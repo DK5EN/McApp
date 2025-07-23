@@ -9,7 +9,7 @@ echo "🔧 Starting Caddy + Lighttpd installer..."
 
 # --- Sudo-Handling ---
 if [[ $EUID -ne 0 ]]; then
-  if sudo -n true 2>/dev/null; then libpython3-dev
+  if sudo -n true 2>/dev/null; then
     exec sudo "$0" "$@"
   else
     echo "🔐 Root-Rechte erforderlich. Bitte Passwort eingeben:"
