@@ -9,7 +9,7 @@ echo "🔧 Starting Caddy + Lighttpd installer..."
 
 # --- Sudo-Handling ---
 if [[ $EUID -ne 0 ]]; then
-  if sudo -n true 2>/dev/null; then
+  if sudo -n true 2>/dev/null; then libpython3-dev
     exec sudo "$0" "$@"
   else
     echo "🔐 Root-Rechte erforderlich. Bitte Passwort eingeben:"
@@ -77,7 +77,7 @@ echo "📦 Updating package lists..."
 sudo apt update
 
 echo "📥 Installing base dependencies..."
-sudo apt install -y debian-keyring debian-archive-keyring curl apt-transport-https jq
+sudo apt install -y debian-keyring debian-archive-keyring curl apt-transport-https jq libpython3-dev
 
 # 3. Add Caddy GPG key if missing
 CADDY_KEYRING="/usr/share/keyrings/caddy-stable-archive-keyring.gpg"
@@ -104,8 +104,8 @@ fi
 echo "📦 Updating APT again..."
 sudo apt update
 
-echo "📥 Installing caddy, lighttpd, screen..."
-sudo apt install -y caddy lighttpd screen
+echo "📥 Installing caddy, lighttpd ..."
+sudo apt install -y caddy lighttpd
 
 # 6. Verify Caddy installation
 echo "🧪 Verifying caddy installation..."
