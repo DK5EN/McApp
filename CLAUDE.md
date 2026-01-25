@@ -56,6 +56,72 @@ WebSocket Clients (Vue.js SPA)
 - `BLEClient`: D-Bus based BLE connection with keep-alive and auto-reconnect
 - `CommandHandler`: Extensible command system with throttling and abuse protection
 
+### Module Integration
+
+The `MessageRouter` (defined in `C2-mc-ws.py:56-539`) is the central pub/sub hub that connects all protocol handlers:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    C2-mc-ws.py (main entry point)               │
+│                                                                 │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                    MessageRouter                          │  │
+│  │                 (Central Pub/Sub Hub)                     │  │
+│  │                                                           │  │
+│  │  _subscribers: {message_type → [handler_functions]}       │  │
+│  │  _protocols:   {protocol_name → handler_instance}         │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│         │              │              │              │          │
+│         ▼              ▼              ▼              ▼          │
+│  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌────────────┐   │
+│  │UDPHandler │  │WSManager  │  │BLE funcs  │  │CommandHdlr │   │
+│  │(udp_      │  │(websocket_│  │(ble_      │  │(command_   │   │
+│  │handler.py)│  │handler.py)│  │handler.py)│  │handler.py) │   │
+│  └───────────┘  └───────────┘  └───────────┘  └────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Initialization Flow** (`main()` at line 904):
+```python
+storage_handler = MessageStorageHandler(message_store, MAX_STORE_SIZE_MB)
+message_router = MessageRouter(storage_handler)
+
+command_handler = create_command_handler(...)
+message_router.register_protocol('commands', command_handler)
+
+udp_handler = UDPHandler(..., message_router=message_router)
+message_router.register_protocol('udp', udp_handler)
+
+websocket_manager = WebSocketManager(WS_HOST, WS_PORT, message_router)
+message_router.register_protocol('websocket', websocket_manager)
+```
+
+**Message Types & Subscriptions:**
+
+| Message Type | Subscribers | Purpose |
+|--------------|-------------|---------|
+| `mesh_message` | WSManager, StorageHandler | Messages from LoRa mesh |
+| `ble_notification` | WSManager, StorageHandler, CommandHandler | BLE device notifications |
+| `ble_status` | WSManager | BLE connection status updates |
+| `websocket_message` | WSManager | Messages to broadcast to clients |
+| `ble_message` | BLE handler | Outbound messages via BLE |
+| `udp_message` | UDP handler | Outbound messages via UDP |
+
+**Incoming Message Flow (BLE → WebSocket clients):**
+1. BLE device sends GATT notification
+2. `BLEClient._on_props_changed()` receives raw bytes
+3. `notification_handler()` parses JSON or binary format
+4. `message_router.publish('ble', 'ble_notification', data)`
+5. `WebSocketManager._broadcast_handler()` receives via subscription
+6. Broadcasts JSON to all connected WebSocket clients
+
+**Outgoing Message Flow (WebSocket client → Mesh):**
+1. Client sends message via WebSocket
+2. `WebSocketManager._process_client_message()` routes by type
+3. `message_router.publish('websocket', 'udp_message', data)`
+4. `MessageRouter._udp_message_handler()` applies suppression logic
+5. `UDPHandler.send_message()` sends JSON to MeshCom node
+
 ## Development Commands
 
 ```bash

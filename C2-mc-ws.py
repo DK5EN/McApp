@@ -1,21 +1,27 @@
 #!/usr/bin/env python3
+import asyncio
+import errno
+import json
+import os
+import re
+import signal
+import sys
+import time
+import traceback
+from collections import deque, defaultdict
+
 from message_storage import MessageStorageHandler
 from udp_handler import UDPHandler
 from websocket_handler import WebSocketManager
-
 from ble_handler import (
     ble_connect, ble_disconnect, ble_pair, ble_unpair,
-    scan_ble_devices, backend_resolve_ip, get_ble_client,
+    scan_ble_devices, backend_resolve_ip,
     handle_a0_command, handle_set_command, handle_ble_message
 )
-
 from command_handler import create_command_handler
 
-VERSION="v0.50.0"
+VERSION = "v0.50.0"
 
-#### debug
-import signal
-import traceback
 
 def debug_signal_handler(signum, frame):
     """Print stack trace when USR1 signal received"""
@@ -24,24 +30,6 @@ def debug_signal_handler(signum, frame):
     print("=" * 60)
     traceback.print_stack(frame)
     print("=" * 60)
-#### debug
-
-
-import asyncio
-import errno
-import json
-import os
-import re
-import signal
-import socket
-import sys
-import unicodedata
-import websockets
-from struct import *
-
-import time
-
-from collections import deque, defaultdict
 
 
 CONFIG_FILE = "/etc/mcadvchat/config.json"
@@ -376,7 +364,7 @@ class MessageRouter:
         """Check if outbound message should be suppressed using validator"""
         if not self.validator:
             if has_console:
-                print(f"⚠️ Validator not initialized, no suppression")
+                print("⚠️ Validator not initialized, no suppression")
             return False
         
         suppress = self.validator.should_suppress_outbound(message_data)
@@ -417,12 +405,12 @@ class MessageRouter:
     
         if is_self_message:
             if has_console:
-                print(f"📡 UDP Handler: Self-message handled, not sending to mesh")
+                print("📡 UDP Handler: Self-message handled, not sending to mesh")
             return
     
         # External message - send to mesh network
         if has_console:
-            print(f"📡 UDP Handler: Sending external message to mesh network")
+            print("📡 UDP Handler: Sending external message to mesh network")
             
         udp_handler = self.get_protocol('udp')
         
@@ -430,7 +418,7 @@ class MessageRouter:
             try:
                 await udp_handler.send_message(normalized_data)
                 if has_console:
-                    print(f"📡 UDP message sent successfully to mesh network")
+                    print("📡 UDP message sent successfully to mesh network")
             except Exception as e:
                 print(f"📡 UDP message send failed: {e}")
                 await self.publish('system', 'websocket_message', {
@@ -440,7 +428,7 @@ class MessageRouter:
                     'timestamp': int(time.time() * 1000)
                 })
         else:
-            print(f"📡 UDP handler not available, can't send message")
+            print("📡 UDP handler not available, can't send message")
             await self.publish('system', 'websocket_message', {
                 'src_type': 'system',
                 'type': 'error', 
@@ -480,12 +468,12 @@ class MessageRouter:
         
         if is_self_message:
             if has_console:
-                print(f"📱 BLE Handler: Self-message handled, not sending to device")
+                print("📱 BLE Handler: Self-message handled, not sending to device")
             return
         
         # External message - send to BLE device
         if has_console:
-            print(f"📱 BLE Handler: Sending external message to BLE device")
+            print("📱 BLE Handler: Sending external message to BLE device")
         await handle_ble_message(msg, dst)
     
     def _is_message_to_self(self, message_data):
@@ -537,7 +525,7 @@ class MessageRouter:
         }
 
         if has_console:
-            print(f"🔄 MessageRouter: Routing to CommandHandler subscribers...")
+            print("🔄 MessageRouter: Routing to CommandHandler subscribers...")
             print(f"🔄 MessageRouter: Available subscribers for 'ble_notification': {len(self._subscribers['ble_notification'])}")
     
         # Find CommandHandler subscribers
@@ -545,7 +533,7 @@ class MessageRouter:
             try:
                   await handler(routed_message)
                   if has_console:
-                      print(f"🔄 MessageRouter: Routed self-message to CommandHandler")
+                      print("🔄 MessageRouter: Routed self-message to CommandHandler")
             except Exception as e:
                     print(f"MessageRouter ERROR: Failed to route self-message: {e}")
                 
@@ -651,7 +639,7 @@ class MessageValidator:
         """Validate destination format (assumes already uppercase)"""
         if not dst:
             if has_console:
-                print(f"🔍 Invalid dst: empty")
+                print("🔍 Invalid dst: empty")
             return False
         
         # Invalid destinations from table
@@ -705,7 +693,7 @@ class MessageValidator:
         # Must be a command
         if not self.is_command(msg):
             if has_console:
-                print(f"🔍 → Not a command - NO SUPPRESSION")
+                print("🔍 → Not a command - NO SUPPRESSION")
             return False
         
         # Invalid destinations always suppress
@@ -971,8 +959,6 @@ async def main():
                 break
 
     # Signal handling with fallback
-    shutdown_requested = False
-
     def handle_shutdown(signum=None, frame=None):
         print(f"🛡️ Signal {signum or 'SIGINT'} received, stopping proxy service ..")
         if stop_event.is_set():

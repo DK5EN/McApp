@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 import asyncio
 import json
-import time
 import sys
-from datetime import datetime, timedelta
+import time
+from datetime import datetime
+from struct import unpack
 from zoneinfo import ZoneInfo
-from timezonefinder import TimezoneFinder
-from struct import *
 
-from dbus_next import Variant, MessageType
+from dbus_next import Variant
 from dbus_next.aio import MessageBus
 from dbus_next.constants import BusType
 from dbus_next.errors import DBusError, InterfaceNotFoundError
 from dbus_next.service import ServiceInterface, method
+from timezonefinder import TimezoneFinder
 
-VERSION="v0.48.0"
+VERSION = "v0.48.0"
 
 has_console = sys.stdout.isatty()
 
@@ -268,7 +268,7 @@ def timestamp_from_date_time(date, time_str):
     dt_str = f"{date} {time_str}"
     try:
         dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
-    except Exception as e:
+    except Exception:
         dt = datetime.strptime("1970-01-01 00:00:00", "%Y-%m-%d %H:%M:%S")
 
     return int(dt.timestamp() * 1000)
@@ -495,20 +495,6 @@ async def notification_handler(clean_msg, message_router=None):
     if clean_msg.startswith(b'D{'):
 
          var = decode_json_message(clean_msg)
-         typ_mapping = {
-               "MH": "MHead update",
-               "SA": "APRS",
-               "G": "GPS",
-               "W": "weather",
-               "SN": "System Settings",
-               "SE": "pressure und Co sensors",
-               "SW": "Wifi ttings",
-               "I": "Info page",
-               "IO": "IO page",
-               "TM": "TM page",
-               "AN": "AN page",
-               "CONFFIN": "Habe fertig"
-         }
 
          try:
            typ = var.get('TYP')
@@ -792,7 +778,7 @@ class BLEClient:
             if self.dev_iface:
                 try:
                     await asyncio.wait_for(self.dev_iface.call_disconnect(), timeout=3.0)
-                except:
+                except Exception:
                     pass  # Ignore errors during cleanup
             
             if self.bus:
@@ -859,7 +845,7 @@ class BLEClient:
         """Find GATT characteristic by UUID in the device tree"""
         try:
             introspect = await bus.introspect(BLUEZ_SERVICE_NAME, path)
-        except Exception as e:
+        except Exception:
             return None, None
 
         for node in introspect.nodes:
@@ -886,7 +872,7 @@ class BLEClient:
 
     async def start_notify(self, on_change=None):
         if not self._connected: 
-           await self._publish_status('notify','error', f"❌ connection not established")
+           await self._publish_status('notify','error', "❌ connection not established")
            if has_console:
               print("❌ Connection not established, start notify aborted")
            return
@@ -899,7 +885,7 @@ class BLEClient:
 
         if not self.bus:
            print("❌ Connection not established, start notify aborted")
-           await self._publish_status('notify','error', f"❌ connection not established")
+           await self._publish_status('notify','error', "❌ connection not established")
            return
 
         if not self.read_char_iface:
@@ -920,15 +906,6 @@ class BLEClient:
             print(f"⚠️ StartNotify fehlgeschlagen: {e}")
 
     async def _on_props_changed(self, iface, changed, invalidated):
-      connection_state = "unknown"
-      try:
-           if self.props_iface:
-                 connected = (await self.props_iface.call_get(DEVICE_INTERFACE, "Connected")).value
-                 connection_state = "connected" if connected else "disconnected"
-      except:
-             connection_state = "error_checking"
-
-
       if iface != GATT_CHARACTERISTIC_INTERFACE:
         return
 
@@ -943,12 +920,12 @@ class BLEClient:
     async def stop_notify(self):
         if not self.bus:
            print("🛑 connection not established, can't stop notify ..")
-           await self._publish_status('notify','error', f"❌ connection not established")
+           await self._publish_status('notify','error', "❌ connection not established")
            return
 
         if not self.read_char_iface:
            print("🛑 no read interface, can't stop notify ..")
-           await self._publish_status('notify','error', f"❌ no read interface, can't stop notify")
+           await self._publish_status('notify','error', "❌ no read interface, can't stop notify")
            return
 
         try:
@@ -958,7 +935,7 @@ class BLEClient:
                    self.read_props_iface.off_properties_changed(self._on_props_changed)
                except AttributeError:
                    pass
-               except Exception as e:
+               except Exception:
                    pass
 
            await self.read_char_iface.call_stop_notify()
@@ -976,13 +953,13 @@ class BLEClient:
     async def send_hello(self):
         if not self.bus:
            print("🛑 connection not established, can't send hello ..")
-           await self._publish_status('send hello','error', f"❌ connection not established")
+           await self._publish_status('send hello','error', "❌ connection not established")
            return
 
         connected = (await self.props_iface.call_get(DEVICE_INTERFACE, "Connected")).value
         if not connected:
            print("🛑 connection lost, can't send ..")
-           await self._publish_status('send hello','error', f"❌ connection lost")
+           await self._publish_status('send hello','error', "❌ connection lost")
 
            await self.disconnect()
            await self.close()
@@ -992,7 +969,7 @@ class BLEClient:
             await self.write_char_iface.call_write_value(self.hello_bytes, {})
             await self._publish_status('conf load','info', ".. waking up device ..")
             if has_console:
-               print(f"📨 Hello sent ..")
+               print("📨 Hello sent ..")
 
         else:
             print("⚠️ Keine Write-Charakteristik verfügbar")
@@ -1000,13 +977,13 @@ class BLEClient:
     async def send_message(self, msg, grp):
         if not self.bus:
            print("🛑 connection not established, can't send ..")
-           await self._publish_status('send message','error', f"❌ connection not established")
+           await self._publish_status('send message','error', "❌ connection not established")
            return
 
         connected = (await self.props_iface.call_get(DEVICE_INTERFACE, "Connected")).value
         if not connected:
            print("🛑 connection lost, can't send ..")
-           await self._publish_status('send message','error', f"❌ connection lost")
+           await self._publish_status('send message','error', "❌ connection lost")
 
            await self.disconnect()
            await self.close()
@@ -1024,7 +1001,7 @@ class BLEClient:
               await asyncio.wait_for(self.write_char_iface.call_write_value(byte_array, {}), timeout=5)
             except asyncio.TimeoutError:
               print("🕓 Timeout beim Schreiben an BLE-Device")
-              await self._publish_status('send message','error', f"❌ Timeout on write")
+              await self._publish_status('send message','error', "❌ Timeout on write")
             except Exception as e:
               print(f"💥 Fehler beim Schreiben an BLE: {e}")
               await self._publish_status('send message','error', f"❌ BLE write error {e}")
@@ -1034,7 +1011,7 @@ class BLEClient:
     async def a0_commands(self, cmd):
         if not self.bus:
            print("🛑 connection not established, can't send ..")
-           await self._publish_status('a0 command','error', f"❌ connection not established")
+           await self._publish_status('a0 command','error', "❌ connection not established")
            return
 
         await self._check_conn()
@@ -1057,14 +1034,14 @@ class BLEClient:
        laenge = 0
        
        if not self.bus:
-          await self._publish_status('set command','error', f"❌ connection not established")
+          await self._publish_status('set command','error', "❌ connection not established")
           print("🛑 connection not established, can't send ..")
           return
 
        await self._check_conn()
 
        if has_console:
-          print(f"✅ ready to send")
+          print("✅ ready to send")
 
        #ID = 0x20 Timestamp from phone [4B]
        if cmd == "--settime":
@@ -1095,7 +1072,7 @@ class BLEClient:
     async def _check_conn(self):
         connected = (await self.props_iface.call_get(DEVICE_INTERFACE, "Connected")).value
         if not connected:
-           print(f"⚠️ Verbindung verloren")
+           print("⚠️ Verbindung verloren")
            await self.stop_notify()
            await self.dev_iface.call_disconnect()
            await self.close()
@@ -1168,7 +1145,7 @@ class BLEClient:
 
             try:
                  self.bus.disconnect()
-            except Exception as e:
+            except Exception:
                  pass
 
         else:
@@ -1185,8 +1162,7 @@ class BLEClient:
             print("adjusting time on node ..", lat, lon)
         
         await asyncio.sleep(3)
-        now = datetime.utcnow()
-        
+
         if lon == 0 or lat == 0:
             if has_console:
                 print("Lon/Lat not set, fallback on Raspberry Pi TZ info")
@@ -1301,8 +1277,6 @@ class BLEClient:
           name = props.get("Name", Variant("s", "")).value
           addr = props.get("Address", Variant("s", "")).value
           paired = props.get("Paired", Variant("b", False)).value
-          connected = props.get("Connected", Variant("b", False)).value
-          services_resolved = props.get("ServicesResolved", Variant("b", False)).value
           busy = False
           interfaces[DEVICE_INTERFACE]["Busy"] = Variant("b", busy)
         
@@ -1359,26 +1333,26 @@ class NoInputNoOutputAgent(ServiceInterface):
            print("Agent released")
 
     @method()
-    def RequestPasskey(self, device: 'o') -> 'u':
+    def RequestPasskey(self, device: 'o') -> 'u':  # noqa: F821
        print(f"Passkey requested for {device}")
        return 0
 
     @method()
-    def RequestPinCode(self, device: 'o') -> 's':
+    def RequestPinCode(self, device: 'o') -> 's':  # noqa: F821
         print(f"PIN requested for {device}")
         return "000000"
 
     @method()
-    def DisplayPinCode(self, device: 'o', pincode: 's'):
+    def DisplayPinCode(self, device: 'o', pincode: 's'):  # noqa: F821
         print(f"DisplayPinCode for {device}: {pincode}")
 
     @method()
-    def RequestConfirmation(self, device: 'o', passkey: 'u'):
+    def RequestConfirmation(self, device: 'o', passkey: 'u'):  # noqa: F821
         print(f"Confirm passkey {passkey} for {device}")
         return
 
     @method()
-    def AuthorizeService(self, device: 'o', uuid: 's'):
+    def AuthorizeService(self, device: 'o', uuid: 's'):  # noqa: F821
         print(f"Authorize service {uuid} for {device}")
         return
 

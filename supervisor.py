@@ -2,10 +2,8 @@ import asyncio
 import hashlib
 import json
 import os
-import secrets
 import signal
 import subprocess
-from pathlib import Path
 
 import websockets
 from websockets.server import WebSocketServerProtocol
@@ -45,7 +43,6 @@ class ProxySupervisor:
     async def start_proxy(self):
         if self.proc and self.proc.returncode is None:
             return
-        log_file = open(PROXY_LOG_PATH, "w")
         self.proc = await asyncio.create_subprocess_exec(
             VENV_PYTHON,
             PROXY_SCRIPT,
@@ -96,7 +93,7 @@ class ProxySupervisor:
         for ws in self.clients:
             try:
                 await ws.send(msg)
-            except:
+            except Exception:
                 pass
 
     async def handle_client(self, websocket: WebSocketServerProtocol):

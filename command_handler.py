@@ -2,16 +2,17 @@
 import asyncio
 import hashlib
 import json
+import random
+import re
 import sys
 import time
-import re
-import random
+from collections import defaultdict
 from datetime import datetime
-from collections import defaultdict, deque
-from meteo import WeatherService
-from typing import Dict, Optional
+from typing import Optional
 
-VERSION="v0.61.0"
+from meteo import WeatherService
+
+VERSION = "v0.61.0"
 
 # Response chunking constants
 MAX_RESPONSE_LENGTH = 140  # Maximum characters per message chunk
@@ -245,7 +246,7 @@ class CommandHandler:
             # Our own commands - existing logic remains the same
             if not target:
                 if has_console:
-                    print(f"🔍 → Our command without target - EXECUTE (local intent)")
+                    print("🔍 → Our command without target - EXECUTE (local intent)")
                 if dst == self.my_callsign:
                     return True, 'direct'
                 elif self.is_group(dst):
@@ -254,7 +255,7 @@ class CommandHandler:
                     return True, 'direct'
             elif target == self.my_callsign:
                 if has_console:
-                    print(f"🔍 → Our command with our target - EXECUTE (local execution)")
+                    print("🔍 → Our command with our target - EXECUTE (local execution)")
                 if dst == self.my_callsign:
                     return True, 'direct'
                 elif self.is_group(dst):
@@ -273,12 +274,12 @@ class CommandHandler:
             if not target:
                 # Personal message without target → execute (P2P intent)
                 if has_console:
-                    print(f"🔍 → P2P message without target - EXECUTE (personal chat)")
+                    print("🔍 → P2P message without target - EXECUTE (personal chat)")
                 return True, 'direct'
             elif target == self.my_callsign:
                 # Personal message with our target → execute
                 if has_console:
-                    print(f"🔍 → P2P message with our target - EXECUTE")
+                    print("🔍 → P2P message with our target - EXECUTE")
                 return True, 'direct'
             else:
                 # Personal message with other target → don't execute
@@ -290,7 +291,7 @@ class CommandHandler:
         if self.is_group(dst):
             if target != self.my_callsign:
                 if has_console:
-                    print(f"🔍 → Group message without our target - NO EXECUTION")
+                    print("🔍 → Group message without our target - NO EXECUTION")
                 return False, None
             
             # Group message with our target → check permissions
@@ -305,7 +306,7 @@ class CommandHandler:
                 return False, None
         
         if has_console:
-            print(f"🔍 → No match - NO EXECUTION")
+            print("🔍 → No match - NO EXECUTION")
         return False, None
 
 
@@ -330,7 +331,7 @@ class CommandHandler:
             if not target:
                 # No target → local execution intent
                 if has_console:
-                    print(f"🔍 → Our command without target - EXECUTE (local intent)")
+                    print("🔍 → Our command without target - EXECUTE (local intent)")
                 if dst == self.my_callsign:
                     return True, 'direct'
                 elif self.is_group(dst):
@@ -341,7 +342,7 @@ class CommandHandler:
             elif target == self.my_callsign:
                 # Target is us → local execution
                 if has_console:
-                    print(f"🔍 → Our command with our target - EXECUTE (local execution)")
+                    print("🔍 → Our command with our target - EXECUTE (local execution)")
                 if dst == self.my_callsign:
                     return True, 'direct'
                 elif self.is_group(dst):
@@ -365,7 +366,7 @@ class CommandHandler:
         # Direct to us → always OK
         if dst == self.my_callsign:
             if has_console:
-                print(f"🔍 → Direct message to us - EXECUTE")
+                print("🔍 → Direct message to us - EXECUTE")
             return True, 'direct'
         
         # Group message → check permissions
@@ -381,7 +382,7 @@ class CommandHandler:
                 return False, None  # ← This was the bug: was returning (False, 'group')
     
         if has_console:
-            print(f"🔍 → No match - NO EXECUTION")
+            print("🔍 → No match - NO EXECUTION")
         return False, None
 
     def extract_target_callsign(self, msg):
@@ -391,7 +392,7 @@ class CommandHandler:
 
         if not msg or not msg.startswith('!'):
             if has_console:
-                print(f"🎯 Not a command, returning None")
+                print("🎯 Not a command, returning None")
             return None
         
         # Ensure message is uppercase for processing
@@ -404,7 +405,7 @@ class CommandHandler:
         
         if len(parts) < 2:
             if has_console:
-                print(f"🎯 Less than 2 parts, returning None")
+                print("🎯 Less than 2 parts, returning None")
             return None
 
         command = parts[0][1:]  # Remove ! prefix
@@ -418,7 +419,7 @@ class CommandHandler:
         
         # Special handling for CTCPING command
         if command == 'CTCPING':
-            print(f"🎯 Command: inside ctcping handling")
+            print("🎯 Command: inside ctcping handling")
 
             # Look for target:CALLSIGN pattern first
             for part in parts[1:]:
@@ -444,7 +445,7 @@ class CommandHandler:
 
             # No CTCPING target found - MOVE THIS INSIDE THE IF BLOCK
             if has_console:
-                print(f"🎯 No valid CTCPING target found")
+                print("🎯 No valid CTCPING target found")
             return None
 
 
@@ -452,7 +453,7 @@ class CommandHandler:
         # No target found
         #return None
         if has_console:
-            print(f"🎯 Processing standard command")
+            print("🎯 Processing standard command")
         
         # Look for target in last part (pattern: !WX DK5EN-15)
         potential_target = parts[-1].strip()
@@ -544,7 +545,7 @@ class CommandHandler:
         
         if not should_execute:
             if has_console:
-                print(f"📋 CommandHandler: Command execution denied")
+                print("📋 CommandHandler: Command execution denied")
             return
 
         if has_console:
@@ -1025,7 +1026,7 @@ class CommandHandler:
             match = re.search(r'\{(\d{3})$', msg)
             if not match:
                 if has_console:
-                    print(f"🔍 No message ID found in echo")
+                    print("🔍 No message ID found in echo")
                 return
             
             message_id = match.group(1)  # e.g., "753"
@@ -1069,8 +1070,6 @@ class CommandHandler:
             self.active_pings[message_id] = ping_info
             
             if has_console:
-                seq_text = f" ({sequence_info})" if sequence_info else ""
-            
                 print(f"🏓 Echo tracked: ID={message_id}, target={dst}, test_id={test_id}")
                 print(f"🔍 Active pings now: {list(self.active_pings.keys())}")
                 
@@ -1271,12 +1270,12 @@ class CommandHandler:
         if state == 'on':
             self.group_responses_enabled = True
             if has_console:
-                print(f"🔍 Set group_responses_enabled = True")
+                print("🔍 Set group_responses_enabled = True")
             return "✅ Group responses ENABLED"
         elif state == 'off':
             self.group_responses_enabled = False
             if has_console:
-                print(f"🔍 Set group_responses_enabled = False")
+                print("🔍 Set group_responses_enabled = False")
             return "✅ Group responses DISABLED"
         else:
             current = "ON" if self.group_responses_enabled else "OFF"
@@ -1287,44 +1286,36 @@ class CommandHandler:
 
     def _is_valid_target(self, dst, src):
         """Check if message is for us (callsign) or valid group (1-5 digits or 'TEST')"""
-        aprs_position_pattern = r'^!\d{4}\.\d{2}[NS]/\d{5}\.\d{2}[EW]'
-    
-        if re.match(aprs_position_pattern, msg_text):
-            if has_console:
-                print(f"🌍 APRS position detected, not a command: {msg_text[:30]}...")
-            return False
-
-
         if has_console:
                 print(f"🔍 valid_target dubug {dst}, {src}")
 
         # Always allow direct messages to our callsign
         if dst.upper() == self.my_callsign.upper():
             if has_console:
-                print(f"🔍 valid_target Ture, callsign")
+                print("🔍 valid_target Ture, callsign")
             return True, 'callsign'
         
         # Check if dst is a valid group format
         is_valid_group = dst == 'TEST' or (dst and dst.isdigit() and 1 <= len(dst) <= 5)
         if not is_valid_group:
             if has_console:
-                print(f"🔍 valid_target False, None")
+                print("🔍 valid_target False, None")
             return False, None
         
         # Admin always allowed for groups
         if self._is_admin(src):
             if has_console:
-                print(f"🔍 valid_target admin override, True, group")
+                print("🔍 valid_target admin override, True, group")
             return True, 'group'
         
         # Non-admin only allowed if group responses are enabled
         if self.group_responses_enabled:
             if has_console:
-                print(f"🔍 valid_target group responses enabled, True, group")
+                print("🔍 valid_target group responses enabled, True, group")
             return True, 'group'
         
         if has_console:
-                print(f"🔍 valid_target no match, False, None")
+                print("🔍 valid_target no match, False, None")
         return False, None
 
     async def handle_weather(self, kwargs, requester):
@@ -1775,7 +1766,7 @@ class CommandHandler:
                 
                 if has_console:
                     print(f"🏓 Sent ping {sequence}/{total} to {target}: '{message[:30]}...'")
-                    print(f"🏓 Waiting for echo and ACK...")
+                    print("🏓 Waiting for echo and ACK...")
                     
         except Exception as e:
             if has_console:
@@ -1961,9 +1952,6 @@ class CommandHandler:
         
         # === Test 1: Successful Single Ping ===
         try:
-            # Start a ping test
-            test_start_time = time.time()
-            
             # Simulate echo message
             echo_data = {
                 'src': self.my_callsign,
@@ -2188,7 +2176,7 @@ class CommandHandler:
                 # Verify consistency
                 if successful != successful_from_results or timeouts != timeouts_from_results:
                     if has_console:
-                        print(f"⚠️ Ping summary inconsistency detected!")
+                        print("⚠️ Ping summary inconsistency detected!")
                         print(f"   Results: {successful_from_results} success, {timeouts_from_results} timeouts")
                         print(f"   Tracked: {successful} success, {timeouts} timeouts")
 
@@ -2732,7 +2720,7 @@ class CommandHandler:
 
             if recipient.upper() == self.my_callsign:
                 if has_console:
-                    print(f"🔄 CommandHandler: Self-response, sending directly to WebSocket")
+                    print("🔄 CommandHandler: Self-response, sending directly to WebSocket")
 
                 # Send directly via WebSocket, bypass BLE routing
                 if self.message_router:
@@ -3471,9 +3459,9 @@ class CommandHandler:
                     print(f"     Execute: {actual_exec} (exp: {expected_exec}), Type: {actual_type} (exp: {expected_type})")
                     if not overall_pass:
                         if not exec_match:
-                            print(f"     ❌ Execution mismatch!")
+                            print("     ❌ Execution mismatch!")
                         if not type_match:
-                            print(f"     ❌ Type mismatch!")
+                            print("     ❌ Type mismatch!")
                     print()
                     
             finally:
@@ -3666,15 +3654,12 @@ class CommandHandler:
                 # Determine expected routing
                 if should_execute_locally:
                     expected_execute = True
-                    expected_target_type = target_type
                 else:
                     expected_execute = False
-                    expected_target_type = None
-                
+
                 # Check execution decision
                 exec_match = should_execute == expected_execute
-                type_match = target_type == expected_target_type
-                
+
                 # For mesh routing, we expect no local execution
                 if expected_routing == "mesh":
                     routing_correct = not should_execute
@@ -3779,7 +3764,7 @@ class CommandHandler:
                 reason = validator.get_suppression_reason(normalized)
                 
                 # Self-commands should ALWAYS be suppressed
-                success = should_suppress == True
+                success = should_suppress
                 status = "✅ PASS" if success else "❌ FAIL"
                 results.append((status, description, success))
                 
@@ -3789,7 +3774,7 @@ class CommandHandler:
                     print(f"     Suppressed: {should_suppress} (expected: True)")
                     print(f"     Reason: {reason}")
                     if not success:
-                        print(f"     ❌ Self-command should be suppressed!")
+                        print("     ❌ Self-command should be suppressed!")
                     print()
             
             except Exception as e:
@@ -3908,7 +3893,7 @@ class CommandHandler:
                 print(f"{status} | List active beacons")
                 print(f"     Result: '{list_result}'")
                 if not list_success:
-                    print(f"     ❌ Should contain both Group 50 and Group 51")
+                    print("     ❌ Should contain both Group 50 and Group 51")
                 print()
             
         except Exception as e:

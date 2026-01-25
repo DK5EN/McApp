@@ -1,10 +1,10 @@
-import os
+import asyncio
 import json
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
+
 import zstandard as zstd
-import asyncio
 
 class DailySQLiteDumper:
     def __init__(self, config_path="/etc/mcadvchat/config.json"):

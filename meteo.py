@@ -5,16 +5,16 @@ DWD BrightSky als Primärquelle + OpenMeteo für fehlende Parameter
 Intelligente Daten-Fusion für optimale Genauigkeit
 """
 
-import requests
-import json
 import logging
-import sys
 import math
-from datetime import datetime, timezone, timedelta
-from typing import Dict, Optional, Any, List
+import sys
 import time
+from datetime import datetime, timezone, timedelta
+from typing import Dict, Optional, Any
 
-VERSION="v0.46.0"
+import requests
+
+VERSION = "v0.46.0"
 
 # Logging Setup
 logging.basicConfig(
@@ -362,7 +362,7 @@ class WeatherService:
                     record_time = parse_timestamp(record)
                     if record_time <= now:
                         return record
-                except:
+                except Exception:
                     continue
             
             return sorted_records[0]
@@ -651,7 +651,7 @@ def main():
         
         if "error" not in weather_data:
             lora_packet = weather_service.format_for_lora(weather_data)
-            print(f"\n📦 LoRa Ham Radio Nachricht:")
+            print("\n📦 LoRa Ham Radio Nachricht:")
             print(f"   {lora_packet}")
             print(f"📏 Länge: {len(lora_packet)} Zeichen")
         

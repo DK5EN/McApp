@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 import asyncio
 import json
-import time
-import websockets
 import sys
 
-VERSION="v0.46.0"
+import websockets
+
+VERSION = "v0.46.0"
 
 has_console = sys.stdout.isatty()
 
@@ -39,7 +39,7 @@ class WebSocketManager:
                 json_message = json.dumps(data)
                 await websocket.send(json_message)
                 if has_console:
-                  print(f"📡 WSMgr: Direct send to client successful")
+                    print("📡 WSMgr: Direct send to client successful")
             except Exception as e:
                 print(f"📡 WSMgr: Direct send failed: {e}")
         else:
@@ -64,11 +64,7 @@ class WebSocketManager:
         if targets:
             json_message = json.dumps(message)
             send_tasks = [asyncio.create_task(client.send(json_message)) for client in targets]
-            results = await asyncio.gather(*send_tasks, return_exceptions=True)
-            
-            # Count successful sends
-            successful = sum(1 for r in results if not isinstance(r, Exception))
-            #print(f"📡 WSMgr: Sent to {successful}/{len(targets)} clients")
+            await asyncio.gather(*send_tasks, return_exceptions=True)
         
     async def start_server(self):
         """Start the WebSocket server"""
@@ -87,7 +83,7 @@ class WebSocketManager:
         for client in clients_to_close:
             try:
                 await client.close()
-            except:
+            except Exception:
                 pass
                 
         print("📡 WSMgr: Server stopped")

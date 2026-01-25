@@ -9,9 +9,8 @@ from collections import deque, defaultdict
 from datetime import datetime, timedelta
 from functools import partial
 from statistics import mean
-from collections import OrderedDict
 
-VERSION="v0.46.0"
+VERSION = "v0.46.0"
 
 has_console = sys.stdout.isatty()
 
@@ -50,8 +49,7 @@ def safe_get(raw_data, key, default=""):
         if isinstance(raw_data, dict):
             return raw_data.get(key, default)
 
-    except Exception as e:
-        # Optionally log e
+    except Exception:
         return default
 
     return default
@@ -629,8 +627,7 @@ class MessageStorageHandler:
         
         # Segment statistics by callsign
         segment_stats = defaultdict(int)
-        gap_details = []
-        
+
         for marker in gap_markers:
             callsign = marker["callsign"]
             segment_stats[callsign] += 1
