@@ -1,0 +1,31 @@
+# Data files
+mcdump.json
+sperrliste.json
+
+# Local configuration (contains personal data)
+config.json
+
+# Backup files
+*.orig
+*.bak
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

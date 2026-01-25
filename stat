@@ -1,0 +1,70 @@
+import json
+import datetime
+from collections import defaultdict
+from statistics import mean
+
+# Constants
+BUCKET_SECONDS = 5 * 60
+VALID_RSSI_RANGE = (-140, -30)
+VALID_SNR_RANGE = (-30, 12)
+
+def is_valid_value(value, min_val, max_val):
+    return isinstance(value, (int, float)) and min_val <= value <= max_val
+
+def floor_to_bucket(unix_ms):
+    return int(unix_ms // 1000 // BUCKET_SECONDS * BUCKET_SECONDS)
+
+def process_message_store(message_store):
+    buckets = defaultdict(lambda: {"rssi": [], "snr": []})  # key: (bucket_time, callsign)
+
+    for item in message_store:
+        raw_str = item.get("raw")
+        if not raw_str:
+            continue
+        try:
+            parsed = json.loads(raw_str)
+        except json.JSONDecodeError:
+            continue
+
+        src = parsed.get("src")
+        if not src:
+            continue
+        callsigns = [s.strip() for s in src.split(",")]
+
+        rssi = parsed.get("rssi")
+        snr = parsed.get("snr")
+        timestamp_ms = parsed.get("timestamp")
+        if timestamp_ms is None:
+            continue
+
+        if not (is_valid_value(rssi, *VALID_RSSI_RANGE) and is_valid_value(snr, *VALID_SNR_RANGE)):
+            continue
+
+        bucket_time = floor_to_bucket(timestamp_ms)
+
+        for call in callsigns:
+            key = (bucket_time, call)
+            buckets[key]["rssi"].append(rssi)
+            buckets[key]["snr"].append(snr)
+
+    # Average and build output
+    result = []
+    for (bucket_time, callsign), values in buckets.items():
+        rssi_values = values["rssi"]
+        snr_values = values["snr"]
+        count = min(len(rssi_values), len(snr_values))
+
+        if count == 0:
+            continue
+
+        avg_rssi = round(mean(rssi_values), 2)
+        avg_snr = round(mean(snr_values), 2)
+        result.append({
+            "timestamp": bucket_time,
+            "callsign": callsign,
+            "rssi": avg_rssi,
+            "snr": avg_snr,
+            "count": count
+        })
+
+    return result
