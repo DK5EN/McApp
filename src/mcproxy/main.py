@@ -1159,11 +1159,21 @@ async def main():
                 break
 
     # Signal handling with fallback
+    _first_signal_time = None
+
     def handle_shutdown(signum=None, frame=None):
+        nonlocal _first_signal_time
         logger.info("Signal %s received, stopping proxy service ..", signum or 'SIGINT')
         if stop_event.is_set():
-            logger.warning("Force shutdown - second signal received")
+            now = time.monotonic()
+            # Ignore duplicate signals within 5s of first (asyncio can double-fire)
+            # Only force-exit if user deliberately sends a second signal after 5s
+            if _first_signal_time and (now - _first_signal_time) < 5.0:
+                logger.debug("Ignoring duplicate signal (%.1fs after first)", now - _first_signal_time)
+                return
+            logger.warning("Force shutdown - second signal received after %.0fs", now - _first_signal_time if _first_signal_time else 0)
             os._exit(1)
+        _first_signal_time = time.monotonic()
         stop_event.set()
 
     # Try asyncio signal handlers first (preferred)
