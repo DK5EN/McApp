@@ -153,6 +153,52 @@ class SSEManager:
                         }
                     )
 
+                    # Send initial data (messages, positions, BLE status)
+                    try:
+                        if self.message_router and self.message_router.storage_handler:
+                            initial_payload = self.message_router.storage_handler.get_initial_payload()
+                            yield self._format_sse_event({
+                                "type": "response",
+                                "msg": "message dump",
+                                "data": initial_payload,
+                            })
+
+                            full_data = self.message_router.storage_handler.get_full_dump()
+                            if full_data:
+                                CHUNK_SIZE = 20000
+                                for i in range(0, len(full_data), CHUNK_SIZE):
+                                    yield self._format_sse_event({
+                                        "type": "response",
+                                        "msg": "message dump",
+                                        "data": full_data[i:i + CHUNK_SIZE],
+                                    })
+
+                        # Send BLE status
+                        ble_client = (
+                            self.message_router.get_protocol("ble_client")
+                            if self.message_router else None
+                        )
+                        if ble_client:
+                            status = ble_client.status
+                            yield self._format_sse_event({
+                                "src_type": "BLE",
+                                "TYP": "blueZ",
+                                "command": "BLE info",
+                                "result": "ok",
+                                "state": status.state.value,
+                                "device_address": status.device_address,
+                                "device_name": status.device_name,
+                                "mode": status.mode.value,
+                                "timestamp": int(time.time() * 1000),
+                            })
+
+                        logger.info("SSE client %s: sent initial data", client_id)
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to send initial data to SSE client %s: %s",
+                            client_id, e,
+                        )
+
                     while client.connected:
                         # Check if client disconnected
                         if await request.is_disconnected():

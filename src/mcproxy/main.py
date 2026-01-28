@@ -20,26 +20,13 @@ from .websocket_handler import WebSocketManager
 # BLE client abstraction - supports local, remote, and disabled modes
 from .ble_client import create_ble_client, BLEMode
 
-# Legacy imports for backward compatibility (will be removed)
+# Legacy imports - only backend_resolve_ip still needed (no ble_client equivalent yet)
 try:
-    from .ble_handler import (
-        ble_connect, ble_disconnect, ble_pair, ble_unpair,
-        scan_ble_devices, backend_resolve_ip,
-        handle_a0_command, handle_set_command, handle_ble_message
-    )
+    from .ble_handler import backend_resolve_ip
     BLE_HANDLER_AVAILABLE = True
 except ImportError:
     BLE_HANDLER_AVAILABLE = False
-    # Define stubs when ble_handler is not available
-    async def ble_connect(*args, **kwargs): pass
-    async def ble_disconnect(*args, **kwargs): pass
-    async def ble_pair(*args, **kwargs): pass
-    async def ble_unpair(*args, **kwargs): pass
-    async def scan_ble_devices(*args, **kwargs): pass
     async def backend_resolve_ip(*args, **kwargs): pass
-    async def handle_a0_command(*args, **kwargs): pass
-    async def handle_set_command(*args, **kwargs): pass
-    async def handle_ble_message(*args, **kwargs): pass
 from .command_handler import create_command_handler
 
 # Optional imports for new features
@@ -278,7 +265,7 @@ class MessageRouter:
             await self._handle_ble_scan_command()
             
         elif command == "BLE info":
-            await self._handle_ble_info_command()
+            await self._handle_ble_info_command(websocket)
             
         elif command == "pair BLE":
             await self._handle_ble_pair_command(MAC, BLE_Pin)
@@ -375,39 +362,105 @@ class MessageRouter:
         self.storage_handler.save_dump(store_file_name)
         print(f"Daten gespeichert in {store_file_name}")
 
-    # BLE command handlers
+    # BLE command handlers - route through ble_client abstraction
+    def _get_ble_client(self):
+        """Get the BLE client from registered protocols"""
+        return self.get_protocol('ble_client')
+
     async def _handle_ble_scan_command(self):
         """Handle BLE scan command"""
-        await scan_ble_devices(message_router=self)
+        client = self._get_ble_client()
+        if client:
+            devices = await client.scan()
+            await self.publish('ble', 'ble_status', {
+                'src_type': 'BLE',
+                'command': 'scan BLE result',
+                'result': 'ok',
+                'msg': f'Found {len(devices)} devices',
+                'devices': [{'name': d.name, 'address': d.address, 'rssi': d.rssi, 'paired': d.paired} for d in devices],
+                'timestamp': int(time.time() * 1000)
+            })
+        else:
+            logger.warning("BLE client not available for scan")
 
     async def _handle_ble_pair_command(self, MAC, BLE_Pin):
         """Handle BLE pair command"""
-        await ble_pair(MAC, BLE_Pin, message_router=self)
+        client = self._get_ble_client()
+        if client:
+            await client.pair(MAC)
+        else:
+            logger.warning("BLE client not available for pair")
 
     async def _handle_ble_unpair_command(self, MAC):
         """Handle BLE unpair command"""
-        await ble_unpair(MAC, message_router=self)
+        client = self._get_ble_client()
+        if client:
+            await client.unpair(MAC)
+        else:
+            logger.warning("BLE client not available for unpair")
 
     async def _handle_ble_connect_command(self, MAC):
         """Handle BLE connect command"""
-        await ble_connect(MAC, message_router=self)
+        client = self._get_ble_client()
+        if client:
+            await client.connect(MAC)
+        else:
+            logger.warning("BLE client not available for connect")
 
     async def _handle_ble_disconnect_command(self):
         """Handle BLE disconnect command"""
-        await ble_disconnect(message_router=self)
+        client = self._get_ble_client()
+        if client:
+            await client.disconnect()
+        else:
+            logger.warning("BLE client not available for disconnect")
+
+    async def _handle_ble_info_command(self, websocket):
+        """Handle BLE info command - send current BLE status to requesting client"""
+        client = self._get_ble_client()
+        if client:
+            status = client.status
+            ble_info = {
+                'src_type': 'BLE',
+                'TYP': 'blueZ',
+                'command': 'BLE info',
+                'result': 'ok',
+                'state': status.state.value,
+                'device_address': status.device_address,
+                'device_name': status.device_name,
+                'mode': status.mode.value,
+                'timestamp': int(time.time() * 1000)
+            }
+            if websocket:
+                await self.publish('router', 'websocket_direct', {
+                    'websocket': websocket, 'data': ble_info
+                })
+            else:
+                await self.publish('ble', 'ble_status', ble_info)
+        else:
+            logger.warning("BLE client not available for info")
 
     async def _handle_resolve_ip_command(self, hostname):
         """Handle resolve IP command"""
-        await backend_resolve_ip(hostname, message_router=self)
+        if BLE_HANDLER_AVAILABLE:
+            await backend_resolve_ip(hostname, message_router=self)
 
-    # Device command handlers
+    # Device command handlers - route through ble_client abstraction
     async def _handle_device_a0_command(self, command):
         """Handle device A0 commands (--pos, --reboot, etc.)"""
-        await handle_a0_command(command)
+        client = self._get_ble_client()
+        if client:
+            await client.send_command(command)
+        else:
+            logger.warning("BLE client not available for A0 command")
 
     async def _handle_device_set_command(self, command):
         """Handle device set commands (--settime, --setCALL, etc.)"""
-        await handle_set_command(command)
+        client = self._get_ble_client()
+        if client:
+            await client.set_command(command)
+        else:
+            logger.warning("BLE client not available for set command")
 
     def _should_suppress_outbound(self, message_data):
         """Check if outbound message should be suppressed using validator"""
@@ -523,7 +576,11 @@ class MessageRouter:
         # External message - send to BLE device
         if has_console:
             print("📱 BLE Handler: Sending external message to BLE device")
-        await handle_ble_message(msg, dst)
+        client = self._get_ble_client()
+        if client:
+            await client.send_message(msg, dst)
+        else:
+            logger.warning("BLE client not available, cannot send message")
     
     def _is_message_to_self(self, message_data):
         """Check if message is addressed to our own callsign (assumes normalized data)"""

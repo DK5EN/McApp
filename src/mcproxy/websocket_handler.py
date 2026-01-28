@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 import asyncio
 import json
+import logging
 import sys
 
 import websockets
+
+logger = logging.getLogger(__name__)
 
 VERSION = "v0.46.0"
 
@@ -34,16 +37,14 @@ class WebSocketManager:
         websocket = message_data.get('websocket')
         data = message_data.get('data')
         
-        if websocket and data:
+        if not websocket:
+            return  # SSE clients don't have websocket objects
+        if data:
             try:
                 json_message = json.dumps(data)
                 await websocket.send(json_message)
-                if has_console:
-                    print("📡 WSMgr: Direct send to client successful")
             except Exception as e:
-                print(f"📡 WSMgr: Direct send failed: {e}")
-        else:
-            print(f"📡 WSMgr: Invalid direct send data: {message_data}")
+                logger.debug("Direct send failed: %s", e)
 
     async def _broadcast_handler(self, routed_message):
         """Handle messages from the router and broadcast to WebSocket clients"""
@@ -96,7 +97,17 @@ class WebSocketManager:
         
         async with self.clients_lock:
             self.clients.add(websocket)
-            
+
+        # Auto-send initial data to newly connected client
+        try:
+            if self.message_router:
+                await self.message_router.route_command("send message dump", websocket=websocket)
+                await self.message_router.route_command("BLE info", websocket=websocket)
+                if has_console:
+                    print(f"📡 WSMgr: Sent initial data to {peer}")
+        except Exception as e:
+            logger.warning("Failed to send initial data to %s: %s", peer, e)
+
         try:
             async for message in websocket:
                 try:
