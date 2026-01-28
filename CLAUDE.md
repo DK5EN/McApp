@@ -8,6 +8,7 @@ MCProxy is a message proxy service for MeshCom (LoRa mesh network for ham radio 
 
 ## Architecture
 
+### Standard Deployment (Pi with Bluetooth)
 ```
 WebSocket Clients (Vue.js SPA)
          │
@@ -17,8 +18,8 @@ WebSocket Clients (Vue.js SPA)
 │        MESSAGE ROUTER (C2-mc-ws.py)     │
 │                                         │
 │  ┌───────────┐ ┌───────────┐ ┌────────┐ │
-│  │UDP Handler│ │BLE Handler│ │WS Mgr  │ │
-│  │ :1799     │ │ D-Bus/BlueZ│ │ :2980  │ │
+│  │UDP Handler│ │BLE Client │ │WS Mgr  │ │
+│  │ :1799     │ │(local mode)│ │ :2980  │ │
 │  └───────────┘ └───────────┘ └────────┘ │
 │                                         │
 │  ┌─────────────────────────────────────┐│
@@ -32,14 +33,60 @@ WebSocket Clients (Vue.js SPA)
     (192.168.68.xxx)      (MC-xxxxxx)
 ```
 
+### Distributed Deployment (Remote BLE Service)
+```
+┌─────────────────────────────────────────────────────────┐
+│  MCProxy Brain (Mac, OrbStack, or any server)           │
+│  ├── UDP Handler ──────► MeshCom Node (UDP:1799)        │
+│  ├── WebSocket Manager ► Web Clients (WS:2980)          │
+│  ├── BLE Client ─────► HTTP/SSE ──┐                     │
+│  └── Command Handler              │                     │
+└───────────────────────────────────│─────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────┐
+│  BLE Service (Raspberry Pi with Bluetooth hardware)     │
+│  ├── FastAPI server (REST + SSE)  :8081                 │
+│  ├── D-Bus/BlueZ interface                              │
+│  └── Endpoints:                                         │
+│      POST /api/ble/connect     - Connect to device      │
+│      POST /api/ble/disconnect  - Disconnect             │
+│      POST /api/ble/send        - Send message           │
+│      GET  /api/ble/status      - Connection status      │
+│      GET  /api/ble/notifications - SSE stream           │
+│      GET  /api/ble/devices     - Scan for devices       │
+└─────────────────────────────────────────────────────────┘
+```
+
 ### Core Components
 
 - **C2-mc-ws.py**: Main entry point. Initializes MessageRouter and all protocol handlers
 - **message_storage.py**: In-memory message store with JSON persistence, pruning, and parallel mheard statistics processing
 - **udp_handler.py**: UDP listener/sender for MeshCom node communication (port 1799)
 - **websocket_handler.py**: WebSocket server for web clients (port 2980)
-- **ble_handler.py**: BlueZ D-Bus based BLE handler for direct ESP32 connection via GATT
 - **command_handler.py**: Chat command processor (`!wx`, `!mheard`, `!stats`, `!dice`, etc.)
+- **config_loader.py**: Dataclass-based configuration with environment variable overrides
+
+### BLE Abstraction Layer
+
+The BLE subsystem supports three modes via a unified client interface:
+
+| Mode | File | Description |
+|------|------|-------------|
+| `local` | `ble_client_local.py` | Direct D-Bus/BlueZ (wraps `ble_handler.py`) |
+| `remote` | `ble_client_remote.py` | HTTP/SSE client to remote BLE service |
+| `disabled` | `ble_client_disabled.py` | No-op stub for testing |
+
+- **ble_client.py**: Abstract interface + `create_ble_client()` factory function
+- **ble_handler.py**: Legacy BlueZ D-Bus implementation (used by local mode)
+
+### BLE Service (Standalone)
+
+Located in `ble_service/` - a FastAPI service that exposes BLE hardware via HTTP:
+
+- **ble_service/src/main.py**: FastAPI REST API + SSE endpoints
+- **ble_service/src/ble_adapter.py**: Clean D-Bus/BlueZ wrapper class
+- **ble_service/mcproxy-ble.service**: Systemd service file for Pi
 
 ### Message Flow
 
@@ -128,8 +175,8 @@ message_router.register_protocol('websocket', websocket_manager)
 # Run in development mode (enables verbose logging)
 ./dev.sh
 
-# Run directly with venv
-source ~/venv/bin/activate
+# Run directly with venv (new bootstrap uses ~/mcproxy-venv)
+source ~/mcproxy-venv/bin/activate
 export MCADVCHAT_ENV=dev
 python C2-mc-ws.py
 
@@ -138,6 +185,52 @@ sudo journalctl -u mcproxy.service -f
 
 # Restart production service
 sudo systemctl restart mcproxy.service
+```
+
+## OrbStack Development (macOS)
+
+OrbStack provides fast ARM64 Linux VMs on Apple Silicon, enabling MCProxy development without physical Pi hardware. See `orb-testing.md` for full documentation.
+
+### Quick Start
+
+```bash
+# Create Debian VM (matches Pi target)
+orb create debian:trixie mcproxy-dev
+orb shell mcproxy-dev
+
+# Run with BLE disabled (no Bluetooth in VM)
+export MCPROXY_BLE_MODE=disabled
+python C2-mc-ws.py
+```
+
+### Testing Scenarios
+
+| Scenario | BLE Mode | Setup |
+|----------|----------|-------|
+| Non-BLE features | `disabled` | Just set env var |
+| Real BLE via Pi | `remote` | Run BLE service on Pi, point URL to it |
+| Production on Pi | `local` | Default, uses D-Bus/BlueZ directly |
+
+### Remote BLE Testing
+
+```bash
+# On Pi: Start BLE service
+cd ble_service
+uvicorn src.main:app --host 0.0.0.0 --port 8081
+
+# On Mac/OrbStack: Connect to remote BLE
+export MCPROXY_BLE_MODE=remote
+export MCPROXY_BLE_URL=http://pi.local:8081
+export MCPROXY_BLE_API_KEY=your-secret-key
+python C2-mc-ws.py
+```
+
+### Snapshots
+
+```bash
+orb snapshot create mcproxy-dev pre-test   # Save state
+orb snapshot restore mcproxy-dev pre-test  # Restore
+orb snapshot list mcproxy-dev              # List snapshots
 ```
 
 ## Configuration
@@ -152,14 +245,42 @@ Configuration lives in `/etc/mcadvchat/config.json`:
 
 Dev config: `/etc/mcadvchat/config.dev.json` (auto-selected when `MCADVCHAT_ENV=dev`)
 
+### BLE Configuration
+
+```json
+{
+  "BLE_MODE": "local",           // "local" | "remote" | "disabled"
+  "BLE_REMOTE_URL": "",          // URL for remote BLE service (remote mode only)
+  "BLE_API_KEY": "",             // API key for remote service authentication
+  "BLE_DEVICE_NAME": "",         // Auto-connect device name (e.g., "MC-XXXXXX")
+  "BLE_DEVICE_ADDRESS": ""       // Auto-connect device MAC address
+}
+```
+
+**Environment variable overrides** (useful for testing):
+- `MCPROXY_BLE_MODE` - Override BLE mode without editing config
+- `MCPROXY_BLE_URL` - Override remote BLE service URL
+- `MCPROXY_BLE_API_KEY` - Override API key
+
 ## Dependencies
 
-Python packages (installed in venv via `install_mcproxy.sh`):
-- `websockets`: WebSocket server
-- `dbus_next`: BlueZ D-Bus interface for BLE
-- `timezonefinder`: Timezone detection for node time sync
-- `zstandard`: Compression (unused currently)
-- `requests`: HTTP client for weather API
+Python packages (installed via uv in `~/mcproxy-venv`):
+- `websockets>=14.0`: WebSocket server
+- `dbus-next>=0.2.3`: BlueZ D-Bus interface for BLE (local mode)
+- `timezonefinder>=6.5.0`: Timezone detection for node time sync
+- `httpx>=0.28.0`: Async HTTP client for weather API
+- `aiohttp>=3.9.0`: Async HTTP client for remote BLE
+- `aiohttp-sse-client>=0.2.1`: SSE client for remote BLE notifications
+- `fastapi>=0.115.0`: REST API framework (SSE transport, BLE service)
+- `uvicorn>=0.34.0`: ASGI server for FastAPI
+- `sse-starlette>=2.0.0`: SSE support for FastAPI
+- `pydantic>=2.0`: Data validation
+
+System packages (installed via apt):
+- `caddy`: HTTPS reverse proxy with auto-TLS
+- `lighttpd`: Static file server for Vue.js SPA
+- `bluez`: Bluetooth stack for BLE (local mode only)
+- `jq`: JSON processing in shell scripts
 
 ## Protocol Details
 
@@ -193,13 +314,192 @@ Built-in test suites run at startup (when `has_console` is true):
 
 Target: Raspberry Pi Zero 2W running as systemd service (`mcproxy.service`)
 
-Installation:
+### New Bootstrap System (Recommended)
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/install_mcproxy.sh | bash
+# Single command for install, update, or repair
+curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcproxy.sh | sudo bash
 ```
 
-The install script:
-1. Creates Python venv in `~/venv`
-2. Installs dependencies
-3. Creates config template in `/etc/mcadvchat/config.json`
-4. Sets up systemd service
+The bootstrap script:
+1. Auto-detects state (fresh/migrate/upgrade)
+2. Prompts for configuration on first install
+3. Creates Python venv in `~/mcproxy-venv` using uv
+4. Configures SD card protection (tmpfs, volatile journal)
+5. Sets up firewall (nftables on Trixie, iptables on Bookworm)
+6. Enables and starts systemd service
+
+See `bootstrap/README.md` for full documentation.
+
+### Pi SD-Card Hardening (`pi-harden.sh`)
+
+Idempotent script for Raspberry Pi (Debian Trixie) that optimizes for SD card longevity, security, and fast SSH login. Safe to run repeatedly — each section checks current state before modifying.
+
+```bash
+scp pi-harden.sh mcapp.local:~/
+ssh mcapp.local "sudo bash ~/pi-harden.sh"
+```
+
+**What it does:**
+
+| Step | Action | Benefit |
+|------|--------|---------|
+| Disable services | Stops ModemManager, cloud-init, udisks2, e2scrub, serial-getty | Fewer writes, faster boot |
+| Unattended upgrades | Security-only auto-updates, no auto-reboot | Patched without intervention |
+| tmpfs /var/log | 30M RAM-backed log directory | Eliminates log writes to SD |
+| Journald volatile | `Storage=volatile`, 20M max | No persistent journal on disk |
+| Fast SSH login | Disables MOTD scripts, pam_motd, DNS lookup | Sub-second login |
+| SSHD hardening | ed25519-only, modern ciphers, no root login, MaxAuthTries 3 | Reduced attack surface |
+| Logrotate | Reduces retention to 2 rotations | Less disk churn |
+
+**Idempotency:** Uses marker comments in `/etc/fstab`, `grep -q` checks, and state detection so re-runs skip already-applied changes. A reboot is recommended after first run.
+
+### Legacy Installation (Deprecated)
+
+The old scripts remain for reference but are deprecated:
+- `install_caddy.sh` - Caddy + lighttpd setup
+- `mc-install.sh` - Webapp deployment
+- `install_mcproxy.sh` - Python venv and service setup
+
+## Project Directory Structure
+
+```
+MCProxy/
+├── C2-mc-ws.py              # Main entry point
+├── config_loader.py         # Configuration management
+├── message_storage.py       # Message persistence
+├── udp_handler.py           # UDP protocol handler
+├── websocket_handler.py     # WebSocket server
+├── command_handler.py       # Chat command processor
+├── ble_handler.py           # Legacy D-Bus/BlueZ implementation
+├── ble_client.py            # BLE abstraction interface
+├── ble_client_local.py      # Local BLE (wraps ble_handler)
+├── ble_client_remote.py     # Remote BLE (HTTP/SSE)
+├── ble_client_disabled.py   # No-op stub
+├── sse_handler.py           # SSE transport (optional)
+├── sqlite_storage.py        # SQLite backend (optional)
+├── pi-harden.sh             # SD-card longevity & security hardening
+├── config.sample.json       # Configuration template
+├── requirements.txt         # Python dependencies
+├── orb-testing.md           # OrbStack development guide
+│
+├── ble_service/             # Standalone BLE service
+│   ├── src/
+│   │   ├── __init__.py
+│   │   ├── main.py          # FastAPI REST + SSE
+│   │   └── ble_adapter.py   # Clean D-Bus wrapper
+│   ├── pyproject.toml
+│   ├── mcproxy-ble.service  # Systemd service
+│   └── README.md            # API documentation
+│
+└── bootstrap/               # Installation scripts
+    ├── mcproxy.sh           # Main entry point
+    ├── lib/                 # Script modules
+    └── templates/           # Config templates
+```
+
+## Bootstrap Directory Structure
+
+```
+bootstrap/
+├── mcproxy.sh           # Main entry point (run with sudo)
+├── lib/
+│   ├── detect.sh        # State detection (fresh/migrate/upgrade)
+│   ├── config.sh        # Interactive configuration prompts
+│   ├── system.sh        # tmpfs, firewall, journald, hardening
+│   ├── packages.sh      # apt + uv package management
+│   ├── deploy.sh        # Webapp + Python script deployment
+│   └── health.sh        # Health checks and diagnostics
+├── templates/
+│   ├── config.json.tmpl # Configuration template
+│   ├── mcproxy.service  # systemd unit file
+│   ├── Caddyfile.tmpl   # Caddy reverse proxy config
+│   ├── nftables.conf    # Firewall rules
+│   └── journald.conf    # Volatile journal config
+├── requirements.txt     # Python dependencies (minimum versions)
+└── README.md            # Installation documentation
+```
+
+### Bootstrap CLI Options
+
+```bash
+sudo ./mcproxy.sh --check       # Dry-run, show what would change
+sudo ./mcproxy.sh --force       # Force reinstall everything
+sudo ./mcproxy.sh --fix         # Repair broken installation
+sudo ./mcproxy.sh --reconfigure # Re-prompt for config values
+sudo ./mcproxy.sh --quiet       # Minimal output (for cron)
+```
+
+### BLE Service Deployment (Optional)
+
+For distributed setups where MCProxy runs on a different machine than the Bluetooth hardware:
+
+```bash
+# On Pi with Bluetooth hardware
+cd ~/MCProxy/ble_service
+pip install -e .
+
+# Configure API key
+export BLE_SERVICE_API_KEY=your-secret-key
+
+# Run directly
+uvicorn src.main:app --host 0.0.0.0 --port 8081
+
+# Or install as systemd service
+sudo cp mcproxy-ble.service /etc/systemd/system/
+sudo systemctl edit mcproxy-ble  # Add: Environment=BLE_SERVICE_API_KEY=...
+sudo systemctl enable --now mcproxy-ble
+```
+
+The BLE service exposes:
+- `GET /api/ble/status` - Connection status
+- `GET /api/ble/devices` - Scan for devices
+- `POST /api/ble/connect` - Connect to device
+- `POST /api/ble/disconnect` - Disconnect
+- `POST /api/ble/send` - Send message/command
+- `GET /api/ble/notifications` - SSE notification stream
+- `GET /health` - Health check
+
+See `ble_service/README.md` for full API documentation.
+
+## Troubleshooting
+
+### Bluetooth Blocked by rfkill
+
+**Symptom:** `bluetoothctl power on` fails with "Failed to set power on: org.bluez.Error.Failed"
+
+**Diagnosis:**
+```bash
+rfkill list bluetooth
+# Shows: Soft blocked: yes
+```
+
+**Root cause:** Some Raspberry Pi images ship with `/etc/modprobe.d/rfkill_default.conf` containing `options rfkill default_state=0`, which blocks all radios (Bluetooth, WiFi) at boot.
+
+**Solution:** The bootstrap script automatically installs `unblock-bluetooth.service` which runs `rfkill unblock bluetooth` after the Bluetooth service starts.
+
+**Manual fix (if not using bootstrap):**
+```bash
+# Create systemd service
+cat <<'EOF' | sudo tee /etc/systemd/system/unblock-bluetooth.service
+[Unit]
+Description=Unblock Bluetooth for MCProxy BLE
+After=bluetooth.service
+Before=mcproxy.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/rfkill unblock bluetooth
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable and start
+sudo systemctl daemon-reload
+sudo systemctl enable --now unblock-bluetooth
+
+# Verify
+rfkill list bluetooth  # Should show: Soft blocked: no
+```
