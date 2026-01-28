@@ -359,8 +359,8 @@ class MessageRouter:
 
     async def _handle_dump_to_fs_command(self):
         """Handle dump to filesystem command"""
-        self.storage_handler.save_dump(store_file_name)
-        print(f"Daten gespeichert in {store_file_name}")
+        self.storage_handler.save_dump(cfg.storage.dump_file)
+        self._logger.info("Daten gespeichert in %s", cfg.storage.dump_file)
 
     # BLE command handlers - route through ble_client abstraction
     def _get_ble_client(self):
@@ -459,10 +459,12 @@ class MessageRouter:
             await self.publish('ble', 'ble_status', ble_info)
 
         # Request register dump from device so frontend gets config data
+        # Space out commands to avoid overwhelming the ESP32 BLE device
         if is_connected:
             for cmd in ('--info', '--nodeset', '--pos info', '--aprsset'):
                 try:
                     await client.send_command(cmd)
+                    await asyncio.sleep(0.5)
                 except Exception as e:
                     logger.warning("Failed to send register query %s: %s", cmd, e)
 
