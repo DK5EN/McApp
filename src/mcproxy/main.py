@@ -18,7 +18,7 @@ from .message_storage import MessageStorageHandler
 from .udp_handler import UDPHandler
 from .websocket_handler import WebSocketManager
 # BLE client abstraction - supports local, remote, and disabled modes
-from .ble_client import create_ble_client, BLEMode
+from .ble_client import create_ble_client, BLEMode, ConnectionState
 
 # Legacy imports - only backend_resolve_ip still needed (no ble_client equivalent yet)
 try:
@@ -418,27 +418,41 @@ class MessageRouter:
     async def _handle_ble_info_command(self, websocket):
         """Handle BLE info command - send current BLE status to requesting client"""
         client = self._get_ble_client()
-        if client:
-            status = client.status
+        if not client:
+            logger.warning("BLE client not available for info")
+            return
+
+        status = client.status
+        is_connected = status.state == ConnectionState.CONNECTED
+
+        if is_connected:
             ble_info = {
                 'src_type': 'BLE',
                 'TYP': 'blueZ',
-                'command': 'BLE info',
+                'command': 'connect BLE result',
                 'result': 'ok',
-                'state': status.state.value,
+                'msg': 'BLE connection already running',
                 'device_address': status.device_address,
                 'device_name': status.device_name,
                 'mode': status.mode.value,
-                'timestamp': int(time.time() * 1000)
+                'timestamp': int(time.time() * 1000),
             }
-            if websocket:
-                await self.publish('router', 'websocket_direct', {
-                    'websocket': websocket, 'data': ble_info
-                })
-            else:
-                await self.publish('ble', 'ble_status', ble_info)
         else:
-            logger.warning("BLE client not available for info")
+            ble_info = {
+                'src_type': 'BLE',
+                'TYP': 'blueZ',
+                'command': 'disconnect',
+                'result': 'ok',
+                'msg': 'BLE not connected',
+                'timestamp': int(time.time() * 1000),
+            }
+
+        if websocket:
+            await self.publish('router', 'websocket_direct', {
+                'websocket': websocket, 'data': ble_info
+            })
+        else:
+            await self.publish('ble', 'ble_status', ble_info)
 
     async def _handle_resolve_ip_command(self, hostname):
         """Handle resolve IP command"""

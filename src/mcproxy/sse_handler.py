@@ -190,24 +190,39 @@ class SSEManager:
                                 client_id,
                             )
 
-                        # Send BLE status
+                        # Send BLE status using same format the frontend expects
                         ble_client = (
                             self.message_router.get_protocol("ble_client")
                             if self.message_router else None
                         )
                         if ble_client:
+                            from .ble_client import ConnectionState
+
                             status = ble_client.status
-                            yield self._format_sse_event({
-                                "src_type": "BLE",
-                                "TYP": "blueZ",
-                                "command": "BLE info",
-                                "result": "ok",
-                                "state": status.state.value,
-                                "device_address": status.device_address,
-                                "device_name": status.device_name,
-                                "mode": status.mode.value,
-                                "timestamp": int(time.time() * 1000),
-                            })
+                            is_connected = status.state == ConnectionState.CONNECTED
+
+                            if is_connected:
+                                ble_info = {
+                                    "src_type": "BLE",
+                                    "TYP": "blueZ",
+                                    "command": "connect BLE result",
+                                    "result": "ok",
+                                    "msg": "BLE connection already running",
+                                    "device_address": status.device_address,
+                                    "device_name": status.device_name,
+                                    "mode": status.mode.value,
+                                    "timestamp": int(time.time() * 1000),
+                                }
+                            else:
+                                ble_info = {
+                                    "src_type": "BLE",
+                                    "TYP": "blueZ",
+                                    "command": "disconnect",
+                                    "result": "ok",
+                                    "msg": "BLE not connected",
+                                    "timestamp": int(time.time() * 1000),
+                                }
+                            yield self._format_sse_event(ble_info)
 
                         logger.info("SSE client %s: initial data sent", client_id)
                     except Exception as e:
