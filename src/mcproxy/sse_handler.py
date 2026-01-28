@@ -228,16 +228,9 @@ class SSEManager:
                                 }
                             yield self._format_sse_event(ble_info)
 
-                            # Request register dump so frontend gets device config
-                            if is_connected:
-                                async def _query_registers(client):
-                                    for cmd in ('--info', '--nodeset', '--pos info', '--aprsset'):
-                                        try:
-                                            await client.send_command(cmd)
-                                            await asyncio.sleep(0.5)
-                                        except Exception as e:
-                                            logger.warning("Register query %s failed: %s", cmd, e)
-                                asyncio.create_task(_query_registers(ble_client))
+                            # Register queries are NOT sent here — the frontend sends
+                            # "connect BLE" on open, which triggers _handle_ble_info_command
+                            # in MessageRouter, avoiding duplicate commands to the ESP32.
 
                         logger.info("SSE client %s: initial data sent", client_id)
                     except Exception as e:

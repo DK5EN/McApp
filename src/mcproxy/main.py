@@ -351,10 +351,14 @@ class MessageRouter:
         mheard = await self.storage_handler.process_mheard_store_parallel()
         payload = {
             "type": "response",
-            "msg": "mheard stats", 
+            "msg": "mheard stats",
             "data": mheard
         }
-        await self.publish('router', 'websocket_direct', {'websocket': websocket, 'data': payload})
+        if websocket:
+            await self.publish('router', 'websocket_direct', {'websocket': websocket, 'data': payload})
+        else:
+            # SSE client — broadcast to all connected clients
+            await self.publish('router', 'websocket_message', payload)
 
 
     async def _handle_dump_to_fs_command(self):
@@ -402,10 +406,35 @@ class MessageRouter:
     async def _handle_ble_connect_command(self, MAC):
         """Handle BLE connect command"""
         client = self._get_ble_client()
-        if client:
-            await client.connect(MAC)
-        else:
+        if not client:
             logger.warning("BLE client not available for connect")
+            return
+
+        # Check if already connected — skip reconnect, just query registers
+        if hasattr(client, 'refresh_status'):
+            status = await client.refresh_status()
+        else:
+            status = client.status
+
+        already_connected = status.state == ConnectionState.CONNECTED
+
+        if not already_connected:
+            await client.connect(MAC)
+            await asyncio.sleep(1.0)
+            # Re-check status after connect
+            if hasattr(client, 'refresh_status'):
+                status = await client.refresh_status()
+            else:
+                status = client.status
+
+        if status.state == ConnectionState.CONNECTED:
+            # Query registers, --info last (slowest to respond)
+            for cmd in ('--nodeset', '--pos info', '--aprsset', '--info'):
+                try:
+                    await client.send_command(cmd)
+                    await asyncio.sleep(0.6)
+                except Exception as e:
+                    logger.warning("Register query %s failed: %s", cmd, e)
 
     async def _handle_ble_disconnect_command(self):
         """Handle BLE disconnect command"""
@@ -459,12 +488,12 @@ class MessageRouter:
             await self.publish('ble', 'ble_status', ble_info)
 
         # Request register dump from device so frontend gets config data
-        # Space out commands to avoid overwhelming the ESP32 BLE device
+        # Send --info last: it's the slowest to respond and most likely to get dropped
         if is_connected:
-            for cmd in ('--info', '--nodeset', '--pos info', '--aprsset'):
+            for cmd in ('--nodeset', '--pos info', '--aprsset', '--info'):
                 try:
                     await client.send_command(cmd)
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.6)
                 except Exception as e:
                     logger.warning("Failed to send register query %s: %s", cmd, e)
 
