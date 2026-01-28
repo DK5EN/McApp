@@ -1,0 +1,16 @@
+# MCProxy: Unblock Bluetooth at boot
+# Some Pi images ship with rfkill default_state=0 which blocks all radios
+# This service ensures Bluetooth is unblocked for BLE communication
+
+[Unit]
+Description=Unblock Bluetooth for MCProxy BLE
+After=bluetooth.service
+Before=mcproxy.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/rfkill unblock bluetooth
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

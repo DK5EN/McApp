@@ -17,6 +17,7 @@ import aiohttp
 from aiohttp_sse_client import client as sse_client
 
 from .ble_client import BLEClientBase, BLEDevice, BLEMode, BLEStatus, ConnectionState
+from .ble_handler import decode_binary_message, decode_json_message, dispatcher
 
 logger = logging.getLogger(__name__)
 
@@ -239,7 +240,6 @@ class BLEClientRemote(BLEClientBase):
     async def send_message(self, msg: str, group: str) -> bool:
         """Send message via remote service"""
         if not self.is_connected:
-            logger.warning("Not connected, cannot send message")
             return False
 
         try:
@@ -257,7 +257,6 @@ class BLEClientRemote(BLEClientBase):
     async def send_command(self, cmd: str) -> bool:
         """Send A0 command via remote service"""
         if not self.is_connected:
-            logger.warning("Not connected, cannot send command")
             return False
 
         try:
@@ -345,7 +344,10 @@ class BLEClientRemote(BLEClientBase):
             try:
                 logger.info("Connecting to SSE stream: %s", url)
 
-                async with sse_client.EventSource(url, headers=headers) as event_source:
+                timeout = aiohttp.ClientTimeout(total=None, sock_read=90)
+                async with sse_client.EventSource(
+                    url, headers=headers, timeout=timeout
+                ) as event_source:
                     async for event in event_source:
                         if not self._running:
                             break
@@ -361,8 +363,17 @@ class BLEClientRemote(BLEClientBase):
                 break
             except Exception as e:
                 if self._running:
-                    logger.warning("SSE connection error: %s, reconnecting...", e)
-                    await asyncio.sleep(5)
+                    if not hasattr(self, '_sse_backoff'):
+                        self._sse_backoff = 5
+                    logger.warning("SSE connection error: %s, reconnecting in %ds...",
+                                   e, self._sse_backoff)
+                    await asyncio.sleep(self._sse_backoff)
+                    self._sse_backoff = min(self._sse_backoff * 2, 60)
+                else:
+                    break
+            else:
+                # Reset backoff on clean exit from async for (shouldn't normally happen)
+                self._sse_backoff = 5
 
     async def _handle_notification(self, data: str):
         """Handle incoming SSE notification"""
@@ -388,18 +399,49 @@ class BLEClientRemote(BLEClientBase):
     def _transform_notification(self, notification: dict) -> dict | None:
         """Transform SSE notification to match local BLE handler format"""
         if notification.get('format') == 'json' and 'parsed' in notification:
-            # JSON notification - return parsed data
+            # JSON notification - run through dispatcher like local mode
             parsed = notification['parsed']
+            output = dispatcher(parsed)
+            if output:
+                output['timestamp'] = notification.get('timestamp', int(time.time() * 1000))
+                output['src_type'] = 'ble_remote'
+                return output
+            # Fallback: return parsed directly if dispatcher returns None
             parsed['timestamp'] = notification.get('timestamp', int(time.time() * 1000))
             parsed['src_type'] = 'ble_remote'
             return parsed
 
         elif notification.get('format') == 'binary':
-            # Binary notification - needs decoding by the consumer
+            # Decode binary the same way local BLE handler does
+            raw_b64 = notification.get('raw_base64')
+            if raw_b64:
+                try:
+                    raw_bytes = base64.b64decode(raw_b64)
+                    if raw_bytes.startswith(b'@'):
+                        decoded = decode_binary_message(raw_bytes)
+                        output = dispatcher(decoded)
+                        if output:
+                            output['src_type'] = 'ble_remote'
+                            output['timestamp'] = notification.get(
+                                'timestamp', int(time.time() * 1000)
+                            )
+                            return output
+                    elif raw_bytes.startswith(b'D{'):
+                        decoded = decode_json_message(raw_bytes)
+                        output = dispatcher(decoded)
+                        if output:
+                            output['src_type'] = 'ble_remote'
+                            output['timestamp'] = notification.get(
+                                'timestamp', int(time.time() * 1000)
+                            )
+                            return output
+                except Exception as e:
+                    logger.warning("Failed to decode binary notification: %s", e)
+            # Fallback: return raw if decoding failed
             return {
                 'src_type': 'ble_remote',
                 'format': 'binary',
-                'raw_base64': notification.get('raw_base64'),
+                'raw_base64': raw_b64,
                 'raw_hex': notification.get('raw_hex'),
                 'timestamp': notification.get('timestamp', int(time.time() * 1000))
             }

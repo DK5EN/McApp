@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import asyncio
 import json
+import logging
 import sys
 import time
 from datetime import datetime
@@ -13,6 +14,8 @@ from dbus_next.constants import BusType
 from dbus_next.errors import DBusError, InterfaceNotFoundError
 from dbus_next.service import ServiceInterface, method
 from timezonefinder import TimezoneFinder
+
+logger = logging.getLogger(__name__)
 
 VERSION = "v0.48.0"
 
@@ -650,24 +653,19 @@ class BLEClient:
                     return  # Success
                 except Exception as e:
                     last_error = e
+                    wait_time = min(2 ** attempt, 8)
+                    logger.warning("BLE connect attempt %d/%d failed: %s",
+                                   attempt + 1, max_retries, e)
                     if attempt < max_retries - 1:
-                        #wait_time = min(2 ** attempt, 8)  # Exponential backoff, capped at 8 seconds
-                        wait_time = 1  # linear .. we don't want to wait forever
-                        if has_console:
-                            print(f"⚠️ Connection attempt {attempt + 1}/{max_retries} failed: {e}")
-                            print(f"🔄 Retrying in {wait_time}s...")
-                        await self._publish_status('connect BLE', 'info', 
+                        await self._publish_status('connect BLE', 'info',
                                                  f"Attempt {attempt + 1} failed, retrying in {wait_time}s...")
                         await asyncio.sleep(wait_time)
                         await self._cleanup_failed_connection()
-                    else:
-                        # This is the final attempt
-                        if has_console:
-                            print(f"❌ All {max_retries} connection attempts failed")
-            
+
             # All attempts failed
-            await self._publish_status('connect BLE result', 'error', 
-                                     f"❌ Connection failed after {max_retries} attempts: {last_error}")
+            logger.error("BLE connection failed after %d attempts: %s", max_retries, last_error)
+            await self._publish_status('connect BLE result', 'error',
+                                     f"Connection failed after {max_retries} attempts")
             self._connected = False
 
 
@@ -871,10 +869,7 @@ class BLEClient:
         return None, None
 
     async def start_notify(self, on_change=None):
-        if not self._connected: 
-           await self._publish_status('notify','error', "❌ connection not established")
-           if has_console:
-              print("❌ Connection not established, start notify aborted")
+        if not self._connected:
            return
 
         is_notifying = (await self.read_props_iface.call_get(GATT_CHARACTERISTIC_INTERFACE, "Notifying")).value
@@ -884,8 +879,6 @@ class BLEClient:
            return
 
         if not self.bus:
-           print("❌ Connection not established, start notify aborted")
-           await self._publish_status('notify','error', "❌ connection not established")
            return
 
         if not self.read_char_iface:
@@ -919,13 +912,9 @@ class BLEClient:
 
     async def stop_notify(self):
         if not self.bus:
-           print("🛑 connection not established, can't stop notify ..")
-           await self._publish_status('notify','error', "❌ connection not established")
            return
 
         if not self.read_char_iface:
-           print("🛑 no read interface, can't stop notify ..")
-           await self._publish_status('notify','error', "❌ no read interface, can't stop notify")
            return
 
         try:
@@ -952,8 +941,7 @@ class BLEClient:
 
     async def send_hello(self):
         if not self.bus:
-           print("🛑 connection not established, can't send hello ..")
-           await self._publish_status('send hello','error', "❌ connection not established")
+           logger.debug("BLE not connected, skipping send")
            return
 
         connected = (await self.props_iface.call_get(DEVICE_INTERFACE, "Connected")).value
@@ -972,12 +960,11 @@ class BLEClient:
                print("📨 Hello sent ..")
 
         else:
-            print("⚠️ Keine Write-Charakteristik verfügbar")
+            logger.debug("No write characteristic available")
 
     async def send_message(self, msg, grp):
         if not self.bus:
-           print("🛑 connection not established, can't send ..")
-           await self._publish_status('send message','error', "❌ connection not established")
+           logger.debug("BLE not connected, skipping send")
            return
 
         connected = (await self.props_iface.call_get(DEVICE_INTERFACE, "Connected")).value
@@ -1006,12 +993,11 @@ class BLEClient:
               print(f"💥 Fehler beim Schreiben an BLE: {e}")
               await self._publish_status('send message','error', f"❌ BLE write error {e}")
         else:
-            print("⚠️ Keine Write-Charakteristik verfügbar")
+            logger.debug("No write characteristic available")
 
     async def a0_commands(self, cmd):
         if not self.bus:
-           print("🛑 connection not established, can't send ..")
-           await self._publish_status('a0 command','error', "❌ connection not established")
+           logger.debug("BLE not connected, skipping send")
            return
 
         await self._check_conn()
@@ -1028,14 +1014,12 @@ class BLEClient:
                print(f"📨 Message sent .. {byte_array}")
 
         else:
-            print("⚠️ Keine Write-Charakteristik verfügbar")
+            logger.debug("No write characteristic available")
 
     async def set_commands(self, cmd):
        laenge = 0
        
        if not self.bus:
-          await self._publish_status('set command','error', "❌ connection not established")
-          print("🛑 connection not established, can't send ..")
           return
 
        await self._check_conn()
@@ -1067,36 +1051,51 @@ class BLEClient:
                print(f"📨 Message sent .. {byte_array}")
 
        else:
-            print("⚠️ Keine Write-Charakteristik verfügbar")
+            logger.debug("No write characteristic available")
 
     async def _check_conn(self):
+        if not self.props_iface:
+            return
         connected = (await self.props_iface.call_get(DEVICE_INTERFACE, "Connected")).value
         if not connected:
-           print("⚠️ Verbindung verloren")
+           logger.warning("BLE connection lost to %s", self.mac)
            await self.stop_notify()
-           await self.dev_iface.call_disconnect()
+           try:
+               await self.dev_iface.call_disconnect()
+           except Exception:
+               pass
            await self.close()
-
-           await ble_connect(self.mac)
+           self._connected = False
 
     async def _send_keepalive(self):
+        backoff = 300  # start at 5 minutes
+        max_backoff = 1800  # max 30 minutes
+        consecutive_failures = 0
         try:
             while self._connected:
-                await asyncio.sleep(300)  # 5 minutes
-                if has_console:
-                   print(f"📤 Sending keep-alive to {self.mac}")
+                await asyncio.sleep(backoff)
+                if not self._connected:
+                    break
                 try:
                     props = await self.props_iface.call_get_all(DEVICE_INTERFACE)
                     if not props["ServicesResolved"].value:
                        await self._check_conn()
-
+                       consecutive_failures += 1
+                       backoff = min(backoff * 2, max_backoff)
+                       if consecutive_failures == 1:
+                           logger.warning("BLE device unreachable, will retry with backoff")
                     else:
                       await self.a0_commands("--pos info")
+                      consecutive_failures = 0
+                      backoff = 300
 
                 except Exception as e:
-                    print(f"⚠️ Fehler beim Senden des Keep-Alive: {e}")
+                    consecutive_failures += 1
+                    if consecutive_failures <= 3:
+                        logger.warning("Keepalive error: %s", e)
+                    backoff = min(backoff * 2, max_backoff)
         except asyncio.CancelledError:
-            print(f"⛔ Keep-alive für {self.mac} gestoppt")
+            pass
 
     async def disconnect(self):
         if not self.dev_iface:

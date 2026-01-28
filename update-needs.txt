@@ -1,0 +1,19 @@
+  1. CRITICAL: Expired GPG Key for Caddy Repository                             
+                                                                                
+  EXPKEYSIG ABA1F9B8875A6661 Caddy Web Server <contact@caddyserver.com>         
+  Fix:                                                                          
+  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg  
+  --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg  
+
+curl -1sLf                                            
+      'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo tee         
+      /usr/share/keyrings/caddy-keyring.asc > /dev/null
+
+
+sudo systemctl disable ModemManager
+
+sudo systemctl disable --now packagekit
+
+sudo systemctl disable --now pipewire pipewire-pulse
+sudo systemctl mask pipewire pipewire-pulse 
+sudo systemctl disable --now rtkit-daemon   
