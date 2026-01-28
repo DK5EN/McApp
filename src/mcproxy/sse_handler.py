@@ -155,15 +155,27 @@ class SSEManager:
 
                     # Send initial data (messages, positions, BLE status)
                     try:
-                        if self.message_router and self.message_router.storage_handler:
-                            initial_payload = self.message_router.storage_handler.get_initial_payload()
+                        storage = (
+                            self.message_router.storage_handler
+                            if self.message_router else None
+                        )
+                        if storage:
+                            initial_payload = storage.get_initial_payload()
+                            logger.info(
+                                "SSE client %s: sending initial payload (%d items)",
+                                client_id, len(initial_payload),
+                            )
                             yield self._format_sse_event({
                                 "type": "response",
                                 "msg": "message dump",
                                 "data": initial_payload,
                             })
 
-                            full_data = self.message_router.storage_handler.get_full_dump()
+                            full_data = storage.get_full_dump()
+                            logger.info(
+                                "SSE client %s: sending full dump (%d items)",
+                                client_id, len(full_data),
+                            )
                             if full_data:
                                 CHUNK_SIZE = 20000
                                 for i in range(0, len(full_data), CHUNK_SIZE):
@@ -172,6 +184,11 @@ class SSEManager:
                                         "msg": "message dump",
                                         "data": full_data[i:i + CHUNK_SIZE],
                                     })
+                        else:
+                            logger.warning(
+                                "SSE client %s: no storage handler available",
+                                client_id,
+                            )
 
                         # Send BLE status
                         ble_client = (
@@ -192,11 +209,11 @@ class SSEManager:
                                 "timestamp": int(time.time() * 1000),
                             })
 
-                        logger.info("SSE client %s: sent initial data", client_id)
+                        logger.info("SSE client %s: initial data sent", client_id)
                     except Exception as e:
-                        logger.warning(
-                            "Failed to send initial data to SSE client %s: %s",
-                            client_id, e,
+                        logger.error(
+                            "SSE client %s: failed to send initial data: %s",
+                            client_id, e, exc_info=True,
                         )
 
                     while client.connected:
