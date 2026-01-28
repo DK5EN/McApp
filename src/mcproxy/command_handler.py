@@ -10,7 +10,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Optional
 
-from meteo import WeatherService
+from .meteo import WeatherService
 
 VERSION = "v0.61.0"
 

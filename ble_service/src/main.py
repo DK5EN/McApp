@@ -1,0 +1,458 @@
+"""
+BLE Service API - HTTP/SSE interface for remote BLE access.
+
+This FastAPI application exposes BLE functionality via REST endpoints
+and Server-Sent Events for real-time notifications.
+"""
+
+import asyncio
+import base64
+import json
+import logging
+import os
+import time
+from collections import deque
+from contextlib import asynccontextmanager
+from typing import Annotated
+
+from fastapi import Depends, FastAPI, HTTPException, Header, Query
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from sse_starlette.sse import EventSourceResponse
+
+from .ble_adapter import BLEAdapter, BLEDevice, ConnectionState
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+# Configuration from environment
+API_KEY = os.getenv("BLE_SERVICE_API_KEY", "mcproxy-ble-secret")
+CORS_ORIGINS = os.getenv("BLE_SERVICE_CORS_ORIGINS", "*").split(",")
+
+# Global state
+ble_adapter: BLEAdapter | None = None
+notification_queue: deque[dict] = deque(maxlen=1000)
+notification_event = asyncio.Event()
+
+
+def notification_callback(data: bytes):
+    """Called when BLE notification received"""
+    timestamp = int(time.time() * 1000)
+
+    # Try to parse as JSON or binary
+    notification = {
+        "timestamp": timestamp,
+        "raw_base64": base64.b64encode(data).decode('ascii'),
+        "raw_hex": data.hex(),
+    }
+
+    # Attempt to decode
+    try:
+        if data.startswith(b'D{'):
+            # JSON message
+            json_str = data.rstrip(b'\x00').decode("utf-8")[1:]
+            notification["parsed"] = json.loads(json_str)
+            notification["format"] = "json"
+        elif data.startswith(b'@'):
+            # Binary mesh message
+            notification["format"] = "binary"
+            notification["prefix"] = data[:2].decode('ascii', errors='replace')
+        else:
+            notification["format"] = "unknown"
+    except Exception as e:
+        logger.warning("Notification decode error: %s", e)
+        notification["format"] = "raw"
+
+    notification_queue.append(notification)
+    notification_event.set()
+    logger.debug("Notification queued: %s", notification.get("format", "unknown"))
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup and shutdown lifecycle"""
+    global ble_adapter
+
+    logger.info("Starting BLE Service")
+    ble_adapter = BLEAdapter(notification_callback=notification_callback)
+
+    yield
+
+    # Cleanup
+    logger.info("Shutting down BLE Service")
+    if ble_adapter and ble_adapter.is_connected:
+        await ble_adapter.disconnect()
+
+
+app = FastAPI(
+    title="MCProxy BLE Service",
+    description="Remote BLE access for MeshCom devices",
+    version="0.1.0",
+    lifespan=lifespan
+)
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# --- Authentication ---
+
+async def verify_api_key(x_api_key: Annotated[str | None, Header()] = None):
+    """Verify API key header"""
+    if not API_KEY or API_KEY == "disabled":
+        return True
+
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    return True
+
+
+# --- Request/Response Models ---
+
+class ConnectRequest(BaseModel):
+    """Connection request"""
+    device_address: str | None = None
+    device_name: str | None = None
+
+
+class SendRequest(BaseModel):
+    """Send data request"""
+    data_base64: str | None = None
+    data_hex: str | None = None
+    message: str | None = None
+    group: str | None = None
+    command: str | None = None
+
+
+class StatusResponse(BaseModel):
+    """Status response"""
+    connected: bool
+    state: str
+    device_address: str | None = None
+    device_name: str | None = None
+    last_activity: float | None = None
+    error: str | None = None
+
+
+class DeviceResponse(BaseModel):
+    """Device information"""
+    name: str
+    address: str
+    rssi: int
+    paired: bool
+
+
+class ScanResponse(BaseModel):
+    """Scan results"""
+    devices: list[DeviceResponse]
+    count: int
+
+
+class ResultResponse(BaseModel):
+    """Generic result response"""
+    success: bool
+    message: str
+
+
+# --- API Endpoints ---
+
+@app.get("/api/ble/status", response_model=StatusResponse)
+async def get_status(_: bool = Depends(verify_api_key)):
+    """Get current BLE connection status"""
+    status = ble_adapter.status
+
+    return StatusResponse(
+        connected=ble_adapter.is_connected,
+        state=status.state.value,
+        device_address=status.device.address if status.device else None,
+        device_name=status.device.name if status.device else None,
+        last_activity=status.last_activity,
+        error=status.error
+    )
+
+
+@app.get("/api/ble/devices", response_model=ScanResponse)
+async def scan_devices(
+    timeout: float = Query(default=5.0, ge=1.0, le=30.0),
+    prefix: str = Query(default="MC-"),
+    _: bool = Depends(verify_api_key)
+):
+    """Scan for BLE devices"""
+    if ble_adapter.is_connected:
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot scan while connected. Disconnect first."
+        )
+
+    try:
+        devices = await ble_adapter.scan(timeout=timeout, prefix=prefix)
+        return ScanResponse(
+            devices=[
+                DeviceResponse(
+                    name=d.name,
+                    address=d.address,
+                    rssi=d.rssi,
+                    paired=d.paired
+                )
+                for d in devices
+            ],
+            count=len(devices)
+        )
+    except Exception as e:
+        logger.error("Scan error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ble/connect", response_model=ResultResponse)
+async def connect(request: ConnectRequest, _: bool = Depends(verify_api_key)):
+    """Connect to a BLE device"""
+    if not request.device_address and not request.device_name:
+        raise HTTPException(
+            status_code=400,
+            detail="Either device_address or device_name required"
+        )
+
+    # If only name provided, scan for device
+    mac = request.device_address
+    if not mac and request.device_name:
+        devices = await ble_adapter.scan(timeout=5.0)
+        for device in devices:
+            if device.name == request.device_name:
+                mac = device.address
+                break
+        if not mac:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Device '{request.device_name}' not found"
+            )
+
+    try:
+        success = await ble_adapter.connect(mac)
+        if success:
+            # Start notifications and send hello
+            await ble_adapter.start_notify()
+            await ble_adapter.send_hello()
+            return ResultResponse(success=True, message=f"Connected to {mac}")
+        else:
+            return ResultResponse(success=False, message="Connection failed")
+    except Exception as e:
+        logger.error("Connect error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ble/disconnect", response_model=ResultResponse)
+async def disconnect(_: bool = Depends(verify_api_key)):
+    """Disconnect from current device"""
+    if not ble_adapter.is_connected:
+        return ResultResponse(success=True, message="Already disconnected")
+
+    try:
+        await ble_adapter.disconnect()
+        return ResultResponse(success=True, message="Disconnected")
+    except Exception as e:
+        logger.error("Disconnect error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ble/send", response_model=ResultResponse)
+async def send_data(request: SendRequest, _: bool = Depends(verify_api_key)):
+    """Send data to connected device"""
+    if not ble_adapter.is_connected:
+        raise HTTPException(status_code=409, detail="Not connected")
+
+    try:
+        # Determine what to send
+        if request.command:
+            # A0 command
+            success = await ble_adapter.send_command(request.command)
+            return ResultResponse(
+                success=success,
+                message=f"Command sent: {request.command}" if success else "Send failed"
+            )
+
+        elif request.message and request.group:
+            # Message to group
+            success = await ble_adapter.send_message(request.message, request.group)
+            return ResultResponse(
+                success=success,
+                message=f"Message sent to group {request.group}" if success else "Send failed"
+            )
+
+        elif request.data_base64:
+            # Raw base64 data
+            data = base64.b64decode(request.data_base64)
+            success = await ble_adapter.write(data)
+            return ResultResponse(
+                success=success,
+                message=f"Sent {len(data)} bytes" if success else "Send failed"
+            )
+
+        elif request.data_hex:
+            # Raw hex data
+            data = bytes.fromhex(request.data_hex)
+            success = await ble_adapter.write(data)
+            return ResultResponse(
+                success=success,
+                message=f"Sent {len(data)} bytes" if success else "Send failed"
+            )
+
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide command, message+group, data_base64, or data_hex"
+            )
+
+    except Exception as e:
+        logger.error("Send error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ble/pair", response_model=ResultResponse)
+async def pair_device(request: ConnectRequest, _: bool = Depends(verify_api_key)):
+    """Pair with a BLE device"""
+    if not request.device_address:
+        raise HTTPException(status_code=400, detail="device_address required")
+
+    if ble_adapter.is_connected:
+        raise HTTPException(
+            status_code=409,
+            detail="Disconnect before pairing"
+        )
+
+    try:
+        success = await ble_adapter.pair(request.device_address)
+        return ResultResponse(
+            success=success,
+            message=f"Paired with {request.device_address}" if success else "Pairing failed"
+        )
+    except Exception as e:
+        logger.error("Pair error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ble/unpair", response_model=ResultResponse)
+async def unpair_device(request: ConnectRequest, _: bool = Depends(verify_api_key)):
+    """Unpair a BLE device"""
+    if not request.device_address:
+        raise HTTPException(status_code=400, detail="device_address required")
+
+    try:
+        success = await ble_adapter.unpair(request.device_address)
+        return ResultResponse(
+            success=success,
+            message=f"Unpaired {request.device_address}" if success else "Unpair failed"
+        )
+    except Exception as e:
+        logger.error("Unpair error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ble/settime", response_model=ResultResponse)
+async def set_device_time(_: bool = Depends(verify_api_key)):
+    """Set current time on connected device"""
+    if not ble_adapter.is_connected:
+        raise HTTPException(status_code=409, detail="Not connected")
+
+    try:
+        success = await ble_adapter.set_time()
+        return ResultResponse(
+            success=success,
+            message="Time set" if success else "Failed to set time"
+        )
+    except Exception as e:
+        logger.error("Set time error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- SSE Notifications ---
+
+@app.get("/api/ble/notifications")
+async def stream_notifications(
+    x_api_key: Annotated[str | None, Header()] = None
+):
+    """
+    Server-Sent Events stream of BLE notifications.
+
+    Connect to this endpoint to receive real-time BLE notifications.
+    Each event contains:
+    - timestamp: Unix timestamp in milliseconds
+    - raw_base64: Raw notification data (base64 encoded)
+    - raw_hex: Raw notification data (hex encoded)
+    - format: "json", "binary", or "raw"
+    - parsed: Parsed JSON data (if format is "json")
+    """
+    # Verify API key
+    if API_KEY and API_KEY != "disabled":
+        if x_api_key != API_KEY:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+    async def event_generator():
+        """Generate SSE events from notification queue"""
+        last_sent = 0
+
+        # Send initial status
+        yield {
+            "event": "status",
+            "data": json.dumps({
+                "connected": ble_adapter.is_connected,
+                "state": ble_adapter.status.state.value,
+                "timestamp": int(time.time() * 1000)
+            })
+        }
+
+        while True:
+            # Wait for new notifications
+            try:
+                await asyncio.wait_for(notification_event.wait(), timeout=30.0)
+                notification_event.clear()
+            except asyncio.TimeoutError:
+                # Send keepalive ping
+                yield {
+                    "event": "ping",
+                    "data": json.dumps({"timestamp": int(time.time() * 1000)})
+                }
+                continue
+
+            # Send all queued notifications
+            while notification_queue:
+                notification = notification_queue.popleft()
+                if notification["timestamp"] > last_sent:
+                    last_sent = notification["timestamp"]
+                    yield {
+                        "event": "notification",
+                        "data": json.dumps(notification)
+                    }
+
+    return EventSourceResponse(event_generator())
+
+
+# --- Health Check ---
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "ble_connected": ble_adapter.is_connected if ble_adapter else False,
+        "timestamp": int(time.time() * 1000)
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=int(os.getenv("BLE_SERVICE_PORT", "8081")),
+        reload=False
+    )

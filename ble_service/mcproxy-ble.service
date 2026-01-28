@@ -1,0 +1,21 @@
+[Unit]
+Description=MCProxy BLE Service
+After=bluetooth.target dbus.service
+Wants=bluetooth.target
+
+[Service]
+Type=simple
+User=martin
+WorkingDirectory=/home/martin/mcproxy-test
+Environment=PATH=/home/martin/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=BLE_SERVICE_API_KEY=test-dev-key
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=+/usr/sbin/rfkill unblock bluetooth
+ExecStartPre=/bin/sleep 2
+ExecStartPre=+/usr/bin/bluetoothctl power on
+ExecStart=/home/martin/.local/bin/uv run uvicorn ble_service.src.main:app --host 127.0.0.1 --port 8081
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

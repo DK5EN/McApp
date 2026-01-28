@@ -10,78 +10,128 @@ import time
 import traceback
 from collections import deque, defaultdict
 
-from message_storage import MessageStorageHandler
-from udp_handler import UDPHandler
-from websocket_handler import WebSocketManager
-from ble_handler import (
-    ble_connect, ble_disconnect, ble_pair, ble_unpair,
-    scan_ble_devices, backend_resolve_ip,
-    handle_a0_command, handle_set_command, handle_ble_message
-)
-from command_handler import create_command_handler
+# New modular imports
+from .logging_setup import setup_logging, get_logger, has_console as check_console
+from .config_loader import Config, hours_to_dd_hhmm
 
-VERSION = "v0.50.0"
+from .message_storage import MessageStorageHandler
+from .udp_handler import UDPHandler
+from .websocket_handler import WebSocketManager
+# BLE client abstraction - supports local, remote, and disabled modes
+from .ble_client import create_ble_client, BLEMode
+
+# Legacy imports for backward compatibility (will be removed)
+try:
+    from .ble_handler import (
+        ble_connect, ble_disconnect, ble_pair, ble_unpair,
+        scan_ble_devices, backend_resolve_ip,
+        handle_a0_command, handle_set_command, handle_ble_message
+    )
+    BLE_HANDLER_AVAILABLE = True
+except ImportError:
+    BLE_HANDLER_AVAILABLE = False
+    # Define stubs when ble_handler is not available
+    async def ble_connect(*args, **kwargs): pass
+    async def ble_disconnect(*args, **kwargs): pass
+    async def ble_pair(*args, **kwargs): pass
+    async def ble_unpair(*args, **kwargs): pass
+    async def scan_ble_devices(*args, **kwargs): pass
+    async def backend_resolve_ip(*args, **kwargs): pass
+    async def handle_a0_command(*args, **kwargs): pass
+    async def handle_set_command(*args, **kwargs): pass
+    async def handle_ble_message(*args, **kwargs): pass
+from .command_handler import create_command_handler
+
+# Optional imports for new features
+try:
+    from .sse_handler import SSEManager, create_sse_manager
+    SSE_AVAILABLE = True
+except ImportError:
+    SSE_AVAILABLE = False
+
+try:
+    from .sqlite_storage import create_sqlite_storage
+    SQLITE_AVAILABLE = True
+except ImportError:
+    SQLITE_AVAILABLE = False
+
+VERSION = "v0.51.0"
+
+# Module logger
+logger = get_logger(__name__)
 
 
 def debug_signal_handler(signum, frame):
     """Print stack trace when USR1 signal received"""
-    print("=" * 60)
-    print("🔍 DEBUG: Stack trace at hang point:")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("DEBUG: Stack trace at hang point:")
+    logger.info("=" * 60)
     traceback.print_stack(frame)
-    print("=" * 60)
+    logger.info("=" * 60)
 
-
-CONFIG_FILE = "/etc/mcadvchat/config.json"
-if os.getenv("MCADVCHAT_ENV") == "dev":
-   print("*** Debug 🐛 and 🔧 DEV Environment detected ***")
-   CONFIG_FILE = "/etc/mcadvchat/config.dev.json"
 
 block_list = [
   "response",
   "OE0XXX-99",
 ]
 
-
-def load_config(path=CONFIG_FILE):
-    with open(path, "r", encoding="utf-8") as f:
-        cfg = json.load(f)
-    return cfg
-
-def hours_to_dd_hhmm(hours: int) -> str:
-    days = hours // 24
-    remainder_hours = hours % 24
-    return f"{days:02d} day(s) {remainder_hours:02d}:00h"
-
 class MessageRouter:
     def __init__(self, message_storage_handler=None):
         self._subscribers = defaultdict(list)
         self._protocols = {}
         self.storage_handler = message_storage_handler
-        self.logger = print
         self.my_callsign = None
         self.validator = None
+        self._logger = get_logger(f"{__name__}.MessageRouter")
 
         if message_storage_handler:
             self.subscribe('mesh_message', self._storage_handler)
             self.subscribe('ble_notification', self._storage_handler)
 
-        self.subscribe('ble_message', self._ble_message_handler)  
-        self.subscribe('udp_message', self._udp_message_handler) 
+        self.subscribe('ble_message', self._ble_message_handler)
+        self.subscribe('udp_message', self._udp_message_handler)
 
     def set_callsign(self, callsign):
         """Set the callsign from config"""
         self.my_callsign = callsign.upper()
         self.validator = MessageValidator(self.my_callsign)
-        if has_console:
-            print(f"🔧 MessageRouter: Callsign set to '{self.my_callsign}', validator initialized")
+        self._logger.info("Callsign set to '%s', validator initialized", self.my_callsign)
+
+    # --- Publish Helper Methods ---
+    async def publish_ble_status(self, command: str, result: str, msg: str):
+        """Standardized BLE status publishing"""
+        await self.publish('ble', 'ble_status', {
+            'src_type': 'BLE',
+            'TYP': 'blueZ',
+            'command': command,
+            'result': result,
+            'msg': msg,
+            'timestamp': int(time.time() * 1000)
+        })
+
+    async def publish_system_message(self, msg: str, msg_type: str = 'info'):
+        """Publish system message to websocket clients"""
+        await self.publish('system', 'websocket_message', {
+            'src_type': 'system',
+            'type': msg_type,
+            'msg': msg,
+            'timestamp': int(time.time() * 1000)
+        })
+
+    async def publish_error(self, msg: str, source: str = 'system'):
+        """Publish error message to websocket clients"""
+        await self.publish(source, 'websocket_message', {
+            'src_type': 'system',
+            'type': 'error',
+            'msg': msg,
+            'timestamp': int(time.time() * 1000)
+        })
 
 
     def test_suppression_logic(self):
         """Test suppression logic based on the table scenarios"""
-        if has_console:
-            print("\n🧪 Testing Suppression Logic:")
-            print("=" * 50)
+        self._logger.info("Testing Suppression Logic:")
+        self._logger.info("=" * 50)
         
         test_cases = [
             # (src, dst, msg, expected_suppression, description)
@@ -169,8 +219,7 @@ class MessageRouter:
     def register_protocol(self, name: str, handler):
         """Register a protocol handler (UDP, BLE, WebSocket)"""
         self._protocols[name] = handler
-        if has_console:
-            print(f"MessageRouter: Registered protocol '{name}'")
+        self._logger.info("Registered protocol '%s'", name)
         
     def subscribe(self, message_type: str, handler_func):
         """Subscribe to specific message types"""
@@ -902,48 +951,116 @@ def test_message_blocking_integration(self):
 
 
 async def main():
-    message_store = deque()
-    storage_handler = MessageStorageHandler(message_store, MAX_STORE_SIZE_MB)
-
-    storage_handler.load_dump(store_file_name)
-    storage_handler.prune_messages(PRUNE_HOURS, block_list)
+    # Initialize storage backend based on config
+    if cfg.storage.backend == "sqlite" and SQLITE_AVAILABLE:
+        logger.info("Using SQLite storage backend")
+        storage_handler = await create_sqlite_storage(
+            cfg.storage.db_path,
+            cfg.storage.max_size_mb
+        )
+        await storage_handler.load_dump(cfg.storage.dump_file)
+        await storage_handler.prune_messages(cfg.storage.prune_hours, block_list)
+    else:
+        # Default to in-memory storage
+        if cfg.storage.backend == "sqlite" and not SQLITE_AVAILABLE:
+            logger.warning("SQLite requested but not available, using memory storage")
+        logger.info("Using in-memory storage backend")
+        message_store = deque()
+        storage_handler = MessageStorageHandler(message_store, cfg.storage.max_size_mb)
+        storage_handler.load_dump(cfg.storage.dump_file)
+        storage_handler.prune_messages(cfg.storage.prune_hours, block_list)
 
     message_router = MessageRouter(storage_handler)
+    message_router.set_callsign(cfg.call_sign)
 
-    CALL_SIGN = config["CALL_SIGN"]
-    message_router.set_callsign(CALL_SIGN)
-
-    #Command Handler Plugin
-    command_handler = create_command_handler(message_router, storage_handler, CALL_SIGN, LAT, LONG, STAT_NAME, USER_INFO_TEXT)
-
+    # Command Handler Plugin
+    command_handler = create_command_handler(
+        message_router,
+        storage_handler,
+        cfg.call_sign,
+        cfg.location.latitude,
+        cfg.location.longitude,
+        cfg.location.station_name,
+        cfg.user_info_text
+    )
     message_router.register_protocol('commands', command_handler)
 
+    # UDP Handler
     udp_handler = UDPHandler(
-        listen_port=UDP_PORT_list,
-        target_host=config["UDP_TARGET"], 
-        target_port=UDP_PORT_send,
+        listen_port=cfg.udp.port_listen,
+        target_host=cfg.udp.target,
+        target_port=cfg.udp.port_send,
         message_callback=None,
         message_router=message_router
     )
-
     message_router.register_protocol('udp', udp_handler)
 
-    websocket_manager = WebSocketManager(WS_HOST, WS_PORT, message_router)
+    # WebSocket Manager
+    websocket_manager = WebSocketManager(cfg.websocket.host, cfg.websocket.port, message_router)
     message_router.register_protocol('websocket', websocket_manager)
 
-    await udp_handler.start_listening()
-    
+    # SSE Manager (optional)
+    sse_manager = None
+    if cfg.sse.enabled and SSE_AVAILABLE:
+        sse_manager = create_sse_manager(cfg.sse.host, cfg.sse.port, message_router)
+        if sse_manager:
+            message_router.register_protocol('sse', sse_manager)
+    elif cfg.sse.enabled and not SSE_AVAILABLE:
+        logger.warning("SSE enabled but FastAPI/Uvicorn not installed")
+
+    # BLE Client (supports local, remote, disabled modes)
+    ble_client = None
     try:
-          await websocket_manager.start_server()
+        ble_mode = BLEMode(cfg.ble.mode)
+    except ValueError:
+        logger.warning("Invalid BLE mode '%s', defaulting to 'disabled'", cfg.ble.mode)
+        ble_mode = BLEMode.DISABLED
+
+    logger.info("BLE mode: %s", ble_mode.value)
+
+    if ble_mode != BLEMode.DISABLED:
+        try:
+            ble_client = await create_ble_client(
+                mode=ble_mode,
+                remote_url=cfg.ble.remote_url if ble_mode == BLEMode.REMOTE else None,
+                api_key=cfg.ble.api_key if ble_mode == BLEMode.REMOTE else None,
+                device_mac=cfg.ble.device_address or None,
+                message_router=message_router,
+            )
+            message_router.register_protocol('ble_client', ble_client)
+            await ble_client.start()
+        except Exception as e:
+            logger.error("Failed to initialize BLE client: %s", e)
+            logger.info("Falling back to disabled BLE mode")
+            ble_mode = BLEMode.DISABLED
+            ble_client = await create_ble_client(
+                mode=BLEMode.DISABLED,
+                message_router=message_router,
+            )
+    else:
+        # Create disabled stub
+        ble_client = await create_ble_client(
+            mode=BLEMode.DISABLED,
+            message_router=message_router,
+        )
+        await ble_client.start()
+
+    # Start services
+    await udp_handler.start_listening()
+
+    try:
+        await websocket_manager.start_server()
     except OSError as e:
-      if e.errno == errno.EADDRINUSE:
-           print(f"❌ Address {WS_HOST}:{WS_PORT} already in use.")
-           print("🧠 Tip: Is another instance of the server already running?")
-           print("👀 Try `lsof -i :{}` or `netstat -tulpen | grep {}` to investigate.".format(WS_PORT, WS_PORT))
-           print("💣 Exiting gracefully from a non recoverable error.\n")
-           sys.exit(1)
-      else:
+        if e.errno == errno.EADDRINUSE:
+            logger.error("Address %s:%d already in use", cfg.websocket.host, cfg.websocket.port)
+            logger.info("Tip: Is another instance running? Try 'lsof -i :%d'", cfg.websocket.port)
+            sys.exit(1)
+        else:
             raise
+
+    # Start SSE server if enabled
+    if sse_manager:
+        await sse_manager.start_server()
 
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
@@ -960,35 +1077,42 @@ async def main():
 
     # Signal handling with fallback
     def handle_shutdown(signum=None, frame=None):
-        print(f"🛡️ Signal {signum or 'SIGINT'} received, stopping proxy service ..")
+        logger.info("Signal %s received, stopping proxy service ..", signum or 'SIGINT')
         if stop_event.is_set():
-            print("🛡️ Force shutdown - second signal received")
-            import os
-            os._exit(1)  # Force exit if called twice
+            logger.warning("Force shutdown - second signal received")
+            os._exit(1)
         stop_event.set()
-    
+
     # Try asyncio signal handlers first (preferred)
     try:
         loop.add_signal_handler(signal.SIGINT, handle_shutdown)
         loop.add_signal_handler(signal.SIGTERM, handle_shutdown)
         signal_method = "asyncio"
     except Exception as e:
-        # Fallback to traditional signal handlers
-        print(f"⚠️ Could not set asyncio signal handlers: {e}")
+        logger.warning("Could not set asyncio signal handlers: %s", e)
         signal.signal(signal.SIGINT, handle_shutdown)
         signal.signal(signal.SIGTERM, handle_shutdown)
         signal_method = "traditional"
-    
-    if has_console:
-        print(f"🛡️ Signal handling: {signal_method}")
-    
+
+    logger.debug("Signal handling: %s", signal_method)
 
     if sys.stdin.isatty():
-       print("Drücke 'q' + Enter zum Beenden und Speichern")
-       loop.run_in_executor(None, stdin_reader)
+        logger.info("Press 'q' + Enter to stop and save")
+        loop.run_in_executor(None, stdin_reader)
 
-    print(f"UDP-Listen {UDP_PORT_list}, Target MeshCom {UDP_TARGET}")
-    print(f"MessageRouter: {len(message_router._subscribers)} message types, {len(message_router._protocols)} protocols")
+    logger.info("UDP-Listen %d, Target MeshCom %s", cfg.udp.port_listen, cfg.udp.target)
+    logger.info("MessageRouter: %d message types, %d protocols",
+                len(message_router._subscribers), len(message_router._protocols))
+    if sse_manager:
+        logger.info("SSE server available at http://%s:%d/events", cfg.sse.host, cfg.sse.port)
+
+    # Log BLE configuration
+    if ble_mode == BLEMode.REMOTE:
+        logger.info("BLE: remote mode -> %s", cfg.ble.remote_url)
+    elif ble_mode == BLEMode.LOCAL:
+        logger.info("BLE: local mode (D-Bus/BlueZ)")
+    else:
+        logger.info("BLE: disabled")
 
 
 ########### debug
@@ -1004,17 +1128,17 @@ async def main():
     suppression_passed = True  # Default values
     command_handler_passed = True
 
-    if has_console:
-        print("\n🧪 Running suppression logic tests...")
+    if check_console():
+        logger.info("Running suppression logic tests...")
         suppression_passed = message_router.test_suppression_logic()
-    
-        print("\n🧪 Running command handler test suite...")
-        command_handler_passed = await command_handler.run_all_tests()  # Alle Tests auf einmal
-    
+
+        logger.info("Running command handler test suite...")
+        command_handler_passed = await command_handler.run_all_tests()
+
         if suppression_passed and command_handler_passed:
-            print("\n🎉 All tests passed! System ready.")
+            logger.info("All tests passed! System ready.")
         else:
-            print("\n⚠️ Some tests failed. Check implementation.")
+            logger.warning("Some tests failed. Check implementation.")
 
 ### unit tests
     
@@ -1022,97 +1146,114 @@ async def main():
 
 
     await stop_event.wait()
-    
-    print("🛑 Stopping proxy server, saving to disc ..")
 
+    logger.info("Stopping proxy server, saving to disc ..")
 
     try:
         # Step 1: Clean up beacons
-        print("🛑 Stopping beacon tasks...")
+        logger.info("Stopping beacon tasks...")
         await asyncio.wait_for(
-            command_handler.cleanup_topic_beacons(), 
+            command_handler.cleanup_topic_beacons(),
             timeout=5.0
         )
     except asyncio.TimeoutError:
-        print("⚠️ Beacon cleanup timeout")
+        logger.warning("Beacon cleanup timeout")
 
-    
     # Clean shutdown sequence with timeouts
     try:
-        # Step 2: Disconnect BLE with timeout
-        print("🛑 Disconnecting BLE...")
-        await asyncio.wait_for(
-            message_router.route_command("disconnect BLE"), 
-            timeout=5.0
-        )
+        # Step 2: Stop BLE client with timeout
+        logger.info("Stopping BLE client...")
+        if ble_client:
+            await asyncio.wait_for(ble_client.stop(), timeout=5.0)
+        else:
+            # Fallback to legacy disconnect
+            await asyncio.wait_for(
+                message_router.route_command("disconnect BLE"),
+                timeout=5.0
+            )
     except asyncio.TimeoutError:
-        print("⚠️ BLE disconnect timeout")
-    
+        logger.warning("BLE disconnect timeout")
+
     try:
         # Step 3: Stop UDP handler
-        print("🛑 Stopping UDP handler...")
+        logger.info("Stopping UDP handler...")
         await asyncio.wait_for(udp_handler.stop_listening(), timeout=3.0)
     except asyncio.TimeoutError:
-        print("⚠️ UDP stop timeout")
-    
+        logger.warning("UDP stop timeout")
+
     try:
         # Step 4: Stop WebSocket server
-        print("🛑 Stopping WebSocket server...")
+        logger.info("Stopping WebSocket server...")
         await asyncio.wait_for(websocket_manager.stop_server(), timeout=3.0)
     except asyncio.TimeoutError:
-        print("⚠️ WebSocket stop timeout")
-    
-    print("🛑 All services stopped")
-    
+        logger.warning("WebSocket stop timeout")
+
+    # Step 5: Stop SSE server if running
+    if sse_manager:
+        try:
+            logger.info("Stopping SSE server...")
+            await asyncio.wait_for(sse_manager.stop_server(), timeout=3.0)
+        except asyncio.TimeoutError:
+            logger.warning("SSE stop timeout")
+
+    logger.info("All services stopped")
+
     # Save data
     try:
-        storage_handler.save_dump(store_file_name)
-        print("✅ Data saved successfully")
+        if hasattr(storage_handler, 'save_dump'):
+            if asyncio.iscoroutinefunction(storage_handler.save_dump):
+                await storage_handler.save_dump(cfg.storage.dump_file)
+            else:
+                storage_handler.save_dump(cfg.storage.dump_file)
+        logger.info("Data saved successfully")
     except Exception as e:
-        print(f"⚠️ Error saving data: {e}")
-    
-    print("✅ Shutdown complete")
+        logger.error("Error saving data: %s", e)
+
+    logger.info("Shutdown complete")
 
     # Force clean process exit after successful cleanup
-    import os
     os._exit(0)
 
 
-if __name__ == "__main__":
+def run():
+    """Entry point for mcproxy CLI."""
+    global cfg, has_console, is_dev
 
+    # Determine if we have a console
     has_console = sys.stdout.isatty()
-    config = load_config()
 
-    LAT = config.get("LAT")
-    LONG = config.get("LONG")
-    STAT_NAME = config.get("STAT_NAME")
-    print(f"WX Service for {STAT_NAME} {LAT}/{LONG}")
+    # Setup logging first
+    is_dev = os.getenv("MCADVCHAT_ENV") == "dev"
+    setup_logging(verbose=is_dev, simple_format=True)
 
-    USER_INFO_TEXT = config.get("USER_INFO_TEXT")
+    if is_dev:
+        logger.info("*** Debug and DEV Environment detected ***")
 
-    UDP_PORT_list = config["UDP_PORT_list"]
-    UDP_PORT_send = config["UDP_PORT_send"]
+    # Load configuration using new config loader
+    cfg = Config.load()
 
-    UDP_TARGET = (config["UDP_TARGET"], UDP_PORT_send)
+    # Log configuration summary
+    logger.info("WX Service for %s %.4f/%.4f",
+                cfg.location.station_name,
+                cfg.location.latitude or 0,
+                cfg.location.longitude or 0)
+    logger.info("Messages older than %s get deleted", hours_to_dd_hhmm(cfg.storage.prune_hours))
+    logger.info("Messages store limited to %dMB", cfg.storage.max_size_mb)
+    logger.info("Messages will be stored on exit: %s", cfg.storage.dump_file)
 
-    WS_HOST = config["WS_HOST"]
-    WS_PORT = config["WS_PORT"]
-
-    PRUNE_HOURS = config["PRUNE_HOURS"]
-    print(f"Messages older than {hours_to_dd_hhmm(PRUNE_HOURS)} get deleted")
-
-    MAX_STORE_SIZE_MB = config["MAX_STORAGE_SIZE_MB"]
-    print(f"Messages store limited to {MAX_STORE_SIZE_MB}MB")
-
-    store_file_name = config["STORE_FILE_NAME"]
-    print(f"Messages will be stored on exit: {store_file_name}")
-
-    #dumper = DailySQLiteDumper()
+    if cfg.sse.enabled:
+        logger.info("SSE transport enabled on port %d", cfg.sse.port)
+    if cfg.storage.backend == "sqlite":
+        logger.info("SQLite storage backend: %s", cfg.storage.db_path)
 
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-       print("Manuell beendet mit Ctrl+C")
+        logger.info("Manually stopped with Ctrl+C")
     except Exception as e:
-        print(f"❌ Unexpected error: {e}")
+        logger.exception("Unexpected error: %s", e)
+
+
+if __name__ == "__main__":
+    run()
 

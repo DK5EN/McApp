@@ -1,17 +1,18 @@
 [Unit]
-Description=McAdvances MeshCom Proxy Service
-After=network.target
+Description=MCProxy MeshCom Message Proxy
+After=network.target mcproxy-ble.service
+Wants=mcproxy-ble.service
 
 [Service]
 Type=simple
 User=martin
-WorkingDirectory=/home/martin
-ExecStart=/bin/bash -c 'source /home/martin/venv/bin/activate && exec python3 /usr/local/bin/C2-mc-ws.py'
-Restart=on-failure
-RestartSec=3
-StandardOutput=journal
-StandardError=journal
+WorkingDirectory=/home/martin/mcproxy-test
+Environment=PATH=/home/martin/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=MCADVCHAT_ENV=dev
 Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/martin/.local/bin/uv run mcproxy
+Restart=on-failure
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
