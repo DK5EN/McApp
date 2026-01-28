@@ -458,6 +458,14 @@ class MessageRouter:
         else:
             await self.publish('ble', 'ble_status', ble_info)
 
+        # Request register dump from device so frontend gets config data
+        if is_connected:
+            for cmd in ('--info', '--nodeset', '--pos info', '--aprsset'):
+                try:
+                    await client.send_command(cmd)
+                except Exception as e:
+                    logger.warning("Failed to send register query %s: %s", cmd, e)
+
     async def _handle_resolve_ip_command(self, hostname):
         """Handle resolve IP command"""
         if BLE_HANDLER_AVAILABLE:
