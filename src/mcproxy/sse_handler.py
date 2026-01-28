@@ -198,7 +198,11 @@ class SSEManager:
                         if ble_client:
                             from .ble_client import ConnectionState
 
-                            status = ble_client.status
+                            # Refresh from remote service to get real state
+                            if hasattr(ble_client, 'refresh_status'):
+                                status = await ble_client.refresh_status()
+                            else:
+                                status = ble_client.status
                             is_connected = status.state == ConnectionState.CONNECTED
 
                             if is_connected:

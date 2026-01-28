@@ -422,7 +422,11 @@ class MessageRouter:
             logger.warning("BLE client not available for info")
             return
 
-        status = client.status
+        # Refresh from remote service to avoid stale/racing local cache
+        if hasattr(client, 'refresh_status'):
+            status = await client.refresh_status()
+        else:
+            status = client.status
         is_connected = status.state == ConnectionState.CONNECTED
 
         if is_connected:
