@@ -274,9 +274,10 @@ class MessageStorageHandler:
                         # fields into a newer MH-only update, or vice versa)
                         existing = pos_per_src[src]
                         for key in (
-                            "lat", "long", "alt", "battery_level", "firmware",
-                            "fw_sub", "aprs_symbol", "aprs_symbol_group",
-                            "rssi", "snr", "hw_id", "lora_mod", "mesh",
+                            "via", "lat", "long", "alt", "battery_level",
+                            "firmware", "fw_sub", "aprs_symbol",
+                            "aprs_symbol_group", "rssi", "snr", "hw_id",
+                            "lora_mod", "mesh",
                         ):
                             if key not in existing and key in data:
                                 existing[key] = data[key]
