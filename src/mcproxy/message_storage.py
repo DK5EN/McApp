@@ -23,7 +23,7 @@ SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
 # Konstanten am Anfang der Klasse
 GAP_THRESHOLD_MULTIPLIER = 6  # 30 minutes
 MAX_DEBUG_SEGMENTS_SHOW = 10
-MIN_DATAPOINTS_FOR_STATS = 100
+MIN_DATAPOINTS_FOR_STATS = 3
 
 
 def get_current_timestamp() -> str:
