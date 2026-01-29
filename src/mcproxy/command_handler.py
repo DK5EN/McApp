@@ -135,12 +135,12 @@ COMMANDS = {
 
 
 class CommandHandler:
-    def __init__(self, message_router=None, storage_handler=None, my_callsign = "DK0XXX", lat = 48.4031, lon = 11.7497, stat_name = "Freising", user_info_text=None):
+    def __init__(self, message_router=None, storage_handler=None, my_callsign = "DK0XXX", lat=None, lon=None, stat_name = "", user_info_text=None):
         self.blocked_callsigns = set()
 
         # Topic/Beacon system - NEUE ZEILEN:
         self.active_topics = {}  # {group: {'text': str, 'interval': int, 'task': asyncio.Task}}
-        self.topic_tasks = set() 
+        self.topic_tasks = set()
 
         # CTC Ping system - NEUE ZEILEN:
         self.active_pings = {}  # {ping_id: PingTest}
@@ -160,11 +160,13 @@ class CommandHandler:
         try:
             self.weather_service = WeatherService(self.lat, self.lon, self.stat_name, max_age_minutes=30)
             if has_console:
-                print(f"🌤️  CommandHandler: Weather service initialized for {self.lat}/{self.lon}")
+                print(f"🌤️  CommandHandler: Weather service initialized (location from GPS)")
         except ImportError as e:
             self.weather_service = None
             if has_console:
                 print(f"❌ CommandHandler: Weather service unavailable: {e}")
+
+        # GPS caching is handled centrally in main.py via _cache_gps
 
         # Primary deduplication (msg_id based)
         self.processed_msg_ids = {}  # {msg_id: timestamp}
@@ -4225,6 +4227,6 @@ class CommandHandler:
 
 
 # Integration function for your main script
-def create_command_handler(message_router, storage_handler, call_sign, lat, long, stat_name, user_info_text):
+def create_command_handler(message_router, storage_handler, call_sign, lat=None, lon=None, stat_name="", user_info_text=None):
     """Factory function to create and integrate CommandHandler"""
-    return CommandHandler(message_router, storage_handler, call_sign, lat, long, stat_name, user_info_text)
+    return CommandHandler(message_router, storage_handler, call_sign, lat, lon, stat_name, user_info_text)

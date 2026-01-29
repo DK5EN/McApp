@@ -169,16 +169,49 @@ message_router.register_protocol('websocket', websocket_manager)
 4. `MessageRouter._udp_message_handler()` applies suppression logic
 5. `UDPHandler.send_message()` sends JSON to MeshCom node
 
+## Repository Structure
+
+This project consists of **two separate Git repositories**:
+
+| Repo | Path (local) | Content |
+|------|-------------|---------|
+| **MCProxy** | `/Users/martinwerner/WebDev/MCProxy` | Python backend (this repo) |
+| **webapp** | `/Users/martinwerner/WebDev/webapp` | Vue 3 frontend (separate repo) |
+
+Each repo has its own Git history, branches, and CLAUDE.md.
+
+## Dev Backend Server
+
+The development backend runs on a Raspberry Pi accessible via:
+
+```bash
+ssh mcapp.local    # No username needed
+```
+
+The MCProxy code is deployed to `~/mcproxy-test/` on that machine.
+
+## Package Management
+
+- **Python**: `uv` only — NEVER use `pip` or `venv`
+  - `uv sync` to install dependencies
+  - `uv run mcproxy` to run
+- **Frontend (webapp repo)**: `npm`
+
+## Code Quality
+
+- **Python**: `uvx ruff check` is mandatory — zero tolerance for errors and warnings
+- **Frontend**: `npx eslint` is mandatory — zero tolerance for errors and warnings
+- All issues must be resolved before committing
+
 ## Development Commands
 
 ```bash
 # Run in development mode (enables verbose logging)
 ./dev.sh
 
-# Run directly with venv (new bootstrap uses ~/mcproxy-venv)
-source ~/mcproxy-venv/bin/activate
+# Run with uv
 export MCADVCHAT_ENV=dev
-python C2-mc-ws.py
+uv run mcproxy
 
 # View service logs
 sudo journalctl -u mcproxy.service -f

@@ -78,10 +78,11 @@ class SSEManager:
     with the MessageRouter.
     """
 
-    def __init__(self, host: str, port: int, message_router: Any = None):
+    def __init__(self, host: str, port: int, message_router: Any = None, weather_service: Any = None):
         self.host = host
         self.port = port
         self.message_router = message_router
+        self.weather_service = weather_service
         self.clients: dict[str, SSEClient] = {}
         self.clients_lock = asyncio.Lock()
         self.app: FastAPI | None = None
@@ -341,6 +342,40 @@ class SSEManager:
             """Health check endpoint for load balancers."""
             return {"status": "healthy"}
 
+        # Weather data endpoint
+        @app.get("/api/weather")
+        async def get_weather():
+            """Get current weather data from the meteo service."""
+            if not self.weather_service:
+                raise HTTPException(status_code=503, detail="Weather service not available")
+
+            # If no GPS yet, try cached GPS or trigger BLE query
+            if self.weather_service.lat is None and self.message_router:
+                cached = getattr(self.message_router, 'cached_gps', None)
+                if cached:
+                    self.weather_service.update_location(cached['lat'], cached['lon'])
+                else:
+                    # Query BLE device for GPS (one-shot)
+                    ble = self.message_router.get_protocol('ble_client')
+                    if ble and hasattr(ble, 'is_connected') and ble.is_connected:
+                        await ble.send_command("--pos info")
+                    return {
+                        "error": "Warte auf GPS vom Gerät...",
+                        "timestamp": int(time.time() * 1000),
+                    }
+
+            data = await asyncio.to_thread(self.weather_service.get_weather_data)
+            return data
+
+        # Server time endpoint (for frontend clock sync)
+        @app.get("/api/time")
+        async def get_time():
+            """Return server time for frontend clock sync."""
+            return {
+                "server_time_ms": int(time.time() * 1000),
+                "timezone": time.tzname[time.daylight and time.localtime().tm_isdst],
+            }
+
         return app
 
     @staticmethod
@@ -450,6 +485,7 @@ def create_sse_manager(
     host: str = "0.0.0.0",
     port: int = 2981,
     message_router: Any = None,
+    weather_service: Any = None,
 ) -> SSEManager | None:
     """
     Create an SSE manager if dependencies are available.
@@ -460,4 +496,4 @@ def create_sse_manager(
         logger.warning("SSE transport not available - missing dependencies")
         return None
 
-    return SSEManager(host, port, message_router)
+    return SSEManager(host, port, message_router, weather_service)

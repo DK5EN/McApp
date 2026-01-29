@@ -19,9 +19,8 @@
   "PRUNE_HOURS": 168,
   "STORE_FILE_NAME": "mcdump.json",
 
-  "LAT": 48.2082,
-  "LONG": 16.3738,
-  "STAT_NAME": "Vienna",
+  "_comment_location": "LAT/LONG deprecated — location is obtained from GPS device at runtime",
+  "STAT_NAME": "",
 
   "_comment_ble": "BLE_MODE: 'local' (D-Bus/BlueZ), 'remote' (HTTP/SSE), 'disabled' (no-op)",
   "BLE_MODE": "local",

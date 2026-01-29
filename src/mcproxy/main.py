@@ -347,8 +347,23 @@ class MessageRouter:
 
     async def _handle_mheard_dump_command(self, websocket):
         """Handle mheard dump command"""
+        # Create progress callback that sends updates to the requesting client
+        async def progress_callback(stage, detail, callsign=None):
+            progress_msg = {
+                "type": "progress",
+                "msg": "mheard progress",
+                "stage": stage,
+                "detail": detail,
+            }
+            if callsign:
+                progress_msg["callsign"] = callsign
+            if websocket:
+                await self.publish('router', 'websocket_direct', {'websocket': websocket, 'data': progress_msg})
+            else:
+                await self.publish('router', 'websocket_message', progress_msg)
+
         # Use the parallel version
-        mheard = await self.storage_handler.process_mheard_store_parallel()
+        mheard = await self.storage_handler.process_mheard_store_parallel(progress_callback=progress_callback)
         payload = {
             "type": "response",
             "msg": "mheard stats",
@@ -1086,6 +1101,27 @@ async def main():
 
     message_router = MessageRouter(storage_handler)
     message_router.set_callsign(cfg.call_sign)
+    message_router.cached_gps = None  # {lat, lon} — set when BLE device sends TYP="G"
+
+    async def _cache_gps(routed_message):
+        """Cache GPS from BLE device and update weather service."""
+        data = routed_message['data']
+        if data.get("TYP") != "G":
+            return
+        lat = data.get("LAT", 0)
+        lon = data.get("LON", 0)
+        if lat != 0 and lon != 0:
+            message_router.cached_gps = {"lat": lat, "lon": lon}
+            logger.info("GPS cached: %.4f, %.4f", lat, lon)
+            # Update weather service if available
+            cmd_handler = message_router.get_protocol('commands')
+            if cmd_handler:
+                cmd_handler.lat = lat
+                cmd_handler.lon = lon
+                if cmd_handler.weather_service:
+                    cmd_handler.weather_service.update_location(lat, lon)
+
+    message_router.subscribe("ble_notification", _cache_gps)
 
     # Command Handler Plugin
     command_handler = create_command_handler(
@@ -1116,7 +1152,8 @@ async def main():
     # SSE Manager (optional)
     sse_manager = None
     if cfg.sse.enabled and SSE_AVAILABLE:
-        sse_manager = create_sse_manager(cfg.sse.host, cfg.sse.port, message_router)
+        weather_service = getattr(command_handler, 'weather_service', None)
+        sse_manager = create_sse_manager(cfg.sse.host, cfg.sse.port, message_router, weather_service)
         if sse_manager:
             message_router.register_protocol('sse', sse_manager)
     elif cfg.sse.enabled and not SSE_AVAILABLE:
@@ -1357,10 +1394,8 @@ def run():
     cfg = Config.load()
 
     # Log configuration summary
-    logger.info("WX Service for %s %.4f/%.4f",
-                cfg.location.station_name,
-                cfg.location.latitude or 0,
-                cfg.location.longitude or 0)
+    logger.info("WX Service for %s (location from GPS device)",
+                cfg.location.station_name or "unnamed")
     logger.info("Messages older than %s get deleted", hours_to_dd_hhmm(cfg.storage.prune_hours))
     logger.info("Messages store limited to %dMB", cfg.storage.max_size_mb)
     logger.info("Messages will be stored on exit: %s", cfg.storage.dump_file)

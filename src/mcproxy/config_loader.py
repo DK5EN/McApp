@@ -78,10 +78,14 @@ class StorageConfig:
 
 @dataclass
 class LocationConfig:
-    """Geographic location configuration for weather service."""
+    """Geographic location configuration.
 
-    latitude: float | None = None
-    longitude: float | None = None
+    DEPRECATED: latitude/longitude are now obtained from the GPS device at runtime.
+    Only station_name is used from config. LAT/LONG keys in config.json are ignored.
+    """
+
+    latitude: float | None = None  # deprecated — use GPS device
+    longitude: float | None = None  # deprecated — use GPS device
     station_name: str = ""
 
 

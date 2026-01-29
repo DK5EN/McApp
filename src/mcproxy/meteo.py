@@ -39,24 +39,36 @@ class WeatherService:
     Optimale Datenqualität durch intelligente Fusion
     """
     
-    def __init__(self, lat = 48.4031, lon = 11.7497, stat_name = "Freising", max_age_minutes: int = 30):
-        self.freising_lat = lat
-        self.freising_lon = lon
+    def __init__(self, lat=None, lon=None, stat_name="", max_age_minutes: int = 30):
+        self.lat = lat
+        self.lon = lon
         self.stat_name = stat_name
-        
+
         # Maximales Alter der Wetterdaten in Minuten
         self.max_age_minutes = max_age_minutes
-        
+
         # Request timeout und retry config
         self.timeout = 10
         self.max_retries = 2
-        
-        logger.info(f"WeatherService initialisiert für {self.stat_name} {self.freising_lat}/{self.freising_lon}, Hybrid-Modus: DWD + OpenMeteo")
+
+        logger.info(f"WeatherService initialisiert für {self.stat_name} {self.lat}/{self.lon}, Hybrid-Modus: DWD + OpenMeteo")
+
+    def update_location(self, lat: float, lon: float, stat_name: str | None = None):
+        """Update location from GPS device data"""
+        self.lat = lat
+        self.lon = lon
+        if stat_name:
+            self.stat_name = stat_name
     
     def get_weather_data(self) -> Dict[str, Any]:
         """
         Hybrid-Methode: DWD primär, OpenMeteo für fehlende Parameter
         """
+        if self.lat is None or self.lon is None:
+            return {
+                "error": "Keine GPS-Position verfügbar (warte auf Gerät)",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
         logger.debug("Starte Hybrid-Wetterabfrage...")
         
         # 1. Versuche DWD BrightSky zu laden
@@ -102,7 +114,7 @@ class WeatherService:
             return {
                 "error": "Alle Wetter-APIs nicht verfügbar",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "location": f"{self.freising_lat}/{self.freising_lon}"
+                "location": f"{self.lat}/{self.lon}"
             }
         elif dwd_data is None:
             # Nur OpenMeteo verfügbar
@@ -166,6 +178,7 @@ class WeatherService:
         parameters_to_supplement = [
             ("windgeschwindigkeit_kmh", "Wind-Geschwindigkeit"),
             ("windrichtung_grad", "Wind-Richtung"),
+            ("windboeen_kmh", "Windböen"),
             ("wolkenbedeckung_prozent", "Wolkenbedeckung"),
             ("sichtweite_meter", "Sichtweite"),
             ("niederschlag_mm", "Niederschlag"),
@@ -297,14 +310,14 @@ class WeatherService:
         urls_to_try = [
             {
                 "url": "https://api.brightsky.dev/current_weather",
-                "params": {"lat": self.freising_lat, "lon": self.freising_lon},
+                "params": {"lat": self.lat, "lon": self.lon},
                 "name": "current_weather"
             },
             {
                 "url": "https://api.brightsky.dev/weather",
                 "params": {
-                    "lat": self.freising_lat, 
-                    "lon": self.freising_lon,
+                    "lat": self.lat, 
+                    "lon": self.lon,
                     "date": datetime.now().strftime("%Y-%m-%d"),
                     "last": 24
                 },
@@ -411,9 +424,9 @@ class WeatherService:
         """Open-Meteo API"""
         url = "https://api.open-meteo.com/v1/forecast"
         params = {
-            "latitude": self.freising_lat,
-            "longitude": self.freising_lon,
-            "current": "temperature_2m,relative_humidity_2m,pressure_msl,cloud_cover,wind_speed_10m,wind_direction_10m,visibility,precipitation",
+            "latitude": self.lat,
+            "longitude": self.lon,
+            "current": "temperature_2m,relative_humidity_2m,pressure_msl,cloud_cover,wind_speed_10m,wind_direction_10m,wind_gusts_10m,visibility,precipitation",
             "timezone": "Europe/Berlin"
         }
         
@@ -434,6 +447,7 @@ class WeatherService:
             "luftdruck_hpa": self._safe_float(current.get("pressure_msl")),
             "windgeschwindigkeit_kmh": self._safe_float(current.get("wind_speed_10m")),
             "windrichtung_grad": self._safe_int(current.get("wind_direction_10m")),
+            "windboeen_kmh": self._safe_float(current.get("wind_gusts_10m")),
             "wolkenbedeckung_prozent": self._safe_int(current.get("cloud_cover")),
             "sichtweite_meter": self._safe_int(current.get("visibility")),
             "niederschlag_mm": self._safe_float(current.get("precipitation")),
@@ -473,18 +487,32 @@ class WeatherService:
         except (ValueError, TypeError):
             return None
     
-    def _calculate_cloud_coverage_description(self, cloud_percent: Optional[int]) -> str:
+    def _is_daytime(self, timestamp_str: Optional[str]) -> bool:
+        """Bestimme ob es Tag oder Nacht ist anhand des Messzeitpunkts"""
+        if not timestamp_str or timestamp_str == "unbekannt":
+            # Default: Tag annehmen
+            return True
+        try:
+            ts = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            # Konvertiere zu lokaler Zeit (CET/CEST = UTC+1/+2)
+            local_hour = (ts.hour + 1) % 24  # Grobe CET-Annäherung
+            return 6 <= local_hour < 20
+        except (ValueError, TypeError):
+            return True
+
+    def _calculate_cloud_coverage_description(self, cloud_percent: Optional[int], timestamp_str: Optional[str] = None) -> str:
         """Berechne Wolkenbedeckung in Achteln (/8) und Beschreibung"""
         if cloud_percent is None:
             return "unbekannt"
-        
+
         eighths = round(cloud_percent / 12.5)
         eighths = max(0, min(8, eighths))
-        
+        is_day = self._is_daytime(timestamp_str)
+
         if eighths == 0:
-            return "sonnig"
+            return "sonnig" if is_day else "klar"
         elif eighths <= 1:
-            return f"{eighths}/8 (heiter)"
+            return f"{eighths}/8 (heiter)" if is_day else f"{eighths}/8 (überwiegend klar)"
         elif eighths <= 3:
             return f"{eighths}/8 (aufgelockert bewölkt)"
         elif eighths <= 6:
@@ -526,8 +554,8 @@ class WeatherService:
 
         # Wolkenbedeckung
         clouds_percent = weather_data.get("wolkenbedeckung_prozent")
-        cloud_desc = self._calculate_cloud_coverage_description(clouds_percent)
-        
+        cloud_desc = self._calculate_cloud_coverage_description(clouds_percent, weather_data.get("messzeitpunkt"))
+
         # Niederschlag (optional)
         rain_mm = weather_data.get("niederschlag_mm", 0) or 0
         rain_info = f", {rain_mm:.1f}mm rain" if rain_mm > 0.1 else ""
@@ -586,7 +614,7 @@ class WeatherService:
         
         # Wolken-Info
         clouds_percent = weather_data.get("wolkenbedeckung_prozent")
-        cloud_desc = self._calculate_cloud_coverage_description(clouds_percent)
+        cloud_desc = self._calculate_cloud_coverage_description(clouds_percent, weather_data.get("messzeitpunkt"))
         cloud_text = f"{clouds_percent}% ({cloud_desc})" if clouds_percent is not None else "N/A"
         
         # Fusion-Info
@@ -609,7 +637,7 @@ class WeatherService:
         rain_info = f"🌧️  Niederschlag:   {rain_mm:.1f} mm\n" if rain_mm > 0 else ""
         
         report = f"""
-🌤️  {self.stat_name} {self.freising_lat}/{self.freising_lon} - {weather_data.get('timestamp', 'N/A')[:19]}
+🌤️  {self.stat_name} {self.lat}/{self.lon} - {weather_data.get('timestamp', 'N/A')[:19]}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 🌡️  Temperatur:     {temp}°C
