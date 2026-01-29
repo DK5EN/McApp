@@ -422,6 +422,8 @@ class MessageRouter:
             await self.publish(
                 'router', 'websocket_direct', {'websocket': websocket, 'data': payload}
             )
+        else:
+            await self.publish('router', 'websocket_message', payload)
 
     async def _handle_mheard_dump_command(self, websocket):
         """Handle mheard dump command"""

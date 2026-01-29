@@ -6,6 +6,7 @@ from pathlib import Path
 
 import zstandard as zstd
 
+
 class DailySQLiteDumper:
     def __init__(self, config_path="/etc/mcadvchat/config.json"):
         with open(config_path, "r", encoding="utf-8") as f:

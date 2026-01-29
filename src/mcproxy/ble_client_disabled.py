@@ -9,7 +9,7 @@ import logging
 import time
 from typing import Callable
 
-from .ble_client import BLEClientBase, BLEDevice, BLEMode, BLEStatus, ConnectionState
+from .ble_client import BLEClientBase, BLEDevice, BLEMode, ConnectionState
 
 logger = logging.getLogger(__name__)
 

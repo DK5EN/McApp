@@ -109,7 +109,10 @@ class ProxySupervisor:
                         await websocket.send("[supervisor] Unauthorized.")
                 elif message.startswith("status "):
                     if self.is_authorized(message):
-                        status = "running" if self.proc and self.proc.returncode is None else "stopped"
+                        status = (
+                            "running" if self.proc and self.proc.returncode is None
+                            else "stopped"
+                        )
                         await websocket.send(f"[supervisor] Proxy status: {status}")
                     else:
                         await websocket.send("[supervisor] Unauthorized.")
@@ -126,10 +129,12 @@ class ProxySupervisor:
     async def run_update_scripts(self, websocket):
         try:
             await asyncio.create_subprocess_shell(
-                "curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/mc-install.sh | sudo bash"
+                "curl -fsSL https://raw.githubusercontent.com/"
+                "DK5EN/McAdvChat/main/mc-install.sh | sudo bash"
             )
             await asyncio.create_subprocess_shell(
-                "curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/install_mcproxy.sh | bash"
+                "curl -fsSL https://raw.githubusercontent.com/"
+                "DK5EN/McAdvChat/main/install_mcproxy.sh | bash"
             )
             await websocket.send("[supervisor] Update completed.")
         except Exception as e:

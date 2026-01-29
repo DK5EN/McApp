@@ -5,25 +5,38 @@ This module wraps the existing ble_handler.py functionality behind
 the BLEClientBase interface for local Bluetooth access.
 """
 
-import asyncio
 import logging
-import time
 from typing import Callable
 
-from .ble_client import BLEClientBase, BLEDevice, BLEMode, BLEStatus, ConnectionState
+from .ble_client import BLEClientBase, BLEDevice, BLEMode, ConnectionState
 
 # Import existing BLE handler functions
 from .ble_handler import (
-    BLEClient as LegacyBLEClient,
     ble_connect as legacy_ble_connect,
+)
+from .ble_handler import (
     ble_disconnect as legacy_ble_disconnect,
+)
+from .ble_handler import (
     ble_pair as legacy_ble_pair,
+)
+from .ble_handler import (
     ble_unpair as legacy_ble_unpair,
-    scan_ble_devices as legacy_scan_ble_devices,
-    handle_ble_message as legacy_handle_ble_message,
-    handle_a0_command as legacy_handle_a0_command,
-    handle_set_command as legacy_handle_set_command,
+)
+from .ble_handler import (
     get_ble_client,
+)
+from .ble_handler import (
+    handle_a0_command as legacy_handle_a0_command,
+)
+from .ble_handler import (
+    handle_ble_message as legacy_handle_ble_message,
+)
+from .ble_handler import (
+    handle_set_command as legacy_handle_set_command,
+)
+from .ble_handler import (
+    scan_ble_devices as legacy_scan_ble_devices,
 )
 
 logger = logging.getLogger(__name__)

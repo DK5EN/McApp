@@ -103,7 +103,10 @@ class SQLiteStorage:
                 cursor = conn.execute("SELECT version FROM schema_version LIMIT 1")
                 row = cursor.fetchone()
                 if row is None:
-                    conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
+                    conn.execute(
+                        "INSERT INTO schema_version (version) VALUES (?)",
+                        (SCHEMA_VERSION,),
+                    )
                 conn.commit()
 
         await asyncio.to_thread(_init_db)
@@ -226,7 +229,8 @@ class SQLiteStorage:
 
         # Delete invalid messages
         await self._execute(
-            "DELETE FROM messages WHERE msg = '-- invalid character --' OR msg LIKE '%No core dump%'",
+            "DELETE FROM messages WHERE msg = '-- invalid character --'"
+            " OR msg LIKE '%No core dump%'",
             fetch=False,
         )
 
@@ -320,7 +324,11 @@ class SQLiteStorage:
                 AND rssi BETWEEN ? AND ?
                 AND snr BETWEEN ? AND ?
         """
-        params = (cutoff_ms, VALID_RSSI_RANGE[0], VALID_RSSI_RANGE[1], VALID_SNR_RANGE[0], VALID_SNR_RANGE[1])
+        params = (
+            cutoff_ms,
+            VALID_RSSI_RANGE[0], VALID_RSSI_RANGE[1],
+            VALID_SNR_RANGE[0], VALID_SNR_RANGE[1],
+        )
 
         rows = await self._execute(query, params)
         logger.info("Processing %d rows for mheard statistics", len(rows))
@@ -329,7 +337,9 @@ class SQLiteStorage:
             await progress_callback("bucketing", f"Processing {len(rows)} rows...")
 
         # Group by bucket and callsign
-        buckets: dict[tuple[int, str], dict[str, list]] = defaultdict(lambda: {"rssi": [], "snr": []})
+        buckets: dict[tuple[int, str], dict[str, list]] = defaultdict(
+            lambda: {"rssi": [], "snr": []}
+        )
 
         for row in rows:
             src = row["src"]
@@ -347,12 +357,20 @@ class SQLiteStorage:
                 buckets[key]["snr"].append(row["snr"])
 
         # Build result with gap markers
-        result = await self._build_stats_with_gaps_async(buckets, progress_callback) if progress_callback else self._build_stats_with_gaps(buckets)
+        if progress_callback:
+            result = await self._build_stats_with_gaps_async(
+                buckets, progress_callback
+            )
+        else:
+            result = self._build_stats_with_gaps(buckets)
 
         if progress_callback:
             stats_entries = [r for r in result if not r.get("is_gap_marker")]
             callsign_count = len(set(e["callsign"] for e in stats_entries)) if stats_entries else 0
-            await progress_callback("done", f"{len(stats_entries)} data points for {callsign_count} stations")
+            await progress_callback(
+                "done",
+                f"{len(stats_entries)} data points for {callsign_count} stations",
+            )
 
         return result
 

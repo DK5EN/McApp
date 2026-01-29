@@ -49,10 +49,10 @@ def calc_fcs(msg):
     fcs = 0
     for x in range(0, len(msg)):
         fcs = fcs + msg[x]
-    
+
     # SWAP MSB/LSB
     fcs = ((fcs & 0xFF00) >> 8) | ((fcs & 0xFF) << 8)
-    
+
     return fcs
 
 
@@ -97,20 +97,25 @@ def decode_binary_message(byte_msg):
 
     if byte_msg[:2] == b'@A':  # Prüfen, ob es sich um ACK Frames handelt
         # ACK Message Format: [0x41] [MSG_ID-4] [FLAGS] [ACK_MSG_ID-4] [ACK_TYPE] [0x00]
-        
+
         # FLAGS byte (max_hop_raw) dekodieren
         server_flag = bool(max_hop_raw & 0x80)  # Bit 7: Server Flag
         hop_count = max_hop_raw & 0x7F  # Bits 0-6: Hop Count
-        
+
         # ACK spezifische Felder extrahieren
         if len(byte_msg) >= 12:
             # ACK_MSG_ID (die Original Message ID die bestätigt wird)
             [ack_id] = unpack('<I', byte_msg[6:10])
-            
+
             # ACK_TYPE
             ack_type = byte_msg[10] if len(byte_msg) > 10 else 0
-            ack_type_text = "Node ACK" if ack_type == 0x00 else "Gateway ACK" if ack_type == 0x01 else f"Unknown ({ack_type})"
-            
+            if ack_type == 0x00:
+                ack_type_text = "Node ACK"
+            elif ack_type == 0x01:
+                ack_type_text = "Gateway ACK"
+            else:
+                ack_type_text = f"Unknown ({ack_type})"
+
             # Gateway ID und ACK ID aus der msg_id extrahieren (wenn es ein Gateway ACK ist)
             if ack_type == 0x01:
                 gateway_id = (msg_id >> 10) & 0x3FFFFF  # Bits 31-10: Gateway ID (22 Bits)
@@ -174,10 +179,13 @@ def decode_binary_message(byte_msg):
 
       dest = remaining_msg[:split_idx].decode("utf-8", errors="ignore")
 
-      message = remaining_msg[split_idx:remaining_msg.find(b'\00')].decode("utf-8", errors="ignore").strip()
+      raw = remaining_msg[split_idx:remaining_msg.find(b'\00')]
+      message = raw.decode("utf-8", errors="ignore").strip()
 
       #Etwas bit banging, weil die Binaerdaten am Ende immer gleich aussehen
-      [zero, hardware_id, lora_mod, fcs, fw, lasthw, fw_sub, ending, time_ms ] = unpack('<BBBHBBBBI', byte_msg[-14:-1])
+      [zero, hardware_id, lora_mod, fcs, fw, lasthw, fw_sub, ending, time_ms] = unpack(
+          '<BBBHBBBBI', byte_msg[-14:-1]
+      )
 
 
       # lasthw aufteilen
@@ -189,7 +197,7 @@ def decode_binary_message(byte_msg):
 
       #if message.startswith(":{CET}"):
       #  dest_type = "Datum & Zeit Broadcast an alle"
-      
+
       #elif path.startswith("response"):
       #  dest_type = "user input response"
 
@@ -206,7 +214,7 @@ def decode_binary_message(byte_msg):
       #  dest_type = f"Direktnachricht an {dest}"
 
 #      json_obj = {k: v for k, v in locals().items() if k in [
-#          "payload_type", 
+#          "payload_type",
 #          "msg_id",
 #          "max_hop",
 #          "mesh_info",
@@ -214,29 +222,29 @@ def decode_binary_message(byte_msg):
 #          "path",
 #          "dest",
 #          "message",
-#          "hardware_id", 
-#          "lora_mod", 
-#          "fcs", 
-#          "fcs_ok", 
-#          "fw", 
-#          "fw_subver", 
-#          "lasthw", 
+#          "hardware_id",
+#          "lora_mod",
+#          "fcs",
+#          "fcs_ok",
+#          "fw",
+#          "fw_subver",
+#          "lasthw",
 #          "time_ms",
-#          "ending" 
+#          "ending"
 #          ]}
 
       json_obj = {k: v for k, v in locals().items() if k in [
-          "payload_type", 
+          "payload_type",
           "msg_id",
           "max_hop",
           "mesh_info",
           "path",
           "dest",
           "message",
-          "hardware_id", 
-          "lora_mod", 
-          "fw", 
-          "fw_sub", 
+          "hardware_id",
+          "lora_mod",
+          "fw",
+          "fw_sub",
           "last_hw_id",
           "last_sending"
           ]}
@@ -251,7 +259,7 @@ def get_timezone_info(lat, lon):
     """Get timezone information for coordinates"""
     tf = TimezoneFinder()
     tz_name = tf.timezone_at(lat=lat, lng=lon)
-          
+
     if not tz_name:
         print("❌ Could not determine timezone")
         return None
@@ -259,7 +267,7 @@ def get_timezone_info(lat, lon):
     # Use system time (UTC) and apply tz_name
     now_utc = datetime.utcnow()
     dt_local = datetime.fromtimestamp(now_utc.timestamp(), ZoneInfo(tz_name))
-    
+
     return {
         "timezone": tz_name,
         "offset_hours": dt_local.utcoffset().total_seconds() / 3600
@@ -418,7 +426,7 @@ def transform_ack(input_dict):
        "msg_id": format(input_dict.get("msg_id"), '08X'),
        "ack_id": format(input_dict.get("ack_id"), '08X'),
        "timestamp": int(time.time() * 1000)
-    } 
+    }
 
 
 def transform_pos(input_dict):
@@ -546,7 +554,7 @@ async def notification_handler(clean_msg, message_router=None):
                 print("type unknown",var)
 
          except KeyError:
-             print("error", var) 
+             print("error", var)
 
     # Binärnachrichten beginnen mit '@'
     elif clean_msg.startswith(b'@'):
@@ -645,7 +653,7 @@ class BLEClient:
                 if has_console:
                     print(f"🔁 Verbindung zu {self.mac} besteht bereits")
                 return
-    
+
             last_error = None
             for attempt in range(max_retries):
                 try:
@@ -657,8 +665,8 @@ class BLEClient:
                     logger.warning("BLE connect attempt %d/%d failed: %s",
                                    attempt + 1, max_retries, e)
                     if attempt < max_retries - 1:
-                        await self._publish_status('connect BLE', 'info',
-                                                 f"Attempt {attempt + 1} failed, retrying in {wait_time}s...")
+                        msg = f"Attempt {attempt + 1} failed, retrying in {wait_time}s..."
+                        await self._publish_status('connect BLE', 'info', msg)
                         await asyncio.sleep(wait_time)
                         await self._cleanup_failed_connection()
 
@@ -673,22 +681,22 @@ class BLEClient:
         """Single connection attempt - extracted from current connect() method"""
         if self.bus is None:
             self.bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
-    
+
         introspection = await self.bus.introspect(BLUEZ_SERVICE_NAME, self.path)
         self.device_obj = self.bus.get_proxy_object(BLUEZ_SERVICE_NAME, self.path, introspection)
-        
+
         try:
             self.dev_iface = self.device_obj.get_interface(DEVICE_INTERFACE)
         except InterfaceNotFoundError as e:
             raise ConnectionError(f"Interface not found, device not paired: {e}")
-    
+
         self.props_iface = self.device_obj.get_interface(PROPERTIES_INTERFACE)
-    
+
         try:
             connected = (await self.props_iface.call_get(DEVICE_INTERFACE, "Connected")).value
         except DBusError as e:
             raise ConnectionError(f"Error checking connection state: {e}")
-    
+
         if not connected:
             try:
                 # Add timeout to prevent hanging
@@ -705,43 +713,49 @@ class BLEClient:
 
         if has_console:
             print("🔍 Waiting for service discovery...")
-    
+
         services_resolved = await self._wait_for_services_resolved(timeout=10.0)
         if not services_resolved:
             raise ConnectionError("Services not resolved within 10 seconds")
 
         if has_console:
             print("✅ All services discovered and resolved")
-    
+
         await self._find_characteristics()
-    
+
         if not self.read_char_iface or not self.write_char_iface:
             raise ConnectionError("Characteristics not found - device not properly paired")
-        
+
         self.read_props_iface = self.read_char_obj.get_interface(PROPERTIES_INTERFACE)
-    
+
         # Verify services are resolved
         #try:
-        #    services_resolved = (await self.props_iface.call_get(DEVICE_INTERFACE, "ServicesResolved")).value
+        #    services_resolved = (
+        #        await self.props_iface.call_get(DEVICE_INTERFACE, "ServicesResolved")
+        #    ).value
         #    if not services_resolved:
         #        # Wait a bit for services to resolve
         #        await asyncio.sleep(2)
-        #        services_resolved = (await self.props_iface.call_get(DEVICE_INTERFACE, "ServicesResolved")).value
+        #        services_resolved = (
+        #            await self.props_iface.call_get(DEVICE_INTERFACE, "ServicesResolved")
+        #        ).value
         #        if not services_resolved:
         #            raise ConnectionError("Services not resolved after connection")
         #except DBusError as e:
         #    if has_console:
         #        print(f"⚠️ Warning: Could not check ServicesResolved: {e}")
-    
+
         self._connected = True
-        await self._publish_status('connect BLE result', 'ok', "connection established, downloading config ..")
-    
+        await self._publish_status(
+            'connect BLE result', 'ok', "connection established, downloading config .."
+        )
+
         # Start background tasks
         if has_console:
             print("▶️  Starting time sync task ..")
         self._time_sync = TimeSyncTask(self._handle_timesync)
         self._time_sync.start()
-       
+
         if has_console:
             print("▶️  Starting keep alive ..")
         if not self._keepalive_task or self._keepalive_task.done():
@@ -750,26 +764,28 @@ class BLEClient:
     async def _wait_for_services_resolved(self, timeout=10.0):
         """Wait for BLE services to be discovered and resolved"""
         start_time = time.time()
-        
+
         while (time.time() - start_time) < timeout:
             try:
-                services_resolved = (await self.props_iface.call_get(DEVICE_INTERFACE, "ServicesResolved")).value
+                services_resolved = (
+                    await self.props_iface.call_get(DEVICE_INTERFACE, "ServicesResolved")
+                ).value
                 if services_resolved:
                     if has_console:
                         print(f"🔍 Services resolved after {time.time() - start_time:.1f}s")
                     return True
-                    
+
                 # Still waiting - check every 500ms
                 await asyncio.sleep(0.5)
-                
+
             except DBusError as e:
                 if has_console:
                     print(f"⚠️ Error checking ServicesResolved: {e}")
                 await asyncio.sleep(0.5)
-        
+
         return False
 
-    
+
     async def _cleanup_failed_connection(self):
         """Clean up after a failed connection attempt"""
         try:
@@ -778,10 +794,10 @@ class BLEClient:
                     await asyncio.wait_for(self.dev_iface.call_disconnect(), timeout=3.0)
                 except Exception:
                     pass  # Ignore errors during cleanup
-            
+
             if self.bus:
                 self.bus.disconnect()
-            
+
             # Reset all state
             self.bus = None
             self.device_obj = None
@@ -791,12 +807,12 @@ class BLEClient:
             self.write_char_iface = None
             self.props_iface = None
             self._connected = False
-            
+
             # Stop background tasks if they exist
             if self._time_sync is not None:
                 await self._time_sync.stop()
                 self._time_sync = None
-    
+
             if self._keepalive_task and not self._keepalive_task.done():
                 self._keepalive_task.cancel()
                 try:
@@ -804,18 +820,18 @@ class BLEClient:
                 except asyncio.CancelledError:
                     pass
                 self._keepalive_task = None
-            
+
         except Exception as e:
             if has_console:
                 print(f"⚠️ Error during cleanup: {e}")
 
-                
+
     async def _publish_status(self, command, result, msg):
         """Helper method to publish BLE status messages through router"""
         if self.message_router:
             status_message = {
-                'src_type': 'BLE', 
-                'TYP': 'blueZ', 
+                'src_type': 'BLE',
+                'TYP': 'blueZ',
                 'command': command,
                 'result': result,
                 'msg': msg,
@@ -849,8 +865,10 @@ class BLEClient:
         for node in introspect.nodes:
             child_path = f"{path}/{node.name}"
             try:
-                child_obj = bus.get_proxy_object(BLUEZ_SERVICE_NAME, child_path, 
-                                                await bus.introspect(BLUEZ_SERVICE_NAME, child_path))
+                introspection = await bus.introspect(BLUEZ_SERVICE_NAME, child_path)
+                child_obj = bus.get_proxy_object(
+                    BLUEZ_SERVICE_NAME, child_path, introspection
+                )
 
                 props_iface = child_obj.get_interface(PROPERTIES_INTERFACE)
                 props = await props_iface.call_get_all(GATT_CHARACTERISTIC_INTERFACE)
@@ -872,7 +890,9 @@ class BLEClient:
         if not self._connected:
            return
 
-        is_notifying = (await self.read_props_iface.call_get(GATT_CHARACTERISTIC_INTERFACE, "Notifying")).value
+        is_notifying = (
+            await self.read_props_iface.call_get(GATT_CHARACTERISTIC_INTERFACE, "Notifying")
+        ).value
         if is_notifying:
            if has_console:
               print("wir haben schon ein notify, also nix wie weg hier")
@@ -891,7 +911,11 @@ class BLEClient:
             self.read_props_iface.on_properties_changed(self._on_props_changed)
             await self.read_char_iface.call_start_notify()
 
-            is_notifying = (await self.read_props_iface.call_get(GATT_CHARACTERISTIC_INTERFACE, "Notifying")).value
+            is_notifying = (
+                await self.read_props_iface.call_get(
+                    GATT_CHARACTERISTIC_INTERFACE, "Notifying"
+                )
+            ).value
 
             if has_console:
                print(f"📡 Notify: {is_notifying}")
@@ -904,7 +928,7 @@ class BLEClient:
 
       if "Value" in changed:
         new_value = changed["Value"].value
-        
+
         await notification_handler(new_value, message_router=self.message_router)
 
         if self._on_value_change_cb:
@@ -985,7 +1009,9 @@ class BLEClient:
 
         if self.write_char_iface:
             try:
-              await asyncio.wait_for(self.write_char_iface.call_write_value(byte_array, {}), timeout=5)
+              await asyncio.wait_for(
+                  self.write_char_iface.call_write_value(byte_array, {}), timeout=5
+              )
             except asyncio.TimeoutError:
               print("🕓 Timeout beim Schreiben an BLE-Device")
               await self._publish_status('send message','error', "❌ Timeout on write")
@@ -1018,7 +1044,7 @@ class BLEClient:
 
     async def set_commands(self, cmd):
        laenge = 0
-       
+
        if not self.bus:
           return
 
@@ -1031,16 +1057,16 @@ class BLEClient:
        if cmd == "--settime":
          cmd_byte = bytes([0x20])
 
-         now = int(time.time())  # current time in seconds 
+         now = int(time.time())  # current time in seconds
          byte_array = now.to_bytes(4, byteorder='little')
 
          laenge = len(byte_array) + 2
-         byte_array = laenge.to_bytes(1, 'big') +  cmd_byte + byte_array 
+         byte_array = laenge.to_bytes(1, 'big') +  cmd_byte + byte_array
 
          if has_console:
             print(f"Aktuelle Zeit {now}")
             print("to hex:", ' '.join(f"{b:02X}" for b in byte_array))
-        
+
        else:
           print(f"❌ {cmd} not yet implemented")
 
@@ -1123,7 +1149,7 @@ class BLEClient:
                 await asyncio.wait_for(self.dev_iface.call_disconnect(), timeout=3.0)
             except (asyncio.TimeoutError, Exception):
                 pass
-        
+
             await self._publish_status('disconnect','ok', "✅ disconnected")
             print(f"🧹 Disconnected von {self.mac}")
 
@@ -1159,14 +1185,15 @@ class BLEClient:
         """Time sync handler that uses BLE client methods instead of global functions"""
         if has_console:
             print("adjusting time on node ..", lat, lon)
-        
+
         await asyncio.sleep(3)
 
         if lon == 0 or lat == 0:
             if has_console:
                 print("Lon/Lat not set, fallback on Raspberry Pi TZ info")
             # Use local timezone
-            offset_sec = time.altzone if time.daylight and time.localtime().tm_isdst else time.timezone
+            is_dst = time.daylight and time.localtime().tm_isdst
+            offset_sec = time.altzone if is_dst else time.timezone
             offset = -offset_sec / 3600
             tz_name = "Local"
         else:
@@ -1187,19 +1214,19 @@ class BLEClient:
         """Check if this GPS message should trigger time sync"""
         if message_dict.get("TYP") != "G":
             return False
-            
+
         # Check if we have valid coordinates
         lat = message_dict.get("LAT", 0)
         lon = message_dict.get("LON", 0)
-        
+
         if lat == 0 and lon == 0:
             return False
-            
+
         # Check time delta (reuse existing logic)
         node_timestamp = safe_timestamp_from_dict(message_dict)
         if node_timestamp is None:
             return False
-            
+
         time_delta = node_time_checker(node_timestamp, "G")
         return abs(time_delta) > 60  # Same threshold as before
 
@@ -1208,7 +1235,7 @@ class BLEClient:
         if self._should_trigger_time_sync(message_dict):
             lat = message_dict.get("LAT")
             lon = message_dict.get("LON")
-            
+
             if self._time_sync is not None:
                 self._time_sync.trigger(lat, lon)
             else:
@@ -1243,7 +1270,9 @@ class BLEClient:
           self.bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
       else:
           print("❌ already connected, no scanning possible ..")
-          await self._publish_status('scan BLE result', 'error', "already connected, no scanning possible")
+          await self._publish_status(
+              'scan BLE result', 'error', "already connected, no scanning possible"
+          )
 
           return
 
@@ -1256,14 +1285,15 @@ class BLEClient:
       introspection = await self.bus.introspect(BLUEZ_SERVICE_NAME, path)
       device_obj = self.bus.get_proxy_object(BLUEZ_SERVICE_NAME, path, introspection)
       self.adapter = device_obj.get_interface(ADAPTER_INTERFACE)
-     
+
       # Track discovered devices
       self.found_devices = {}
       # Event zur Synchronisation
       found_mc_event = asyncio.Event()
 
       # Listen to InterfacesAdded signal
-      self.obj_mgr = self.bus.get_proxy_object(BLUEZ_SERVICE_NAME, "/", await self.bus.introspect(BLUEZ_SERVICE_NAME, "/"))
+      root_introspection = await self.bus.introspect(BLUEZ_SERVICE_NAME, "/")
+      self.obj_mgr = self.bus.get_proxy_object(BLUEZ_SERVICE_NAME, "/", root_introspection)
       self.obj_mgr_iface = self.obj_mgr.get_interface(OBJECT_MANAGER_INTERFACE)
 
       objects = await self.obj_mgr_iface.call_get_managed_objects()
@@ -1278,7 +1308,7 @@ class BLEClient:
           paired = props.get("Paired", Variant("b", False)).value
           busy = False
           interfaces[DEVICE_INTERFACE]["Busy"] = Variant("b", busy)
-        
+
           if has_console:
             print(f"💾 Found device: {name} ({addr}, paired={paired}, busy={busy})")
 
@@ -1308,7 +1338,10 @@ class BLEClient:
 
       if has_console:
         print(f"\n✅ Scan complete. Not paired {len(self.found_devices)} device(s)")
-      await self._publish_status('scan BLE', 'info', f"✅ Scan complete, {len(self.found_devices)} not paired device(s)")
+      device_count = len(self.found_devices)
+      await self._publish_status(
+          'scan BLE', 'info', f"✅ Scan complete, {device_count} not paired device(s)"
+      )
 
       for path, (name, addr, rssi) in self.found_devices.items():
           if has_console:
@@ -1370,20 +1403,22 @@ async def ble_pair(mac, BLE_Pin, message_router=None):
     agent = NoInputNoOutputAgent()
     bus.export(AGENT_PATH, agent)
 
-    manager_obj = bus.get_proxy_object(BLUEZ_SERVICE_NAME, "/org/bluez", await bus.introspect(BLUEZ_SERVICE_NAME, "/org/bluez"))
+    bluez_introspection = await bus.introspect(BLUEZ_SERVICE_NAME, "/org/bluez")
+    manager_obj = bus.get_proxy_object(BLUEZ_SERVICE_NAME, "/org/bluez", bluez_introspection)
     agent_manager = manager_obj.get_interface("org.bluez.AgentManager1")
     await agent_manager.call_register_agent(AGENT_PATH, "KeyboardDisplay")
     await agent_manager.call_request_default_agent(AGENT_PATH)
 
     # Pair device
-    dev_obj = bus.get_proxy_object(BLUEZ_SERVICE_NAME, path, await bus.introspect(BLUEZ_SERVICE_NAME, path))
+    dev_introspection = await bus.introspect(BLUEZ_SERVICE_NAME, path)
+    dev_obj = bus.get_proxy_object(BLUEZ_SERVICE_NAME, path, dev_introspection)
 
     try:
         dev_iface = dev_obj.get_interface(DEVICE_INTERFACE)
     except InterfaceNotFoundError as e:
         print("❌ Error, device not found!")
         await message_router.publish('ble', 'ble_status', {
-                'src_type': 'BLE', 'TYP': 'blueZ', 'command': 'BLE pair result', 
+                'src_type': 'BLE', 'TYP': 'blueZ', 'command': 'BLE pair result',
                 'result': 'error', 'msg': f"❌ device not found {mac}: {e}",
                 'timestamp': int(time.time() * 1000)
             })
@@ -1459,7 +1494,7 @@ async def ble_unpair(mac, message_router=None):
                 'timestamp': int(time.time() * 1000)
             })
       return
- 
+
     print(f"🧹 Unpaired device {mac}")
     if message_router:
         await message_router.publish('ble', 'ble_status', {
@@ -1481,7 +1516,7 @@ async def ble_connect(MAC, message_router=None):
             message_router=message_router
         )
 
-    if not client._connected: 
+    if not client._connected:
       await client.connect()
 
       if client._connected:
@@ -1491,8 +1526,8 @@ async def ble_connect(MAC, message_router=None):
     else:
       if message_router:
             await message_router.publish('ble', 'ble_status', {
-                'src_type': 'BLE', 
-                'TYP': 'blueZ', 
+                'src_type': 'BLE',
+                'TYP': 'blueZ',
                 'command': 'connect BLE result',
                 'result': 'info',
                 'msg': "BLE connection already running",
@@ -1507,8 +1542,8 @@ async def ble_disconnect(message_router=None):
     global client
     if client is None:
       return
-    
-    if client._connected: 
+
+    if client._connected:
       await client.disconnect()
       await client.close()
       client = None
@@ -1544,7 +1579,7 @@ async def backend_resolve_ip(hostname, message_router=None):
         ip = infos[0][4][0]
         if has_console:
            print(f"Resolved IP: {ip}")
-        
+
         if message_router:
             await message_router.publish('ble', 'ble_status', {
                 'src_type': 'BLE', 'TYP': 'blueZ', 'command': "resolve-ip",

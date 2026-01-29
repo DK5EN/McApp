@@ -15,12 +15,12 @@ from collections import deque
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, Header, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from .ble_adapter import BLEAdapter, BLEDevice, ConnectionState
+from .ble_adapter import BLEAdapter
 
 # Configure logging
 logging.basicConfig(

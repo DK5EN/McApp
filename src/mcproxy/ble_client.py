@@ -22,10 +22,9 @@ Usage:
     await client.send_message("Hello!", "20")
 """
 
-import asyncio
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Callable
 
