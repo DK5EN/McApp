@@ -396,12 +396,17 @@ class BLEClientRemote(BLEClientBase):
         except Exception as e:
             logger.error("Notification handling error: %s", e)
 
+    def _get_own_callsign(self) -> str:
+        """Get own callsign from message router if available."""
+        return getattr(self.message_router, 'my_callsign', '') if self.message_router else ''
+
     def _transform_notification(self, notification: dict) -> dict | None:
         """Transform SSE notification to match local BLE handler format"""
+        own_call = self._get_own_callsign()
         if notification.get('format') == 'json' and 'parsed' in notification:
             # JSON notification - run through dispatcher like local mode
             parsed = notification['parsed']
-            output = dispatcher(parsed)
+            output = dispatcher(parsed, own_call)
             if output:
                 output['timestamp'] = notification.get('timestamp', int(time.time() * 1000))
                 output['src_type'] = 'ble_remote'
@@ -419,7 +424,7 @@ class BLEClientRemote(BLEClientBase):
                     raw_bytes = base64.b64decode(raw_b64)
                     if raw_bytes.startswith(b'@'):
                         decoded = decode_binary_message(raw_bytes)
-                        output = dispatcher(decoded)
+                        output = dispatcher(decoded, own_call)
                         if output:
                             output['src_type'] = 'ble_remote'
                             output['timestamp'] = notification.get(
@@ -428,7 +433,7 @@ class BLEClientRemote(BLEClientBase):
                             return output
                     elif raw_bytes.startswith(b'D{'):
                         decoded = decode_json_message(raw_bytes)
-                        output = dispatcher(decoded)
+                        output = dispatcher(decoded, own_call)
                         if output:
                             output['src_type'] = 'ble_remote'
                             output['timestamp'] = notification.get(

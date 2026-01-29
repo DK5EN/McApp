@@ -384,7 +384,24 @@ def parse_aprs_position(message):
     return result
 
 
-def transform_common_fields(input_dict):
+def split_path(path: str, own_callsign: str = "") -> tuple[str, str]:
+    """Split BLE path into (src, via), stripping own callsign.
+
+    path: e.g. "DL8DD-7,DK5EN-99>" or "DO7TW-1,DB0FHR-12,DK5EN-99>"
+    Returns: ("DL8DD-7", "") or ("DO7TW-1", "DO7TW-1,DB0FHR-12")
+    """
+    parts = path.rstrip(">").strip().split(",")
+    if own_callsign:
+        filtered = [p for p in parts if p.upper() != own_callsign.upper()]
+    else:
+        filtered = parts
+    src = filtered[0] if filtered else parts[0]
+    via = ",".join(filtered)
+    return src, via
+
+
+def transform_common_fields(input_dict, own_callsign=""):
+    _, via = split_path(input_dict.get("path", ""), own_callsign)
     return {
         "transformer1": "common_fields",
         "src_type": "ble",
@@ -392,7 +409,7 @@ def transform_common_fields(input_dict):
         "firmware": input_dict.get("fw",""),
         #"fw_sub": input_dict.get("fw_sub"),
         "fw_sub": ascii_char(input_dict.get("fw_sub")) if input_dict.get("fw_sub") else None,
-        "via": input_dict.get("path"),
+        "via": via,
         "max_hop": input_dict.get("max_hop"),
         "mesh_info": input_dict.get("mesh_info"),
         "lora_mod": input_dict.get("lora_mod"),
@@ -402,18 +419,19 @@ def transform_common_fields(input_dict):
     }
 
 
-def transform_msg(input_dict):
+def transform_msg(input_dict, own_callsign=""):
+    src, _ = split_path(input_dict["path"], own_callsign)
     return {
         "transformer": "msg",
         "src_type": "ble",
         "type": "msg",
         **input_dict,
-        "src": input_dict["path"].rstrip(">"),
+        "src": src,
         "dst": input_dict["dest"],
         "msg": strip_prefix(input_dict["message"]),
         "msg_id": hex_msg_id(input_dict["msg_id"]),
         "hw_id": input_dict["hardware_id"],
-        **transform_common_fields(input_dict)
+        **transform_common_fields(input_dict, own_callsign)
     }
 
 
@@ -429,18 +447,18 @@ def transform_ack(input_dict):
     }
 
 
-def transform_pos(input_dict):
+def transform_pos(input_dict, own_callsign=""):
     aprs = parse_aprs_position(input_dict["message"]) or {}
+    src, _ = split_path(input_dict["path"], own_callsign)
     return {
         "transformer": "pos",
         "type": "pos",
-        "src": input_dict["path"].rstrip(">"),
-        "via": input_dict.get("path"),
+        "src": src,
         "msg_id": hex_msg_id(input_dict["msg_id"]),
         "msg": input_dict["message"],
         "hw_id": input_dict.get("hardware_id"),
         **aprs,
-        **transform_common_fields(input_dict)
+        **transform_common_fields(input_dict, own_callsign)
     }
 
 
@@ -470,7 +488,7 @@ def transform_ble(input_dict):
      }
 
 
-def dispatcher(input_dict):
+def dispatcher(input_dict, own_callsign=""):
     """Dispatch messages to appropriate transformer based on type"""
     if "TYP" in input_dict:
         if input_dict["TYP"] == "MH":
@@ -484,10 +502,10 @@ def dispatcher(input_dict):
                 print("Type nicht gefunden!", input_dict)
 
     elif input_dict.get("payload_type") == 58:
-        return transform_msg(input_dict)
+        return transform_msg(input_dict, own_callsign)
 
     elif input_dict.get("payload_type") == 33:
-        return transform_pos(input_dict)
+        return transform_pos(input_dict, own_callsign)
 
     elif input_dict.get("payload_type") == 65:
         return transform_ack(input_dict)
@@ -560,7 +578,8 @@ async def notification_handler(clean_msg, message_router=None):
     elif clean_msg.startswith(b'@'):
       message = decode_binary_message(clean_msg)
 
-      output = dispatcher(message)
+      own_call = getattr(message_router, 'my_callsign', '') if message_router else ''
+      output = dispatcher(message, own_call)
       if message_router:
             await message_router.publish('ble', 'ble_notification', output)
 
