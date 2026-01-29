@@ -298,10 +298,13 @@ class SQLiteStorage:
         rows = await self._execute(query)
         return [row["raw_json"] for row in rows]
 
-    async def process_mheard_store_parallel(self) -> list[dict[str, Any]]:
+    async def process_mheard_store_parallel(self, progress_callback=None) -> list[dict[str, Any]]:
         """Process messages for MHeard statistics."""
         now_ms = int(time.time() * 1000)
         cutoff_ms = now_ms - SEVEN_DAYS_MS
+
+        if progress_callback:
+            await progress_callback("start", "Querying database...")
 
         # Query aggregated data directly from SQLite
         query = """
@@ -322,6 +325,9 @@ class SQLiteStorage:
         rows = await self._execute(query, params)
         logger.info("Processing %d rows for mheard statistics", len(rows))
 
+        if progress_callback:
+            await progress_callback("bucketing", f"Processing {len(rows)} rows...")
+
         # Group by bucket and callsign
         buckets: dict[tuple[int, str], dict[str, list]] = defaultdict(lambda: {"rssi": [], "snr": []})
 
@@ -341,7 +347,14 @@ class SQLiteStorage:
                 buckets[key]["snr"].append(row["snr"])
 
         # Build result with gap markers
-        return self._build_stats_with_gaps(buckets)
+        result = await self._build_stats_with_gaps_async(buckets, progress_callback) if progress_callback else self._build_stats_with_gaps(buckets)
+
+        if progress_callback:
+            stats_entries = [r for r in result if not r.get("is_gap_marker")]
+            callsign_count = len(set(e["callsign"] for e in stats_entries)) if stats_entries else 0
+            await progress_callback("done", f"{len(stats_entries)} data points for {callsign_count} stations")
+
+        return result
 
     def _build_stats_with_gaps(
         self,
@@ -371,6 +384,66 @@ class SQLiteStorage:
                 # Check for gap
                 if prev_time and (bucket_time - prev_time) > gap_threshold:
                     # Insert gap marker
+                    final_result.append({
+                        "src_type": "STATS",
+                        "timestamp": bucket_time - BUCKET_SECONDS,
+                        "callsign": callsign,
+                        "rssi": None,
+                        "snr": None,
+                        "count": None,
+                        "segment_id": f"{callsign}_gap_{segment_id}_to_{segment_id + 1}",
+                        "segment_size": 1,
+                        "is_gap_marker": True,
+                    })
+                    segment_id += 1
+
+                rssi_values = values["rssi"]
+                snr_values = values["snr"]
+                count = min(len(rssi_values), len(snr_values))
+
+                if count > 0:
+                    final_result.append({
+                        "src_type": "STATS",
+                        "timestamp": bucket_time,
+                        "callsign": callsign,
+                        "rssi": round(mean(rssi_values), 2),
+                        "snr": round(mean(snr_values), 2),
+                        "count": count,
+                        "segment_id": f"{callsign}_seg_{segment_id}",
+                        "segment_size": 1,
+                    })
+
+                prev_time = bucket_time
+
+        logger.info("Generated %d statistics entries", len(final_result))
+        return sorted(final_result, key=lambda x: (x["callsign"], x["timestamp"]))
+
+    async def _build_stats_with_gaps_async(
+        self,
+        buckets: dict[tuple[int, str], dict[str, list]],
+        progress_callback,
+    ) -> list[dict[str, Any]]:
+        """Async version with per-callsign progress."""
+        gap_threshold = GAP_THRESHOLD_MULTIPLIER * BUCKET_SECONDS
+
+        callsign_data: dict[str, list[tuple[int, dict]]] = defaultdict(list)
+        for (bucket_time, callsign), values in buckets.items():
+            callsign_data[callsign].append((bucket_time, values))
+
+        final_result = []
+
+        for callsign, entries in callsign_data.items():
+            if len(entries) < MIN_DATAPOINTS_FOR_STATS:
+                continue
+
+            await progress_callback("gaps", f"Analyzing {callsign}...", callsign)
+
+            entries.sort(key=lambda x: x[0])
+            segment_id = 0
+            prev_time = None
+
+            for bucket_time, values in entries:
+                if prev_time and (bucket_time - prev_time) > gap_threshold:
                     final_result.append({
                         "src_type": "STATS",
                         "timestamp": bucket_time - BUCKET_SECONDS,

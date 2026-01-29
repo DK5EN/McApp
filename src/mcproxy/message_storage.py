@@ -423,52 +423,72 @@ class MessageStorageHandler:
         return result
 
     
-    async def process_mheard_store_parallel(self):
+    async def process_mheard_store_parallel(self, progress_callback=None):
         """Parallelized mheard processing with integrated gap detection and markers"""
         now_ms = int(time.time() * 1000)
         cutoff_timestamp_ms = now_ms - SEVEN_DAYS_MS
-    
+
+        msg_count = len(self.message_store)
+        if progress_callback:
+            await progress_callback("start", f"Processing {msg_count} messages...")
+
         # 1. Parallel chunk processing
-        raw_buckets = await self._process_chunks_parallel(cutoff_timestamp_ms)
+        raw_buckets = await self._process_chunks_parallel(cutoff_timestamp_ms, progress_callback=progress_callback)
         if not raw_buckets:
+            if progress_callback:
+                await progress_callback("done", "0 data points for 0 stations")
             return []
-    
+
         # 2. Convert buckets to time-ordered statistics
+        if progress_callback:
+            await progress_callback("bucketing", "Generating time buckets...")
         raw_stats = self._buckets_to_stats(raw_buckets)
-    
-        # 3. Create segments with integrated gap markers
-        final_result = self._create_segments_with_gaps(raw_stats)
-    
+
+        # 3. Create segments with integrated gap markers (with per-callsign progress)
+        if progress_callback:
+            final_result = await self._create_segments_with_gaps_async(raw_stats, progress_callback)
+        else:
+            final_result = self._create_segments_with_gaps(raw_stats)
+
         # 4. Consolidated logging
         self._log_processing_summary(raw_stats, final_result)
-    
+
+        # 5. Done progress
+        if progress_callback:
+            stats_entries = [r for r in final_result if not r.get("is_gap_marker")]
+            callsign_count = len(set(e["callsign"] for e in stats_entries))
+            await progress_callback("done", f"{len(stats_entries)} data points for {callsign_count} stations")
+
         return final_result
     
-    async def _process_chunks_parallel(self, cutoff_timestamp_ms):
+    async def _process_chunks_parallel(self, cutoff_timestamp_ms, progress_callback=None):
         """Handle parallel chunk processing with error handling"""
         messages = list(self.message_store)
         if not messages:
             return {}
-    
+
         chunk_size = max(1, len(messages) // self.max_workers)
         chunks = [messages[i:i + chunk_size] for i in range(0, len(messages), chunk_size)]
-    
+
         if has_console:
             print(f"📊 Processing {len(messages)} messages in {len(chunks)} chunks using {self.max_workers} workers")
-    
+
         # Process chunks in parallel
         loop = asyncio.get_event_loop()
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             process_func = partial(self._process_message_chunk, cutoff_timestamp_ms=cutoff_timestamp_ms)
             futures = [loop.run_in_executor(executor, process_func, chunk) for chunk in chunks]
-            
+
             try:
                 chunk_results = await asyncio.gather(*futures, return_exceptions=True)
                 successful_chunks = sum(1 for r in chunk_results if not isinstance(r, Exception))
-                
+
                 if has_console:
                     print(f"📊 Successfully processed {successful_chunks}/{len(chunks)} chunks")
-                    
+
+                if progress_callback:
+                    await progress_callback("chunking", f"Crunching data ({successful_chunks}/{len(chunks)} chunks)")
+
                 # Merge all buckets
                 all_buckets = defaultdict(lambda: {"rssi": [], "snr": []})
                 for result in chunk_results:
@@ -477,9 +497,9 @@ class MessageStorageHandler:
                     for key, values in result.items():
                         all_buckets[key]["rssi"].extend(values["rssi"])
                         all_buckets[key]["snr"].extend(values["snr"])
-                        
+
                 return all_buckets
-                
+
             except Exception as e:
                 if has_console:
                     print(f"📊 Parallel processing failed: {e}")
@@ -516,7 +536,7 @@ class MessageStorageHandler:
         gap_threshold = GAP_THRESHOLD_MULTIPLIER * BUCKET_SECONDS
         final_result = []
         filtered_callsigns = []
-        
+
         # Process each callsign separately
         for callsign, entries in self._group_by_callsign(raw_stats).items():
             if len(entries) < MIN_DATAPOINTS_FOR_STATS:
@@ -532,7 +552,29 @@ class MessageStorageHandler:
                 print(f"📊   {callsign}: {count} points (filtered)")
         
         return sorted(final_result, key=lambda x: (x["callsign"], x["timestamp"]))
-    
+
+    async def _create_segments_with_gaps_async(self, raw_stats, progress_callback):
+        """Async version that emits per-callsign progress during gap analysis"""
+        gap_threshold = GAP_THRESHOLD_MULTIPLIER * BUCKET_SECONDS
+        final_result = []
+        filtered_callsigns = []
+
+        for callsign, entries in self._group_by_callsign(raw_stats).items():
+            if len(entries) < MIN_DATAPOINTS_FOR_STATS:
+                filtered_callsigns.append((callsign, len(entries)))
+                continue
+            await progress_callback("gaps", f"Analyzing {callsign}...", callsign)
+            callsign_result = self._process_callsign_timeline(callsign, entries, gap_threshold)
+            final_result.extend(callsign_result)
+
+        if has_console and filtered_callsigns:
+            filtered_callsigns.sort(key=lambda x: x[1], reverse=True)
+            print(f"📊 Filtered {len(filtered_callsigns)} callsigns with <{MIN_DATAPOINTS_FOR_STATS} data points:")
+            for callsign, count in filtered_callsigns[:MAX_DEBUG_SEGMENTS_SHOW]:
+                print(f"📊   {callsign}: {count} points (filtered)")
+
+        return sorted(final_result, key=lambda x: (x["callsign"], x["timestamp"]))
+
     def _group_by_callsign(self, stats):
         """Group statistics by callsign and sort by timestamp"""
         grouped = defaultdict(list)
