@@ -265,15 +265,28 @@ class MessageStorageHandler:
                 try:
                     data = json.loads(raw)
                     src = data.get("src")
-                    if src is not None and src not in pos_per_src:
-                        pos_per_src[src] = raw
+                    if src is None:
+                        continue
+                    if src not in pos_per_src:
+                        pos_per_src[src] = data
+                    else:
+                        # Merge missing fields from older messages (e.g. APRS position
+                        # fields into a newer MH-only update, or vice versa)
+                        existing = pos_per_src[src]
+                        for key in (
+                            "lat", "long", "alt", "battery_level", "firmware",
+                            "fw_sub", "aprs_symbol", "aprs_symbol_group",
+                            "rssi", "snr", "hw_id", "lora_mod", "mesh",
+                        ):
+                            if key not in existing and key in data:
+                                existing[key] = data[key]
                 except json.JSONDecodeError:
                     continue
 
         messages = []
         for msg_list in msgs_per_dst.values():
             messages.extend(reversed(msg_list))
-        positions = list(pos_per_src.values())
+        positions = [json.dumps(d, ensure_ascii=False) for d in pos_per_src.values()]
 
         return {"messages": messages, "positions": positions}
 
