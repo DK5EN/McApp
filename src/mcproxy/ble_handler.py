@@ -358,7 +358,7 @@ def parse_aprs_position(message):
     alt_match = re.search(r"/A=(\d{6})", message)
     if alt_match:
         altitude_ft = int(alt_match.group(1))
-        result["alt"] = altitude_ft
+        result["alt"] = round(altitude_ft * 0.3048)
 
     # Battery level: /B=085
     battery_match = re.search(r"/B=(\d{3})", message)
