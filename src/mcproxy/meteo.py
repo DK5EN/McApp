@@ -451,7 +451,7 @@ class WeatherService:
             "wolkenbedeckung_prozent": self._safe_int(current.get("cloud_cover")),
             "sichtweite_meter": self._safe_int(current.get("visibility")),
             "niederschlag_mm": self._safe_float(current.get("precipitation")),
-            "bedingung": "automatisch",
+            "bedingung": "N/A",
             "dwd_station": "Open-Meteo Modell",
             "messzeitpunkt": current.get("time", "unbekannt")
         }
