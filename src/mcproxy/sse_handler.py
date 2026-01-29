@@ -45,10 +45,12 @@ class SendMessageRequest(BaseModel):
 
     type: str = "msg"
     src: str | None = None
-    dst: str
-    msg: str
+    dst: str = "*"
+    msg: str = ""
     MAC: str | None = None
     BLE_Pin: str | None = None
+    before: int | None = None
+    limit: int = 20
 
 
 class SSEClient:
@@ -78,7 +80,10 @@ class SSEManager:
     with the MessageRouter.
     """
 
-    def __init__(self, host: str, port: int, message_router: Any = None, weather_service: Any = None):
+    def __init__(
+        self, host: str, port: int,
+        message_router: Any = None, weather_service: Any = None
+    ):
         self.host = host
         self.port = port
         self.message_router = message_router
@@ -160,10 +165,33 @@ class SSEManager:
                             self.message_router.storage_handler
                             if self.message_router else None
                         )
-                        if storage:
+                        if storage and hasattr(storage, 'get_smart_initial'):
+                            # SQLite backend — use smart_initial
+                            initial_data = await storage.get_smart_initial()
+                            logger.info(
+                                "SSE client %s: sending smart_initial"
+                                " (%d msgs, %d pos)",
+                                client_id,
+                                len(initial_data["messages"]),
+                                len(initial_data["positions"]),
+                            )
+                            yield self._format_sse_event({
+                                "type": "response",
+                                "msg": "smart_initial",
+                                "data": initial_data,
+                            })
+                            summary = await storage.get_summary()
+                            yield self._format_sse_event({
+                                "type": "response",
+                                "msg": "summary",
+                                "data": summary,
+                            })
+                        elif storage:
+                            # In-memory backend — old dump path
                             initial_payload = storage.get_initial_payload()
                             logger.info(
-                                "SSE client %s: sending initial payload (%d items)",
+                                "SSE client %s: sending initial payload"
+                                " (%d items)",
                                 client_id, len(initial_payload),
                             )
                             yield self._format_sse_event({
@@ -174,7 +202,8 @@ class SSEManager:
 
                             full_data = storage.get_full_dump()
                             logger.info(
-                                "SSE client %s: sending full dump (%d items)",
+                                "SSE client %s: sending full dump"
+                                " (%d items)",
                                 client_id, len(full_data),
                             )
                             if full_data:
@@ -183,7 +212,9 @@ class SSEManager:
                                     yield self._format_sse_event({
                                         "type": "response",
                                         "msg": "message dump",
-                                        "data": full_data[i:i + CHUNK_SIZE],
+                                        "data": full_data[
+                                            i:i + CHUNK_SIZE
+                                        ],
                                     })
                         else:
                             logger.warning(
@@ -297,11 +328,22 @@ class SSEManager:
                 message_data["src"] = request.src
 
             try:
-                if request.type == "command":
+                if request.type == "page_request":
+                    # Paginated message fetch — response via SSE stream
+                    await self.message_router.route_command(
+                        "get_messages_page",
+                        websocket=None,
+                        data={
+                            "dst": request.dst,
+                            "before": getattr(request, "before", None),
+                            "limit": getattr(request, "limit", 20),
+                        },
+                    )
+                elif request.type == "command":
                     # Route command through message router
                     await self.message_router.route_command(
                         request.msg,
-                        websocket=None,  # No websocket for SSE
+                        websocket=None,
                         MAC=request.MAC,
                         BLE_Pin=request.BLE_Pin,
                     )

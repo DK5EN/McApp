@@ -12,12 +12,13 @@ ssh "$PI_HOST" "mkdir -p ~/$PI_DIR/src/mcproxy ~/$PI_DIR/ble_service/src"
 
 # 2. Copy MCProxy package
 scp src/mcproxy/*.py "$REMOTE/src/mcproxy/"
-scp pyproject.toml "$REMOTE/"
+scp pyproject.toml uv.lock "$REMOTE/"
 
 # 3. Copy BLE service files
 scp ble_service/src/__init__.py ble_service/src/main.py \
     ble_service/src/ble_adapter.py \
     "$REMOTE/ble_service/src/"
+scp ble_service/pyproject.toml "$REMOTE/ble_service/"
 
 # 4. Copy config (only if not exists)
 if ssh "$PI_HOST" "test ! -f ~/$PI_DIR/config.json"; then
