@@ -319,7 +319,7 @@ class MessageStorageHandler:
                 data = json.loads(raw)
             except json.JSONDecodeError:
                 continue
-            if data.get("dst") != dst:
+            if dst and data.get("dst") != dst:
                 continue
             ts = data.get("timestamp", 0)
             if before_timestamp is not None and ts >= before_timestamp:
