@@ -52,6 +52,7 @@ class BLEDevice:
     rssi: int = 0
     paired: bool = False
     connected: bool = False
+    known: bool = False
     path: str = ""
 
 
@@ -135,7 +136,7 @@ class BLEAdapter:
 
         # State
         self._status = BLEStatus()
-        self._connect_lock = asyncio.Lock()
+        self._operation_lock = asyncio.Lock()
         self._keepalive_task: asyncio.Task | None = None
         self._connected_mac: str | None = None
         self._agent_registered: bool = False
@@ -170,80 +171,82 @@ class BLEAdapter:
         Returns:
             List of discovered BLEDevice objects
         """
-        await self._ensure_bus()
+        async with self._operation_lock:
+            await self._ensure_bus()
 
-        found_devices: dict[str, BLEDevice] = {}
-        known_devices: list[BLEDevice] = []
+            found_devices: dict[str, BLEDevice] = {}
+            known_devices: list[BLEDevice] = []
 
-        # Get adapter
-        path = "/org/bluez/hci0"
-        introspection = await self.bus.introspect(BLUEZ_SERVICE_NAME, path)
-        adapter_obj = self.bus.get_proxy_object(BLUEZ_SERVICE_NAME, path, introspection)
-        adapter = adapter_obj.get_interface(ADAPTER_INTERFACE)
+            # Get adapter
+            path = "/org/bluez/hci0"
+            introspection = await self.bus.introspect(BLUEZ_SERVICE_NAME, path)
+            adapter_obj = self.bus.get_proxy_object(BLUEZ_SERVICE_NAME, path, introspection)
+            adapter = adapter_obj.get_interface(ADAPTER_INTERFACE)
 
-        # Get object manager for existing devices
-        obj_mgr = self.bus.get_proxy_object(
-            BLUEZ_SERVICE_NAME, "/",
-            await self.bus.introspect(BLUEZ_SERVICE_NAME, "/")
-        )
-        obj_mgr_iface = obj_mgr.get_interface(OBJECT_MANAGER_INTERFACE)
+            # Get object manager for existing devices
+            obj_mgr = self.bus.get_proxy_object(
+                BLUEZ_SERVICE_NAME, "/",
+                await self.bus.introspect(BLUEZ_SERVICE_NAME, "/")
+            )
+            obj_mgr_iface = obj_mgr.get_interface(OBJECT_MANAGER_INTERFACE)
 
-        # Check known/paired devices first
-        objects = await obj_mgr_iface.call_get_managed_objects()
-        for obj_path, interfaces in objects.items():
-            if DEVICE_INTERFACE in interfaces:
-                props = interfaces[DEVICE_INTERFACE]
-                name = props.get("Name", Variant("s", "")).value
-                addr = props.get("Address", Variant("s", "")).value
-                paired = props.get("Paired", Variant("b", False)).value
-                rssi = props.get("RSSI", Variant("n", 0)).value
-
-                if name.startswith(prefix):
-                    device = BLEDevice(
-                        name=name,
-                        address=addr,
-                        rssi=rssi,
-                        paired=paired,
-                        path=obj_path
-                    )
-                    known_devices.append(device)
-
-        # Setup handler for new devices during scan
-        async def on_interfaces_added(path, interfaces):
-            if DEVICE_INTERFACE in interfaces:
-                props = interfaces[DEVICE_INTERFACE]
-                name = props.get("Name", Variant("s", "")).value
-                if name.startswith(prefix):
+            # Check known/paired devices first
+            objects = await obj_mgr_iface.call_get_managed_objects()
+            for obj_path, interfaces in objects.items():
+                if DEVICE_INTERFACE in interfaces:
+                    props = interfaces[DEVICE_INTERFACE]
+                    name = props.get("Name", Variant("s", "")).value
                     addr = props.get("Address", Variant("s", "")).value
+                    paired = props.get("Paired", Variant("b", False)).value
                     rssi = props.get("RSSI", Variant("n", 0)).value
-                    found_devices[path] = BLEDevice(
-                        name=name,
-                        address=addr,
-                        rssi=rssi,
-                        paired=False,
-                        path=path
-                    )
 
-        def on_interfaces_added_sync(path, interfaces):
-            asyncio.create_task(on_interfaces_added(path, interfaces))
+                    if name.startswith(prefix):
+                        device = BLEDevice(
+                            name=name,
+                            address=addr,
+                            rssi=rssi,
+                            paired=paired,
+                            known=True,
+                            path=obj_path
+                        )
+                        known_devices.append(device)
 
-        obj_mgr_iface.on_interfaces_added(on_interfaces_added_sync)
+            # Setup handler for new devices during scan
+            async def on_interfaces_added(path, interfaces):
+                if DEVICE_INTERFACE in interfaces:
+                    props = interfaces[DEVICE_INTERFACE]
+                    name = props.get("Name", Variant("s", "")).value
+                    if name.startswith(prefix):
+                        addr = props.get("Address", Variant("s", "")).value
+                        rssi = props.get("RSSI", Variant("n", 0)).value
+                        found_devices[path] = BLEDevice(
+                            name=name,
+                            address=addr,
+                            rssi=rssi,
+                            paired=False,
+                            path=path
+                        )
 
-        # Start discovery
-        logger.info("Starting BLE scan (timeout=%.1fs, prefix='%s')", timeout, prefix)
-        await adapter.call_start_discovery()
+            def on_interfaces_added_sync(path, interfaces):
+                asyncio.create_task(on_interfaces_added(path, interfaces))
 
-        try:
-            await asyncio.sleep(timeout)
-        finally:
-            await adapter.call_stop_discovery()
+            obj_mgr_iface.on_interfaces_added(on_interfaces_added_sync)
 
-        # Combine results
-        all_devices = known_devices + list(found_devices.values())
-        logger.info("Scan complete: %d known, %d discovered",
-                   len(known_devices), len(found_devices))
+            # Start discovery
+            logger.info("Starting BLE scan (timeout=%.1fs, prefix='%s')", timeout, prefix)
+            await adapter.call_start_discovery()
 
-        return all_devices
+            try:
+                await asyncio.sleep(timeout)
+            finally:
+                await adapter.call_stop_discovery()
+
+            # Combine results
+            all_devices = known_devices + list(found_devices.values())
+            logger.info("Scan complete: %d known, %d discovered",
+                       len(known_devices), len(found_devices))
+
+            return all_devices
 
     async def connect(self, mac: str, max_retries: int = 3) -> bool:
         """
@@ -256,7 +259,7 @@ class BLEAdapter:
         Returns:
             True if connection successful
         """
-        async with self._connect_lock:
+        async with self._operation_lock:
             if self.is_connected:
                 if self._connected_mac == mac:
                     logger.info("Already connected to %s", mac)
@@ -418,7 +421,7 @@ class BLEAdapter:
 
     async def disconnect(self) -> bool:
         """Disconnect from current device"""
-        async with self._connect_lock:
+        async with self._operation_lock:
             return await self._disconnect_internal()
 
     async def _disconnect_internal(self) -> bool:
@@ -616,55 +619,56 @@ class BLEAdapter:
         Returns:
             True if pairing successful
         """
-        await self._ensure_bus()
+        async with self._operation_lock:
+            await self._ensure_bus()
 
-        path = self._mac_to_dbus_path(mac)
+            path = self._mac_to_dbus_path(mac)
 
-        # Register agent (once per bus lifetime)
-        if not self._agent_registered:
-            agent = NoInputNoOutputAgent()
-            self.bus.export(AGENT_PATH, agent)
+            # Register agent (once per bus lifetime)
+            if not self._agent_registered:
+                agent = NoInputNoOutputAgent()
+                self.bus.export(AGENT_PATH, agent)
 
-            manager_obj = self.bus.get_proxy_object(
-                BLUEZ_SERVICE_NAME, "/org/bluez",
-                await self.bus.introspect(BLUEZ_SERVICE_NAME, "/org/bluez")
+                manager_obj = self.bus.get_proxy_object(
+                    BLUEZ_SERVICE_NAME, "/org/bluez",
+                    await self.bus.introspect(BLUEZ_SERVICE_NAME, "/org/bluez")
+                )
+                agent_manager = manager_obj.get_interface("org.bluez.AgentManager1")
+                await agent_manager.call_register_agent(AGENT_PATH, "KeyboardDisplay")
+                await agent_manager.call_request_default_agent(AGENT_PATH)
+                self._agent_registered = True
+
+            # Pair
+            dev_obj = self.bus.get_proxy_object(
+                BLUEZ_SERVICE_NAME, path,
+                await self.bus.introspect(BLUEZ_SERVICE_NAME, path)
             )
-            agent_manager = manager_obj.get_interface("org.bluez.AgentManager1")
-            await agent_manager.call_register_agent(AGENT_PATH, "KeyboardDisplay")
-            await agent_manager.call_request_default_agent(AGENT_PATH)
-            self._agent_registered = True
 
-        # Pair
-        dev_obj = self.bus.get_proxy_object(
-            BLUEZ_SERVICE_NAME, path,
-            await self.bus.introspect(BLUEZ_SERVICE_NAME, path)
-        )
-
-        try:
-            dev_iface = dev_obj.get_interface(DEVICE_INTERFACE)
-        except InterfaceNotFoundError:
-            logger.error("Device not found: %s", mac)
-            return False
-
-        try:
-            await dev_iface.call_pair()
-            await dev_iface.set_trusted(True)
-
-            is_paired = await dev_iface.get_paired()
-            logger.info("Paired with %s: %s", mac, is_paired)
-
-            # Disconnect after pairing
-            await asyncio.sleep(2)
             try:
-                await dev_iface.call_disconnect()
-            except Exception:
-                pass
+                dev_iface = dev_obj.get_interface(DEVICE_INTERFACE)
+            except InterfaceNotFoundError:
+                logger.error("Device not found: %s", mac)
+                return False
 
-            return is_paired
+            try:
+                await dev_iface.call_pair()
+                await dev_iface.set_trusted(True)
 
-        except Exception as e:
-            logger.error("Pairing failed: %s", e)
-            return False
+                is_paired = await dev_iface.get_paired()
+                logger.info("Paired with %s: %s", mac, is_paired)
+
+                # Disconnect after pairing
+                await asyncio.sleep(2)
+                try:
+                    await dev_iface.call_disconnect()
+                except Exception:
+                    pass
+
+                return is_paired
+
+            except Exception as e:
+                logger.error("Pairing failed: %s", e)
+                return False
 
     async def unpair(self, mac: str) -> bool:
         """
@@ -676,21 +680,22 @@ class BLEAdapter:
         Returns:
             True if unpairing successful
         """
-        await self._ensure_bus()
+        async with self._operation_lock:
+            await self._ensure_bus()
 
-        device_path = self._mac_to_dbus_path(mac)
-        adapter_path = "/org/bluez/hci0"
+            device_path = self._mac_to_dbus_path(mac)
+            adapter_path = "/org/bluez/hci0"
 
-        adapter_obj = self.bus.get_proxy_object(
-            BLUEZ_SERVICE_NAME, adapter_path,
-            await self.bus.introspect(BLUEZ_SERVICE_NAME, adapter_path)
-        )
-        adapter_iface = adapter_obj.get_interface(ADAPTER_INTERFACE)
+            adapter_obj = self.bus.get_proxy_object(
+                BLUEZ_SERVICE_NAME, adapter_path,
+                await self.bus.introspect(BLUEZ_SERVICE_NAME, adapter_path)
+            )
+            adapter_iface = adapter_obj.get_interface(ADAPTER_INTERFACE)
 
-        try:
-            await adapter_iface.call_remove_device(device_path)
-            logger.info("Unpaired device: %s", mac)
-            return True
-        except DBusError as e:
-            logger.error("Unpair failed: %s", e)
-            return False
+            try:
+                await adapter_iface.call_remove_device(device_path)
+                logger.info("Unpaired device: %s", mac)
+                return True
+            except DBusError as e:
+                logger.error("Unpair failed: %s", e)
+                return False

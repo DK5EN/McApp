@@ -150,6 +150,7 @@ class DeviceResponse(BaseModel):
     address: str
     rssi: int
     paired: bool
+    known: bool = False
 
 
 class ScanResponse(BaseModel):
@@ -188,6 +189,11 @@ async def scan_devices(
     _: bool = Depends(verify_api_key)
 ):
     """Scan for BLE devices"""
+    if ble_adapter._operation_lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="Another BLE operation is in progress"
+        )
     if ble_adapter.is_connected:
         raise HTTPException(
             status_code=409,
@@ -202,7 +208,8 @@ async def scan_devices(
                     name=d.name,
                     address=d.address,
                     rssi=d.rssi,
-                    paired=d.paired
+                    paired=d.paired,
+                    known=d.known
                 )
                 for d in devices
             ],
@@ -323,6 +330,12 @@ async def pair_device(request: ConnectRequest, _: bool = Depends(verify_api_key)
     if not request.device_address:
         raise HTTPException(status_code=400, detail="device_address required")
 
+    if ble_adapter._operation_lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="Another BLE operation is in progress"
+        )
+
     if ble_adapter.is_connected:
         raise HTTPException(
             status_code=409,
@@ -345,6 +358,12 @@ async def unpair_device(request: ConnectRequest, _: bool = Depends(verify_api_ke
     """Unpair a BLE device"""
     if not request.device_address:
         raise HTTPException(status_code=400, detail="device_address required")
+
+    if ble_adapter._operation_lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="Another BLE operation is in progress"
+        )
 
     try:
         success = await ble_adapter.unpair(request.device_address)

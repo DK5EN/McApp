@@ -55,6 +55,7 @@ class BLEDevice:
     rssi: int = 0
     paired: bool = False
     connected: bool = False
+    known: bool = False
 
 
 @dataclass

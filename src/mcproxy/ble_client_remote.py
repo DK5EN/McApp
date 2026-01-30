@@ -66,31 +66,44 @@ class BLEClientRemote(BLEClientBase):
         self,
         method: str,
         endpoint: str,
-        data: dict | None = None
+        data: dict | None = None,
+        retries: int = 2,
+        retry_delay: float = 1.5
     ) -> dict:
-        """Make HTTP request to remote service"""
+        """Make HTTP request to remote service, with retry on 409 (busy)"""
         await self._ensure_session()
 
         url = urljoin(self.remote_url, endpoint)
 
-        try:
-            async with self._session.request(
-                method,
-                url,
-                headers=self._headers(),
-                json=data if data else None
-            ) as response:
-                response_data = await response.json()
+        for attempt in range(1 + retries):
+            try:
+                async with self._session.request(
+                    method,
+                    url,
+                    headers=self._headers(),
+                    json=data if data else None
+                ) as response:
+                    response_data = await response.json()
 
-                if response.status >= 400:
-                    error_msg = response_data.get('detail', 'Unknown error')
-                    raise RuntimeError(f"API error ({response.status}): {error_msg}")
+                    if response.status == 409 and attempt < retries:
+                        logger.info(
+                            "BLE busy (409), retry %d/%d in %.1fs: %s",
+                            attempt + 1, retries, retry_delay, endpoint
+                        )
+                        await asyncio.sleep(retry_delay)
+                        continue
 
-                return response_data
+                    if response.status >= 400:
+                        error_msg = response_data.get('detail', 'Unknown error')
+                        raise RuntimeError(f"API error ({response.status}): {error_msg}")
 
-        except aiohttp.ClientError as e:
-            logger.error("HTTP request failed: %s", e)
-            raise RuntimeError(f"Connection error: {e}") from e
+                    return response_data
+
+            except aiohttp.ClientError as e:
+                logger.error("HTTP request failed: %s", e)
+                raise RuntimeError(f"Connection error: {e}") from e
+
+        raise RuntimeError("BLE service busy after retries")
 
     async def _publish_status(self, command: str, result: str, msg: str):
         """Publish BLE status through message router"""
@@ -119,7 +132,8 @@ class BLEClientRemote(BLEClientBase):
                     name=d['name'],
                     address=d['address'],
                     rssi=d['rssi'],
-                    paired=d['paired']
+                    paired=d['paired'],
+                    known=d.get('known', False)
                 )
                 for d in response.get('devices', [])
             ]

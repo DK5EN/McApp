@@ -478,18 +478,30 @@ class MessageRouter:
         client = self._get_ble_client()
         if client:
             devices = await client.scan()
-            await self.publish('ble', 'ble_status', {
-                'src_type': 'BLE',
-                'command': 'scan BLE result',
-                'result': 'ok',
-                'msg': f'Found {len(devices)} devices',
-                'devices': [
-                    {'name': d.name, 'address': d.address,
-                     'rssi': d.rssi, 'paired': d.paired}
-                    for d in devices
-                ],
-                'timestamp': int(time.time() * 1000)
-            })
+            ts = int(time.time() * 1000)
+
+            paired = [d for d in devices if d.known]
+            unpaired = [d for d in devices if not d.known]
+
+            known_msg = {'src_type': 'BLE', 'TYP': 'blueZknown', 'timestamp': ts}
+            for d in paired:
+                path = f"/org/bluez/hci0/dev_{d.address.replace(':', '_')}"
+                known_msg[path] = {
+                    'org.bluez.Device1': {
+                        'Name': d.name,
+                        'Address': d.address,
+                        'Paired': True,
+                        'Connected': getattr(d, 'connected', False),
+                        'Busy': False,
+                    }
+                }
+            await self.publish('ble', 'ble_status', known_msg)
+
+            unknown_msg = {'src_type': 'BLE', 'TYP': 'blueZunKnown', 'timestamp': ts}
+            for d in unpaired:
+                path = f"/org/bluez/hci0/dev_{d.address.replace(':', '_')}"
+                unknown_msg[path] = [d.name, d.address, d.rssi]
+            await self.publish('ble', 'ble_status', unknown_msg)
         else:
             logger.warning("BLE client not available for scan")
 
