@@ -872,6 +872,10 @@ class MessageValidator:
 
         command = parts[0][1:]
 
+        # Commands that NEVER have targets (always local)
+        if command in ['GROUP', 'KB', 'TOPIC', 'SEARCH']:
+            return None
+
         if command == 'CTCPING':
             # Look for target:CALLSIGN pattern for execution delegation
             for part in parts[1:]:
