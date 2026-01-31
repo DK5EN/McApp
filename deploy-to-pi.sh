@@ -8,10 +8,14 @@ REMOTE="$PI_HOST:~/$PI_DIR"
 echo "=== Deploying MCProxy to $PI_HOST ==="
 
 # 1. Create remote dirs
-ssh "$PI_HOST" "mkdir -p ~/$PI_DIR/src/mcproxy ~/$PI_DIR/ble_service/src"
+ssh "$PI_HOST" "mkdir -p ~/$PI_DIR/src/mcproxy/commands ~/$PI_DIR/ble_service/src"
 
 # 2. Copy MCProxy package
 scp src/mcproxy/*.py "$REMOTE/src/mcproxy/"
+scp src/mcproxy/commands/*.py "$REMOTE/src/mcproxy/commands/"
+
+# Clean up removed files from refactoring
+ssh "$PI_HOST" "rm -f ~/$PI_DIR/src/mcproxy/command_handler.py"
 scp pyproject.toml uv.lock "$REMOTE/"
 
 # 3. Copy BLE service files

@@ -1,0 +1,629 @@
+"""RoutingMixin: message handling, command parsing, execution routing."""
+
+import re
+
+from .constants import COMMAND_THROTTLING, DEFAULT_THROTTLE_TIMEOUT, has_console
+
+
+class RoutingMixin:
+    """Mixin providing message routing, command parsing, and execution logic."""
+
+    async def _message_handler(self, routed_message):
+        """Handle incoming messages and check for commands"""
+        message_data = routed_message["data"]
+        src_type = message_data.get("src_type")
+
+        if "msg" not in message_data:
+            return
+
+        msg_text = message_data.get("msg", "")
+
+        if self._is_echo_message(msg_text):
+            await self._handle_echo_message(message_data)
+            return
+
+        if self._is_ack_message(msg_text):
+            await self._handle_ack_message(message_data)
+            return
+
+        if not msg_text or not msg_text.startswith("!"):
+            return
+
+        msg_text = re.sub(r"\{\d+$", "", msg_text)  # Remove {829 at end
+
+        msg_id = message_data.get("msg_id")
+        if self._is_duplicate_msg_id(msg_id):
+            if has_console:
+                print(f"🔄 CommandHandler: Duplicate msg_id {msg_id}, ignoring silently")
+            return
+
+        # EARLY NORMALIZATION using the same pattern as MessageRouter
+        normalized = self.normalize_command_data(message_data)
+        src = normalized["src"]
+        dst = normalized["dst"]
+        msg_text = normalized["msg"]
+
+        if has_console:
+            print(f"📋 CommandHandler: Checking command '{msg_text}' from {src} to {dst}")
+
+        # NEW: Use simplified reception logic
+        should_execute, target_type = self._should_execute_command(src, dst, msg_text)
+
+        if not should_execute:
+            if has_console:
+                print("📋 CommandHandler: Command execution denied")
+            return
+
+        if has_console:
+            admin_status = " (ADMIN)" if self._is_admin(src) else ""
+            group_status = " [Groups: ON]" if self.group_responses_enabled else " [Groups: OFF]"
+            print(f"📋 CommandHandler: Executing {target_type} command{admin_status}{group_status}")
+
+        if target_type == "direct":
+            if src == self.my_callsign:
+                # Outgoing: Antwort an Chat-Partner
+                response_target = dst
+            else:
+                # Incoming: Antwort an Sender
+                response_target = src
+        else:
+            # Group: Antwort an Gruppe
+            response_target = dst
+
+        if has_console:
+            print(f"📋 CommandHandler: Response will be sent to {response_target} ({target_type})")
+
+        # Check if user is blocked
+        if self._is_user_blocked(src):
+            if has_console:
+                print(f"🔴 CommandHandler: User {src} is blocked due to abuse")
+            if src not in self.block_notifications_sent:
+                self.block_notifications_sent.add(src)
+                await self.send_response(
+                    "🚫 Temporarily in timeout due to repeated invalid commands",
+                    response_target,
+                    src_type,
+                )
+            return
+
+        # Check throttling
+        content_hash = self._get_content_hash(src, msg_text, dst)
+        if self._is_throttled(content_hash):
+            if has_console:
+                print(f"⏳ CommandHandler: THROTTLED - {src} command '{msg_text}'")
+            await self.send_response(
+                "⏳ Command throttled. Same command allowed once per 5min",
+                response_target,
+                src_type,
+            )
+            return
+
+        # Parse and execute command
+        try:
+            cmd_result = self.parse_command(msg_text)
+            if cmd_result:
+                cmd, kwargs = cmd_result
+
+                if self._is_throttled(content_hash, cmd):
+                    timeout_text = (
+                        f"{COMMAND_THROTTLING.get(cmd, DEFAULT_THROTTLE_TIMEOUT // 60)}min"
+                    )
+                    await self.send_response(
+                        f"⏳ !{cmd} throttled. Try again in {timeout_text}",
+                        response_target,
+                        src_type,
+                    )
+                    return
+
+                response = await self.execute_command(cmd, kwargs, src)
+
+                self._mark_msg_id_processed(msg_id)
+                self._mark_content_processed(content_hash, cmd)
+
+                await self.send_response(response, response_target, src_type)
+
+            else:
+                # Track failed attempt
+                self._track_failed_attempt(src)
+                self._mark_msg_id_processed(msg_id)
+                await self.send_response("❌ Unknown command. Try !help", response_target, src_type)
+
+        except Exception as e:
+            error_type = type(e).__name__
+            if has_console:
+                print(f"CommandHandler ERROR ({error_type}): {e}")
+
+            self._track_failed_attempt(src)
+            self._mark_msg_id_processed(msg_id)
+
+            if "timeout" in str(e).lower():
+                await self.send_response(
+                    "❌ Command timeout. Try again later", response_target, src_type
+                )
+            elif "weather" in str(e).lower():
+                await self.send_response(
+                    "❌ Weather service temporarily unavailable", response_target, src_type
+                )
+            else:
+                await self.send_response(
+                    f"❌ Command failed: {str(e)[:50]}", response_target, src_type
+                )
+
+    def normalize_command_data(self, message_data):
+        """Normalize command data with uppercase conversion"""
+        src_raw = message_data.get("src", "UNKNOWN")
+        src = src_raw.split(",")[0].strip().upper() if "," in src_raw else src_raw.strip().upper()
+
+        dst = message_data.get("dst", "").strip().upper()
+        msg = message_data.get("msg", "").strip()
+
+        # Commands to uppercase
+        if msg.startswith("!"):
+            msg = msg.upper()
+
+        return {"src": src, "dst": dst, "msg": msg, "original": message_data}
+
+    def _should_execute_command(self, src, dst, msg):
+        """Simplified reception logic with P2P support"""
+        src = src.upper()
+        dst = dst.upper()
+        msg = msg.upper()
+
+        if has_console:
+            print(f"🔍 Command execution check: src='{src}', dst='{dst}', msg='{msg[:20]}...'")
+
+        if dst in ["*", "ALL", ""]:
+            # Nur eigene Befehle an Broadcast-Destinationen ausführen
+            if src == self.my_callsign:
+                if has_console:
+                    print(f"🔍 → Own broadcast command '{dst}' - EXECUTE")
+                return True, "group"
+            else:
+                if has_console:
+                    print(f"🔍 → Remote broadcast command '{dst}' from {src} - NO EXECUTION")
+                return False, None
+
+        target = self.extract_target_callsign(msg)
+
+        if src == self.my_callsign:
+            # Our own commands - existing logic remains the same
+            if not target:
+                if has_console:
+                    print("🔍 → Our command without target - EXECUTE (local intent)")
+                if dst == self.my_callsign:
+                    return True, "direct"
+                elif self.is_group(dst):
+                    return True, "group"
+                else:
+                    return True, "direct"
+            elif target == self.my_callsign:
+                if has_console:
+                    print("🔍 → Our command with our target - EXECUTE (local execution)")
+                if dst == self.my_callsign:
+                    return True, "direct"
+                elif self.is_group(dst):
+                    return True, "group"
+                else:
+                    return True, "direct"
+            else:
+                if has_console:
+                    print(
+                        f"🔍 → Our command with remote"
+                        f" target '{target}' - NO EXECUTION"
+                        f" (remote intent)"
+                    )
+                return False, None
+
+        # === INCOMING COMMANDS ===
+
+        # Direct P2P message to us
+        if dst == self.my_callsign:
+            if not target:
+                # Personal message without target → execute (P2P intent)
+                if has_console:
+                    print("🔍 → P2P message without target - EXECUTE (personal chat)")
+                return True, "direct"
+            elif target == self.my_callsign:
+                # Personal message with our target → execute
+                if has_console:
+                    print("🔍 → P2P message with our target - EXECUTE")
+                return True, "direct"
+            else:
+                # Personal message with other target → don't execute
+                if has_console:
+                    print(f"🔍 → P2P message with other target '{target}' - NO EXECUTION")
+                return False, None
+
+        # Group message → requires our callsign as target
+        if self.is_group(dst):
+            if target != self.my_callsign:
+                if has_console:
+                    print("🔍 → Group message without our target - NO EXECUTION")
+                return False, None
+
+            # Group message with our target → check permissions
+            execute = self.group_responses_enabled or self._is_admin(src)
+            reason = (
+                "Groups ON"
+                if self.group_responses_enabled
+                else "Admin override"
+                if self._is_admin(src)
+                else "Groups OFF"
+            )
+            if has_console:
+                print(
+                    f"🔍 → Group '{dst}' with our"
+                    f" target - "
+                    f"{'EXECUTE' if execute else 'NO EXECUTION'}"
+                    f" ({reason})"
+                )
+
+            if execute:
+                return True, "group"
+            else:
+                return False, None
+
+        if has_console:
+            print("🔍 → No match - NO EXECUTION")
+        return False, None
+
+    def _should_execute_command_old(self, src, dst, msg):
+        """Simplified reception logic from table"""
+        src = src.upper()
+        dst = dst.upper()
+        msg = msg.upper()
+
+        if has_console:
+            print(f"🔍 Command execution check: src='{src}', dst='{dst}', msg='{msg[:20]}...'")
+
+        # Invalid destinations never execute
+        if dst in ["*", "ALL", ""]:
+            if has_console:
+                print(f"🔍 → Invalid dst '{dst}' - NO EXECUTION")
+            return False, None
+
+        target = self.extract_target_callsign(msg)
+
+        if src == self.my_callsign:
+            if not target:
+                if has_console:
+                    print("🔍 → Our command without target - EXECUTE (local intent)")
+                if dst == self.my_callsign:
+                    return True, "direct"
+                elif self.is_group(dst):
+                    return True, "group"
+                else:
+                    return True, "direct"
+
+            elif target == self.my_callsign:
+                if has_console:
+                    print("🔍 → Our command with our target - EXECUTE (local execution)")
+                if dst == self.my_callsign:
+                    return True, "direct"
+                elif self.is_group(dst):
+                    return True, "group"
+                else:
+                    return True, "direct"
+
+            else:
+                if has_console:
+                    print(
+                        f"🔍 → Our command with remote"
+                        f" target '{target}' - NO EXECUTION"
+                        f" (remote intent)"
+                    )
+                return False, None
+
+        # Target must be us
+        if target != self.my_callsign:
+            if has_console:
+                print(f"🔍 → Target '{target}' != us ({self.my_callsign}) - NO EXECUTION")
+            return False, None
+
+        # Direct to us → always OK
+        if dst == self.my_callsign:
+            if has_console:
+                print("🔍 → Direct message to us - EXECUTE")
+            return True, "direct"
+
+        # Group message → check permissions
+        if self.is_group(dst):
+            execute = self.group_responses_enabled or self._is_admin(src)
+            reason = (
+                "Groups ON"
+                if self.group_responses_enabled
+                else "Admin override"
+                if self._is_admin(src)
+                else "Groups OFF"
+            )
+            if has_console:
+                print(
+                    f"🔍 → Group '{dst}' - {'EXECUTE' if execute else 'NO EXECUTION'} ({reason})"
+                )
+
+            if execute:
+                return True, "group"
+            else:
+                return False, None
+
+        if has_console:
+            print("🔍 → No match - NO EXECUTION")
+        return False, None
+
+    def extract_target_callsign(self, msg):
+        """Extract target callsign from command message"""
+        if has_console:
+            print(f"🎯 extract_target_callsign called with: '{msg}'")
+
+        if not msg or not msg.startswith("!"):
+            if has_console:
+                print("🎯 Not a command, returning None")
+            return None
+
+        # Ensure message is uppercase for processing
+        msg_upper = msg.upper().strip()
+        parts = msg_upper.split()
+
+        if has_console:
+            print(f"🎯 msg_upper: {msg_upper}")
+            print(f"🎯 Parts: {parts}")
+
+        if len(parts) < 2:
+            if has_console:
+                print("🎯 Less than 2 parts, returning None")
+            return None
+
+        command = parts[0][1:]  # Remove ! prefix
+
+        if has_console:
+            print(f"🎯 Command: '{command}'")
+
+        # Commands that NEVER have targets (always local)
+        if command in ["GROUP", "KB", "TOPIC", "SEARCH"]:
+            return None
+
+        # Special handling for CTCPING command
+        if command == "CTCPING":
+            print("🎯 Command: inside ctcping handling")
+
+            # Look for target:CALLSIGN pattern first
+            for part in parts[1:]:
+                print(f"🎯 Command: part is {part}")
+
+                if part.startswith("TARGET:"):
+                    potential_target = part[7:]  # Remove 'TARGET:' prefix
+                    if has_console:
+                        print(f"🎯 portential_target: '{potential_target}'")
+                    if potential_target.upper() in ["LOCAL", ""]:
+                        return None  # Local execution
+                    # Validate callsign pattern
+                    if re.match(r"^[A-Z0-9]{2,8}(-\d{1,2})?$", potential_target):
+                        return potential_target
+
+            potential_target = parts[-1].strip()
+            if has_console:
+                print(f"🎯 portential_target: '{potential_target}'")
+            if re.match(r"^[A-Z0-9]{2,8}(-\d{1,2})?$", potential_target):
+                if has_console:
+                    print(f"🎯 CTCPING target (at end): '{potential_target}' from '{msg}'")
+                return potential_target
+
+            # No CTCPING target found - MOVE THIS INSIDE THE IF BLOCK
+            if has_console:
+                print("🎯 No valid CTCPING target found")
+            return None
+
+        if has_console:
+            print("🎯 Processing standard command")
+
+        # Look for target in last part (pattern: !WX DK5EN-15)
+        potential_target = parts[-1].strip()
+        if has_console:
+            print(f"🎯 Checking potential target: '{potential_target}'")
+
+        # Validate callsign pattern
+        if re.match(r"^[A-Z0-9]{2,8}(-\d{1,2})?$", potential_target):
+            if has_console:
+                print(f"🎯 Target extracted: '{potential_target}' from '{msg}'")
+
+            return potential_target
+
+        if has_console:
+            print(f"🎯 No valid target in: '{msg}' (checked: '{potential_target}')")
+
+        return None
+
+    def is_group(self, dst):
+        """Check if destination is a group"""
+        if not dst:
+            return False
+
+        # Special group 'TEST'
+        if dst.upper() == "TEST":
+            return True
+
+        # Numeric groups: 1-99999
+        if dst.isdigit():
+            try:
+                group_num = int(dst)
+                return 1 <= group_num <= 99999
+            except ValueError:
+                return False
+
+        return False
+
+    def _is_admin(self, callsign):
+        """Check if callsign is admin (DK5EN with any SID)"""
+        if not callsign:
+            return False
+        base_call = callsign.split("-")[0] if "-" in callsign else callsign
+        return base_call.upper() == self.admin_callsign_base.upper()
+
+    def _is_valid_target(self, dst, src):
+        """Check if message is for us (callsign) or valid group (1-5 digits or 'TEST')"""
+        if has_console:
+            print(f"🔍 valid_target dubug {dst}, {src}")
+
+        # Always allow direct messages to our callsign
+        if dst.upper() == self.my_callsign.upper():
+            if has_console:
+                print("🔍 valid_target Ture, callsign")
+            return True, "callsign"
+
+        # Check if dst is a valid group format
+        is_valid_group = dst == "TEST" or (dst and dst.isdigit() and 1 <= len(dst) <= 5)
+        if not is_valid_group:
+            if has_console:
+                print("🔍 valid_target False, None")
+            return False, None
+
+        # Admin always allowed for groups
+        if self._is_admin(src):
+            if has_console:
+                print("🔍 valid_target admin override, True, group")
+            return True, "group"
+
+        # Non-admin only allowed if group responses are enabled
+        if self.group_responses_enabled:
+            if has_console:
+                print("🔍 valid_target group responses enabled, True, group")
+            return True, "group"
+
+        if has_console:
+            print("🔍 valid_target no match, False, None")
+        return False, None
+
+    def parse_command(self, msg_text):
+        """Parse command text into command and arguments"""
+        from .handler import COMMANDS
+
+        if not msg_text.startswith("!"):
+            return None
+
+        parts = msg_text[1:].split()
+        if not parts:
+            return None
+
+        cmd = parts[0].lower()
+
+        if cmd not in COMMANDS:
+            return None
+
+        # Parse key:value pairs
+        kwargs = {}
+        for part in parts[1:]:
+            if ":" in part:
+                key, value = part.split(":", 1)
+                kwargs[key.lower()] = value
+            else:
+                # Handle positional arguments for simple commands
+                if cmd in ["s", "search"] and not kwargs:
+                    kwargs["call"] = part
+
+                elif cmd == "pos" and not kwargs:
+                    kwargs["call"] = part
+
+                elif cmd == "stats" and not kwargs:
+                    try:
+                        kwargs["hours"] = int(part)
+                    except ValueError:
+                        pass
+
+                elif cmd in ["mh", "mheard"] and not kwargs:
+                    try:
+                        kwargs["limit"] = int(part)
+                    except ValueError:
+                        if part.lower() in ["msg", "pos", "all"]:
+                            kwargs["type"] = part.lower()
+                        else:
+                            pass
+
+                elif cmd == "group" and not kwargs:
+                    kwargs["state"] = part
+
+                elif cmd == "ctcping" and not kwargs:
+                    for part in parts[1:]:
+                        if ":" in part:
+                            key, value = part.split(":", 1)
+                            key = key.lower()
+                            if key == "target":
+                                kwargs["target"] = (
+                                    value.upper() if value.upper() != "LOCAL" else "local"
+                                )
+                            elif key == "call":
+                                kwargs["call"] = value.upper()
+
+                elif cmd == "topic" and not kwargs:
+                    if len(parts) >= 2:
+                        if parts[1].upper() == "DELETE" and len(parts) >= 3:
+                            kwargs["action"] = "delete"
+                            kwargs["group"] = parts[2].upper()
+                        else:
+                            kwargs["group"] = parts[1].upper()
+
+                            if len(parts) >= 3:
+                                text_parts = []
+                                interval_part = None
+
+                                for i, part in enumerate(parts[2:], 2):
+                                    if ":" in part and part.startswith("interval:"):
+                                        interval_part = part
+                                        break
+                                    else:
+                                        text_parts.append(parts[i])
+
+                                if text_parts:
+                                    kwargs["text"] = " ".join(text_parts)
+
+                                if interval_part:
+                                    try:
+                                        interval_value = int(interval_part.split(":", 1)[1])
+                                        kwargs["interval"] = interval_value
+                                    except (ValueError, IndexError):
+                                        pass
+                                elif len(parts) >= 4 and parts[-1].isdigit():
+                                    try:
+                                        kwargs["interval"] = int(parts[-1])
+                                        if text_parts and text_parts[-1] == parts[-1]:
+                                            text_parts = text_parts[:-1]
+                                            kwargs["text"] = (
+                                                " ".join(text_parts)
+                                                if text_parts
+                                                else kwargs.get("text", "")
+                                            )
+                                    except ValueError:
+                                        pass
+
+                elif cmd == "kb" and not kwargs:
+                    if len(parts) >= 2:
+                        first_arg = parts[1].upper()
+
+                        if first_arg in ["LIST", "DELALL"]:
+                            kwargs["callsign"] = first_arg.lower()
+                        else:
+                            kwargs["callsign"] = first_arg
+
+                            if len(parts) >= 3:
+                                second_arg = parts[2].upper()
+                                if second_arg == "DEL":
+                                    kwargs["action"] = "del"
+
+        return cmd, kwargs
+
+    async def execute_command(self, cmd, kwargs, requester):
+        """Execute a command and return response"""
+        from .handler import COMMANDS
+
+        if cmd not in COMMANDS:
+            return "❌ Unknown command"
+
+        handler_name = COMMANDS[cmd]["handler"]
+        handler = getattr(self, handler_name, None)
+
+        if not handler:
+            return f"❌ Handler {handler_name} not implemented"
+
+        try:
+            return await handler(kwargs, requester)
+        except Exception as e:
+            return f"❌ Command error: {str(e)[:50]}"

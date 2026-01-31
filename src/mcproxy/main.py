@@ -28,7 +28,7 @@ try:
 except ImportError:
     BLE_HANDLER_AVAILABLE = False
     async def backend_resolve_ip(*args, **kwargs): pass
-from .command_handler import create_command_handler
+from .commands import create_command_handler
 
 # Optional imports for new features
 try:
