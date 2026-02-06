@@ -552,16 +552,12 @@ class CTCPingMixin:
 
     async def handle_ctcping(self, kwargs, requester):
         """Handle CTC ping test with roundtrip time measurement"""
-        target_node = kwargs.get("target", "local")
         ping_target = kwargs.get("call", "").upper()
         payload_size = kwargs.get("payload", 25)
         repeat_count = kwargs.get("repeat", 1)
 
         if not ping_target:
             return "❌ Target callsign required (call:TARGET)"
-
-        if target_node != "local" and target_node.upper() != self.my_callsign:
-            return f"❌ Cannot delegate to {target_node} - send message to {target_node} directly"
 
         if not re.match(r"^[A-Z]{1,2}[0-9][A-Z]{1,3}(-\d{1,2})?$", ping_target):
             return "❌ Invalid target callsign format"

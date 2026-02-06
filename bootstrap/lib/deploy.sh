@@ -1,6 +1,6 @@
 #!/bin/bash
 # deploy.sh - Application deployment for MCProxy bootstrap
-# Handles: webapp download, Python scripts, version management
+# Handles: release tarball download, webapp, version management, systemd
 
 #──────────────────────────────────────────────────────────────────
 # MAIN DEPLOYMENT FUNCTION
@@ -10,7 +10,8 @@ deploy_app() {
   local force="${1:-false}"
 
   deploy_webapp "$force"
-  deploy_scripts "$force"
+  deploy_release "$force"
+  setup_python_env
   migrate_config
 }
 
@@ -102,89 +103,162 @@ download_webapp() {
 }
 
 #──────────────────────────────────────────────────────────────────
-# PYTHON SCRIPTS DEPLOYMENT
+# RELEASE TARBALL DEPLOYMENT
 #──────────────────────────────────────────────────────────────────
 
-deploy_scripts() {
+# Query GitHub Releases API for the latest release tag
+get_latest_release_version() {
+  local tag
+  tag=$(curl -fsSL --connect-timeout 5 \
+    "${GITHUB_API_BASE}/releases/latest" 2>/dev/null \
+    | jq -r '.tag_name // empty' 2>/dev/null)
+
+  if [[ -n "$tag" ]]; then
+    echo "$tag"
+  else
+    echo "unknown"
+  fi
+}
+
+# Read installed version from pyproject.toml in INSTALL_DIR
+get_installed_mcproxy_version() {
+  local pyproject="${INSTALL_DIR}/pyproject.toml"
+
+  if [[ -f "$pyproject" ]]; then
+    grep -oP '^version\s*=\s*"\K[^"]+' "$pyproject" 2>/dev/null || echo "not_installed"
+  else
+    echo "not_installed"
+  fi
+}
+
+deploy_release() {
   local force="${1:-false}"
 
-  log_info "Checking Python scripts deployment..."
+  log_info "Checking MCProxy release deployment..."
 
   local installed_version
   local remote_version
 
-  installed_version=$(get_installed_scripts_version)
-  remote_version=$(get_remote_scripts_version)
+  installed_version=$(get_installed_mcproxy_version)
+  remote_version=$(get_latest_release_version)
 
   log_info "  Installed: ${installed_version}"
   log_info "  Remote:    ${remote_version}"
 
   # Decide if update needed
   if [[ "$force" == "true" ]]; then
-    log_info "  Force mode: reinstalling scripts"
+    log_info "  Force mode: reinstalling release"
   elif [[ "$installed_version" == "not_installed" ]]; then
-    log_info "  Scripts not installed, downloading..."
+    log_info "  MCProxy not installed, downloading..."
   elif [[ "$remote_version" == "unknown" ]]; then
     log_warn "  Cannot check remote version, skipping update"
     return 0
-  elif version_gte "$installed_version" "$remote_version"; then
-    log_info "  Scripts are up to date"
+  elif version_gte "$installed_version" "${remote_version#v}"; then
+    log_info "  MCProxy is up to date"
     return 0
   else
-    log_info "  Updating scripts: ${installed_version} → ${remote_version}"
+    log_info "  Updating MCProxy: ${installed_version} → ${remote_version}"
   fi
 
-  download_scripts
+  download_and_install_release "$remote_version"
 }
 
-download_scripts() {
-  log_info "  Downloading Python scripts..."
+download_and_install_release() {
+  local version="${1:-}"
 
-  # List of Python files to download
-  local -a script_files=(
-    "C2-mc-ws.py"
-    "message_storage.py"
-    "udp_handler.py"
-    "websocket_handler.py"
-    "ble_handler.py"
-    "command_handler.py"
-  )
+  # If no version given, fetch latest
+  if [[ -z "$version" || "$version" == "unknown" ]]; then
+    version=$(get_latest_release_version)
+    if [[ "$version" == "unknown" ]]; then
+      log_error "  Cannot determine latest release version"
+      return 1
+    fi
+  fi
 
+  log_info "  Downloading MCProxy ${version}..."
+
+  local tarball_name="mcproxy-${version}.tar.gz"
+  local checksum_name="mcproxy-${version}.tar.gz.sha256"
+  local release_url="https://github.com/${GITHUB_REPO}/releases/download/${version}"
   local tmp_dir
   tmp_dir=$(mktemp -d)
 
-  # Download each script
-  for script in "${script_files[@]}"; do
-    local script_url="${GITHUB_RAW_BASE}/${script}"
+  # Download release tarball
+  if ! curl -fsSL -o "${tmp_dir}/${tarball_name}" "${release_url}/${tarball_name}"; then
+    log_error "  Failed to download release tarball"
+    rm -rf "$tmp_dir"
+    return 1
+  fi
 
-    if ! curl -fsSL -o "${tmp_dir}/${script}" "$script_url"; then
-      log_error "  Failed to download ${script}"
+  # Download and verify SHA256 checksum
+  if curl -fsSL -o "${tmp_dir}/${checksum_name}" "${release_url}/${checksum_name}" 2>/dev/null; then
+    log_info "  Verifying SHA256 checksum..."
+    if ! (cd "$tmp_dir" && sha256sum -c "$checksum_name" --quiet 2>/dev/null); then
+      log_error "  Checksum verification failed!"
       rm -rf "$tmp_dir"
       return 1
     fi
-  done
+    log_ok "  Checksum verified"
+  else
+    log_warn "  No checksum file available, skipping verification"
+  fi
 
-  # Backup existing scripts
-  for script in "${script_files[@]}"; do
-    if [[ -f "${SCRIPTS_DIR}/${script}" ]]; then
-      cp "${SCRIPTS_DIR}/${script}" "${SCRIPTS_DIR}/${script}.bak"
-    fi
-  done
+  # Backup existing installation if present
+  if [[ -d "$INSTALL_DIR" ]] && [[ -f "${INSTALL_DIR}/pyproject.toml" ]]; then
+    local backup_dir="${INSTALL_DIR}.bak.$(date +%Y%m%d%H%M%S)"
+    cp -a "$INSTALL_DIR" "$backup_dir"
+    log_info "  Backed up existing installation to ${backup_dir}"
+  fi
 
-  # Install scripts
-  for script in "${script_files[@]}"; do
-    install -m 755 "${tmp_dir}/${script}" "${SCRIPTS_DIR}/${script}"
-  done
+  # Create install directory
+  mkdir -p "$INSTALL_DIR"
 
-  # Write version file
-  local remote_version
-  remote_version=$(get_remote_scripts_version)
-  echo "$remote_version" > "${SCRIPTS_DIR}/mcproxy-version"
+  # Extract tarball with --strip-components=1 to remove top-level dir
+  tar -xzf "${tmp_dir}/${tarball_name}" -C "$INSTALL_DIR" --strip-components=1
+
+  # Set ownership to the real user (not root)
+  local run_user="${SUDO_USER:-$(whoami)}"
+  chown -R "$run_user:$run_user" "$INSTALL_DIR"
 
   # Cleanup
   rm -rf "$tmp_dir"
 
-  log_ok "  Python scripts deployed to ${SCRIPTS_DIR}"
+  log_ok "  MCProxy ${version} deployed to ${INSTALL_DIR}"
+}
+
+#──────────────────────────────────────────────────────────────────
+# PYTHON ENVIRONMENT (uv sync)
+#──────────────────────────────────────────────────────────────────
+
+setup_python_env() {
+  log_info "Setting up Python environment with uv sync..."
+
+  if [[ ! -f "${INSTALL_DIR}/pyproject.toml" ]]; then
+    log_error "  No pyproject.toml found in ${INSTALL_DIR}"
+    return 1
+  fi
+
+  # Ensure uv is available
+  if ! command -v uv &>/dev/null; then
+    log_error "  uv not found - install it first"
+    return 1
+  fi
+
+  # Run uv sync as the real user (not root)
+  local run_user="${SUDO_USER:-$(whoami)}"
+
+  if [[ "$run_user" != "root" ]]; then
+    su - "$run_user" -c "cd '${INSTALL_DIR}' && uv sync"
+  else
+    (cd "$INSTALL_DIR" && uv sync)
+  fi
+
+  if [[ $? -eq 0 ]]; then
+    log_ok "  Python environment ready (${INSTALL_DIR}/.venv)"
+  else
+    log_error "  uv sync failed"
+    return 1
+  fi
 }
 
 #──────────────────────────────────────────────────────────────────
@@ -199,49 +273,52 @@ activate_services() {
 }
 
 configure_systemd_service() {
-  log_info "  Configuring systemd service..."
+  log_info "  Configuring systemd services..."
 
-  local service_file="/etc/systemd/system/mcproxy.service"
-
-  # Get the real user (not root when using sudo)
   local run_user="${SUDO_USER:-root}"
   local run_home
   run_home=$(getent passwd "$run_user" | cut -d: -f6)
 
-  cat > "$service_file" << EOF
-[Unit]
-Description=MCProxy - MeshCom Message Proxy
-Documentation=https://github.com/DK5EN/McAdvChat
-After=network-online.target bluetooth.target
-Wants=network-online.target
+  # --- mcproxy.service ---
+  local mcproxy_service="/etc/systemd/system/mcproxy.service"
+  local template_dir
 
-[Service]
-Type=simple
-User=${run_user}
-Group=${run_user}
-WorkingDirectory=${SCRIPTS_DIR}
-Environment="PATH=${run_home}/mcproxy-venv/bin:/usr/local/bin:/usr/bin:/bin"
-Environment="MCADVCHAT_ENV=prod"
-ExecStart=${run_home}/mcproxy-venv/bin/python ${SCRIPTS_DIR}/C2-mc-ws.py
-Restart=always
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
+  # Find template directory
+  if [[ -d "${INSTALL_DIR}/bootstrap/templates" ]]; then
+    template_dir="${INSTALL_DIR}/bootstrap/templates"
+  elif [[ -d "${SCRIPT_DIR}/templates" ]]; then
+    template_dir="${SCRIPT_DIR}/templates"
+  else
+    log_error "  Cannot find service templates"
+    return 1
+  fi
 
-# Security hardening
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=read-only
-PrivateTmp=true
-ReadWritePaths=/var/log/mcproxy ${CONFIG_DIR}
+  # Render mcproxy.service from template
+  sed -e "s|{{USER}}|${run_user}|g" \
+      -e "s|{{HOME}}|${run_home}|g" \
+      "${template_dir}/mcproxy.service" > "$mcproxy_service"
 
-[Install]
-WantedBy=multi-user.target
-EOF
+  log_info "  mcproxy.service configured"
+
+  # --- mcproxy-ble.service (optional) ---
+  if [[ -f "${template_dir}/mcproxy-ble.service" ]]; then
+    local ble_service="/etc/systemd/system/mcproxy-ble.service"
+
+    # Read BLE API key from config if available
+    local ble_api_key=""
+    if [[ -f "$CONFIG_FILE" ]] && command -v jq &>/dev/null; then
+      ble_api_key=$(jq -r '.BLE_API_KEY // ""' "$CONFIG_FILE" 2>/dev/null)
+    fi
+
+    sed -e "s|{{USER}}|${run_user}|g" \
+        -e "s|{{HOME}}|${run_home}|g" \
+        -e "s|{{BLE_API_KEY}}|${ble_api_key}|g" \
+        "${template_dir}/mcproxy-ble.service" > "$ble_service"
+
+    log_info "  mcproxy-ble.service configured"
+  fi
 
   systemctl daemon-reload
-
-  log_info "  systemd service configured"
 }
 
 enable_and_start_services() {

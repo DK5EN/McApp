@@ -43,7 +43,9 @@ try:
 except ImportError:
     SQLITE_AVAILABLE = False
 
-VERSION = "v0.51.0"
+from . import __version__
+
+VERSION = f"v{__version__}"
 
 # Module logger
 logger = get_logger(__name__)
@@ -867,11 +869,17 @@ class MessageValidator:
         return normalized
 
     def extract_target_callsign(self, msg):
-        """Extract target callsign from command message"""
+        """Extract target callsign from command message.
+
+        Priority:
+        1. Explicit target: parameter (scanned anywhere in message)
+        2. Fallback: first standalone callsign (right-to-left, skip key:value)
+
+        Commands that never have targets: GROUP, KB, TOPIC
+        """
         if not msg or not msg.startswith('!'):
             return None
 
-        # Ensure message is uppercase for processing
         msg_upper = msg.upper().strip()
         parts = msg_upper.split()
 
@@ -880,37 +888,31 @@ class MessageValidator:
 
         command = parts[0][1:]
 
-        # Commands that NEVER have targets (always local)
-        if command in ['GROUP', 'KB', 'TOPIC', 'SEARCH']:
+        # Commands that NEVER have targets (admin-only, local state)
+        if command in ['GROUP', 'KB', 'TOPIC']:
             return None
 
-        if command == 'CTCPING':
-            # Look for target:CALLSIGN pattern for execution delegation
-            for part in parts[1:]:
-                if part.startswith('TARGET:'):  # ← FIXED!
-                    potential_target = part[7:]  # Remove 'TARGET:' prefix
-                    if potential_target.upper() in ['LOCAL', '']:
-                        return None  # Local execution
-                    # Validate callsign pattern
-                    if re.match(r'^[A-Z0-9]{2,8}(-\d{1,2})?$', potential_target):
-                        if has_console:
-                            print(f"🎯 CTCPING target extracted: '{potential_target}' from '{msg}'")
-                        return potential_target
+        # Callsign pattern: requires letter + digit, min 3 chars
+        callsign_pattern = r'^(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]{3,8}(-\d{1,2})?$'
 
-            # No target parameter = local execution
-            return None
+        # Priority 1: Explicit target:CALLSIGN parameter (scanned anywhere)
+        for part in parts[1:]:
+            if part.startswith('TARGET:'):
+                potential = part[7:]  # Remove 'TARGET:' prefix
+                if potential in ['LOCAL', '']:
+                    return None  # Explicit local execution
+                if re.match(callsign_pattern, potential):
+                    return potential
+                return None  # Invalid target format
 
-        # Look for target in last part (pattern: !WX DK5EN-15)
-        potential_target = parts[-1].strip()
+        # Priority 2: Positional fallback (right-to-left, skip key:value pairs)
+        for part in reversed(parts[1:]):
+            if ':' in part:
+                continue  # Skip key:value arguments
+            potential = part.strip()
+            if re.match(callsign_pattern, potential):
+                return potential
 
-        # Validate callsign pattern (letters/numbers, optional SID)
-        if re.match(r'^[A-Z0-9]{2,8}(-\d{1,2})?$', potential_target):
-            if has_console:
-                print(f"🎯 Target extracted: '{potential_target}' from '{msg}'")
-            return potential_target
-
-        if has_console:
-            print(f"🎯 No valid target in: '{msg}' (checked: '{potential_target}')")
         return None
 
     def is_group(self, dst):

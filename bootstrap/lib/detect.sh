@@ -99,27 +99,43 @@ detect_install_state() {
 }
 
 #──────────────────────────────────────────────────────────────────
-# MIGRATION DETECTION (old scripts → new bootstrap)
+# MIGRATION DETECTION (old scripts → new package layout)
 #──────────────────────────────────────────────────────────────────
 
 # Check if this is an old installation that needs migration
 needs_migration() {
+  # Old-style: scripts in /usr/local/bin but no package layout
+  if needs_package_migration; then
+    return 0
+  fi
+
   # Old venv exists but new one doesn't
   if [[ -d "$OLD_VENV_DIR" ]] && [[ ! -d "$VENV_DIR" ]]; then
     return 0
   fi
 
-  # systemd service points to old venv path
+  # systemd service points to old venv path or old C2-mc-ws.py
   local service_file="/etc/systemd/system/mcproxy.service"
   if [[ -f "$service_file" ]]; then
+    if grep -q "C2-mc-ws.py" "$service_file" 2>/dev/null; then
+      return 0
+    fi
     if grep -q "~/venv\|/home/.*/venv/bin" "$service_file" 2>/dev/null; then
-      # Check it's not already pointing to mcproxy-venv
-      if ! grep -q "mcproxy-venv" "$service_file" 2>/dev/null; then
+      if ! grep -q "uv run mcproxy" "$service_file" 2>/dev/null; then
         return 0
       fi
     fi
   fi
 
+  return 1
+}
+
+# Check if old-style individual scripts exist but no package layout
+needs_package_migration() {
+  # Old C2-mc-ws.py exists in /usr/local/bin but no pyproject.toml in INSTALL_DIR
+  if [[ -f "${SCRIPTS_DIR}/C2-mc-ws.py" ]] && [[ ! -f "${INSTALL_DIR}/pyproject.toml" ]]; then
+    return 0
+  fi
   return 1
 }
 
@@ -134,43 +150,39 @@ has_old_venv() {
 migrate_old_installation() {
   log_info "Migrating from old installation..."
 
-  local user_home
-  user_home=$(get_real_home)
-  local old_venv="${user_home}/venv"
-  local new_venv="${user_home}/mcproxy-venv"
-
   # Step 1: Stop the service if running
   if systemctl is-active --quiet mcproxy 2>/dev/null; then
     log_info "  Stopping mcproxy service..."
     systemctl stop mcproxy
   fi
 
-  # Step 2: Handle old venv
-  if [[ -d "$old_venv" ]]; then
-    log_info "  Found old venv at ${old_venv}"
-
-    # We don't migrate the old venv - we create a fresh one
-    # The old one might have pip-installed packages with different versions
-    log_info "  Old venv will be preserved (not deleted)"
-    log_info "  Creating new venv at ${new_venv}"
+  # Step 2: Note old files (leave in place, harmless)
+  if [[ -f "${SCRIPTS_DIR}/C2-mc-ws.py" ]]; then
+    log_info "  Found old scripts in ${SCRIPTS_DIR} (will be left as-is)"
   fi
 
-  # Step 3: Update systemd service file
+  local user_home
+  user_home=$(get_real_home)
+  local old_venv="${user_home}/venv"
+  if [[ -d "$old_venv" ]]; then
+    log_info "  Found old venv at ${old_venv} (will be preserved)"
+  fi
+  if [[ -d "$VENV_DIR" ]]; then
+    log_info "  Found old mcproxy-venv at ${VENV_DIR} (will be preserved)"
+  fi
+
+  # Step 3: Backup systemd service file
   local service_file="/etc/systemd/system/mcproxy.service"
   if [[ -f "$service_file" ]]; then
-    log_info "  Updating systemd service file..."
-
-    # Backup old service file
+    log_info "  Backing up old systemd service file..."
     cp "$service_file" "${service_file}.bak.$(date +%Y%m%d%H%M%S)"
-
-    # The new service file will be written by deploy.sh
   fi
 
   # Step 4: Check for old config format and migrate if needed
   migrate_old_config
 
   log_ok "  Migration preparation complete"
-  log_info "  The new venv will be created during package installation"
+  log_info "  Release tarball will be downloaded during deployment"
 }
 
 # Migrate old config format if necessary
@@ -249,12 +261,12 @@ get_installed_webapp_version() {
   fi
 }
 
-# Get installed Python scripts version
+# Get installed MCProxy version from pyproject.toml
 get_installed_scripts_version() {
-  local version_file="${SCRIPTS_DIR}/mcproxy-version"
+  local pyproject="${INSTALL_DIR}/pyproject.toml"
 
-  if [[ -f "$version_file" ]]; then
-    cat "$version_file"
+  if [[ -f "$pyproject" ]]; then
+    grep -oP '^version\s*=\s*"\K[^"]+' "$pyproject" 2>/dev/null || echo "not_installed"
   else
     echo "not_installed"
   fi
@@ -266,9 +278,18 @@ get_remote_webapp_version() {
     | grep -oP 'v\d+\.\d+\.\d+' | head -1 || echo "unknown"
 }
 
-# Get remote scripts version from GitHub
+# Get remote MCProxy version from GitHub Releases API
 get_remote_scripts_version() {
-  curl -fsSL --connect-timeout 5 "${GITHUB_RAW_BASE}/version" 2>/dev/null || echo "unknown"
+  local tag
+  tag=$(curl -fsSL --connect-timeout 5 \
+    "${GITHUB_API_BASE}/releases/latest" 2>/dev/null \
+    | jq -r '.tag_name // empty' 2>/dev/null)
+
+  if [[ -n "$tag" ]]; then
+    echo "$tag"
+  else
+    echo "unknown"
+  fi
 }
 
 # Compare semantic versions
@@ -301,11 +322,12 @@ service_is_enabled() {
   systemctl is-enabled --quiet "$service" 2>/dev/null
 }
 
-# Check if venv exists and is functional
+# Check if venv exists and is functional (checks new uv-managed .venv in INSTALL_DIR)
 venv_is_valid() {
-  [[ -d "$VENV_DIR" ]] && \
-    [[ -f "${VENV_DIR}/bin/python" ]] && \
-    "${VENV_DIR}/bin/python" -c "import sys; sys.exit(0)" 2>/dev/null
+  local venv_path="${INSTALL_DIR}/.venv"
+  [[ -d "$venv_path" ]] && \
+    [[ -f "${venv_path}/bin/python" ]] && \
+    "${venv_path}/bin/python" -c "import sys; sys.exit(0)" 2>/dev/null
 }
 
 #──────────────────────────────────────────────────────────────────
@@ -315,20 +337,20 @@ venv_is_valid() {
 check_versions_report() {
   local installed_webapp
   local remote_webapp
-  local installed_scripts
-  local remote_scripts
+  local installed_mcproxy
+  local remote_mcproxy
 
   installed_webapp=$(get_installed_webapp_version)
   remote_webapp=$(get_remote_webapp_version)
-  installed_scripts=$(get_installed_scripts_version)
-  remote_scripts=$(get_remote_scripts_version)
+  installed_mcproxy=$(get_installed_scripts_version)
+  remote_mcproxy=$(get_remote_scripts_version)
 
   echo "  Version comparison:"
   echo ""
   echo "  Component      Installed    Remote"
   echo "  ─────────────────────────────────────"
   printf "  %-14s %-12s %s\n" "Webapp" "$installed_webapp" "$remote_webapp"
-  printf "  %-14s %-12s %s\n" "Scripts" "$installed_scripts" "$remote_scripts"
+  printf "  %-14s %-12s %s\n" "MCProxy" "$installed_mcproxy" "$remote_mcproxy"
   echo ""
 
   # Determine what would be updated
@@ -338,9 +360,9 @@ check_versions_report() {
     echo "  [DEPLOY] Webapp is current"
   fi
 
-  if [[ "$installed_scripts" == "not_installed" ]] || ! version_gte "$installed_scripts" "$remote_scripts"; then
-    echo "  [DEPLOY] Would update scripts: ${installed_scripts} → ${remote_scripts}"
+  if [[ "$installed_mcproxy" == "not_installed" ]] || ! version_gte "$installed_mcproxy" "${remote_mcproxy#v}"; then
+    echo "  [DEPLOY] Would update MCProxy: ${installed_mcproxy} → ${remote_mcproxy}"
   else
-    echo "  [DEPLOY] Scripts are current"
+    echo "  [DEPLOY] MCProxy is current"
   fi
 }

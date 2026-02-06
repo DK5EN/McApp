@@ -1,19 +1,75 @@
 #!/bin/bash
 # system.sh - System configuration for MCProxy bootstrap
-# Handles: tmpfs, firewall, journald, service hardening
+# Handles: tmpfs, firewall, journald, service hardening, SSH, logrotate
+# Incorporates all pi-harden.sh functionality for SD card longevity & security
 
 #──────────────────────────────────────────────────────────────────
 # MAIN SYSTEM SETUP FUNCTION
 #──────────────────────────────────────────────────────────────────
 
 setup_system() {
+  disable_unused_services
   configure_tmpfs
   configure_journald
+  configure_logrotate
   configure_firewall
   configure_bluetooth
   configure_unattended_upgrades
-  disable_unused_services
+  configure_fast_ssh_login
   configure_ssh_hardening
+}
+
+#──────────────────────────────────────────────────────────────────
+# DISABLE UNUSED SERVICES & TIMERS
+#──────────────────────────────────────────────────────────────────
+
+disable_unused_services() {
+  log_info "Disabling unused services..."
+
+  # Services safe to disable on a headless Pi
+  local -a disable_services=(
+    "cups"
+    "cups-browsed"
+    "ModemManager"
+    "triggerhappy"
+    # cloud-init suite (not needed on local network Pi)
+    "cloud-init-local"
+    "cloud-init-main"
+    "cloud-init-network"
+    "cloud-config"
+    "cloud-final"
+    # SD card wear reduction
+    "udisks2"
+    "e2scrub_reap"
+    # Serial console (headless — no display attached)
+    "serial-getty@ttyS0"
+  )
+
+  local -a disable_timers=(
+    "e2scrub_all.timer"
+    "man-db.timer"
+  )
+
+  for svc in "${disable_services[@]}"; do
+    if systemctl is-enabled --quiet "$svc" 2>/dev/null; then
+      systemctl disable --now "$svc" 2>/dev/null || true
+      log_info "  Disabled: $svc"
+    fi
+  done
+
+  for tmr in "${disable_timers[@]}"; do
+    if systemctl is-enabled --quiet "$tmr" 2>/dev/null; then
+      systemctl disable --now "$tmr" 2>/dev/null || true
+      log_info "  Disabled timer: $tmr"
+    fi
+  done
+
+  # DO NOT disable these (required for MCProxy):
+  # - avahi-daemon (mDNS for .local resolution)
+  # - bluetooth (BLE for ESP32 communication)
+  # - wpa_supplicant (WiFi connectivity)
+
+  log_ok "  Unused services disabled"
 }
 
 #──────────────────────────────────────────────────────────────────
@@ -25,46 +81,57 @@ configure_tmpfs() {
 
   local fstab="/etc/fstab"
   local marker="# MCProxy tmpfs"
-  local needs_remount=false
 
-  # Check if already configured
-  if grep -q "$marker" "$fstab" 2>/dev/null; then
+  # Check if already configured (also accept pi-harden marker)
+  if grep -qE "(MCProxy tmpfs|pi-harden)" "$fstab" 2>/dev/null; then
     log_info "  tmpfs already configured in fstab"
-    return 0
-  fi
+  else
+    # Backup fstab
+    cp "$fstab" "${fstab}.bak.$(date +%Y%m%d)"
 
-  # Backup fstab
-  cp "$fstab" "${fstab}.bak.$(date +%Y%m%d)"
-
-  # Add tmpfs entries
-  cat >> "$fstab" << EOF
+    # Add tmpfs entries — nodev,noexec on /var/log for security
+    cat >> "$fstab" << EOF
 
 ${marker} - begin
-tmpfs /var/log tmpfs defaults,noatime,nosuid,mode=0755,size=30M 0 0
+tmpfs /var/log tmpfs defaults,noatime,nosuid,nodev,noexec,size=30M 0 0
 tmpfs /tmp tmpfs defaults,noatime,nosuid,mode=1777,size=50M 0 0
 ${marker} - end
 EOF
 
-  log_ok "  tmpfs entries added to fstab"
+    log_ok "  tmpfs entries added to fstab"
+  fi
 
   # Create log directory structure in tmpfs after mount
   mkdir -p /etc/tmpfiles.d
   cat > /etc/tmpfiles.d/mcproxy.conf << 'EOF'
-# MCProxy log directories
-d /var/log/mcproxy 0755 root root -
-d /var/log/caddy 0755 caddy caddy -
-d /var/log/lighttpd 0755 www-data www-data -
+# MCProxy + system log directories (recreated on every boot in tmpfs)
+d /var/log/mcproxy   0755 root     root     -
+d /var/log/caddy     0755 caddy    caddy    -
+d /var/log/lighttpd  0755 www-data www-data -
+d /var/log/journal   0755 root     root     -
+d /var/log/apt       0755 root     root     -
+d /var/log/private   0700 root     root     -
+d /var/log/chrony    0755 _chrony  _chrony  -
+d /var/log/unattended-upgrades 0755 root root -
 EOF
 
-  log_info "  Mounting tmpfs (will be permanent after reboot)..."
-
-  # Mount if not already mounted
-  if ! mountpoint -q /tmp; then
-    mount -t tmpfs -o defaults,noatime,nosuid,mode=1777,size=50M tmpfs /tmp || true
+  # Try to mount /var/log now if not already tmpfs
+  if findmnt -n /var/log 2>/dev/null | grep -q tmpfs; then
+    log_info "  /var/log already mounted as tmpfs"
+  else
+    # Create dirs before mount so services don't break
+    systemd-tmpfiles --create /etc/tmpfiles.d/mcproxy.conf 2>/dev/null || true
+    if mount /var/log 2>/dev/null; then
+      log_ok "  Mounted /var/log tmpfs"
+    else
+      log_warn "  /var/log tmpfs mount deferred to next reboot"
+    fi
   fi
 
-  # Note: /var/log mount is tricky on running system, skip for now
-  log_warn "  Note: /var/log tmpfs will be active after next reboot"
+  # Mount /tmp if not already mounted
+  if ! mountpoint -q /tmp 2>/dev/null; then
+    mount -t tmpfs -o defaults,noatime,nosuid,mode=1777,size=50M tmpfs /tmp || true
+  fi
 }
 
 #──────────────────────────────────────────────────────────────────
@@ -79,8 +146,8 @@ configure_journald() {
 
   mkdir -p "$conf_dir"
 
-  # Check if already configured
-  if [[ -f "$conf_file" ]]; then
+  # Check if already configured (ours or pi-harden's)
+  if [[ -f "$conf_file" ]] || [[ -f "${conf_dir}/volatile.conf" ]]; then
     log_info "  journald already configured"
     return 0
   fi
@@ -99,6 +166,27 @@ EOF
 
   # Restart journald to apply
   systemctl restart systemd-journald || true
+}
+
+#──────────────────────────────────────────────────────────────────
+# LOGROTATE (Reduce retention for SD card longevity)
+#──────────────────────────────────────────────────────────────────
+
+configure_logrotate() {
+  log_info "Reducing logrotate retention..."
+
+  if [[ ! -f /etc/logrotate.conf ]]; then
+    log_info "  logrotate.conf not found, skipping"
+    return 0
+  fi
+
+  if grep -qE '^\s*rotate\s+2\b' /etc/logrotate.conf 2>/dev/null; then
+    log_info "  logrotate already set to rotate 2"
+    return 0
+  fi
+
+  sed -i 's/^\s*rotate\s\+[0-9]\+/rotate 2/' /etc/logrotate.conf
+  log_ok "  logrotate set to rotate 2"
 }
 
 #──────────────────────────────────────────────────────────────────
@@ -268,7 +356,22 @@ configure_bluetooth() {
   fi
 
   # Install the service from template
-  cp "${BOOTSTRAP_DIR}/templates/unblock-bluetooth.service" "$service_file"
+  local template_dir
+  if [[ -d "${INSTALL_DIR}/bootstrap/templates" ]]; then
+    template_dir="${INSTALL_DIR}/bootstrap/templates"
+  elif [[ -d "${SCRIPT_DIR}/templates" ]]; then
+    template_dir="${SCRIPT_DIR}/templates"
+  else
+    log_warn "  Cannot find templates dir, skipping bluetooth service"
+    return 0
+  fi
+
+  if [[ -f "${template_dir}/unblock-bluetooth.service" ]]; then
+    cp "${template_dir}/unblock-bluetooth.service" "$service_file"
+  else
+    log_warn "  unblock-bluetooth.service template not found, skipping"
+    return 0
+  fi
 
   # Enable the service
   systemctl daemon-reload
@@ -312,6 +415,9 @@ Unattended-Upgrade::Origins-Pattern {
 // Don't automatically reboot
 Unattended-Upgrade::Automatic-Reboot "false";
 
+// Auto-fix interrupted dpkg
+Unattended-Upgrade::AutoFixInterruptedDpkg "true";
+
 // Clean up old packages
 Unattended-Upgrade::Remove-Unused-Dependencies "true";
 
@@ -330,37 +436,43 @@ EOF
 }
 
 #──────────────────────────────────────────────────────────────────
-# DISABLE UNUSED SERVICES
+# FAST SSH LOGIN (disable MOTD delays)
 #──────────────────────────────────────────────────────────────────
 
-disable_unused_services() {
-  log_info "Disabling unused services..."
+configure_fast_ssh_login() {
+  log_info "Speeding up SSH login..."
 
-  # Services safe to disable on a headless Pi
-  local -a disable_services=(
-    "cups"
-    "cups-browsed"
-    "ModemManager"
-    "triggerhappy"
-  )
-
-  for svc in "${disable_services[@]}"; do
-    if systemctl is-enabled --quiet "$svc" 2>/dev/null; then
-      systemctl disable --now "$svc" 2>/dev/null || true
-      log_info "  Disabled: $svc"
+  # Disable MOTD scripts (each one adds latency to login)
+  if [[ -d /etc/update-motd.d ]]; then
+    local disabled=false
+    for f in /etc/update-motd.d/*; do
+      if [[ -x "$f" ]]; then
+        chmod -x "$f"
+        disabled=true
+      fi
+    done
+    if [[ "$disabled" == "true" ]]; then
+      log_info "  Disabled MOTD scripts"
+    else
+      log_info "  MOTD scripts already disabled"
     fi
-  done
+  fi
 
-  # DO NOT disable these (required for MCProxy):
-  # - avahi-daemon (mDNS for .local resolution)
-  # - bluetooth (BLE for ESP32 communication)
-  # - wpa_supplicant (WiFi connectivity)
+  # Comment out pam_motd in sshd PAM config (avoids dynamic MOTD generation)
+  if [[ -f /etc/pam.d/sshd ]]; then
+    if grep -qE '^\s*session.*pam_motd' /etc/pam.d/sshd; then
+      sed -i 's/^\(\s*session.*pam_motd\)/#\1/' /etc/pam.d/sshd
+      log_info "  Disabled pam_motd in /etc/pam.d/sshd"
+    else
+      log_info "  pam_motd already disabled"
+    fi
+  fi
 
-  log_ok "  Unused services disabled"
+  log_ok "  Fast SSH login configured"
 }
 
 #──────────────────────────────────────────────────────────────────
-# SSH HARDENING
+# SSH HARDENING (crypto + access control)
 #──────────────────────────────────────────────────────────────────
 
 configure_ssh_hardening() {
@@ -371,29 +483,32 @@ configure_ssh_hardening() {
 
   mkdir -p "$ssh_conf_dir"
 
-  # Check if already configured
-  if [[ -f "$ssh_conf" ]]; then
+  # Check if already configured (ours or pi-harden's)
+  if [[ -f "$ssh_conf" ]] || [[ -f "${ssh_conf_dir}/10-pi-harden.conf" ]]; then
     log_info "  SSH hardening already configured"
     return 0
   fi
 
   cat > "$ssh_conf" << 'EOF'
-# MCProxy SSH hardening
+# MCProxy SSH hardening — crypto + access control
+HostKey /etc/ssh/ssh_host_ed25519_key
+Ciphers aes256-gcm@openssh.com,chacha20-poly1305@openssh.com
+MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
+KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org
+UseDNS no
+X11Forwarding no
 PermitRootLogin no
 MaxAuthTries 3
 MaxSessions 3
 LoginGraceTime 30
 ClientAliveInterval 300
 ClientAliveCountMax 2
-
-# Note: PasswordAuthentication left as-is
-# Users should manually disable after setting up keys
 EOF
 
   # Validate sshd config before restarting
   if sshd -t 2>/dev/null; then
-    systemctl reload sshd || true
-    log_ok "  SSH hardening applied"
+    systemctl restart sshd || true
+    log_ok "  SSH hardening applied (ed25519-only, modern ciphers)"
   else
     rm -f "$ssh_conf"
     log_warn "  SSH config invalid, hardening skipped"

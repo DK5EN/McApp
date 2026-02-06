@@ -40,8 +40,8 @@ During first install, you'll be prompted for:
 
 | Setting | Example | Description |
 |---------|---------|-------------|
-| Callsign | `DK5EN-9` | Your ham radio callsign with SSID |
-| Node address | `meshcom.local` | MeshCom node hostname or IP |
+| Callsign | `DX9XX-99` | Your ham radio callsign with SSID |
+| Node address | `mcapp.local` | MeshCom node hostname or IP |
 | Latitude | `48.2082` | Your station latitude |
 | Longitude | `16.3738` | Your station longitude |
 | Station name | `Vienna` | Name for weather reports |

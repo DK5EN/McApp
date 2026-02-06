@@ -1,6 +1,7 @@
 # Data files
 mcdump.json
 sperrliste.json
+CLAUDE.md
 
 # Local configuration (contains personal data)
 config.json
@@ -25,6 +26,9 @@ ENV/
 *.swp
 *.swo
 *~
+
+# Archived/obsolete files
+.old/
 
 # OS
 .DS_Store

@@ -1,6 +1,6 @@
 #!/bin/bash
 # packages.sh - Package management for MCProxy bootstrap
-# Handles: apt packages, uv, Caddy, lighttpd, Python venv
+# Handles: apt packages, uv, Caddy, lighttpd
 
 #──────────────────────────────────────────────────────────────────
 # MAIN PACKAGE INSTALLATION
@@ -11,7 +11,6 @@ install_packages() {
   install_uv
   install_caddy
   install_lighttpd
-  setup_python_venv
 }
 
 #──────────────────────────────────────────────────────────────────
@@ -24,7 +23,7 @@ install_apt_deps() {
   # Update package lists
   apt-get update -qq
 
-  # Core dependencies
+  # Core dependencies (no python3-venv or python3-pip — uv handles everything)
   local -a packages=(
     # Essential tools
     "curl"
@@ -33,10 +32,8 @@ install_apt_deps() {
     "screen"
     "git"
 
-    # Python (version depends on Debian release)
+    # Python runtime (uv manages venvs and packages)
     "python3"
-    "python3-venv"
-    "python3-pip"
 
     # BlueZ for BLE support
     "bluez"
@@ -63,23 +60,32 @@ install_apt_deps() {
 install_uv() {
   log_info "Installing uv package manager..."
 
-  if command -v uv &>/dev/null; then
+  # Check if uv is already available for the real user
+  local run_user="${SUDO_USER:-$(whoami)}"
+  local run_home
+  run_home=$(getent passwd "$run_user" | cut -d: -f6)
+
+  if [[ -x "${run_home}/.local/bin/uv" ]]; then
     local uv_version
-    uv_version=$(uv --version 2>/dev/null | head -1)
+    uv_version=$("${run_home}/.local/bin/uv" --version 2>/dev/null | head -1)
     log_info "  uv already installed: ${uv_version}"
     return 0
   fi
 
-  # Install uv using official installer
-  curl -LsSf https://astral.sh/uv/install.sh | sh
+  # Install uv as the real user (not root)
+  if [[ "$run_user" != "root" ]]; then
+    su - "$run_user" -c "curl -LsSf https://astral.sh/uv/install.sh | sh"
+  else
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+  fi
 
   # Add to PATH for current session
-  export PATH="$HOME/.local/bin:$PATH"
+  export PATH="${run_home}/.local/bin:$PATH"
 
   # Verify installation
-  if command -v uv &>/dev/null; then
+  if [[ -x "${run_home}/.local/bin/uv" ]]; then
     local uv_version
-    uv_version=$(uv --version 2>/dev/null | head -1)
+    uv_version=$("${run_home}/.local/bin/uv" --version 2>/dev/null | head -1)
     log_ok "  uv installed: ${uv_version}"
   else
     log_error "  Failed to install uv"
@@ -254,109 +260,4 @@ EOF
   else
     log_warn "  lighttpd config test failed"
   fi
-}
-
-#──────────────────────────────────────────────────────────────────
-# PYTHON VIRTUAL ENVIRONMENT
-#──────────────────────────────────────────────────────────────────
-
-setup_python_venv() {
-  log_info "Setting up Python virtual environment..."
-
-  local python_version
-  local python_exec
-
-  python_version=$(get_python_version)
-  python_exec=$(get_python_executable)
-
-  if [[ -z "$python_exec" ]]; then
-    log_error "  Python not found"
-    return 1
-  fi
-
-  log_info "  Using Python ${python_version} (${python_exec})"
-
-  # Check if venv exists and is valid
-  if venv_is_valid; then
-    log_info "  Existing venv is valid, updating packages..."
-    update_venv_packages
-    return 0
-  fi
-
-  # Remove broken venv if exists
-  [[ -d "$VENV_DIR" ]] && rm -rf "$VENV_DIR"
-
-  # Create venv using uv (preferred) or fallback to venv module
-  if command -v uv &>/dev/null; then
-    log_info "  Creating venv with uv..."
-    uv venv "$VENV_DIR" --python "$python_exec"
-  else
-    log_info "  Creating venv with python -m venv..."
-    "$python_exec" -m venv "$VENV_DIR"
-  fi
-
-  # Install packages
-  install_venv_packages
-
-  log_ok "  Python venv created at ${VENV_DIR}"
-}
-
-install_venv_packages() {
-  log_info "  Installing Python packages..."
-
-  local requirements_file
-
-  # Find requirements file
-  if [[ -f "${SCRIPT_DIR}/requirements.txt" ]]; then
-    requirements_file="${SCRIPT_DIR}/requirements.txt"
-  elif [[ -f "${SHARE_DIR}/requirements.txt" ]]; then
-    requirements_file="${SHARE_DIR}/requirements.txt"
-  else
-    # Create minimal requirements inline
-    requirements_file=$(mktemp)
-    cat > "$requirements_file" << 'EOF'
-# MCProxy Python dependencies (minimum versions)
-websockets>=14.0
-dbus-next>=0.2.3
-timezonefinder>=6.5.0
-httpx>=0.28.0
-zstandard>=0.23.0
-EOF
-    trap "rm -f $requirements_file" EXIT
-  fi
-
-  # Install using uv pip (preferred) or regular pip
-  if command -v uv &>/dev/null; then
-    uv pip install --python "${VENV_DIR}/bin/python" -r "$requirements_file"
-  else
-    "${VENV_DIR}/bin/pip" install --upgrade pip
-    "${VENV_DIR}/bin/pip" install -r "$requirements_file"
-  fi
-
-  log_ok "  Python packages installed"
-}
-
-update_venv_packages() {
-  log_info "  Updating Python packages..."
-
-  local requirements_file
-
-  # Find requirements file
-  if [[ -f "${SCRIPT_DIR}/requirements.txt" ]]; then
-    requirements_file="${SCRIPT_DIR}/requirements.txt"
-  elif [[ -f "${SHARE_DIR}/requirements.txt" ]]; then
-    requirements_file="${SHARE_DIR}/requirements.txt"
-  else
-    log_info "  No requirements file found, skipping update"
-    return 0
-  fi
-
-  # Update using uv pip (preferred) or regular pip
-  if command -v uv &>/dev/null; then
-    uv pip install --python "${VENV_DIR}/bin/python" --upgrade -r "$requirements_file"
-  else
-    "${VENV_DIR}/bin/pip" install --upgrade -r "$requirements_file"
-  fi
-
-  log_ok "  Python packages updated"
 }

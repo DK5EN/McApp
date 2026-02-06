@@ -99,8 +99,8 @@ COMMANDS = {
     },
     "ctcping": {
         "handler": "handle_ctcping",
-        "args": ["target", "call", "payload", "repeat"],
-        "format": "!ctcping [target:Execution-Host|local], call:Ping-Target payload:25 repeat:3",
+        "args": ["call", "payload", "repeat"],
+        "format": "!ctcping call:Ping-Target payload:25 repeat:3 [target:Remote-Node]",
         "description": "Ping test with roundtrip time measurement",
     },
     "help": {

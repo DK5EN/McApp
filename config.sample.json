@@ -1,5 +1,5 @@
 {
-  "CALL_SIGN": "OE0XXX-1",
+  "CALL_SIGN": "OE0XXX-99",
   "USER_INFO_TEXT": "MCProxy MeshCom Message Proxy",
 
   "UDP_PORT_list": 1799,
@@ -9,23 +9,22 @@
   "WS_HOST": "127.0.0.1",
   "WS_PORT": 2980,
 
-  "SSE_ENABLED": false,
+  "SSE_ENABLED": true,
   "SSE_HOST": "0.0.0.0",
   "SSE_PORT": 2981,
 
   "STORAGE_BACKEND": "memory",
   "DB_PATH": "/var/lib/mcproxy/messages.db",
-  "MAX_STORAGE_SIZE_MB": 10,
-  "PRUNE_HOURS": 168,
+  "MAX_STORAGE_SIZE_MB": 100,
+  "PRUNE_HOURS": 1350,
   "STORE_FILE_NAME": "mcdump.json",
 
-  "_comment_location": "LAT/LONG deprecated — location is obtained from GPS device at runtime",
-  "STAT_NAME": "",
+  "STAT_NAME": "Wien",
 
   "_comment_ble": "BLE_MODE: 'local' (D-Bus/BlueZ), 'remote' (HTTP/SSE), 'disabled' (no-op)",
-  "BLE_MODE": "local",
-  "BLE_REMOTE_URL": "",
-  "BLE_API_KEY": "",
+  "BLE_MODE": "remote",
+  "BLE_REMOTE_URL": "http://127.0.0.1:8081",
+  "BLE_API_KEY": "test-dev-key",
   "BLE_DEVICE_NAME": "",
   "BLE_DEVICE_ADDRESS": "",
   "BLE_READ_UUID": "6e400003-b5a3-f393-e0a9-e50e24dcca9e",

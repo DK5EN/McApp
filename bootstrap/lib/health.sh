@@ -127,19 +127,21 @@ check_config_valid() {
 #──────────────────────────────────────────────────────────────────
 
 check_venv() {
+  local venv_path="${INSTALL_DIR}/.venv"
+
   if ! venv_is_valid; then
     printf "  %-20s ${RED}[FAIL]${NC} invalid or missing\n" "python venv:"
     return 1
   fi
 
   # Check if key packages are importable
-  if ! "${VENV_DIR}/bin/python" -c "import websockets, dbus_next" 2>/dev/null; then
+  if ! "${venv_path}/bin/python" -c "import websockets, dbus_next" 2>/dev/null; then
     printf "  %-20s ${YELLOW}[WARN]${NC} missing packages\n" "python venv:"
     return 1
   fi
 
   local python_version
-  python_version=$("${VENV_DIR}/bin/python" --version 2>&1 | cut -d' ' -f2)
+  python_version=$("${venv_path}/bin/python" --version 2>&1 | cut -d' ' -f2)
   printf "  %-20s ${GREEN}[OK]${NC} Python ${python_version}\n" "python venv:"
   return 0
 }
@@ -210,10 +212,12 @@ print_diagnostic_info() {
 
   echo "Python Environment:"
   echo "  System:     $(python3 --version 2>&1)"
-  if [[ -f "${VENV_DIR}/bin/python" ]]; then
-    echo "  Venv:       $("${VENV_DIR}/bin/python" --version 2>&1)"
+  local venv_path="${INSTALL_DIR}/.venv"
+  if [[ -f "${venv_path}/bin/python" ]]; then
+    echo "  Venv:       $(${venv_path}/bin/python --version 2>&1)"
+    echo "  Install:    ${INSTALL_DIR}"
     echo "  Packages:"
-    "${VENV_DIR}/bin/pip" list 2>/dev/null | grep -E "websockets|dbus-next|timezonefinder|httpx|zstandard" | sed 's/^/    /'
+    "${venv_path}/bin/pip" list 2>/dev/null | grep -E "websockets|dbus-next|timezonefinder|httpx|zstandard" | sed 's/^/    /'
   fi
   echo ""
 

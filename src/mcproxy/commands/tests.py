@@ -326,9 +326,9 @@ def test_reception_logic(handler):
             handler.my_callsign,
             "!SEARCH OE5HWN-12",
             True,
-            True,
-            "direct",
-            "Eigener !search Befehl → lokale Ausführung, sucht Messages",
+            False,
+            None,
+            "Eigener !search mit Callsign → remote intent (OE5HWN-12 ist Target)",
         ),
         (
             handler.my_callsign,
@@ -492,6 +492,24 @@ def test_intent_based_reception_logic(handler):
          "Ungültiges Ziel → no execute"),
         ("OE5HWN-12", "", f"!TIME {handler.my_callsign}", True, False, None,
          "Leeres Ziel → no execute"),
+        # target: parameter support (unified routing)
+        ("OE5HWN-12", "20", f"!MHEARD TARGET:{handler.my_callsign} TYPE:MSG", True, True, "group",
+         "Group mheard with target: param → execute"),
+        ("OE5HWN-12", "20", f"!POS TARGET:{handler.my_callsign} CALL:DB0ED", True, True, "group",
+         "Group pos with target: param → execute"),
+        ("OE5HWN-12", "20", f"!SEARCH TARGET:{handler.my_callsign} CALL:OE1ABC", True, True,
+         "group", "Group search with target: param → execute"),
+        # Positional fallback with key:value args (the bug fix)
+        ("OE5HWN-12", "20", f"!MHEARD {handler.my_callsign} TYPE:MSG", True, True, "group",
+         "Group mheard with positional target before key:value → execute"),
+        # Remote intent with target: and key:value
+        (handler.my_callsign, "20", "!MHEARD TARGET:OE5HWN-12 TYPE:MSG", True, False, None,
+         "Our mheard with remote target: → remote intent"),
+        (handler.my_callsign, "20", "!POS TARGET:OE5HWN-12 CALL:DK5EN", True, False, None,
+         "Our pos with remote target: → remote intent"),
+        # target:local explicit
+        (handler.my_callsign, handler.my_callsign, "!WX TARGET:LOCAL", True, True, "direct",
+         "Explicit target:local → local execution"),
     ]
 
     results = []
@@ -1282,6 +1300,13 @@ async def test_self_command_suppression_logic(handler):
         (f"!TIME {handler.my_callsign}", "Time command with our target"),
     ]
 
+    # Commands that should NOT be suppressed (remote intent)
+    non_suppress_cases = [
+        ("!WX TARGET:OE5HWN-12", "WX with remote target: should NOT suppress"),
+        ("!MHEARD TARGET:OE5HWN-12 TYPE:MSG", "MHeard with remote target: should NOT suppress"),
+        ("!SEARCH TARGET:OE5HWN-12 CALL:DK5EN", "Search with remote target: should NOT suppress"),
+    ]
+
     results = []
 
     if not handler.message_router or not hasattr(handler.message_router, "validator"):
@@ -1309,6 +1334,35 @@ async def test_self_command_suppression_logic(handler):
                 print(f"     Reason: {reason}")
                 if not success:
                     print("     ❌ Self-command should be suppressed!")
+                print()
+
+        except Exception as e:
+            status = "❌ ERROR"
+            results.append((status, description, False))
+            if has_console:
+                print(f"❌ ERROR | {description}")
+                print(f"     Exception: {e}")
+                print()
+
+    # Test non-suppression cases (remote intent — should NOT be suppressed)
+    for command, description in non_suppress_cases:
+        try:
+            test_data = {"src": handler.my_callsign, "dst": "20", "msg": command}
+            normalized = validator.normalize_message_data(test_data)
+            should_suppress = validator.should_suppress_outbound(normalized)
+            reason = validator.get_suppression_reason(normalized)
+
+            success = not should_suppress
+            status = "✅ PASS" if success else "❌ FAIL"
+            results.append((status, description, success))
+
+            if has_console:
+                print(f"{status} | {description}")
+                print(f"     Command: {command}")
+                print(f"     Suppressed: {should_suppress} (expected: False)")
+                print(f"     Reason: {reason}")
+                if not success:
+                    print("     ❌ Remote-intent command should NOT be suppressed!")
                 print()
 
         except Exception as e:

@@ -2,7 +2,12 @@
 
 import re
 
-from .constants import COMMAND_THROTTLING, DEFAULT_THROTTLE_TIMEOUT, has_console
+from .constants import (
+    CALLSIGN_TARGET_PATTERN,
+    COMMAND_THROTTLING,
+    DEFAULT_THROTTLE_TIMEOUT,
+    has_console,
+)
 
 
 class RoutingMixin:
@@ -351,85 +356,46 @@ class RoutingMixin:
         return False, None
 
     def extract_target_callsign(self, msg):
-        """Extract target callsign from command message"""
-        if has_console:
-            print(f"🎯 extract_target_callsign called with: '{msg}'")
+        """Extract target callsign from command message.
 
+        Priority:
+        1. Explicit target: parameter (scanned anywhere in message)
+        2. Fallback: first standalone callsign (right-to-left, skip key:value)
+
+        Commands that never have targets: GROUP, KB, TOPIC
+        """
         if not msg or not msg.startswith("!"):
-            if has_console:
-                print("🎯 Not a command, returning None")
             return None
 
-        # Ensure message is uppercase for processing
         msg_upper = msg.upper().strip()
         parts = msg_upper.split()
 
-        if has_console:
-            print(f"🎯 msg_upper: {msg_upper}")
-            print(f"🎯 Parts: {parts}")
-
         if len(parts) < 2:
-            if has_console:
-                print("🎯 Less than 2 parts, returning None")
             return None
 
         command = parts[0][1:]  # Remove ! prefix
 
-        if has_console:
-            print(f"🎯 Command: '{command}'")
-
-        # Commands that NEVER have targets (always local)
-        if command in ["GROUP", "KB", "TOPIC", "SEARCH"]:
+        # Commands that NEVER have targets (admin-only, local state)
+        if command in ["GROUP", "KB", "TOPIC"]:
             return None
 
-        # Special handling for CTCPING command
-        if command == "CTCPING":
-            print("🎯 Command: inside ctcping handling")
+        # Priority 1: Explicit target:CALLSIGN parameter (scanned anywhere)
+        for part in parts[1:]:
+            if part.startswith("TARGET:"):
+                potential = part[7:]  # Remove 'TARGET:' prefix
+                if potential in ["LOCAL", ""]:
+                    return None  # Explicit local execution
+                if re.match(CALLSIGN_TARGET_PATTERN, potential):
+                    return potential
+                return None  # Invalid target format
 
-            # Look for target:CALLSIGN pattern first
-            for part in parts[1:]:
-                print(f"🎯 Command: part is {part}")
-
-                if part.startswith("TARGET:"):
-                    potential_target = part[7:]  # Remove 'TARGET:' prefix
-                    if has_console:
-                        print(f"🎯 portential_target: '{potential_target}'")
-                    if potential_target.upper() in ["LOCAL", ""]:
-                        return None  # Local execution
-                    # Validate callsign pattern
-                    if re.match(r"^[A-Z0-9]{2,8}(-\d{1,2})?$", potential_target):
-                        return potential_target
-
-            potential_target = parts[-1].strip()
-            if has_console:
-                print(f"🎯 portential_target: '{potential_target}'")
-            if re.match(r"^[A-Z0-9]{2,8}(-\d{1,2})?$", potential_target):
-                if has_console:
-                    print(f"🎯 CTCPING target (at end): '{potential_target}' from '{msg}'")
-                return potential_target
-
-            # No CTCPING target found - MOVE THIS INSIDE THE IF BLOCK
-            if has_console:
-                print("🎯 No valid CTCPING target found")
-            return None
-
-        if has_console:
-            print("🎯 Processing standard command")
-
-        # Look for target in last part (pattern: !WX DK5EN-15)
-        potential_target = parts[-1].strip()
-        if has_console:
-            print(f"🎯 Checking potential target: '{potential_target}'")
-
-        # Validate callsign pattern
-        if re.match(r"^[A-Z0-9]{2,8}(-\d{1,2})?$", potential_target):
-            if has_console:
-                print(f"🎯 Target extracted: '{potential_target}' from '{msg}'")
-
-            return potential_target
-
-        if has_console:
-            print(f"🎯 No valid target in: '{msg}' (checked: '{potential_target}')")
+        # Priority 2: Positional fallback (right-to-left, skip key:value pairs)
+        for part in reversed(parts[1:]):
+            if ":" in part:
+                continue  # Skip key:value arguments
+            potential = part.strip()
+            if re.match(CALLSIGN_TARGET_PATTERN, potential):
+                return potential
 
         return None
 
@@ -546,12 +512,13 @@ class RoutingMixin:
                         if ":" in part:
                             key, value = part.split(":", 1)
                             key = key.lower()
-                            if key == "target":
-                                kwargs["target"] = (
-                                    value.upper() if value.upper() != "LOCAL" else "local"
-                                )
-                            elif key == "call":
+                            # target: is handled by extract_target_callsign routing
+                            if key == "call":
                                 kwargs["call"] = value.upper()
+                            elif key == "payload":
+                                kwargs["payload"] = value
+                            elif key == "repeat":
+                                kwargs["repeat"] = value
 
                 elif cmd == "topic" and not kwargs:
                     if len(parts) >= 2:

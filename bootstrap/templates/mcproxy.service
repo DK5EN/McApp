@@ -8,21 +8,20 @@ Wants=network-online.target
 Type=simple
 User={{USER}}
 Group={{USER}}
-WorkingDirectory=/usr/local/bin
-Environment="PATH={{HOME}}/mcproxy-venv/bin:/usr/local/bin:/usr/bin:/bin"
+WorkingDirectory={{HOME}}/mcproxy
+Environment="PATH={{HOME}}/.local/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="MCADVCHAT_ENV=prod"
-ExecStart={{HOME}}/mcproxy-venv/bin/python /usr/local/bin/C2-mc-ws.py
+ExecStart={{HOME}}/.local/bin/uv run mcproxy
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
 
-# Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=true
-ReadWritePaths=/var/log/mcproxy /etc/mcadvchat
+ReadWritePaths=/var/log/mcproxy /etc/mcadvchat {{HOME}}/mcproxy
 
 [Install]
 WantedBy=multi-user.target

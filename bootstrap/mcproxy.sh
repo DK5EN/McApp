@@ -30,6 +30,8 @@ readonly CONFIG_FILE="${CONFIG_DIR}/config.json"
 readonly WEBAPP_DIR="/var/www/html/webapp"
 readonly SCRIPTS_DIR="/usr/local/bin"
 readonly SHARE_DIR="/usr/local/share/mcproxy"
+readonly GITHUB_REPO="DK5EN/McAdvChat"
+readonly GITHUB_API_BASE="https://api.github.com/repos/${GITHUB_REPO}"
 
 # User home directory (handles sudo correctly)
 # When running with sudo, $HOME is /root, but we want the actual user's home
@@ -41,13 +43,15 @@ get_real_home() {
   fi
 }
 
-# Venv paths (set after we know the real home)
+# Paths set after we know the real home
 VENV_DIR=""
 OLD_VENV_DIR=""
+INSTALL_DIR=""
 
-init_venv_paths() {
+init_paths() {
   local real_home
   real_home=$(get_real_home)
+  INSTALL_DIR="${real_home}/mcproxy"
   VENV_DIR="${real_home}/mcproxy-venv"
   OLD_VENV_DIR="${real_home}/venv"
 }
@@ -235,7 +239,7 @@ main() {
   require_root
 
   # Initialize paths that depend on the real user's home
-  init_venv_paths
+  init_paths
 
   source_libs
 
@@ -329,9 +333,9 @@ dry_run_report() {
       echo "  [PACKAGES] Install apt packages (jq, curl, screen, etc.)"
       echo "  [PACKAGES] Install and configure Caddy"
       echo "  [PACKAGES] Install and configure lighttpd"
-      echo "  [PACKAGES] Create Python venv with dependencies"
+      echo "  [DEPLOY] Download release tarball to ~/mcproxy"
+      echo "  [DEPLOY] Run uv sync to install Python dependencies"
       echo "  [DEPLOY] Download and install webapp"
-      echo "  [DEPLOY] Download and install Python scripts"
       echo "  [SERVICES] Enable and start mcproxy, caddy, lighttpd"
       ;;
     incomplete)
@@ -341,18 +345,18 @@ dry_run_report() {
       echo "  [SERVICES] Enable and start services"
       ;;
     migrate)
-      echo "  [MIGRATE] Detected old installation (~/venv)"
+      echo "  [MIGRATE] Detected old installation (/usr/local/bin scripts)"
       echo "  [MIGRATE] Stop mcproxy service"
-      echo "  [MIGRATE] Preserve old venv at ~/venv"
-      echo "  [MIGRATE] Create new venv at ~/mcproxy-venv"
-      echo "  [MIGRATE] Update systemd service paths"
+      echo "  [MIGRATE] Download release tarball to ~/mcproxy"
+      echo "  [MIGRATE] Run uv sync for dependencies"
+      echo "  [MIGRATE] Update systemd service to use 'uv run mcproxy'"
       echo "  [MIGRATE] Add missing config fields"
       echo "  [SYSTEM] Configure tmpfs, firewall, journald"
       echo "  [PACKAGES] Install uv, update dependencies"
       echo "  [SERVICES] Restart with new configuration"
       echo ""
       echo "  Note: Your existing config.json will be preserved."
-      echo "  The old ~/venv will NOT be deleted (manual cleanup if desired)."
+      echo "  Old files in /usr/local/bin will NOT be deleted."
       ;;
     upgrade)
       check_versions_report
