@@ -250,15 +250,22 @@ config_has_template_values() {
 # VERSION DETECTION
 #──────────────────────────────────────────────────────────────────
 
-# Get installed webapp version (from version.html)
+# Get installed webapp version
+# Checks version.txt first (new combined tarball format), then version.html (legacy)
 get_installed_webapp_version() {
-  local version_file="${WEBAPP_DIR}/version.html"
-
-  if [[ -f "$version_file" ]]; then
-    grep -oP 'v\d+\.\d+\.\d+' "$version_file" 2>/dev/null | head -1 || echo "unknown"
-  else
-    echo "not_installed"
+  # New format: plain text version.txt from combined tarball
+  if [[ -f "${WEBAPP_DIR}/version.txt" ]]; then
+    cat "${WEBAPP_DIR}/version.txt" 2>/dev/null || echo "unknown"
+    return
   fi
+
+  # Legacy format: version.html
+  if [[ -f "${WEBAPP_DIR}/version.html" ]]; then
+    grep -oP 'v\d+\.\d+\.\d+' "${WEBAPP_DIR}/version.html" 2>/dev/null | head -1 || echo "unknown"
+    return
+  fi
+
+  echo "not_installed"
 }
 
 # Get installed MCProxy version from pyproject.toml
@@ -273,7 +280,21 @@ get_installed_scripts_version() {
 }
 
 # Get remote webapp version from GitHub
+# With combined tarballs, the webapp version matches the MCProxy release version.
+# Falls back to the old raw.githubusercontent.com method for backward compat.
 get_remote_webapp_version() {
+  # Primary: webapp version is the same as the latest release tag
+  local tag
+  tag=$(curl -fsSL --connect-timeout 5 \
+    "${GITHUB_API_BASE}/releases/latest" 2>/dev/null \
+    | jq -r '.tag_name // empty' 2>/dev/null)
+
+  if [[ -n "$tag" ]]; then
+    echo "$tag"
+    return
+  fi
+
+  # Fallback: old method via raw.githubusercontent.com
   curl -fsSL --connect-timeout 5 "${GITHUB_RAW_BASE}/webapp/version.html" 2>/dev/null \
     | grep -oP 'v\d+\.\d+\.\d+' | head -1 || echo "unknown"
 }

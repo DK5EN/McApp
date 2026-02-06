@@ -1,62 +1,79 @@
-# release.sh — MCProxy Release Workflow
+# release.sh — MCProxy Unified Release Workflow
 
-Builds a release tarball, uploads it to GitHub Releases, and manages version numbers. Runs on Mac (the dev machine), not on the Pi.
+Builds a combined tarball (backend + webapp), uploads it to GitHub Releases, and manages version numbers. Runs on Mac (the dev machine), not on the Pi.
+
+**No arguments needed** — the script auto-detects the branch and does the right thing.
 
 ## Prerequisites
 
 - `git` — clean working tree required
 - `gh` — GitHub CLI, authenticated
+- `npm` — for building the Vue.js webapp
 - `shasum` — SHA256 checksum (ships with macOS)
-- `tar`, `sed`
+- `tar`, `sed`, `jq`
+- The webapp repo must be at `../webapp` relative to MCProxy
 
 ## Usage
 
 ```bash
-./release.sh v0.52.0
+./release.sh
 ```
 
-Version format: `v{major}.{minor}.{patch}`
+That's it. Branch detection handles everything.
 
-## What It Does
+## Two Modes
 
-### Step 1: Validation
+### Production (on `main` branch)
 
-- Checks version format matches `v#.#.#`
-- Checks all required tools are installed
-- **Rejects dirty working trees** — commit or stash first
-
-### Step 2: Version Bump
-
-Updates the `version` field in both:
-- `pyproject.toml` (main package)
-- `ble_service/pyproject.toml` (BLE service)
-
-Uses `sed -i ''` (macOS in-place edit).
-
-### Step 3: Git Commit + Tag
-
-```
-git add pyproject.toml ble_service/pyproject.toml
-git commit -m "[chore] Bump version to v0.52.0"
-git tag -a v0.52.0 -m "Release v0.52.0"
+```bash
+git checkout main
+./release.sh
 ```
 
-The commit and tag are local only — you push them after reviewing the release.
+1. Auto-bumps minor version: reads `pyproject.toml` (e.g., `0.51.0`) → `v0.52.0`
+2. Validates clean tree and required tools
+3. Updates `version` in `pyproject.toml` and `ble_service/pyproject.toml`
+4. Builds the webapp (`npm run build` in `../webapp`)
+5. Writes `version.txt` into webapp dist
+6. Commits version bump, creates annotated tag
+7. Builds combined tarball, uploads as `--draft`
+8. Prints next steps (review, publish, push)
 
-### Step 4: Build Tarball
+### Dev (on `development` branch)
 
-Creates `mcproxy-v0.52.0.tar.gz` in a temp directory, containing only release files:
+```bash
+git checkout development
+./release.sh
+```
+
+1. Validates clean tree and required tools
+2. Reads current version from `pyproject.toml` (e.g., `0.51.0`)
+3. Scans existing tags: `git tag -l "v0.51.0-dev.*"`
+4. Auto-generates next tag: `v0.51.0-dev.1`, `v0.51.0-dev.2`, etc.
+5. Does **NOT** bump `pyproject.toml`
+6. Builds the webapp (`npm run build` in `../webapp`)
+7. Creates lightweight tag (no commit needed)
+8. Builds combined tarball, uploads as `--prerelease` (published, not draft)
+9. Auto-pushes the tag (no review step for dev)
+
+## Tarball Structure (Both Modes)
 
 ```
 mcproxy-v0.52.0/
   pyproject.toml
   uv.lock
   config.sample.json
-  src/mcproxy/           # Full Python package
+  src/mcproxy/           # Python package
   src/mcproxy/commands/  # Commands sub-package
   ble_service/src/       # BLE service source
   ble_service/pyproject.toml
-  bootstrap/             # Full bootstrap directory
+  bootstrap/             # Bootstrap scripts
+  webapp/                # Built Vue.js SPA
+    index.html
+    version.txt          # Contains the release tag
+    assets/
+    img/
+    ...
 ```
 
 **Excluded** (never in the tarball):
@@ -65,19 +82,7 @@ mcproxy-v0.52.0/
 - Dev scripts: `deploy-to-pi.sh`, `release.sh`
 - Data files: `mcdump.json`, `config.json`, `sperrliste.json`
 
-### Step 5: SHA256 Checksum
-
-Generates `mcproxy-v0.52.0.tar.gz.sha256` alongside the tarball. The bootstrap installer verifies this on download.
-
-### Step 6: GitHub Release (Draft)
-
-Uploads both files as a **draft** release via `gh release create --draft`. This lets you review before publishing.
-
-### Step 7: Cleanup
-
-Removes the local tarball and checksum file after upload.
-
-## After the Script Finishes
+## After a Production Release
 
 ```bash
 # 1. Review the draft at https://github.com/DK5EN/McAdvChat/releases
@@ -88,16 +93,37 @@ git push origin v0.52.0
 git push
 ```
 
+Dev releases are auto-published and auto-pushed — no manual steps required.
+
 ## How the Bootstrap Consumes Releases
 
-When a Pi runs the bootstrap installer:
+### Production (default)
 
-1. Queries `https://api.github.com/repos/DK5EN/McAdvChat/releases/latest` for the newest tag
+```bash
+sudo ./mcproxy.sh
+```
+
+1. Queries `/releases/latest` for the newest stable tag (pre-releases are excluded)
 2. Downloads `mcproxy-v0.52.0.tar.gz` from the release assets
-3. Verifies the SHA256 checksum
+3. Verifies SHA256 checksum
 4. Extracts to `~/mcproxy/` with `--strip-components=1`
-5. Runs `uv sync` to install dependencies into `~/mcproxy/.venv/`
-6. Renders systemd service from `bootstrap/templates/mcproxy.service`
+5. Copies `~/mcproxy/webapp/` to `/var/www/html/webapp/` (bundled SPA)
+6. Runs `uv sync` to install Python dependencies
+7. Renders systemd service from `bootstrap/templates/mcproxy.service`
+
+### Dev mode
+
+```bash
+sudo ./mcproxy.sh --dev
+```
+
+1. Queries `/releases` and finds the first pre-release
+2. Downloads the pre-release tarball
+3. Same extraction and deployment flow as production
+
+### Backward Compatibility
+
+If the tarball doesn't contain a `webapp/` directory (old releases), the bootstrap falls back to downloading the webapp separately from `raw.githubusercontent.com`.
 
 ## Version Flow
 
@@ -107,3 +133,5 @@ pyproject.toml  ──►  importlib.metadata  ──►  __version__  ──►
 ```
 
 Single source of truth is `pyproject.toml`. The Python package reads it at runtime via `importlib.metadata.version("mcproxy")`. The bootstrap reads it via `grep` from the installed `pyproject.toml`.
+
+For dev releases, the tag (e.g., `v0.51.0-dev.3`) is written to `webapp/version.txt` but `pyproject.toml` retains the base version (`0.51.0`).

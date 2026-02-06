@@ -48,6 +48,8 @@ class BLEClientRemote(BLEClientBase):
         self._sse_task: asyncio.Task | None = None
         self._running = False
         self._status.mode = BLEMode.REMOTE
+        self._last_connect_attempt: float = 0
+        self._connect_cooldown: float = 15.0
 
     def _headers(self) -> dict:
         """Get request headers with API key"""
@@ -75,12 +77,16 @@ class BLEClientRemote(BLEClientBase):
         endpoint: str,
         data: dict | None = None,
         retries: int = 2,
-        retry_delay: float = 1.5
+        retry_delay: float = 1.5,
+        request_timeout: float | None = None,
     ) -> dict:
         """Make HTTP request to remote service, with retry on 409 (busy) and connection errors"""
         await self._ensure_session()
 
         url = urljoin(self.remote_url, endpoint)
+        timeout = (
+            aiohttp.ClientTimeout(total=request_timeout) if request_timeout else None
+        )
 
         for attempt in range(1 + retries):
             try:
@@ -88,7 +94,8 @@ class BLEClientRemote(BLEClientBase):
                     method,
                     url,
                     headers=self._headers(),
-                    json=data if data else None
+                    json=data if data else None,
+                    timeout=timeout,
                 ) as response:
                     response_data = await response.json()
 
@@ -168,14 +175,29 @@ class BLEClientRemote(BLEClientBase):
 
     async def connect(self, mac: str) -> bool:
         """Connect to device via remote service"""
+        # Guard: don't stack connect attempts (webapp auto-sends on SSE reconnect)
+        if self._status.state == ConnectionState.CONNECTING:
+            logger.info("Connect already in progress, ignoring duplicate request")
+            return False
+
+        # Cooldown after recent failure to prevent rapid-fire retry loops
+        elapsed = time.time() - self._last_connect_attempt
+        if self._last_connect_attempt and elapsed < self._connect_cooldown:
+            remaining = self._connect_cooldown - elapsed
+            logger.info("Connect cooldown active (%.0fs remaining), skipping", remaining)
+            return False
+
         try:
             self._status.state = ConnectionState.CONNECTING
+            self._last_connect_attempt = time.time()
             await self._publish_status('connect BLE', 'info', f'Connecting to {mac}...')
 
             response = await self._request(
                 'POST',
                 '/api/ble/connect',
-                {'device_address': mac}
+                {'device_address': mac},
+                retries=0,  # BLE service has internal retries; don't retry 409 here
+                request_timeout=45.0,  # Allow for 3×10s BLE attempts + cleanup
             )
 
             success = response.get('success', False)
@@ -183,6 +205,7 @@ class BLEClientRemote(BLEClientBase):
             if success:
                 self._status.state = ConnectionState.CONNECTED
                 self._status.device_address = mac
+                self._last_connect_attempt = 0  # Reset cooldown on success
                 await self._publish_status('connect BLE result', 'ok', f'Connected to {mac}')
             else:
                 self._status.state = ConnectionState.ERROR

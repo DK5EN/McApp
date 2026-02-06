@@ -32,10 +32,11 @@ else
     echo ">>> config.json already exists, skipping"
 fi
 
-# 5. Copy systemd service files
-scp ble_service/mcproxy-ble.service mcproxy.service "$PI_HOST:/tmp/"
+# 5. Skip systemd service files — templates contain placeholders ({{USER}} etc.)
+#    that the bootstrap installer renders. The deploy script only updates code.
+#    To update service files, edit them on the Pi directly or use bootstrap/mcproxy.sh.
 
-# 6. Install uv + deps + systemd service (idempotent)
+# 6. Install uv + sync deps + restart services
 ssh "$PI_HOST" bash <<'SETUP'
 set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"
@@ -50,40 +51,13 @@ fi
 uv sync
 echo ">>> Dependencies installed"
 
-# Install BLE service (only restart if changed)
-if ! diff -q /tmp/mcproxy-ble.service /etc/systemd/system/mcproxy-ble.service &>/dev/null; then
-    sudo cp /tmp/mcproxy-ble.service /etc/systemd/system/
-    sudo systemctl daemon-reload
-    sudo systemctl enable mcproxy-ble
-    sudo systemctl restart mcproxy-ble
-    echo ">>> mcproxy-ble.service updated and restarted"
-else
-    echo ">>> mcproxy-ble.service unchanged, skipping restart"
-    # Start if not running
-    if ! systemctl is-active --quiet mcproxy-ble; then
-        sudo systemctl start mcproxy-ble
-        echo ">>> mcproxy-ble.service was stopped, started it"
-    fi
-fi
-
 # Symlink config for dev env
 sudo mkdir -p /etc/mcadvchat
 sudo ln -sf /home/martin/mcproxy-test/config.json /etc/mcadvchat/config.dev.json
 
-# Install MCProxy service (only restart if changed)
-if ! diff -q /tmp/mcproxy.service /etc/systemd/system/mcproxy.service &>/dev/null; then
-    sudo cp /tmp/mcproxy.service /etc/systemd/system/
-    sudo systemctl daemon-reload
-    sudo systemctl enable mcproxy
-    sudo systemctl restart mcproxy
-    echo ">>> mcproxy.service updated and restarted"
-else
-    echo ">>> mcproxy.service unchanged, skipping restart"
-    if ! systemctl is-active --quiet mcproxy; then
-        sudo systemctl start mcproxy
-        echo ">>> mcproxy.service was stopped, started it"
-    fi
-fi
+# Restart services to pick up new code
+sudo systemctl restart mcproxy-ble mcproxy
+echo ">>> Services restarted"
 SETUP
 
 echo "=== Deploy complete ==="

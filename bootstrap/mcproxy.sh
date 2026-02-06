@@ -12,6 +12,7 @@
 #   --force       Skip version checks, reinstall everything
 #   --reconfigure Re-prompt for configuration values
 #   --fix         Repair mode: reinstall broken components
+#   --dev         Install latest development pre-release
 #   --quiet       Minimal output (for cron jobs)
 #   --version     Show script version and exit
 
@@ -71,6 +72,7 @@ FORCE=false
 RECONFIGURE=false
 FIX_MODE=false
 QUIET=false
+DEV_MODE=false
 
 #──────────────────────────────────────────────────────────────────
 # LOGGING
@@ -165,6 +167,10 @@ parse_args() {
         FIX_MODE=true
         shift
         ;;
+      --dev)
+        DEV_MODE=true
+        shift
+        ;;
       --quiet)
         QUIET=true
         shift
@@ -198,6 +204,7 @@ Options:
   --force       Skip version checks, reinstall everything
   --reconfigure Re-prompt for configuration values
   --fix         Repair mode: reinstall broken components
+  --dev         Install latest development pre-release
   --quiet       Minimal output (for cron jobs)
   --version     Show script version and exit
   --help, -h    Show this help message
@@ -214,6 +221,9 @@ Examples:
 
   # Repair broken installation
   sudo ./mcproxy.sh --fix
+
+  # Install latest dev pre-release
+  sudo ./mcproxy.sh --dev
 
   # Change configuration
   sudo ./mcproxy.sh --reconfigure
@@ -288,7 +298,7 @@ main() {
 
   # Phase 5: Application deployment
   log_step "Deploying application..."
-  deploy_app "$FORCE"
+  deploy_app "$FORCE" "$DEV_MODE"
 
   # Phase 6: Service activation
   log_step "Activating services..."

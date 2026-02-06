@@ -170,10 +170,11 @@ class SSEManager:
                             initial_data = await storage.get_smart_initial()
                             logger.info(
                                 "SSE client %s: sending smart_initial"
-                                " (%d msgs, %d pos)",
+                                " (%d msgs, %d pos, %d acks)",
                                 client_id,
                                 len(initial_data["messages"]),
                                 len(initial_data["positions"]),
+                                len(initial_data.get("acks", [])),
                             )
                             yield self._format_sse_event({
                                 "type": "response",

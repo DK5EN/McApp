@@ -8,110 +8,38 @@
 
 deploy_app() {
   local force="${1:-false}"
+  local dev_mode="${2:-false}"
 
+  deploy_release "$force" "$dev_mode"
   deploy_webapp "$force"
-  deploy_release "$force"
   setup_python_env
   migrate_config
-}
-
-#──────────────────────────────────────────────────────────────────
-# WEBAPP DEPLOYMENT
-#──────────────────────────────────────────────────────────────────
-
-deploy_webapp() {
-  local force="${1:-false}"
-
-  log_info "Checking webapp deployment..."
-
-  local installed_version
-  local remote_version
-
-  installed_version=$(get_installed_webapp_version)
-  remote_version=$(get_remote_webapp_version)
-
-  log_info "  Installed: ${installed_version}"
-  log_info "  Remote:    ${remote_version}"
-
-  # Decide if update needed
-  if [[ "$force" == "true" ]]; then
-    log_info "  Force mode: reinstalling webapp"
-  elif [[ "$installed_version" == "not_installed" ]]; then
-    log_info "  Webapp not installed, downloading..."
-  elif [[ "$remote_version" == "unknown" ]]; then
-    log_warn "  Cannot check remote version, skipping update"
-    return 0
-  elif version_gte "$installed_version" "$remote_version"; then
-    log_info "  Webapp is up to date"
-    return 0
-  else
-    log_info "  Updating webapp: ${installed_version} → ${remote_version}"
-  fi
-
-  download_webapp
-}
-
-download_webapp() {
-  log_info "  Downloading webapp..."
-
-  local webapp_url="${GITHUB_RAW_BASE}/webapp/webapp.tar.gz"
-  local checksum_url="${GITHUB_RAW_BASE}/webapp/webapp.tar.gz.sha256"
-  local tmp_dir
-  tmp_dir=$(mktemp -d)
-
-  # Download webapp archive
-  if ! curl -fsSL -o "${tmp_dir}/webapp.tar.gz" "$webapp_url"; then
-    log_error "  Failed to download webapp"
-    rm -rf "$tmp_dir"
-    return 1
-  fi
-
-  # Download and verify checksum (if available)
-  if curl -fsSL -o "${tmp_dir}/webapp.tar.gz.sha256" "$checksum_url" 2>/dev/null; then
-    log_info "  Verifying checksum..."
-    if ! (cd "$tmp_dir" && sha256sum -c webapp.tar.gz.sha256 --quiet 2>/dev/null); then
-      log_error "  Checksum verification failed!"
-      rm -rf "$tmp_dir"
-      return 1
-    fi
-    log_info "  Checksum verified"
-  else
-    log_warn "  No checksum available, skipping verification"
-  fi
-
-  # Ensure webapp directory exists
-  mkdir -p "$WEBAPP_DIR"
-
-  # Backup existing webapp
-  if [[ -d "$WEBAPP_DIR" ]] && [[ -f "${WEBAPP_DIR}/index.html" ]]; then
-    local backup_dir="${WEBAPP_DIR}.bak.$(date +%Y%m%d%H%M%S)"
-    cp -a "$WEBAPP_DIR" "$backup_dir"
-    log_info "  Backed up existing webapp to ${backup_dir}"
-  fi
-
-  # Extract webapp
-  tar -xzf "${tmp_dir}/webapp.tar.gz" -C "$WEBAPP_DIR" --strip-components=1
-
-  # Set permissions
-  chown -R www-data:www-data "$WEBAPP_DIR"
-  chmod -R 755 "$WEBAPP_DIR"
-
-  # Cleanup
-  rm -rf "$tmp_dir"
-
-  log_ok "  Webapp deployed to ${WEBAPP_DIR}"
 }
 
 #──────────────────────────────────────────────────────────────────
 # RELEASE TARBALL DEPLOYMENT
 #──────────────────────────────────────────────────────────────────
 
-# Query GitHub Releases API for the latest release tag
+# Query GitHub Releases API for the latest stable release tag
 get_latest_release_version() {
   local tag
   tag=$(curl -fsSL --connect-timeout 5 \
     "${GITHUB_API_BASE}/releases/latest" 2>/dev/null \
     | jq -r '.tag_name // empty' 2>/dev/null)
+
+  if [[ -n "$tag" ]]; then
+    echo "$tag"
+  else
+    echo "unknown"
+  fi
+}
+
+# Query GitHub Releases API for the latest pre-release tag
+get_latest_prerelease_version() {
+  local tag
+  tag=$(curl -fsSL --connect-timeout 5 \
+    "${GITHUB_API_BASE}/releases" 2>/dev/null \
+    | jq -r '[.[] | select(.prerelease)][0].tag_name // empty' 2>/dev/null)
 
   if [[ -n "$tag" ]]; then
     echo "$tag"
@@ -133,6 +61,7 @@ get_installed_mcproxy_version() {
 
 deploy_release() {
   local force="${1:-false}"
+  local dev_mode="${2:-false}"
 
   log_info "Checking MCProxy release deployment..."
 
@@ -140,7 +69,13 @@ deploy_release() {
   local remote_version
 
   installed_version=$(get_installed_mcproxy_version)
-  remote_version=$(get_latest_release_version)
+
+  if [[ "$dev_mode" == "true" ]]; then
+    remote_version=$(get_latest_prerelease_version)
+    log_info "  Mode: development (pre-release)"
+  else
+    remote_version=$(get_latest_release_version)
+  fi
 
   log_info "  Installed: ${installed_version}"
   log_info "  Remote:    ${remote_version}"
@@ -224,6 +159,154 @@ download_and_install_release() {
   rm -rf "$tmp_dir"
 
   log_ok "  MCProxy ${version} deployed to ${INSTALL_DIR}"
+}
+
+#──────────────────────────────────────────────────────────────────
+# WEBAPP DEPLOYMENT
+#──────────────────────────────────────────────────────────────────
+
+deploy_webapp() {
+  local force="${1:-false}"
+
+  log_info "Checking webapp deployment..."
+
+  # New flow: if the tarball included webapp/, use it directly
+  if [[ -d "${INSTALL_DIR}/webapp" ]] && [[ -f "${INSTALL_DIR}/webapp/index.html" ]]; then
+    deploy_webapp_from_tarball "$force"
+  else
+    # Fallback: old tarball without bundled webapp — download separately
+    log_info "  No bundled webapp in tarball, falling back to download"
+    deploy_webapp_download "$force"
+  fi
+}
+
+# Deploy webapp from the bundled webapp/ directory in the release tarball
+deploy_webapp_from_tarball() {
+  local force="${1:-false}"
+
+  local installed_version
+  local tarball_version
+
+  installed_version=$(get_installed_webapp_version)
+
+  # Read version from the bundled webapp
+  if [[ -f "${INSTALL_DIR}/webapp/version.txt" ]]; then
+    tarball_version=$(cat "${INSTALL_DIR}/webapp/version.txt")
+  else
+    tarball_version="unknown"
+  fi
+
+  log_info "  Installed: ${installed_version}"
+  log_info "  Bundled:   ${tarball_version}"
+
+  if [[ "$force" != "true" ]] && [[ "$installed_version" != "not_installed" ]] && \
+     [[ "$tarball_version" != "unknown" ]] && version_gte "$installed_version" "$tarball_version"; then
+    log_info "  Webapp is up to date"
+    return 0
+  fi
+
+  log_info "  Deploying bundled webapp..."
+
+  # Ensure webapp directory exists
+  mkdir -p "$WEBAPP_DIR"
+
+  # Backup existing webapp
+  if [[ -d "$WEBAPP_DIR" ]] && [[ -f "${WEBAPP_DIR}/index.html" ]]; then
+    local backup_dir="${WEBAPP_DIR}.bak.$(date +%Y%m%d%H%M%S)"
+    cp -a "$WEBAPP_DIR" "$backup_dir"
+    log_info "  Backed up existing webapp to ${backup_dir}"
+  fi
+
+  # Copy from tarball to webapp serve dir
+  cp -a "${INSTALL_DIR}/webapp/." "$WEBAPP_DIR/"
+
+  # Set permissions
+  chown -R www-data:www-data "$WEBAPP_DIR"
+  chmod -R 755 "$WEBAPP_DIR"
+
+  log_ok "  Webapp deployed from tarball to ${WEBAPP_DIR}"
+}
+
+# Fallback: download webapp separately (backward compat with old releases)
+deploy_webapp_download() {
+  local force="${1:-false}"
+
+  local installed_version
+  local remote_version
+
+  installed_version=$(get_installed_webapp_version)
+  remote_version=$(get_remote_webapp_version)
+
+  log_info "  Installed: ${installed_version}"
+  log_info "  Remote:    ${remote_version}"
+
+  # Decide if update needed
+  if [[ "$force" == "true" ]]; then
+    log_info "  Force mode: reinstalling webapp"
+  elif [[ "$installed_version" == "not_installed" ]]; then
+    log_info "  Webapp not installed, downloading..."
+  elif [[ "$remote_version" == "unknown" ]]; then
+    log_warn "  Cannot check remote version, skipping update"
+    return 0
+  elif version_gte "$installed_version" "$remote_version"; then
+    log_info "  Webapp is up to date"
+    return 0
+  else
+    log_info "  Updating webapp: ${installed_version} → ${remote_version}"
+  fi
+
+  download_webapp
+}
+
+download_webapp() {
+  log_info "  Downloading webapp..."
+
+  local webapp_url="${GITHUB_RAW_BASE}/webapp/webapp.tar.gz"
+  local checksum_url="${GITHUB_RAW_BASE}/webapp/webapp.tar.gz.sha256"
+  local tmp_dir
+  tmp_dir=$(mktemp -d)
+
+  # Download webapp archive
+  if ! curl -fsSL -o "${tmp_dir}/webapp.tar.gz" "$webapp_url"; then
+    log_error "  Failed to download webapp"
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  # Download and verify checksum (if available)
+  if curl -fsSL -o "${tmp_dir}/webapp.tar.gz.sha256" "$checksum_url" 2>/dev/null; then
+    log_info "  Verifying checksum..."
+    if ! (cd "$tmp_dir" && sha256sum -c webapp.tar.gz.sha256 --quiet 2>/dev/null); then
+      log_error "  Checksum verification failed!"
+      rm -rf "$tmp_dir"
+      return 1
+    fi
+    log_info "  Checksum verified"
+  else
+    log_warn "  No checksum available, skipping verification"
+  fi
+
+  # Ensure webapp directory exists
+  mkdir -p "$WEBAPP_DIR"
+
+  # Backup existing webapp
+  if [[ -d "$WEBAPP_DIR" ]] && [[ -f "${WEBAPP_DIR}/index.html" ]]; then
+    local backup_dir="${WEBAPP_DIR}.bak.$(date +%Y%m%d%H%M%S)"
+    cp -a "$WEBAPP_DIR" "$backup_dir"
+    log_info "  Backed up existing webapp to ${backup_dir}"
+  fi
+
+  # Extract webapp
+  tar -xzf "${tmp_dir}/webapp.tar.gz" -C "$WEBAPP_DIR" --strip-components=1
+
+  # Set permissions
+  chown -R www-data:www-data "$WEBAPP_DIR"
+  chmod -R 755 "$WEBAPP_DIR"
+
+  # Cleanup
+  rm -rf "$tmp_dir"
+
+  log_ok "  Webapp deployed to ${WEBAPP_DIR}"
 }
 
 #──────────────────────────────────────────────────────────────────

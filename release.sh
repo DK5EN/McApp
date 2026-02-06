@@ -1,19 +1,19 @@
 #!/bin/bash
-# release.sh - Build and publish MCProxy releases
+# release.sh - Unified release builder for MCProxy
 #
-# Usage: ./release.sh v0.52.0
+# Fully automatic — just run ./release.sh (no arguments needed).
+# Detects the current branch and handles everything:
 #
-# This script:
-#   1. Validates the version format and clean git state
-#   2. Updates version in pyproject.toml files
-#   3. Commits and tags the release
-#   4. Builds a tarball with only release files
-#   5. Generates SHA256 checksum
-#   6. Uploads via gh release create
+#   main branch       → Production release (bumps version, draft)
+#   development branch → Dev pre-release (auto-numbered, published)
+#
+# Produces a single combined tarball with backend + webapp.
 
 set -euo pipefail
 
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly WEBAPP_DIR="$(cd "${SCRIPT_DIR}/../webapp" && pwd)"
+readonly GITHUB_REPO="DK5EN/McAdvChat"
 
 # Colors
 readonly RED='\033[0;31m'
@@ -26,29 +26,42 @@ log_warn() { echo -e "${YELLOW}[WARN]${NC} $*" >&2; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
 #──────────────────────────────────────────────────────────────────
+# BRANCH / MODE DETECTION
+#──────────────────────────────────────────────────────────────────
+
+detect_mode() {
+  local branch
+  branch=$(git -C "$SCRIPT_DIR" rev-parse --abbrev-ref HEAD)
+
+  case "$branch" in
+    main|master)
+      echo "production"
+      ;;
+    development)
+      echo "dev"
+      ;;
+    *)
+      log_error "Releases can only be created from 'main' or 'development' branch."
+      log_error "Current branch: ${branch}"
+      exit 1
+      ;;
+  esac
+}
+
+#──────────────────────────────────────────────────────────────────
 # VALIDATION
 #──────────────────────────────────────────────────────────────────
 
-validate_version() {
-  local version="$1"
-
-  if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    log_error "Invalid version format: ${version}"
-    echo "  Expected: v{major}.{minor}.{patch} (e.g., v0.52.0)"
-    exit 1
-  fi
-}
-
 validate_clean_tree() {
-  if [[ -n "$(git status --porcelain)" ]]; then
+  if [[ -n "$(git -C "$SCRIPT_DIR" status --porcelain)" ]]; then
     log_error "Working tree is not clean. Commit or stash changes first."
-    git status --short
+    git -C "$SCRIPT_DIR" status --short
     exit 1
   fi
 }
 
 validate_tools() {
-  local -a required=("git" "gh" "shasum" "tar" "sed")
+  local -a required=("git" "gh" "shasum" "tar" "sed" "npm" "jq")
   for tool in "${required[@]}"; do
     if ! command -v "$tool" &>/dev/null; then
       log_error "Required tool not found: ${tool}"
@@ -58,24 +71,105 @@ validate_tools() {
 }
 
 #──────────────────────────────────────────────────────────────────
-# VERSION BUMP
+# VERSION HELPERS
+#──────────────────────────────────────────────────────────────────
+
+# Read current version from pyproject.toml (e.g., "0.51.0")
+read_pyproject_version() {
+  grep -oE '^version = "([^"]+)"' "${SCRIPT_DIR}/pyproject.toml" \
+    | head -1 | sed 's/version = "//;s/"//'
+}
+
+# Production: auto-bump minor version (0.51.0 → v0.52.0)
+auto_version() {
+  local current
+  current=$(read_pyproject_version)
+
+  local major minor patch
+  IFS='.' read -r major minor patch <<< "$current"
+  minor=$((minor + 1))
+  patch=0
+
+  echo "v${major}.${minor}.${patch}"
+}
+
+# Dev: find the next -dev.N tag for the current version
+get_next_dev_tag() {
+  local current
+  current=$(read_pyproject_version)
+  local prefix="v${current}-dev"
+
+  # Find existing dev tags for this version
+  local highest=0
+  while IFS= read -r tag; do
+    [[ -z "$tag" ]] && continue
+    local num="${tag##*.}"
+    if [[ "$num" =~ ^[0-9]+$ ]] && (( num > highest )); then
+      highest=$num
+    fi
+  done < <(git -C "$SCRIPT_DIR" tag -l "${prefix}.*")
+
+  local next=$((highest + 1))
+  echo "${prefix}.${next}"
+}
+
+#──────────────────────────────────────────────────────────────────
+# VERSION BUMP (production only)
 #──────────────────────────────────────────────────────────────────
 
 bump_version() {
   local version="$1"
-  local bare_version="${version#v}"  # Strip 'v' prefix
+  local bare_version="${version#v}"
 
   log_info "Bumping version to ${version}..."
 
-  # Update pyproject.toml
   sed -i '' "s/^version = \".*\"/version = \"${bare_version}\"/" \
     "${SCRIPT_DIR}/pyproject.toml"
 
-  # Update ble_service/pyproject.toml
   sed -i '' "s/^version = \".*\"/version = \"${bare_version}\"/" \
     "${SCRIPT_DIR}/ble_service/pyproject.toml"
 
   log_info "  Updated pyproject.toml files"
+}
+
+#──────────────────────────────────────────────────────────────────
+# WEBAPP BUILD
+#──────────────────────────────────────────────────────────────────
+
+build_webapp() {
+  local version="$1"
+
+  log_info "Building webapp..."
+
+  if [[ ! -d "$WEBAPP_DIR" ]]; then
+    log_error "Webapp directory not found: ${WEBAPP_DIR}"
+    exit 1
+  fi
+
+  if [[ ! -f "${WEBAPP_DIR}/package.json" ]]; then
+    log_error "No package.json found in ${WEBAPP_DIR}"
+    exit 1
+  fi
+
+  # Install dependencies if node_modules is missing
+  if [[ ! -d "${WEBAPP_DIR}/node_modules" ]]; then
+    log_info "  Installing npm dependencies..."
+    (cd "$WEBAPP_DIR" && npm install)
+  fi
+
+  # Build
+  (cd "$WEBAPP_DIR" && npm run build)
+
+  # Validate output
+  if [[ ! -d "${WEBAPP_DIR}/dist" ]] || [[ ! -f "${WEBAPP_DIR}/dist/index.html" ]]; then
+    log_error "Webapp build failed — no dist/index.html found"
+    exit 1
+  fi
+
+  # Write version.txt into dist for bootstrap version detection
+  echo "$version" > "${WEBAPP_DIR}/dist/version.txt"
+
+  log_info "  Webapp built successfully (version.txt: ${version})"
 }
 
 #──────────────────────────────────────────────────────────────────
@@ -94,7 +188,7 @@ build_tarball() {
 
   mkdir -p "$staging"
 
-  # Copy included files
+  # Copy project files
   cp "${SCRIPT_DIR}/pyproject.toml" "$staging/"
   cp "${SCRIPT_DIR}/uv.lock" "$staging/" 2>/dev/null || log_warn "  No uv.lock found (will be generated by uv sync)"
   cp "${SCRIPT_DIR}/config.sample.json" "$staging/" 2>/dev/null || true
@@ -118,8 +212,17 @@ build_tarball() {
 
   # bootstrap/ directory
   cp -r "${SCRIPT_DIR}/bootstrap" "${staging}/bootstrap"
-  # Remove any generated files from bootstrap copy
   find "${staging}/bootstrap" -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+
+  # webapp/ — copy built SPA from ../webapp/dist
+  if [[ -d "${WEBAPP_DIR}/dist" ]]; then
+    # Use tar to copy, excluding macOS metadata
+    mkdir -p "${staging}/webapp"
+    tar -cf - -C "${WEBAPP_DIR}/dist" --exclude='.DS_Store' . | tar -xf - -C "${staging}/webapp"
+    log_info "  Included webapp ($(find "${staging}/webapp" -type f | wc -l | tr -d ' ') files)"
+  else
+    log_warn "  No webapp dist found — tarball will not include webapp"
+  fi
 
   # Build tarball
   tar -czf "${SCRIPT_DIR}/${tarball_name}" -C "$tmp_dir" "$prefix"
@@ -147,10 +250,10 @@ generate_checksum() {
 # GIT + GITHUB RELEASE
 #──────────────────────────────────────────────────────────────────
 
-commit_and_tag() {
+commit_and_tag_production() {
   local version="$1"
 
-  log_info "Creating git commit and tag..."
+  log_info "Creating git commit and annotated tag..."
 
   git -C "$SCRIPT_DIR" add pyproject.toml ble_service/pyproject.toml
   git -C "$SCRIPT_DIR" commit -m "[chore] Bump version to ${version}"
@@ -159,23 +262,52 @@ commit_and_tag() {
   log_info "  Committed and tagged ${version}"
 }
 
-upload_release() {
+tag_dev() {
+  local version="$1"
+
+  log_info "Creating lightweight tag ${version}..."
+
+  git -C "$SCRIPT_DIR" tag "$version"
+
+  log_info "  Tagged ${version}"
+}
+
+upload_production() {
   local version="$1"
   local tarball="$2"
   local checksum="$3"
 
-  log_info "Creating GitHub release ${version}..."
+  log_info "Creating GitHub draft release ${version}..."
 
   local -a assets=("${SCRIPT_DIR}/${tarball}" "${SCRIPT_DIR}/${checksum}")
 
   gh release create "$version" \
+    --repo "$GITHUB_REPO" \
     --title "MCProxy ${version}" \
     --notes "Release ${version}" \
     --draft \
     "${assets[@]}"
 
   log_info "  Draft release created: ${version}"
-  log_info "  Review and publish at: https://github.com/DK5EN/McAdvChat/releases"
+}
+
+upload_dev() {
+  local version="$1"
+  local tarball="$2"
+  local checksum="$3"
+
+  log_info "Creating GitHub pre-release ${version}..."
+
+  local -a assets=("${SCRIPT_DIR}/${tarball}" "${SCRIPT_DIR}/${checksum}")
+
+  gh release create "$version" \
+    --repo "$GITHUB_REPO" \
+    --title "MCProxy ${version} (dev)" \
+    --notes "Development pre-release ${version}" \
+    --prerelease \
+    "${assets[@]}"
+
+  log_info "  Pre-release published: ${version}"
 }
 
 #──────────────────────────────────────────────────────────────────
@@ -195,56 +327,106 @@ cleanup_artifacts() {
 #──────────────────────────────────────────────────────────────────
 
 main() {
-  if [[ $# -lt 1 ]]; then
-    echo "Usage: ./release.sh v{major}.{minor}.{patch}"
-    echo "  Example: ./release.sh v0.52.0"
-    exit 1
-  fi
-
-  local version="$1"
-
   echo ""
   echo "  MCProxy Release Builder"
   echo "  ========================"
   echo ""
 
-  validate_version "$version"
   validate_tools
-  validate_clean_tree
 
-  log_info "Preparing release ${version}..."
+  local mode
+  mode=$(detect_mode)
+
+  log_info "Mode: ${mode} (detected from branch)"
   echo ""
 
-  # Step 1: Bump version
-  bump_version "$version"
+  if [[ "$mode" == "production" ]]; then
+    #── Production release ────────────────────────────────────────
+    validate_clean_tree
 
-  # Step 2: Commit and tag
-  commit_and_tag "$version"
+    local version
+    version=$(auto_version)
+    local current
+    current=$(read_pyproject_version)
 
-  # Step 3: Build tarball
-  local tarball
-  tarball=$(build_tarball "$version")
+    log_info "Version: ${current} -> ${version}"
+    echo ""
 
-  # Step 4: Generate checksum
-  local checksum
-  checksum=$(generate_checksum "$tarball")
+    # Step 1: Bump version in pyproject.toml files
+    bump_version "$version"
 
-  # Step 5: Upload to GitHub
-  upload_release "$version" "$tarball" "$checksum"
+    # Step 2: Build webapp
+    build_webapp "$version"
 
-  # Step 6: Cleanup local artifacts
-  cleanup_artifacts "$tarball" "$checksum"
+    # Step 3: Commit and tag
+    commit_and_tag_production "$version"
 
-  echo ""
-  log_info "Release ${version} created successfully!"
-  echo ""
-  echo "  Next steps:"
-  echo "  1. Review the draft release on GitHub"
-  echo "  2. Edit release notes if needed"
-  echo "  3. Publish the release"
-  echo "  4. Push the tag: git push origin ${version}"
-  echo "  5. Push the commit: git push"
-  echo ""
+    # Step 4: Build tarball
+    local tarball
+    tarball=$(build_tarball "$version")
+
+    # Step 5: Generate checksum
+    local checksum
+    checksum=$(generate_checksum "$tarball")
+
+    # Step 6: Upload as draft
+    upload_production "$version" "$tarball" "$checksum"
+
+    # Step 7: Cleanup
+    cleanup_artifacts "$tarball" "$checksum"
+
+    echo ""
+    log_info "Release ${version} created successfully!"
+    echo ""
+    echo "  Next steps:"
+    echo "  1. Review the draft release on GitHub"
+    echo "  2. Edit release notes if needed"
+    echo "  3. Publish the release"
+    echo "  4. Push the tag: git push origin ${version}"
+    echo "  5. Push the commit: git push"
+    echo ""
+
+  else
+    #── Dev pre-release ───────────────────────────────────────────
+    validate_clean_tree
+
+    local version
+    version=$(get_next_dev_tag)
+    local current
+    current=$(read_pyproject_version)
+
+    log_info "Base version: ${current}"
+    log_info "Dev tag: ${version}"
+    echo ""
+
+    # Step 1: Build webapp
+    build_webapp "$version"
+
+    # Step 2: Create lightweight tag (no commit — pyproject.toml unchanged)
+    tag_dev "$version"
+
+    # Step 3: Build tarball
+    local tarball
+    tarball=$(build_tarball "$version")
+
+    # Step 4: Generate checksum
+    local checksum
+    checksum=$(generate_checksum "$tarball")
+
+    # Step 5: Upload as pre-release (published, not draft)
+    upload_dev "$version" "$tarball" "$checksum"
+
+    # Step 6: Push the tag immediately (no review step for dev)
+    log_info "Pushing tag ${version}..."
+    git -C "$SCRIPT_DIR" push origin "$version"
+
+    # Step 7: Cleanup
+    cleanup_artifacts "$tarball" "$checksum"
+
+    echo ""
+    log_info "Dev release ${version} published!"
+    echo ""
+  fi
 }
 
 main "$@"

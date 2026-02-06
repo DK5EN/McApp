@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from .ble_adapter import BLEAdapter
+from .ble_adapter import BLEAdapter, ConnectionState
 
 # Configure logging
 logging.basicConfig(
@@ -259,8 +259,8 @@ async def connect(request: ConnectRequest, _: bool = Depends(verify_api_key)):
 
 @app.post("/api/ble/disconnect", response_model=ResultResponse)
 async def disconnect(_: bool = Depends(verify_api_key)):
-    """Disconnect from current device"""
-    if not ble_adapter.is_connected:
+    """Disconnect from current device (also resets ERROR state)"""
+    if ble_adapter.status.state == ConnectionState.DISCONNECTED:
         return ResultResponse(success=True, message="Already disconnected")
 
     try:

@@ -245,10 +245,11 @@ class MessageStorageHandler:
         return msg_msgs + pos_msgs
 
     async def get_smart_initial(self, limit_per_dst: int = 15) -> dict:
-        """Get smart initial payload: last N messages per dst + latest position per src."""
+        """Get smart initial payload: last N messages per dst + latest position per src + ACKs."""
         recent_items = list(reversed(self.message_store))
         msgs_per_dst = defaultdict(list)
         pos_per_src = {}
+        acks = []
 
         for i in recent_items:
             raw = i["raw"]
@@ -261,6 +262,8 @@ class MessageStorageHandler:
                         msgs_per_dst[dst].append(raw)
                 except json.JSONDecodeError:
                     continue
+            elif '"type": "ack"' in raw:
+                acks.append(raw)
             elif '"type": "pos"' in raw:
                 try:
                     data = json.loads(raw)
@@ -289,7 +292,7 @@ class MessageStorageHandler:
             messages.extend(reversed(msg_list))
         positions = [json.dumps(d, ensure_ascii=False) for d in pos_per_src.values()]
 
-        return {"messages": messages, "positions": positions}
+        return {"messages": messages, "positions": positions, "acks": acks}
 
     async def get_summary(self) -> dict:
         """Get message count per destination."""

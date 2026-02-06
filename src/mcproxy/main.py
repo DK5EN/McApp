@@ -378,6 +378,7 @@ class MessageRouter:
             "data": {
                 "messages": initial_data["messages"],
                 "positions": initial_data["positions"],
+                "acks": initial_data.get("acks", []),
             },
         }
         await self.publish(

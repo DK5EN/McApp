@@ -140,6 +140,7 @@ class BLEAdapter:
         self._keepalive_task: asyncio.Task | None = None
         self._connected_mac: str | None = None
         self._agent_registered: bool = False
+        self._cancel_connect: bool = False
 
     @property
     def status(self) -> BLEStatus:
@@ -260,6 +261,8 @@ class BLEAdapter:
             True if connection successful
         """
         async with self._operation_lock:
+            self._cancel_connect = False
+
             if self.is_connected:
                 if self._connected_mac == mac:
                     logger.info("Already connected to %s", mac)
@@ -269,9 +272,14 @@ class BLEAdapter:
                     await self._disconnect_internal()
 
             self._status.state = ConnectionState.CONNECTING
+            self._status.error = None
             path = self._mac_to_dbus_path(mac)
 
             for attempt in range(max_retries):
+                if self._cancel_connect:
+                    logger.info("Connection cancelled by disconnect request")
+                    break
+
                 try:
                     await self._attempt_connection(mac, path)
                     self._connected_mac = mac
@@ -292,12 +300,18 @@ class BLEAdapter:
                         await self._cleanup_failed_connection()
                         await asyncio.sleep(1)
 
-            self._status.state = ConnectionState.ERROR
-            self._status.error = f"Connection failed after {max_retries} attempts"
+            await self._cleanup_failed_connection()
+
+            if self._cancel_connect:
+                self._status.state = ConnectionState.DISCONNECTED
+                self._status.error = None
+            else:
+                self._status.state = ConnectionState.ERROR
+                self._status.error = f"Connection failed after {max_retries} attempts"
             return False
 
     async def _attempt_connection(self, mac: str, path: str):
-        """Single connection attempt"""
+        """Single connection attempt with stale BlueZ state handling"""
         await self._ensure_bus()
 
         introspection = await self.bus.introspect(BLUEZ_SERVICE_NAME, path)
@@ -310,16 +324,36 @@ class BLEAdapter:
 
         self.props_iface = self.device_obj.get_interface(PROPERTIES_INTERFACE)
 
-        # Check if already connected
-        connected = (await self.props_iface.call_get(DEVICE_INTERFACE, "Connected")).value
+        # Check if BlueZ has stale connection (e.g. after device hard reboot)
+        try:
+            connected = (await self.props_iface.call_get(
+                DEVICE_INTERFACE, "Connected"
+            )).value
+            if connected:
+                logger.warning("BlueZ reports connected (possibly stale), forcing disconnect")
+                try:
+                    await asyncio.wait_for(self.dev_iface.call_disconnect(), timeout=5.0)
+                except Exception:
+                    pass
+                await asyncio.sleep(0.5)
+        except Exception:
+            pass
 
-        if not connected:
-            try:
-                await asyncio.wait_for(self.dev_iface.call_connect(), timeout=10.0)
-            except asyncio.TimeoutError:
-                raise ConnectionError("Connection timeout after 10 seconds")
-            except DBusError as e:
-                raise ConnectionError(f"Connect failed: {e}") from e
+        # Attempt connection
+        try:
+            await asyncio.wait_for(self.dev_iface.call_connect(), timeout=10.0)
+        except asyncio.TimeoutError:
+            raise ConnectionError("Connection timeout after 10 seconds")
+        except DBusError as e:
+            if "In Progress" in str(e):
+                # BlueZ has a pending connection from a previous attempt
+                logger.warning("Stale 'In Progress' in BlueZ, clearing before retry")
+                try:
+                    await asyncio.wait_for(self.dev_iface.call_disconnect(), timeout=3.0)
+                except Exception:
+                    pass
+                raise ConnectionError("Cleared stale BlueZ state, will retry") from e
+            raise ConnectionError(f"Connect failed: {e}") from e
 
         # Wait for services to resolve
         if not await self._wait_for_services_resolved(timeout=10.0):
@@ -391,20 +425,22 @@ class BLEAdapter:
         return None, None
 
     async def _cleanup_failed_connection(self):
-        """Clean up after failed connection"""
+        """Clean up after failed connection — guaranteed to reset state"""
         try:
             if self.dev_iface:
                 try:
                     await asyncio.wait_for(self.dev_iface.call_disconnect(), timeout=3.0)
                 except Exception:
                     pass
-
-            if self.bus:
-                self.bus.disconnect()
-
-            self._reset_state()
         except Exception as e:
             logger.warning("Cleanup error: %s", e)
+        finally:
+            if self.bus:
+                try:
+                    self.bus.disconnect()
+                except Exception:
+                    pass
+            self._reset_state()
 
     def _reset_state(self):
         """Reset all state variables"""
@@ -420,13 +456,14 @@ class BLEAdapter:
         self._agent_registered = False
 
     async def disconnect(self) -> bool:
-        """Disconnect from current device"""
+        """Disconnect from current device (also cancels in-progress connections)"""
+        self._cancel_connect = True
         async with self._operation_lock:
             return await self._disconnect_internal()
 
     async def _disconnect_internal(self) -> bool:
         """Internal disconnect without lock"""
-        if not self.is_connected:
+        if self._status.state == ConnectionState.DISCONNECTED:
             return True
 
         self._status.state = ConnectionState.DISCONNECTING
