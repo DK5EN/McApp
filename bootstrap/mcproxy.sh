@@ -341,12 +341,11 @@ dry_run_report() {
       echo "  [SYSTEM] Disable unused services"
       echo "  [PACKAGES] Install uv package manager"
       echo "  [PACKAGES] Install apt packages (jq, curl, screen, etc.)"
-      echo "  [PACKAGES] Install and configure Caddy"
       echo "  [PACKAGES] Install and configure lighttpd"
       echo "  [DEPLOY] Download release tarball to ~/mcproxy"
       echo "  [DEPLOY] Run uv sync to install Python dependencies"
       echo "  [DEPLOY] Download and install webapp"
-      echo "  [SERVICES] Enable and start mcproxy, caddy, lighttpd"
+      echo "  [SERVICES] Enable and start mcproxy, lighttpd"
       ;;
     incomplete)
       echo "  [CONFIG] Resume configuration prompts"

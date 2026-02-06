@@ -111,6 +111,10 @@ graph TD
     McProxy -- "UDP :1799<br/>⇄ bidirectional" --> MeshComNode
 ```
 
+| Chat | Map | MHeard |
+|------|-----|--------|
+| ![Chat](doc/chat.png) | ![Map](doc/map.png) | ![MHeard](doc/mheard.png) |
+
 # McApp Specification
 
 The MeshCom McApp project consists of three components:

@@ -407,7 +407,7 @@ configure_systemd_service() {
 enable_and_start_services() {
   log_info "  Enabling and starting services..."
 
-  local -a services=("caddy" "lighttpd" "mcproxy")
+  local -a services=("lighttpd" "mcproxy")
   local failed=false
 
   for svc in "${services[@]}"; do

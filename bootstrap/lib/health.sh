@@ -15,12 +15,10 @@ health_check() {
 
   # Check services
   if ! check_service "mcproxy"; then all_passed=false; fi
-  if ! check_service "caddy"; then all_passed=false; fi
   if ! check_service "lighttpd"; then all_passed=false; fi
 
   # Check endpoints
   if ! check_webapp_endpoint; then all_passed=false; fi
-  if ! check_websocket_port; then all_passed=false; fi
   if ! check_udp_port; then all_passed=false; fi
 
   # Check config
@@ -55,33 +53,13 @@ check_service() {
 #──────────────────────────────────────────────────────────────────
 
 check_webapp_endpoint() {
-  local hostname
-  hostname=$(hostname -s)
-
-  # Try HTTPS first (via Caddy)
-  if curl -fsSL --connect-timeout 5 -k "https://localhost/webapp/index.html" &>/dev/null; then
-    printf "  %-20s ${GREEN}[OK]${NC} HTTPS responding\n" "webapp:"
-    return 0
-  fi
-
-  # Try HTTP fallback (via lighttpd)
+  # Check HTTP via lighttpd
   if curl -fsSL --connect-timeout 5 "http://localhost/webapp/index.html" &>/dev/null; then
-    printf "  %-20s ${YELLOW}[WARN]${NC} HTTP only (no TLS)\n" "webapp:"
+    printf "  %-20s ${GREEN}[OK]${NC} HTTP responding\n" "webapp:"
     return 0
   fi
 
   printf "  %-20s ${RED}[FAIL]${NC} not responding\n" "webapp:"
-  return 1
-}
-
-check_websocket_port() {
-  # Check if WebSocket port is listening
-  if ss -tln | grep -q ':2980\b' || ss -tln | grep -q ':2981\b'; then
-    printf "  %-20s ${GREEN}[OK]${NC} port listening\n" "websocket:"
-    return 0
-  fi
-
-  printf "  %-20s ${RED}[FAIL]${NC} port not listening\n" "websocket:"
   return 1
 }
 
@@ -161,9 +139,7 @@ print_success_summary() {
   echo ""
   echo "  Access Points:"
   echo "  ─────────────────────────────────────────────────────────"
-  echo "    Web UI:     https://${hostname}.local/webapp"
-  echo "    Root Cert:  https://${hostname}.local/root.crt"
-  echo "    WebSocket:  wss://${hostname}.local:2981"
+  echo "    Web UI:     http://${hostname}.local/webapp"
   echo ""
   echo "  Service Management:"
   echo "  ─────────────────────────────────────────────────────────"
@@ -185,11 +161,6 @@ print_success_summary() {
     echo ""
   fi
 
-  echo "  For first-time setup:"
-  echo "  1. Download the root certificate from the URL above"
-  echo "  2. Install it in your browser/system trust store"
-  echo "  3. Navigate to the Web UI"
-  echo ""
 }
 
 #──────────────────────────────────────────────────────────────────
@@ -222,7 +193,7 @@ print_diagnostic_info() {
   echo ""
 
   echo "Services:"
-  for svc in mcproxy caddy lighttpd bluetooth avahi-daemon; do
+  for svc in mcproxy lighttpd bluetooth avahi-daemon; do
     local status
     if systemctl is-active --quiet "$svc" 2>/dev/null; then
       status="running"
@@ -237,7 +208,7 @@ print_diagnostic_info() {
 
   echo "Network Ports:"
   echo "  TCP:"
-  ss -tln 2>/dev/null | grep -E ':(443|2980|2981|80)\b' | awk '{print "    " $4}'
+  ss -tln 2>/dev/null | grep -E ':(80|2980)\b' | awk '{print "    " $4}'
   echo "  UDP:"
   ss -uln 2>/dev/null | grep -E ':1799\b' | awk '{print "    " $4}'
   echo ""

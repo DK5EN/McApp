@@ -106,7 +106,6 @@ EOF
   cat > /etc/tmpfiles.d/mcproxy.conf << 'EOF'
 # MCProxy + system log directories (recreated on every boot in tmpfs)
 d /var/log/mcproxy   0755 root     root     -
-d /var/log/caddy     0755 caddy    caddy    -
 d /var/log/lighttpd  0755 www-data www-data -
 d /var/log/journal   0755 root     root     -
 d /var/log/apt       0755 root     root     -
@@ -248,11 +247,11 @@ table inet filter {
     # SSH (rate limited)
     tcp dport 22 ct state new limit rate 3/minute accept
 
-    # HTTPS (Caddy reverse proxy)
-    tcp dport 443 accept
+    # HTTP (lighttpd webapp)
+    tcp dport 80 accept
 
-    # WebSocket over TLS
-    tcp dport 2981 accept
+    # SSE/REST (MCProxy API)
+    tcp dport 2980 accept
 
     # MeshCom UDP
     udp dport 1799 accept
@@ -317,9 +316,9 @@ configure_iptables_legacy() {
   iptables -A INPUT -p tcp --dport 22 -m state --state NEW -m recent --update --seconds 60 --hitcount 4 -j DROP
   iptables -A INPUT -p tcp --dport 22 -j ACCEPT
 
-  # HTTPS, WSS, MeshCom UDP, mDNS
-  iptables -A INPUT -p tcp --dport 443 -j ACCEPT
-  iptables -A INPUT -p tcp --dport 2981 -j ACCEPT
+  # HTTP, SSE/REST, MeshCom UDP, mDNS
+  iptables -A INPUT -p tcp --dport 80 -j ACCEPT
+  iptables -A INPUT -p tcp --dport 2980 -j ACCEPT
   iptables -A INPUT -p udp --dport 1799 -j ACCEPT
   iptables -A INPUT -p udp --dport 5353 -j ACCEPT
 

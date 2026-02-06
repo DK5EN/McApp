@@ -52,17 +52,6 @@ get_python_executable() {
   fi
 }
 
-# Get Caddy apt repository line for this Debian version
-get_caddy_repo() {
-  local codename
-  codename=$(get_debian_codename)
-
-  # Fall back to bookworm if unknown
-  [[ "$codename" == "unknown" ]] && codename="bookworm"
-
-  echo "deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian ${codename} main"
-}
-
 #──────────────────────────────────────────────────────────────────
 # INSTALLATION STATE DETECTION
 #──────────────────────────────────────────────────────────────────
