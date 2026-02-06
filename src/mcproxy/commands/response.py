@@ -64,7 +64,7 @@ class ResponseMixin:
                         print("command handler: src_type", src_type)
 
                     try:
-                        if src_type == "ble":
+                        if src_type in ("ble", "ble_remote"):
                             await self.message_router.publish(
                                 "command", "ble_message", message_data
                             )

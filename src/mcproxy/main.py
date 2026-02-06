@@ -473,6 +473,18 @@ class MessageRouter:
         """Get the BLE client from registered protocols"""
         return self.get_protocol('ble_client')
 
+    async def _query_ble_registers(self):
+        """Query BLE device config registers (I, SN, G, SA)."""
+        client = self._get_ble_client()
+        if not client:
+            return
+        for cmd in ('--nodeset', '--pos info', '--aprsset', '--info'):
+            try:
+                await client.send_command(cmd)
+                await asyncio.sleep(0.6)
+            except Exception as e:
+                logger.warning("Register query %s failed: %s", cmd, e)
+
     async def _handle_ble_scan_command(self):
         """Handle BLE scan command"""
         client = self._get_ble_client()
@@ -546,13 +558,7 @@ class MessageRouter:
                 status = client.status
 
         if status.state == ConnectionState.CONNECTED:
-            # Query registers, --info last (slowest to respond)
-            for cmd in ('--nodeset', '--pos info', '--aprsset', '--info'):
-                try:
-                    await client.send_command(cmd)
-                    await asyncio.sleep(0.6)
-                except Exception as e:
-                    logger.warning("Register query %s failed: %s", cmd, e)
+            await self._query_ble_registers()
 
     async def _handle_ble_disconnect_command(self):
         """Handle BLE disconnect command"""
@@ -606,14 +612,8 @@ class MessageRouter:
             await self.publish('ble', 'ble_status', ble_info)
 
         # Request register dump from device so frontend gets config data
-        # Send --info last: it's the slowest to respond and most likely to get dropped
         if is_connected:
-            for cmd in ('--nodeset', '--pos info', '--aprsset', '--info'):
-                try:
-                    await client.send_command(cmd)
-                    await asyncio.sleep(0.6)
-                except Exception as e:
-                    logger.warning("Failed to send register query %s: %s", cmd, e)
+            await self._query_ble_registers()
 
     async def _handle_resolve_ip_command(self, hostname):
         """Handle resolve IP command"""
@@ -731,11 +731,19 @@ class MessageRouter:
         msg = normalized_data.get('msg')
         dst = normalized_data.get('dst')
 
+        self._logger.info(
+            "BLE Handler: msg='%s' src='%s' dst='%s'",
+            msg, normalized_data.get('src'), dst
+        )
+
         if has_console:
             print(f"📱 BLE Handler: Processing '{msg}'"
                   f" from {normalized_data.get('src')} to '{dst}'")
 
-        if self._should_suppress_outbound(normalized_data):
+        suppress = self._should_suppress_outbound(normalized_data)
+        self._logger.info("BLE Handler: suppress=%s", suppress)
+
+        if suppress:
             reason = self.validator.get_suppression_reason(normalized_data)
             self.log_message_routing_decision(
                 normalized_data, "BLE_SUPPRESSION", "SUPPRESS", reason

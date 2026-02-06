@@ -260,9 +260,13 @@ class SSEManager:
                                 }
                             yield self._format_sse_event(ble_info)
 
-                            # Register queries are NOT sent here — the frontend sends
-                            # "connect BLE" on open, which triggers _handle_ble_info_command
-                            # in MessageRouter, avoiding duplicate commands to the ESP32.
+                            # If BLE is connected, query device registers in background.
+                            # Responses arrive as ble_notification events via pub/sub
+                            # and flow to this client through the SSE event queue.
+                            if is_connected:
+                                asyncio.create_task(
+                                    self.message_router._query_ble_registers()
+                                )
 
                         logger.info("SSE client %s: initial data sent", client_id)
                     except Exception as e:
