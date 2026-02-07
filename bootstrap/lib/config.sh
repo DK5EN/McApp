@@ -115,7 +115,7 @@ prompt_station_name() {
   local current="$1"
   local name
 
-  name=$(prompt_with_default "Enter station name (for weather reports)" "$current")
+  name=$(prompt_with_default "Enter your city (for weather reports)" "$current")
 
   # Sanitize: remove special characters, trim whitespace
   name=$(echo "$name" | tr -cd '[:alnum:] _-' | xargs)

@@ -65,7 +65,7 @@ During first install, you'll be prompted for:
 | Node address | `mcapp.local` | MeshCom node hostname or IP |
 | Latitude | `48.2082` | Your station latitude |
 | Longitude | `16.3738` | Your station longitude |
-| Station name | `Munich` | Name for weather reports |
+| City | `Munich` | Your city (for weather reports) |
 
 Configuration is stored in `/etc/mcapp/config.json`.
 
