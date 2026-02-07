@@ -278,7 +278,7 @@ main() {
   if [[ "$QUIET" != "true" ]]; then
     echo ""
     echo "╔══════════════════════════════════════════════════════════╗"
-    echo "║           McApp Bootstrap v${SCRIPT_VERSION}                        ║"
+    echo "║           McApp Bootstrap v${SCRIPT_VERSION}                         ║"
     echo "║   MeshCom Message Proxy for Raspberry Pi                 ║"
     echo "╚══════════════════════════════════════════════════════════╝"
     echo ""
