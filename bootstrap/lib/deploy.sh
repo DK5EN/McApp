@@ -327,19 +327,26 @@ setup_python_env() {
     return 1
   fi
 
-  # Ensure uv is available
-  if ! command -v uv &>/dev/null; then
-    log_error "  uv not found - install it first"
-    return 1
+  # Resolve uv binary path (may not be in root's PATH)
+  local run_user="${SUDO_USER:-$(whoami)}"
+  local run_home
+  run_home=$(getent passwd "$run_user" | cut -d: -f6)
+  local uv_bin="${run_home}/.local/bin/uv"
+
+  if [[ ! -x "$uv_bin" ]]; then
+    # Fallback: check system PATH
+    uv_bin=$(command -v uv 2>/dev/null || true)
+    if [[ -z "$uv_bin" ]]; then
+      log_error "  uv not found - install it first"
+      return 1
+    fi
   fi
 
   # Run uv sync as the real user (not root)
-  local run_user="${SUDO_USER:-$(whoami)}"
-
   if [[ "$run_user" != "root" ]]; then
-    su - "$run_user" -c "cd '${INSTALL_DIR}' && uv sync"
+    sudo -u "$run_user" bash -c "cd '${INSTALL_DIR}' && '${uv_bin}' sync"
   else
-    (cd "$INSTALL_DIR" && uv sync)
+    (cd "$INSTALL_DIR" && "$uv_bin" sync)
   fi
 
   if [[ $? -eq 0 ]]; then
