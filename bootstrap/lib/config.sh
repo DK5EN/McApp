@@ -290,22 +290,41 @@ write_config() {
 
   cat > "$tmp_config" << EOF
 {
+  "CALL_SIGN": "${callsign}",
+  "USER_INFO_TEXT": "${user_info_text}",
+
   "UDP_TARGET": "${node_address}",
   "UDP_PORT_send": 1799,
   "UDP_PORT_list": 1799,
+
   "WS_HOST": "127.0.0.1",
   "WS_PORT": 2980,
-  "CALL_SIGN": "${callsign}",
-  "USER_INFO_TEXT": "${user_info_text}",
+
+  "SSE_ENABLED": true,
+  "SSE_HOST": "0.0.0.0",
+  "SSE_PORT": 2981,
+
   "LAT": ${latitude},
   "LONG": ${longitude},
   "STAT_NAME": "${station_name}",
   "HOSTNAME": "${hostname}",
+
+  "STORAGE_BACKEND": "sqlite",
+  "DB_PATH": "/var/lib/mcapp/messages.db",
+  "MAX_STORAGE_SIZE_MB": 100,
   "PRUNE_HOURS": 168,
-  "MAX_STORAGE_SIZE_MB": 50,
-  "WEATHER_SERVICE": "open-meteo",
+  "STORE_FILE_NAME": "mcdump.json",
+
+  "WEATHER_SERVICE": "dwd",
+
+  "BLE_MODE": "disabled",
+  "BLE_REMOTE_URL": "http://127.0.0.1:8081",
+  "BLE_API_KEY": "",
   "BLE_DEVICE_NAME": "",
-  "BLE_ENABLED": false
+  "BLE_DEVICE_ADDRESS": "",
+  "BLE_READ_UUID": "6e400003-b5a3-f393-e0a9-e50e24dcca9e",
+  "BLE_WRITE_UUID": "6e400002-b5a3-f393-e0a9-e50e24dcca9e",
+  "BLE_HELLO_BYTES": "04102030"
 }
 EOF
 
