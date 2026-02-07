@@ -61,6 +61,7 @@ During first install, you'll be prompted for:
 | Setting | Example | Description |
 |---------|---------|-------------|
 | Callsign | `DX9XX-99` | Your ham radio callsign with SSID |
+| User info | `My Node \| Munich` | Text returned by `!userinfo` command |
 | Node address | `mcapp.local` | MeshCom node hostname or IP |
 | Latitude | `48.2082` | Your station latitude |
 | Longitude | `16.3738` | Your station longitude |

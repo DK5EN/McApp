@@ -297,6 +297,7 @@ write_config() {
   "WS_HOST": "127.0.0.1",
   "WS_PORT": 2980,
   "CALL_SIGN": "${callsign}",
+  "USER_INFO_TEXT": "${callsign} Node",
   "LAT": ${latitude},
   "LONG": ${longitude},
   "STAT_NAME": "${station_name}",

@@ -36,6 +36,7 @@ ssh mcapp.local "sudo tee /etc/mcapp/config.json" <<'EOF'
   "SSE_HOST": "0.0.0.0",
   "SSE_PORT": 2981,
   "CALL_SIGN": "DK5EN-99",
+  "USER_INFO_TEXT": "DK5EN-99 Node | Freising, Bavaria",
   "LAT": 48.4071,
   "LONG": 11.7389,
   "STAT_NAME": "DK5EN Freising McApp V 1.0",
