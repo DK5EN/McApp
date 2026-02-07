@@ -581,6 +581,116 @@ class SQLiteStorage:
         logger.info("Generated %d statistics entries", len(final_result))
         return sorted(final_result, key=lambda x: (x["callsign"], x["timestamp"]))
 
+    async def get_stats(self, hours: int) -> dict:
+        """Get message statistics for the given time window."""
+        cutoff_ms = int((time.time() - hours * 3600) * 1000)
+
+        rows = await self._execute(
+            "SELECT type, src FROM messages WHERE timestamp >= ?",
+            (cutoff_ms,),
+        )
+
+        msg_count = 0
+        pos_count = 0
+        users: set[str] = set()
+
+        for row in rows:
+            msg_type = row["type"]
+            src = row["src"]
+            if msg_type == "msg":
+                msg_count += 1
+                if src:
+                    users.add(src.split(",")[0])
+            elif msg_type == "pos":
+                pos_count += 1
+
+        return {
+            "msg_count": msg_count,
+            "pos_count": pos_count,
+            "users": users,
+        }
+
+    async def get_mheard_stations(self, limit: int, msg_type: str) -> dict:
+        """Get recently heard stations aggregated by callsign."""
+        rows = await self._execute(
+            "SELECT src, type, timestamp FROM messages"
+            " WHERE type IN ('msg', 'pos') AND src != ''"
+            " ORDER BY timestamp DESC LIMIT 4000",
+        )
+
+        stations: dict[str, dict] = defaultdict(
+            lambda: {"last_msg": 0, "msg_count": 0, "last_pos": 0, "pos_count": 0}
+        )
+
+        for row in rows:
+            data_type = row["type"]
+            src = row["src"]
+            timestamp = row["timestamp"]
+
+            if not src:
+                continue
+
+            call = src.split(",")[0]
+
+            if data_type == "msg":
+                stations[call]["msg_count"] += 1
+                if timestamp > stations[call]["last_msg"]:
+                    stations[call]["last_msg"] = timestamp
+            elif data_type == "pos":
+                stations[call]["pos_count"] += 1
+                if timestamp > stations[call]["last_pos"]:
+                    stations[call]["last_pos"] = timestamp
+
+        return dict(stations)
+
+    async def search_messages(self, callsign: str, days: int, search_type: str) -> list[dict]:
+        """Search messages by callsign and timeframe."""
+        cutoff_ms = int((time.time() - days * 86400) * 1000)
+
+        rows = await self._execute(
+            "SELECT raw_json FROM messages WHERE timestamp >= ? ORDER BY timestamp DESC",
+            (cutoff_ms,),
+        )
+
+        results = []
+        for row in rows:
+            try:
+                raw_data = json.loads(row["raw_json"])
+                results.append(raw_data)
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+        return results
+
+    async def get_positions(self, callsign: str, days: int) -> list[dict]:
+        """Get position data for a callsign."""
+        cutoff_ms = int((time.time() - days * 86400) * 1000)
+
+        rows = await self._execute(
+            "SELECT raw_json FROM messages"
+            " WHERE type = 'pos' AND timestamp >= ?"
+            " AND UPPER(src) LIKE ?"
+            " ORDER BY timestamp DESC",
+            (cutoff_ms, f"%{callsign}%"),
+        )
+
+        positions = []
+        for row in rows:
+            try:
+                raw_data = json.loads(row["raw_json"])
+                lat = raw_data.get("lat")
+                lon = raw_data.get("long")
+                timestamp = raw_data.get("timestamp", 0)
+                if lat and lon:
+                    time_str = time.strftime("%H:%M", time.localtime(timestamp / 1000))
+                    positions.append(
+                        {"lat": lat, "lon": lon, "time": time_str, "timestamp": timestamp}
+                    )
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+        return positions
+
     async def load_dump(self, filename: str) -> int:
         """Load messages from JSON dump file."""
         path = Path(filename)
