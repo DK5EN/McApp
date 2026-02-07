@@ -37,6 +37,9 @@ CORS_ORIGINS = os.getenv("BLE_SERVICE_CORS_ORIGINS", "*").split(",")
 ble_adapter: BLEAdapter | None = None
 notification_queue: deque[dict] = deque(maxlen=1000)
 notification_event = asyncio.Event()
+_reconnect_task: asyncio.Task | None = None
+_user_disconnected: bool = False
+_last_connected_mac: str | None = None
 
 
 def notification_callback(data: bytes):
@@ -72,6 +75,64 @@ def notification_callback(data: bytes):
     logger.debug("Notification queued: %s", notification.get("format", "unknown"))
 
 
+def _on_adapter_disconnect():
+    """Called by BLEAdapter when an unexpected disconnect is detected during write"""
+    global _reconnect_task
+    if _user_disconnected:
+        return
+    logger.warning("Unexpected disconnect detected, scheduling auto-reconnect")
+    # Schedule reconnect (can't await from sync callback)
+    if _reconnect_task is None or _reconnect_task.done():
+        _reconnect_task = asyncio.create_task(_auto_reconnect())
+
+
+async def _auto_reconnect():
+    """Attempt to reconnect with exponential backoff"""
+    global _last_connected_mac
+    mac = _last_connected_mac
+    if not mac:
+        logger.warning("No previous MAC address for auto-reconnect")
+        return
+
+    delays = [5, 10, 20, 60]  # Exponential backoff
+    for attempt, delay in enumerate(delays, 1):
+        if _user_disconnected:
+            logger.info("Auto-reconnect cancelled (user disconnected)")
+            return
+
+        logger.info("Auto-reconnect attempt %d/%d in %ds to %s",
+                    attempt, len(delays), delay, mac)
+        await asyncio.sleep(delay)
+
+        if _user_disconnected:
+            return
+        if ble_adapter.is_connected:
+            logger.info("Already reconnected, stopping auto-reconnect")
+            return
+
+        try:
+            # Clean up stale bus before reconnect
+            if ble_adapter.bus:
+                try:
+                    ble_adapter.bus.disconnect()
+                except Exception:
+                    pass
+                ble_adapter.bus = None
+
+            success = await ble_adapter.connect(mac)
+            if success:
+                await ble_adapter.start_notify()
+                await ble_adapter.send_hello()
+                logger.info("Auto-reconnect successful to %s", mac)
+                return
+            else:
+                logger.warning("Auto-reconnect attempt %d failed", attempt)
+        except Exception as e:
+            logger.warning("Auto-reconnect attempt %d error: %s", attempt, e)
+
+    logger.error("Auto-reconnect exhausted all %d attempts for %s", len(delays), mac)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle"""
@@ -79,11 +140,14 @@ async def lifespan(app: FastAPI):
 
     logger.info("Starting BLE Service")
     ble_adapter = BLEAdapter(notification_callback=notification_callback)
+    ble_adapter._disconnect_callback = _on_adapter_disconnect
 
     yield
 
     # Cleanup
     logger.info("Shutting down BLE Service")
+    if _reconnect_task and not _reconnect_task.done():
+        _reconnect_task.cancel()
     if ble_adapter and ble_adapter.is_connected:
         await ble_adapter.disconnect()
 
@@ -244,8 +308,11 @@ async def connect(request: ConnectRequest, _: bool = Depends(verify_api_key)):
             )
 
     try:
+        global _user_disconnected, _last_connected_mac
+        _user_disconnected = False
         success = await ble_adapter.connect(mac)
         if success:
+            _last_connected_mac = mac
             # Start notifications and send hello
             await ble_adapter.start_notify()
             await ble_adapter.send_hello()
@@ -260,6 +327,14 @@ async def connect(request: ConnectRequest, _: bool = Depends(verify_api_key)):
 @app.post("/api/ble/disconnect", response_model=ResultResponse)
 async def disconnect(_: bool = Depends(verify_api_key)):
     """Disconnect from current device (also resets ERROR state)"""
+    global _user_disconnected, _reconnect_task
+    _user_disconnected = True
+
+    # Cancel any pending auto-reconnect
+    if _reconnect_task and not _reconnect_task.done():
+        _reconnect_task.cancel()
+        _reconnect_task = None
+
     if ble_adapter.status.state == ConnectionState.DISCONNECTED:
         return ResultResponse(success=True, message="Already disconnected")
 
@@ -280,45 +355,36 @@ async def send_data(request: SendRequest, _: bool = Depends(verify_api_key)):
     try:
         # Determine what to send
         if request.command:
-            # A0 command
             success = await ble_adapter.send_command(request.command)
-            return ResultResponse(
-                success=success,
-                message=f"Command sent: {request.command}" if success else "Send failed"
-            )
-
         elif request.message and request.group:
-            # Message to group
             success = await ble_adapter.send_message(request.message, request.group)
-            return ResultResponse(
-                success=success,
-                message=f"Message sent to group {request.group}" if success else "Send failed"
-            )
-
         elif request.data_base64:
-            # Raw base64 data
             data = base64.b64decode(request.data_base64)
             success = await ble_adapter.write(data)
-            return ResultResponse(
-                success=success,
-                message=f"Sent {len(data)} bytes" if success else "Send failed"
-            )
-
         elif request.data_hex:
-            # Raw hex data
             data = bytes.fromhex(request.data_hex)
             success = await ble_adapter.write(data)
-            return ResultResponse(
-                success=success,
-                message=f"Sent {len(data)} bytes" if success else "Send failed"
-            )
-
         else:
             raise HTTPException(
                 status_code=400,
                 detail="Provide command, message+group, data_base64, or data_hex"
             )
 
+        # If write failed, check if device disconnected during the write
+        if not success and not ble_adapter.is_connected:
+            raise HTTPException(status_code=409, detail="Not connected")
+
+        if request.command:
+            msg = f"Command sent: {request.command}" if success else "Send failed"
+        elif request.message and request.group:
+            msg = f"Message sent to group {request.group}" if success else "Send failed"
+        else:
+            msg = f"Sent {len(data)} bytes" if success else "Send failed"
+
+        return ResultResponse(success=success, message=msg)
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Send error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

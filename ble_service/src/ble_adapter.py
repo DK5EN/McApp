@@ -137,10 +137,12 @@ class BLEAdapter:
         # State
         self._status = BLEStatus()
         self._operation_lock = asyncio.Lock()
+        self._write_lock = asyncio.Lock()
         self._keepalive_task: asyncio.Task | None = None
         self._connected_mac: str | None = None
         self._agent_registered: bool = False
         self._cancel_connect: bool = False
+        self._disconnect_callback: Callable[[], None] | None = None
 
     @property
     def status(self) -> BLEStatus:
@@ -558,7 +560,8 @@ class BLEAdapter:
 
     async def write(self, data: bytes) -> bool:
         """
-        Write data to device.
+        Write data to device. Serialized via write lock to prevent
+        concurrent GATT writes that cause "In Progress" D-Bus errors.
 
         Args:
             data: Raw bytes to write
@@ -569,19 +572,51 @@ class BLEAdapter:
         if not self.is_connected or not self.write_char_iface:
             raise RuntimeError("Not connected")
 
-        try:
-            await asyncio.wait_for(
-                self.write_char_iface.call_write_value(data, {}),
-                timeout=5.0
-            )
-            self._status.last_activity = time.time()
-            return True
-        except asyncio.TimeoutError:
-            logger.error("Write timeout")
-            return False
-        except Exception as e:
-            logger.error("Write error: %s", e)
-            return False
+        async with self._write_lock:
+            try:
+                await asyncio.wait_for(
+                    self.write_char_iface.call_write_value(data, {}),
+                    timeout=5.0
+                )
+                self._status.last_activity = time.time()
+                return True
+            except asyncio.TimeoutError:
+                logger.error("Write timeout")
+                return False
+            except Exception as e:
+                error_str = str(e)
+                logger.error("Write error: %s", error_str)
+                if "Not connected" in error_str:
+                    self._on_disconnect_detected()
+                return False
+
+    def _on_disconnect_detected(self):
+        """Handle unexpected disconnect detected during write failure"""
+        logger.warning("Disconnect detected during write, updating state")
+        self._status.state = ConnectionState.DISCONNECTED
+        self._status.device = None
+        self._status.error = "Connection lost"
+        self._connected_mac = None
+
+        # Cancel keepalive
+        if self._keepalive_task and not self._keepalive_task.done():
+            self._keepalive_task.cancel()
+            self._keepalive_task = None
+
+        # Reset GATT interfaces (bus may still be valid for reconnect)
+        self.device_obj = None
+        self.dev_iface = None
+        self.props_iface = None
+        self.read_char_obj = None
+        self.read_char_iface = None
+        self.read_props_iface = None
+        self.write_char_iface = None
+
+        if self._disconnect_callback:
+            try:
+                self._disconnect_callback()
+            except Exception as e:
+                logger.error("Disconnect callback error: %s", e)
 
     async def send_message(self, msg: str, group: str) -> bool:
         """
