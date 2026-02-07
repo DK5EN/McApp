@@ -9,6 +9,7 @@ import sys
 import time
 import traceback
 from collections import defaultdict, deque
+from pathlib import Path
 
 # BLE client abstraction - supports local, remote, and disabled modes
 from .ble_client import BLEMode, ConnectionState, create_ble_client
@@ -1251,7 +1252,13 @@ async def main():
             cfg.storage.db_path,
             cfg.storage.max_size_mb
         )
-        await storage_handler.load_dump(cfg.storage.dump_file)
+        # One-time migration: import mcdump.json into SQLite, then rename to prevent re-import
+        dump_path = Path(cfg.storage.dump_file)
+        if dump_path.exists():
+            count = await storage_handler.load_dump(cfg.storage.dump_file)
+            migrated_path = dump_path.with_suffix(".json.migrated")
+            dump_path.rename(migrated_path)
+            logger.info("Migrated dump file → %s (%d messages imported)", migrated_path, count)
         await storage_handler.prune_messages(cfg.storage.prune_hours, block_list)
     else:
         # Default to in-memory storage
@@ -1530,14 +1537,16 @@ async def main():
 
     logger.info("All services stopped")
 
-    # Save data
+    # Save data — only dump to JSON for in-memory backend; SQLite persists automatically
     try:
-        if hasattr(storage_handler, 'save_dump'):
+        if cfg.storage.backend != "sqlite" and hasattr(storage_handler, 'save_dump'):
             if asyncio.iscoroutinefunction(storage_handler.save_dump):
                 await storage_handler.save_dump(cfg.storage.dump_file)
             else:
                 storage_handler.save_dump(cfg.storage.dump_file)
-        logger.info("Data saved successfully")
+            logger.info("Data saved to %s", cfg.storage.dump_file)
+        else:
+            logger.info("SQLite backend — no dump file needed")
     except Exception as e:
         logger.error("Error saving data: %s", e)
 
@@ -1569,12 +1578,14 @@ def run():
                 cfg.location.station_name or "unnamed")
     logger.info("Messages older than %s get deleted", hours_to_dd_hhmm(cfg.storage.prune_hours))
     logger.info("Messages store limited to %dMB", cfg.storage.max_size_mb)
-    logger.info("Messages will be stored on exit: %s", cfg.storage.dump_file)
+
+    if cfg.storage.backend == "sqlite":
+        logger.info("SQLite storage backend: %s", cfg.storage.db_path)
+    else:
+        logger.info("Messages will be stored on exit: %s", cfg.storage.dump_file)
 
     if cfg.sse.enabled:
         logger.info("SSE transport enabled on port %d", cfg.sse.port)
-    if cfg.storage.backend == "sqlite":
-        logger.info("SQLite storage backend: %s", cfg.storage.db_path)
 
     try:
         asyncio.run(main())
