@@ -211,3 +211,9 @@ ssh mcapp.local "sudo bash -c '
 - **Symptom:** `scp: realpath bootstrap/: No such file` — upload directory fails
 - **Cause:** OpenSSH 9.0+ defaults to SFTP protocol, which requires the remote target to exist when trailing slashes are used
 - **Fix:** Changed `scp -r bootstrap/ mcapp.local:~/bootstrap/` to `scp -r bootstrap mcapp.local:~` (no trailing slashes)
+
+### 9. `/tmp` tmpfs too small for `uv` download (`system.sh:146,181`)
+- **Symptom:** `tar: uv: Wrote only 2048 of 10240 bytes` — uv 0.10.0 binary (~47MB) cannot extract
+- **Cause:** Bootstrap configures `/tmp` as 50MB tmpfs for SD card protection, but the `uv` installer downloads and extracts in `/tmp`, exceeding the space limit
+- **OS-specific:** Hits on fresh installs where tmpfs is created during the same bootstrap run that installs uv (found on Bookworm, applies to all)
+- **Fix:** Increased `/tmp` tmpfs from `size=50M` to `size=150M` in both the fstab entry and the mount command

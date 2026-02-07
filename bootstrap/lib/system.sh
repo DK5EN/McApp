@@ -143,7 +143,7 @@ configure_tmpfs() {
 
 ${marker} - begin
 tmpfs /var/log tmpfs defaults,noatime,nosuid,nodev,noexec,size=30M 0 0
-tmpfs /tmp tmpfs defaults,noatime,nosuid,mode=1777,size=50M 0 0
+tmpfs /tmp tmpfs defaults,noatime,nosuid,mode=1777,size=150M 0 0
 ${marker} - end
 EOF
 
@@ -178,7 +178,7 @@ EOF
 
   # Mount /tmp if not already mounted
   if ! mountpoint -q /tmp 2>/dev/null; then
-    mount -t tmpfs -o defaults,noatime,nosuid,mode=1777,size=50M tmpfs /tmp || true
+    mount -t tmpfs -o defaults,noatime,nosuid,mode=1777,size=150M tmpfs /tmp || true
   fi
 }
 
