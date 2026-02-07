@@ -33,7 +33,7 @@ graph LR
         MR["McApp Remote<br/>(e.g. DB0ED-99, Pi)"]
     end
 
-    FE -- "WSS:2981<br/>(via Caddy)" --> MC
+    FE -- "SSE:2981<br/>(via lighttpd)" --> MC
     MC -- "UDP:1799" --> HL
     MC -. "BLE GATT<br/>(alternative)" .-> HL
     HL -- "433 MHz<br/>LoRa Mesh" --> HR
@@ -44,7 +44,7 @@ graph LR
 
 | Node | Role | Connection |
 |------|------|------------|
-| Frontend (Vue.js SPA) | Web client for chat and monitoring | WebSocket via Caddy reverse proxy |
+| Frontend (Vue.js SPA) | Web client for chat and monitoring | SSE via lighttpd reverse proxy |
 | McApp Local (DK5EN-1) | Message router, command processor | Pi Zero, hub of all connections |
 | HeltecV3 Local | ESP32 LoRa transceiver | UDP:1799 or BLE GATT to McApp |
 | HeltecV3 Remote | ESP32 LoRa transceiver at remote site | 433 MHz mesh link to local HeltecV3 |

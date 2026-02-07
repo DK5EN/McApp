@@ -134,6 +134,6 @@ curl -N -H "X-API-Key: secret" \
 ## Security Notes
 
 - Always use a strong, unique API key in production
-- Consider using HTTPS (via reverse proxy like Caddy)
+- Consider using HTTPS via a reverse proxy
 - Limit CORS origins in production
 - The service requires D-Bus access to BlueZ

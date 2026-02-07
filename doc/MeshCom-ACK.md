@@ -1,40 +1,40 @@
-# MeshCom ACK System Dokumentation
+# MeshCom ACK System Documentation
 
-## Überblick
+## Overview
 
-Das MeshCom ACK (Acknowledgment) System verwendet spezielle Nachrichten zur Bestätigung des Empfangs. ACK-Nachrichten haben eine feste Struktur und verwenden verschiedene Statuswerte.
+The MeshCom ACK (Acknowledgment) system uses special messages to confirm receipt. ACK messages have a fixed structure and use various status values.
 
-## ACK Nachrichtenformat
+## ACK Message Format
 
-Eine ACK-Nachricht hat folgende Struktur:
+An ACK message has the following structure:
 
 ```
 [0x41] [MSG_ID - 4 Bytes] [FLAGS] [ACK_MSG_ID - 4 Bytes] [ACK_TYPE] [0x00]
 ```
 
-### Byte-Aufschlüsselung:
+### Byte Breakdown:
 
 1. **Byte 0: Message Type (0x41)**
-   - Kennzeichnet die Nachricht als ACK-Nachricht
+   - Identifies the message as an ACK message
 
 2. **Bytes 1-4: MSG_ID**
-   - 32-Bit Message ID der ACK-Nachricht selbst
+   - 32-bit message ID of the ACK message itself
    - Byte 1: LSB (Least Significant Byte)
-   - Byte 2: 
-   - Byte 3: 
+   - Byte 2:
+   - Byte 3:
    - Byte 4: MSB (Most Significant Byte)
    - Format: Little-Endian
 
 3. **Byte 5: FLAGS**
    - Bit 7 (0x80): Server Flag
-     - 1 = Nachricht kommt vom/geht zum Server
-     - 0 = Normale Peer-to-Peer Nachricht
+     - 1 = Message comes from/goes to server
+     - 0 = Normal peer-to-peer message
    - Bits 0-6 (0x7F): Max Hop Count
-     - Anzahl der verbleibenden Hops für Mesh-Weiterleitung
-     - Wird bei jeder Weiterleitung dekrementiert
+     - Number of remaining hops for mesh forwarding
+     - Decremented with each forwarding step
 
 4. **Bytes 6-9: ACK_MSG_ID**
-   - 32-Bit Message ID der Original-Nachricht, die bestätigt wird
+   - 32-bit message ID of the original message being acknowledged
    - Byte 6: LSB
    - Byte 7:
    - Byte 8:
@@ -42,31 +42,31 @@ Eine ACK-Nachricht hat folgende Struktur:
    - Format: Little-Endian
 
 5. **Byte 10: ACK_TYPE**
-   - 0x00: Node ACK (Bestätigung von einem normalen Knoten)
-   - 0x01: Gateway ACK (Bestätigung von einem Gateway)
+   - 0x00: Node ACK (acknowledgment from a regular node)
+   - 0x01: Gateway ACK (acknowledgment from a gateway)
 
 6. **Byte 11: Terminator (0x00)**
-   - Markiert das Ende der ACK-Nachricht
+   - Marks the end of the ACK message
 
-## ACK Status-Codes
+## ACK Status Codes
 
-Im Code werden folgende Status-Werte für die Nachrichtenverfolgung verwendet:
+The following status values are used in the code for message tracking:
 
 ```cpp
 own_msg_id[index][4] = status
 ```
 
-- **0x00**: Nachricht noch nicht gehört
-- **0x01**: Nachricht wurde gehört (HEARD)
-- **0x02**: ACK wurde empfangen
+- **0x00**: Message not yet heard
+- **0x01**: Message was heard (HEARD)
+- **0x02**: ACK was received
 
-## Message ID Struktur
+## Message ID Structure
 
-Die Message ID ist ein 32-Bit Wert, der wie folgt aufgebaut sein kann:
+The message ID is a 32-bit value that can be structured as follows:
 
 ### Standard Message ID
-- Basiert auf `millis()` (Millisekunden seit Start)
-- Eindeutig pro Knoten während einer Session
+- Based on `millis()` (milliseconds since start)
+- Unique per node during a session
 
 ### Gateway Message ID Format
 ```cpp
@@ -75,69 +75,69 @@ msg_counter = ((_GW_ID & 0x3FFFFF) << 10) | (iAckId & 0x3FF);
 - Bits 31-10: Gateway ID (22 Bits)
 - Bits 9-0: ACK ID (10 Bits)
 
-## ACK Verarbeitungslogik
+## ACK Processing Logic
 
-### 1. Empfang einer normalen Nachricht
-- System prüft, ob es eine eigene Message ID ist
-- Falls ja und Status = 0x00, wird Status auf 0x01 gesetzt (HEARD)
-- Eine HEARD-Benachrichtigung wird an das Phone/BLE gesendet
+### 1. Receiving a Regular Message
+- System checks whether it matches one of its own message IDs
+- If yes and status = 0x00, status is set to 0x01 (HEARD)
+- A HEARD notification is sent to the phone/BLE
 
-### 2. Empfang einer ACK-Nachricht
-- System prüft die ACK_MSG_ID gegen eigene gesendete Nachrichten
-- Falls gefunden und Status < 0x02, wird:
-  - Status auf 0x02 gesetzt (ACK empfangen)
-  - ACK an Phone/BLE weitergeleitet
+### 2. Receiving an ACK Message
+- System checks the ACK_MSG_ID against its own sent messages
+- If found and status < 0x02:
+  - Status is set to 0x02 (ACK received)
+  - ACK is forwarded to phone/BLE
 
-### 3. Gateway ACK-Generierung
-Gateways senden automatisch ACKs für:
-- Nachrichten an "*" (Broadcast)
-- Nachrichten an "WLNK-1"
-- Nachrichten an "APRS2SOTA"
-- Gruppen-Nachrichten
+### 3. Gateway ACK Generation
+Gateways automatically send ACKs for:
+- Messages to "*" (broadcast)
+- Messages to "WLNK-1"
+- Messages to "APRS2SOTA"
+- Group messages
 
-### 4. ACK-Weiterleitung im Mesh
-- ACKs werden nur weitergeleitet, wenn:
-  - Max Hop Count > 0
-  - Mesh-Funktion aktiviert ist
-  - Es sich um eine neue Message ID handelt
-  - Die Nachricht nicht bereits vom Server kommt
+### 4. ACK Forwarding in the Mesh
+- ACKs are only forwarded when:
+  - Max hop count > 0
+  - Mesh functionality is enabled
+  - It is a new message ID
+  - The message does not already come from the server
 
-## Spezielle ACK-Fälle
+## Special ACK Cases
 
 ### Direct Message ACK
-Bei Direktnachrichten mit "{" am Ende:
+For direct messages with "{" at the end:
 ```
-:Nachrichtentext{123
+:messagetext{123
 ```
-Die Zahl nach "{" ist die ACK-ID, die in der Antwort referenziert wird.
+The number after "{" is the ACK ID referenced in the reply.
 
-### ACK/REJ Nachrichten
-Format im Payload:
-- `:ack123` - Positive Bestätigung für Nachricht 123
-- `:rej123` - Ablehnung für Nachricht 123
+### ACK/REJ Messages
+Payload format:
+- `:ack123` - Positive acknowledgment for message 123
+- `:rej123` - Rejection for message 123
 
-## Beispiel einer ACK-Sequenz
+## Example ACK Sequence
 
-1. **Original-Nachricht gesendet:**
+1. **Original message sent:**
    ```
    MSG_ID: 0x12345678
    ```
 
-2. **HEARD-Status (wenn Nachricht im Netz gehört):**
+2. **HEARD status (when message is heard on the network):**
    ```
    [0x41] [0x78,0x56,0x34,0x12] [0x00] [0x00,0x00]
    Status → 0x01
    ```
 
-3. **ACK empfangen:**
+3. **ACK received:**
    ```
-   [0x41] [neue_msg_id] [0x83] [0x78,0x56,0x34,0x12] [0x01] [0x00]
+   [0x41] [new_msg_id] [0x83] [0x78,0x56,0x34,0x12] [0x01] [0x00]
    Status → 0x02
    ```
 
-## Implementierungshinweise
+## Implementation Notes
 
-- ACKs werden nicht für Telemetrie-Nachrichten (Ziel: "100001") generiert
-- Broadcast-Nachrichten mit speziellen Präfixen ({MCP}, {SET}, {CET}) erzeugen keine Gateway-ACKs
-- Die Retransmission-Logik nutzt den ACK-Status zur Entscheidung über Wiederholungen
-- ACK-Nachrichten selbst werden mit Status 0xFF markiert (keine Wiederholung)
+- ACKs are not generated for telemetry messages (destination: "100001")
+- Broadcast messages with special prefixes ({MCP}, {SET}, {CET}) do not generate gateway ACKs
+- The retransmission logic uses the ACK status to decide on retries
+- ACK messages themselves are marked with status 0xFF (no retransmission)
