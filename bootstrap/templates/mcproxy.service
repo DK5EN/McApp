@@ -21,7 +21,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=true
-ReadWritePaths=/var/log/mcproxy /etc/mcadvchat {{HOME}}/mcproxy
+ReadWritePaths=/var/log/mcproxy /etc/mcadvchat /var/lib/mcproxy {{HOME}}/mcproxy {{HOME}}/.cache/uv
 
 [Install]
 WantedBy=multi-user.target

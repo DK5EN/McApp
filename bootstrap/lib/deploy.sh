@@ -112,8 +112,8 @@ download_and_install_release() {
 
   log_info "  Downloading MCProxy ${version}..."
 
-  local tarball_name="mcproxy-${version}.tar.gz"
-  local checksum_name="mcproxy-${version}.tar.gz.sha256"
+  local tarball_name="mcadvchat-${version}.tar.gz"
+  local checksum_name="mcadvchat-${version}.tar.gz.sha256"
   local release_url="https://github.com/${GITHUB_REPO}/releases/download/${version}"
   local tmp_dir
   tmp_dir=$(mktemp -d)
@@ -154,6 +154,12 @@ download_and_install_release() {
   # Set ownership to the real user (not root)
   local run_user="${SUDO_USER:-$(whoami)}"
   chown -R "$run_user:$run_user" "$INSTALL_DIR"
+
+  # Create runtime directories required by systemd ReadWritePaths
+  mkdir -p /var/lib/mcproxy
+  chown "$run_user:$run_user" /var/lib/mcproxy
+  mkdir -p /var/log/mcproxy
+  chown "$run_user:$run_user" /var/log/mcproxy
 
   # Cleanup
   rm -rf "$tmp_dir"

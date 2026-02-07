@@ -2,21 +2,25 @@
 
 McApp is a single page, client rendered, web application. It should run on every modern browser out there, but you never know. Settings get stored in your browser. If you delete your browser cache, everything is reset.
 
-Rendering on the client, the Raspberry Pi is only a lightweight proxy between a MeshCom device, that is connected via BLE and the Webbrowser. It uses SSE and RestAPI for communication.
+Rendering on the client, the Raspberry Pi is only a lightweight proxy between a MeshCom device that is connected via BLE and the web browser. It uses SSE and RestAPI for communication.
 
-- Either in Memory Database or LightSQL - we have an SD Card does not handle well constant writes
-- no PHP as this means, we need page reloads which is slow and not so elegant in 2025, just static web page is retrieved once
+- Either in-memory database or LightSQL — the SD card does not handle constant writes well
+- No PHP, as this requires page reloads, which are slow and not elegant — just a static web page is retrieved once
 - On initial page load, a dump from the McProxy gets sent to your browser. So every time you refresh your browser, you get a fresh reload.
 - Infinite scrolling is enabled, so go back to 1972 if you're so inclined
-- Try to install the app on your mobile phone by storing it as icon on your home screen
-- Does install with an icon on your Mobile Phone
+- Try to install the app on your mobile phone by storing it as an icon on your home screen
+- Installs with an icon on your mobile phone
 
 ### Installation
 
 Run this single command on a Raspberry Pi for fresh install, update, or repair:
 
 ```bash
+# Install latest stable release
 curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcproxy.sh | sudo bash
+
+# Install latest development pre-release
+curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcproxy.sh | sudo bash -s -- --dev
 ```
 
 The script auto-detects its context and does the right thing:
@@ -24,6 +28,7 @@ The script auto-detects its context and does the right thing:
 - **Update**: Checks versions, updates if newer available
 - **Incomplete**: Resumes configuration prompts
 - **Migration**: Upgrades from old install scripts
+- **Dev mode** (`--dev`): Installs the latest pre-release instead of the latest stable release
 
 #### Requirements
 
@@ -32,7 +37,7 @@ The script auto-detects its context and does the right thing:
 - 512MB RAM minimum
 - SD card (8GB+ recommended)
 - Network connectivity
-- MeshCom Node in BlueTooth range
+- MeshCom Node in Bluetooth range
 
 #### Configuration
 
@@ -55,6 +60,7 @@ sudo ./mcproxy.sh --check       # Dry-run, show what would change
 sudo ./mcproxy.sh --force       # Force reinstall everything
 sudo ./mcproxy.sh --fix         # Repair broken installation
 sudo ./mcproxy.sh --reconfigure # Re-prompt for configuration
+sudo ./mcproxy.sh --dev         # Install latest development pre-release
 sudo ./mcproxy.sh --quiet       # Minimal output (for cron)
 ```
 
@@ -152,10 +158,10 @@ The MeshCom McApp project consists of three components:
      - Must have a searchable map of nodes
      - Map must support satellite view and dark mode
      - Clicking on a node shows more information
-     - Not planned: fetching dynamic data for temperature, humidity, and air pressure, as well as other sensor data as this data does not propagete over the Internet backbone. Go to aprs.fi to see sensor data
+     - Not planned: fetching dynamic data for temperature, humidity, and air pressure, as well as other sensor data as this data does not propagate over the Internet backbone. Go to aprs.fi to see sensor data
 
   - **FT - File Transfer** 
-     - Was implemented, but then removed as the bandwidth is to small
+     - Was implemented, but then removed as the bandwidth is too small
 
   - **Setup Page**
      - Must be able to filter groups and PN users
@@ -166,7 +172,7 @@ The MeshCom McApp project consists of three components:
 - **Server Backend**
     - Runs on a Raspberry Pi Zero 2W, which is particularly power-efficient and more than sufficient for our purposes
     - Receives all messages from the MeshCom node via UDP (`--extudpip 192...` and `--extudp on` must be set)
-    - Preferrably connects via Bluetooth protocol for more stable transmission with more data and more capabilities like RSSI and SNR info
+    - Preferably connects via Bluetooth protocol for more stable transmission with more data and more capabilities like RSSI and SNR info
     - Implements a keep-alive over Bluetooth and automatically reconnects if the connection is lost
     - Automatically sets the timezone on the MeshCom node, accounting for daylight saving time
     - Must perform UTF-8 and APRS protocol checks, as there are regularly illegal characters that cause crashes
@@ -201,7 +207,7 @@ The MeshCom McApp project consists of three components:
 
 - MeshCom uses UTF-8, with the peculiarity that during UDP transmission the JSON is double-stringified
 
-- MeshCom can transmit unsafe characters, especially when an E22 node is operated with unclean power supply
+- MeshCom can transmit unsafe characters, especially when an E22 node is operated with an unclean power supply
      - The raw byte stream can be toxic and should urgently go through multiple sanitizing steps
 
 - Compression on just a few bytes unfortunately only adds overhead without any real savings

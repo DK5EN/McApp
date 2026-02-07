@@ -21,7 +21,7 @@ get_debian_codename() {
 get_python_version() {
   case "$(get_debian_codename)" in
     trixie|sid)
-      echo "3.14"
+      echo "3.13"
       ;;
     bookworm)
       echo "3.11"
