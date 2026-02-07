@@ -68,14 +68,14 @@ check_webapp_endpoint() {
 }
 
 check_udp_port() {
-  # Retry a few times — service may need seconds to bind the port after restart
-  local attempts=5
+  # Retry generously — on first boot the Pi is slow to start the Python process
+  local attempts=8
   for ((i=1; i<=attempts; i++)); do
     if ss -uln | grep -q ':1799\b'; then
       printf "  %-20s ${GREEN}[OK]${NC} port listening\n" "udp (meshcom):"
       return 0
     fi
-    sleep 2
+    sleep 3
   done
 
   printf "  %-20s ${RED}[FAIL]${NC} port not listening\n" "udp (meshcom):"
