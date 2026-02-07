@@ -108,9 +108,10 @@ class SQLiteStorage:
                         (SCHEMA_VERSION,),
                     )
 
-                # Purge any BLE register messages that leaked into storage
+                # Purge BLE register messages that leaked into storage
+                # (only 'BLE' src_type + transformer-tagged rows, NOT 'ble_remote' which is legit)
                 c1 = conn.execute(
-                    "DELETE FROM messages WHERE src_type IN ('BLE', 'ble', 'ble_remote')"
+                    "DELETE FROM messages WHERE src_type = 'BLE'"
                 )
                 c2 = conn.execute(
                     "DELETE FROM messages"
@@ -249,9 +250,9 @@ class SQLiteStorage:
             fetch=False,
         )
 
-        # Delete ALL BLE/register messages from storage (regardless of type column)
+        # Delete BLE register messages (src_type 'BLE' = register data, not 'ble_remote')
         await self._execute(
-            "DELETE FROM messages WHERE src_type IN ('BLE', 'ble', 'ble_remote')",
+            "DELETE FROM messages WHERE src_type = 'BLE'",
             fetch=False,
         )
         await self._execute(
@@ -327,7 +328,6 @@ class SQLiteStorage:
         msg_rows = await self._execute(
             "SELECT raw_json FROM messages"
             " WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
-            " AND COALESCE(src_type, '') NOT IN ('BLE', 'ble', 'ble_remote')"
             " ORDER BY timestamp DESC LIMIT 1000",
         )
 
@@ -405,7 +405,6 @@ class SQLiteStorage:
         """Get full message dump."""
         query = (
             "SELECT raw_json FROM messages WHERE type = 'msg'"
-            " AND COALESCE(src_type, '') NOT IN ('BLE', 'ble', 'ble_remote')"
             " ORDER BY timestamp"
         )
         rows = await self._execute(query)
