@@ -1,5 +1,5 @@
 #!/bin/bash
-# release.sh - Unified release builder for McAdvChat
+# release.sh - Unified release builder for McApp
 #
 # Fully automatic — just run ./release.sh (no arguments needed).
 # Detects the current branch and handles everything:
@@ -380,8 +380,8 @@ upload_production() {
   # gh release create also pushes the tag to the remote
   gh release create "$version" \
     --repo "$GITHUB_REPO" \
-    --title "McAdvChat ${version}" \
-    --notes "McAdvChat release ${version}" \
+    --title "McApp ${version}" \
+    --notes "McApp release ${version}" \
     --draft \
     "${assets[@]}"
 
@@ -402,8 +402,8 @@ upload_dev() {
   # gh release create also pushes the tag to the remote
   gh release create "$version" \
     --repo "$GITHUB_REPO" \
-    --title "McAdvChat ${version} (dev)" \
-    --notes "McAdvChat development pre-release ${version}" \
+    --title "McApp ${version} (dev)" \
+    --notes "McApp development pre-release ${version}" \
     --prerelease \
     "${assets[@]}"
 
@@ -437,8 +437,8 @@ cleanup_artifacts() {
 
 main() {
   echo ""
-  echo "  McAdvChat Release Builder"
-  echo "  ========================"
+  echo "  McApp Release Builder"
+  echo "  ====================="
   echo ""
 
   validate_tools
