@@ -220,8 +220,13 @@ configure_nftables() {
 
   # Check if our rules already exist
   if grep -q "$marker" "$nft_conf" 2>/dev/null; then
-    log_info "  nftables rules already configured"
-    return 0
+    # Update existing rules if SSE port 2981 is missing
+    if ! grep -q "dport 2981" "$nft_conf" 2>/dev/null; then
+      log_info "  Updating nftables rules (adding SSE port 2981)..."
+    else
+      log_info "  nftables rules already configured"
+      return 0
+    fi
   fi
 
   # Backup existing config
@@ -250,8 +255,11 @@ table inet filter {
     # HTTP (lighttpd webapp)
     tcp dport 80 accept
 
-    # SSE/REST (MCProxy API)
+    # WebSocket (MCProxy)
     tcp dport 2980 accept
+
+    # SSE/REST (MCProxy API)
+    tcp dport 2981 accept
 
     # MeshCom UDP
     udp dport 1799 accept
@@ -316,9 +324,10 @@ configure_iptables_legacy() {
   iptables -A INPUT -p tcp --dport 22 -m state --state NEW -m recent --update --seconds 60 --hitcount 4 -j DROP
   iptables -A INPUT -p tcp --dport 22 -j ACCEPT
 
-  # HTTP, SSE/REST, MeshCom UDP, mDNS
+  # HTTP, WebSocket, SSE/REST, MeshCom UDP, mDNS
   iptables -A INPUT -p tcp --dport 80 -j ACCEPT
   iptables -A INPUT -p tcp --dport 2980 -j ACCEPT
+  iptables -A INPUT -p tcp --dport 2981 -j ACCEPT
   iptables -A INPUT -p udp --dport 1799 -j ACCEPT
   iptables -A INPUT -p udp --dport 5353 -j ACCEPT
 

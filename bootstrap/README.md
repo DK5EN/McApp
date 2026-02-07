@@ -47,7 +47,8 @@ The following ports are opened:
 |------|----------|---------|
 | 22 | TCP | SSH (rate limited) |
 | 80 | TCP | HTTP (lighttpd webapp) |
-| 2980 | TCP | SSE/REST (MCProxy API) |
+| 2980 | TCP | WebSocket (MCProxy) |
+| 2981 | TCP | SSE/REST (MCProxy API) |
 | 1799 | UDP | MeshCom |
 | 5353 | UDP | mDNS (.local) |
 

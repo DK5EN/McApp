@@ -208,7 +208,7 @@ print_diagnostic_info() {
 
   echo "Network Ports:"
   echo "  TCP:"
-  ss -tln 2>/dev/null | grep -E ':(80|2980)\b' | awk '{print "    " $4}'
+  ss -tln 2>/dev/null | grep -E ':(80|2980|2981)\b' | awk '{print "    " $4}'
   echo "  UDP:"
   ss -uln 2>/dev/null | grep -E ':1799\b' | awk '{print "    " $4}'
   echo ""
