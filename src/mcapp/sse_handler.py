@@ -189,7 +189,7 @@ class SSEManager:
                             })
                         elif storage:
                             # In-memory backend — old dump path
-                            initial_payload = storage.get_initial_payload()
+                            initial_payload = await storage.get_initial_payload()
                             logger.info(
                                 "SSE client %s: sending initial payload"
                                 " (%d items)",
@@ -201,7 +201,7 @@ class SSEManager:
                                 "data": initial_payload,
                             })
 
-                            full_data = storage.get_full_dump()
+                            full_data = await storage.get_full_dump()
                             logger.info(
                                 "SSE client %s: sending full dump"
                                 " (%d items)",
