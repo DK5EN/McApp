@@ -19,8 +19,11 @@ install_packages() {
 install_apt_deps() {
   log_info "Installing system dependencies..."
 
-  # Update package lists
+  # Update package lists and upgrade installed packages
   apt-get update -qq
+  log_info "Upgrading installed packages..."
+  DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
+  log_ok "  System packages upgraded"
 
   # Core dependencies (no python3-venv or python3-pip — uv handles everything)
   local -a packages=(

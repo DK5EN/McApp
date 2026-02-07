@@ -194,7 +194,7 @@ print_success_summary() {
   echo "  ─────────────────────────────────────────────────────────"
   echo "    Config:     ${CONFIG_FILE}"
   echo "    Reconfig:   sudo ~/bootstrap/mcapp.sh --reconfigure"
-  echo "    Upgrade:    sudo ~/bootstrap/mcapp.sh --force --dev"
+  echo "    Upgrade:    sudo ~/bootstrap/mcapp.sh"
   echo ""
 
   # Show callsign if configured
