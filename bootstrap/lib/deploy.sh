@@ -112,8 +112,8 @@ download_and_install_release() {
 
   log_info "  Downloading McApp ${version}..."
 
-  local tarball_name="mcapp-${version}.tar.gz"
-  local checksum_name="mcapp-${version}.tar.gz.sha256"
+  local tarball_name="mcadvchat-${version}.tar.gz"
+  local checksum_name="mcadvchat-${version}.tar.gz.sha256"
   local release_url="https://github.com/${GITHUB_REPO}/releases/download/${version}"
   local tmp_dir
   tmp_dir=$(mktemp -d)

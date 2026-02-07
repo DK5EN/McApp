@@ -59,8 +59,11 @@ EOF
 For rapid iteration during development, copy scripts via scp:
 
 ```bash
-scp -r bootstrap/ mcapp.local:~/bootstrap/
+scp -r bootstrap mcapp.local:~
 ```
+
+> **Note:** Do not add trailing slashes — modern OpenSSH (9.0+) uses SFTP by default,
+> which fails with `realpath: No such file` when the remote target doesn't exist yet.
 
 > **Future:** Once the bootstrap is stable on GitHub, install directly via curl:
 >
@@ -150,14 +153,14 @@ When a step fails:
 
 1. Read the error from ssh output or journal logs
 2. Fix the script locally in `bootstrap/`
-3. Copy to Pi: `scp -r bootstrap/ mcapp.local:~/bootstrap/`
+3. Copy to Pi: `scp -r bootstrap mcapp.local:~`
 4. Re-run: `ssh mcapp.local "sudo ~/bootstrap/mcapp.sh --dev --force"`
 
 For service-only fixes (no full bootstrap re-run needed):
 
 ```bash
 # Copy updated service template
-scp bootstrap/templates/mcapp.service mcapp.local:~/bootstrap/templates/
+scp bootstrap/templates/mcapp.service mcapp.local:~/bootstrap/templates/mcapp.service
 
 # Render template and restart
 ssh mcapp.local "sudo bash -c '
@@ -199,3 +202,8 @@ ssh mcapp.local "sudo bash -c '
 ### 7. SSE port not open in firewall (`nftables.conf`)
 - **Symptom:** SSE endpoint unreachable from network clients
 - **Fix:** Added port 2981/tcp to nftables and iptables firewall rules
+
+### 8. SCP fails with SFTP protocol (`deployment_testing.md`)
+- **Symptom:** `scp: realpath bootstrap/: No such file` — upload directory fails
+- **Cause:** OpenSSH 9.0+ defaults to SFTP protocol, which requires the remote target to exist when trailing slashes are used
+- **Fix:** Changed `scp -r bootstrap/ mcapp.local:~/bootstrap/` to `scp -r bootstrap mcapp.local:~` (no trailing slashes)
