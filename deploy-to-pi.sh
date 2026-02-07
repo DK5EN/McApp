@@ -5,7 +5,7 @@ PI_HOST="mcapp.local"
 PI_DIR="mcapp"
 REMOTE="$PI_HOST:~/$PI_DIR"
 
-echo "=== Deploying McAdvChat to $PI_HOST ==="
+echo "=== Deploying McApp to $PI_HOST ==="
 
 # 1. Create remote dirs
 ssh "$PI_HOST" "mkdir -p ~/$PI_DIR/src/mcapp/commands ~/$PI_DIR/ble_service/src"
