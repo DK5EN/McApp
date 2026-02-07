@@ -240,20 +240,29 @@ collect_config() {
   local user_info_text
 
   callsign=$(prompt_callsign "$current_callsign")
-  node_address=$(prompt_node_address "$current_node")
+  node_address="${callsign}.local"
   latitude=$(prompt_latitude "$current_lat")
   longitude=$(prompt_longitude "$current_lon")
   station_name=$(prompt_station_name "$current_station")
   user_info_text=$(prompt_with_default "Enter user info text (returned by !userinfo)" "${current_user_info:-${callsign} Node}")
 
+  # Resolve node address to IP
+  local node_ip
+  node_ip=$(getent hosts "$node_address" 2>/dev/null | awk '{print $1}')
+
   echo ""
   echo "Configuration summary:"
-  echo "  Callsign:     $callsign"
-  echo "  Node address: $node_address"
-  echo "  Latitude:     $latitude"
-  echo "  Longitude:    $longitude"
-  echo "  Station name: $station_name"
-  echo "  User info:    $user_info_text"
+  echo "  Callsign:       $callsign"
+  echo "  MeshCom Node:   $node_address"
+  if [[ -n "$node_ip" ]]; then
+  echo "  MeshCom Node IP: $node_ip"
+  else
+  echo "  MeshCom Node IP: (could not resolve)"
+  fi
+  echo "  Latitude:       $latitude"
+  echo "  Longitude:      $longitude"
+  echo "  City:           $station_name"
+  echo "  User info:      $user_info_text"
   echo ""
 
   read -rp "[?] Save this configuration? (Y/n): " confirm </dev/tty
