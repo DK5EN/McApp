@@ -355,15 +355,14 @@ class BLEClientRemote(BLEClientBase):
                 self._status.state = ConnectionState.DISCONNECTED
 
         except Exception as e:
-            logger.error("Failed to connect to remote BLE service: %s", e)
+            logger.warning("Remote BLE service not ready yet: %s (SSE loop will retry)", e)
             await self._publish_status(
                 'remote connect',
                 'error',
                 f'Cannot reach BLE service at {self.remote_url}: {e}'
             )
-            return
 
-        # Start SSE notification stream
+        # Always start SSE notification stream — it has its own reconnection logic
         self._sse_task = asyncio.create_task(self._sse_loop())
 
     async def stop(self) -> None:
