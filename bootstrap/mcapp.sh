@@ -142,6 +142,8 @@ source_libs() {
   # Piped mode: download lib files from GitHub
   elif [[ "$PIPED_MODE" == "true" ]]; then
     lib_dir=$(download_libs)
+    # Clean up downloaded libs when script exits
+    trap "rm -rf '$lib_dir'" EXIT
   else
     log_error "Cannot find library files"
     exit 1
@@ -162,10 +164,12 @@ source_libs() {
 }
 
 # Download library files from GitHub for piped mode (curl | bash)
+# NOTE: Do NOT set EXIT trap here — this runs in a subshell via $(),
+# so an EXIT trap would delete the temp dir before the caller can use it.
+# Cleanup is handled by the caller in source_libs().
 download_libs() {
   local tmp_dir
   tmp_dir=$(mktemp -d)
-  trap "rm -rf '$tmp_dir'" EXIT
 
   local lib_files=("detect.sh" "config.sh" "system.sh" "packages.sh" "deploy.sh" "health.sh")
 
@@ -175,6 +179,7 @@ download_libs() {
     if ! curl -fsSL --connect-timeout 10 \
       "${GITHUB_RAW_BASE}/bootstrap/lib/${lib}" -o "${tmp_dir}/${lib}"; then
       log_error "Failed to download lib/${lib} from ${GITHUB_RAW_BASE}"
+      rm -rf "$tmp_dir"
       exit 1
     fi
   done
