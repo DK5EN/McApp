@@ -6,7 +6,7 @@
 # VALIDATION PATTERNS
 #──────────────────────────────────────────────────────────────────
 
-# Ham radio callsign pattern (e.g., DK5EN-9, W1ABC-15, OE1ABC-1)
+# Ham radio callsign pattern (e.g., DL0XXX-99, W1ABC-15, OE1ABC-1)
 readonly CALLSIGN_PATTERN='^[A-Z]{1,2}[0-9][A-Z]{1,4}(-[0-9]{1,2})?$'
 
 # Latitude range: -90 to 90
@@ -42,7 +42,7 @@ prompt_callsign() {
   local callsign
 
   while true; do
-    callsign=$(prompt_with_default "Enter your callsign (e.g., DK5EN-9)" "$current")
+    callsign=$(prompt_with_default "Enter your callsign (e.g., DL0XXX-99)" "$current")
     callsign="${callsign^^}" # Convert to uppercase
 
     if validate_callsign "$callsign"; then
@@ -50,7 +50,7 @@ prompt_callsign() {
       return 0
     fi
 
-    log_warn "Invalid callsign format. Use format like: DK5EN-9, W1ABC-15, OE1ABC"
+    log_warn "Invalid callsign format. Use format like: DL0XXX-99, W1ABC-15, OE1ABC"
   done
 }
 
@@ -229,6 +229,7 @@ collect_config() {
   current_lat=$(get_config_value "LAT")
   current_lon=$(get_config_value "LONG")
   current_station=$(get_config_value "STAT_NAME")
+  current_user_info=$(get_config_value "USER_INFO_TEXT")
 
   # Collect values interactively
   local callsign
@@ -236,12 +237,14 @@ collect_config() {
   local latitude
   local longitude
   local station_name
+  local user_info_text
 
   callsign=$(prompt_callsign "$current_callsign")
   node_address=$(prompt_node_address "$current_node")
   latitude=$(prompt_latitude "$current_lat")
   longitude=$(prompt_longitude "$current_lon")
   station_name=$(prompt_station_name "$current_station")
+  user_info_text=$(prompt_with_default "Enter user info text (returned by !userinfo)" "${current_user_info:-${callsign} Node}")
 
   echo ""
   echo "Configuration summary:"
@@ -250,6 +253,7 @@ collect_config() {
   echo "  Latitude:     $latitude"
   echo "  Longitude:    $longitude"
   echo "  Station name: $station_name"
+  echo "  User info:    $user_info_text"
   echo ""
 
   read -rp "[?] Save this configuration? (Y/n): " confirm </dev/tty
@@ -259,7 +263,7 @@ collect_config() {
   fi
 
   # Write config file
-  write_config "$callsign" "$node_address" "$latitude" "$longitude" "$station_name"
+  write_config "$callsign" "$node_address" "$latitude" "$longitude" "$station_name" "$user_info_text"
 
   log_ok "Configuration saved to ${CONFIG_FILE}"
 }
@@ -271,6 +275,7 @@ write_config() {
   local latitude="$3"
   local longitude="$4"
   local station_name="$5"
+  local user_info_text="$6"
 
   # Ensure config directory exists
   mkdir -p "$CONFIG_DIR"
@@ -291,7 +296,7 @@ write_config() {
   "WS_HOST": "127.0.0.1",
   "WS_PORT": 2980,
   "CALL_SIGN": "${callsign}",
-  "USER_INFO_TEXT": "${callsign} Node",
+  "USER_INFO_TEXT": "${user_info_text}",
   "LAT": ${latitude},
   "LONG": ${longitude},
   "STAT_NAME": "${station_name}",
