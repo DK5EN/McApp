@@ -149,7 +149,7 @@ download_and_install_release() {
   mkdir -p "$INSTALL_DIR"
 
   # Extract tarball with --strip-components=1 to remove top-level dir
-  tar -xzf "${tmp_dir}/${tarball_name}" -C "$INSTALL_DIR" --strip-components=1
+  tar -xzf "${tmp_dir}/${tarball_name}" -C "$INSTALL_DIR" --strip-components=1 --warning=no-unknown-keyword
 
   # Set ownership to the real user (not root)
   local run_user="${SUDO_USER:-$(whoami)}"
@@ -303,7 +303,7 @@ download_webapp() {
   fi
 
   # Extract webapp
-  tar -xzf "${tmp_dir}/webapp.tar.gz" -C "$WEBAPP_DIR" --strip-components=1
+  tar -xzf "${tmp_dir}/webapp.tar.gz" -C "$WEBAPP_DIR" --strip-components=1 --warning=no-unknown-keyword
 
   # Set permissions
   chown -R www-data:www-data "$WEBAPP_DIR"
