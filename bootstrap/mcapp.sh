@@ -21,7 +21,7 @@ set -eo pipefail
 #──────────────────────────────────────────────────────────────────
 # CONSTANTS
 #──────────────────────────────────────────────────────────────────
-readonly SCRIPT_VERSION="2.0.10"
+readonly SCRIPT_VERSION="2.0.11"
 
 # Detect piped mode (curl | bash) — BASH_SOURCE is empty when piped
 if [[ -n "${BASH_SOURCE[0]:-}" && "${BASH_SOURCE[0]}" != "bash" ]]; then

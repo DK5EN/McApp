@@ -64,11 +64,15 @@ check_webapp_endpoint() {
 }
 
 check_udp_port() {
-  # Check if UDP port is listening
-  if ss -uln | grep -q ':1799\b'; then
-    printf "  %-20s ${GREEN}[OK]${NC} port listening\n" "udp (meshcom):"
-    return 0
-  fi
+  # Retry a few times — service may need seconds to bind the port after restart
+  local attempts=5
+  for ((i=1; i<=attempts; i++)); do
+    if ss -uln | grep -q ':1799\b'; then
+      printf "  %-20s ${GREEN}[OK]${NC} port listening\n" "udp (meshcom):"
+      return 0
+    fi
+    sleep 2
+  done
 
   printf "  %-20s ${RED}[FAIL]${NC} port not listening\n" "udp (meshcom):"
   return 1
