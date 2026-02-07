@@ -164,11 +164,8 @@ validate_latitude() {
     return 1
   fi
 
-  # Check range using bc for floating point comparison
-  local in_range
-  in_range=$(echo "$lat >= $LAT_MIN && $lat <= $LAT_MAX" | bc -l 2>/dev/null)
-
-  [[ "$in_range" == "1" ]]
+  # Check range using awk (always available, unlike bc)
+  awk "BEGIN { exit ($lat >= $LAT_MIN && $lat <= $LAT_MAX) ? 0 : 1 }"
 }
 
 validate_longitude() {
@@ -179,11 +176,8 @@ validate_longitude() {
     return 1
   fi
 
-  # Check range using bc for floating point comparison
-  local in_range
-  in_range=$(echo "$lon >= $LON_MIN && $lon <= $LON_MAX" | bc -l 2>/dev/null)
-
-  [[ "$in_range" == "1" ]]
+  # Check range using awk (always available, unlike bc)
+  awk "BEGIN { exit ($lon >= $LON_MIN && $lon <= $LON_MAX) ? 0 : 1 }"
 }
 
 #──────────────────────────────────────────────────────────────────
