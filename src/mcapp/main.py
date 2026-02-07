@@ -1325,6 +1325,10 @@ async def main():
     elif cfg.sse.enabled and not SSE_AVAILABLE:
         logger.warning("SSE enabled but FastAPI/Uvicorn not installed")
 
+    # Start UDP early — before BLE init which can block for seconds on Pi,
+    # ensuring the health check finds port 1799 listening promptly.
+    await udp_handler.start_listening()
+
     # BLE Client (supports local, remote, disabled modes)
     ble_client = None
     try:
@@ -1361,9 +1365,6 @@ async def main():
             message_router=message_router,
         )
         await ble_client.start()
-
-    # Start services
-    await udp_handler.start_listening()
 
     try:
         await websocket_manager.start_server()
