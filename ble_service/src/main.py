@@ -356,7 +356,7 @@ async def send_data(request: SendRequest, _: bool = Depends(verify_api_key)):
         # Determine what to send
         if request.command:
             success = await ble_adapter.send_command(request.command)
-        elif request.message and request.group:
+        elif request.message is not None and request.group is not None:
             success = await ble_adapter.send_message(request.message, request.group)
         elif request.data_base64:
             data = base64.b64decode(request.data_base64)
@@ -376,8 +376,9 @@ async def send_data(request: SendRequest, _: bool = Depends(verify_api_key)):
 
         if request.command:
             msg = f"Command sent: {request.command}" if success else "Send failed"
-        elif request.message and request.group:
-            msg = f"Message sent to group {request.group}" if success else "Send failed"
+        elif request.message is not None and request.group is not None:
+            msg = (f"Message sent to group {request.group}" if request.group
+                   else "Message sent (broadcast)") if success else "Send failed"
         else:
             msg = f"Sent {len(data)} bytes" if success else "Send failed"
 
