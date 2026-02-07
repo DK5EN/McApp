@@ -1,10 +1,13 @@
-# Deployment Testing: McAdvChat on Fresh Raspberry Pi Trixie
+# Deployment Testing: McAdvChat on Fresh Raspberry Pi
 
 ## Prerequisites
 
-- Fresh Raspberry Pi with Debian Trixie (64-bit)
+- Fresh Raspberry Pi with Debian Trixie (64-bit) or Bookworm (64-bit)
+  - Trixie: Python 3.13, nftables firewall
+  - Bookworm: Python 3.11, iptables firewall
 - SSH access: `ssh mcapp.local`
 - GitHub release: `McAdvChat v1.01.0-dev.1` or later pre-release
+- Package manager: `uv` (installed by bootstrap, never pip/venv)
 
 ## Step 0: Clear stale SSH host key (fresh SD card)
 
@@ -31,7 +34,7 @@ ssh mcapp.local "sudo tee /etc/mcadvchat/config.json" <<'EOF'
   "CALL_SIGN": "DK5EN-99",
   "LAT": 48.4071,
   "LONG": 11.7389,
-  "STAT_NAME": "DK5EN MCProxy",
+  "STAT_NAME": "DK5EN Freising McApp V 1.0",
   "HOSTNAME": "mcapp",
   "STORAGE_BACKEND": "sqlite",
   "DB_PATH": "/var/lib/mcproxy/messages.db",
@@ -53,15 +56,31 @@ EOF
 
 ## Step 2: Copy bootstrap scripts to Pi
 
+For rapid iteration during development, copy scripts via scp:
+
 ```bash
 scp -r bootstrap/ mcapp.local:~/bootstrap/
 ```
+
+> **Future:** Once the bootstrap is stable on GitHub, install directly via curl:
+>
+> Dev: `curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcproxy.sh | sudo bash -s -- --dev`
+>
+> Prod: `curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcproxy.sh | sudo bash`
 
 ## Step 3: Run bootstrap
 
 ```bash
 ssh mcapp.local "sudo ~/bootstrap/mcproxy.sh --dev"
 ```
+
+The bootstrap script will:
+- Install system packages and `uv` package manager
+- Generate locales (`en_US.UTF-8`, `de_DE.UTF-8`) to suppress SSH locale warnings
+- Set up Python environment via `uv sync` (no venv/pip)
+- Configure firewall (nftables on Trixie, iptables on Bookworm)
+- Open required ports: SSH (22), HTTP (80), WebSocket (2980), SSE (2981), UDP (1799), mDNS (5353)
+- Install and start systemd services: `mcproxy` and `mcproxy-ble`
 
 For re-runs after partial install:
 
@@ -71,15 +90,21 @@ ssh mcapp.local "sudo ~/bootstrap/mcproxy.sh --dev --force"
 
 ## Step 4: Verify deployment
 
+Both `mcproxy` (main proxy) and `mcproxy-ble` (BLE backend) must be running.
+
 ```bash
 ssh mcapp.local 'bash -c "
 echo MCPROXY: $(systemctl is-active mcproxy)
+echo MCPROXY_BLE: $(systemctl is-active mcproxy-ble)
 echo LIGHTTPD: $(systemctl is-active lighttpd)
 echo WEBAPP: $(curl -s -o /dev/null -w %{http_code} http://localhost/webapp/)
+echo WS: $(curl -s -o /dev/null -w %{http_code} http://localhost:2980 2>/dev/null && echo OPEN || echo CLOSED)
+echo SSE: $(curl -s -o /dev/null -w %{http_code} http://localhost:2981/health 2>/dev/null || echo CLOSED)
 echo UDP: $(ss -ulnp 2>/dev/null | grep -c 1799)
 echo CONFIG: $(test -f /etc/mcadvchat/config.json && echo OK || echo MISSING)
-echo VENV: $(test -f /home/martin/mcproxy/.venv/bin/python && echo OK || echo MISSING)
+echo UV: $(command -v uv >/dev/null 2>&1 && echo OK || echo MISSING)
 echo SQLITE: $(test -f /var/lib/mcproxy/messages.db && echo OK || echo MISSING)
+echo LOCALE: $(locale -a 2>/dev/null | grep -c de_DE.utf8)
 "'
 ```
 
@@ -87,18 +112,36 @@ Expected output (all OK):
 
 ```
 MCPROXY: active
+MCPROXY_BLE: active
 LIGHTTPD: active
 WEBAPP: 200
+WS: OPEN
+SSE: 200
 UDP: 1
 CONFIG: OK
-VENV: OK
+UV: OK
 SQLITE: OK
+LOCALE: 1
+```
+
+### Firewall verification
+
+Confirm that WebSocket and SSE ports are reachable from the network:
+
+```bash
+# From your Mac (not on the Pi)
+curl -s -o /dev/null -w "%{http_code}" http://mcapp.local:2980
+curl -s -o /dev/null -w "%{http_code}" http://mcapp.local:2981/health
 ```
 
 ## Step 5: Check logs
 
 ```bash
+# Main proxy
 ssh mcapp.local "sudo journalctl -u mcproxy --no-pager -n 30"
+
+# BLE backend
+ssh mcapp.local "sudo journalctl -u mcproxy-ble --no-pager -n 30"
 ```
 
 ## Iterative fix cycle
@@ -148,11 +191,11 @@ ssh mcapp.local "sudo bash -c '
 - **Symptom:** `status=2` — `Failed to initialize cache at /home/martin/.cache/uv` (read-only filesystem)
 - **Fix:** Added `{{HOME}}/.cache/uv` to `ReadWritePaths`
 
-## Locale warning (cosmetic, not blocking)
+### 6. SSH locale warning (`system.sh`)
+- **Symptom:** `bash: warning: setlocale: LC_ALL: cannot change locale (de_DE.UTF-8)`
+- **Cause:** Mac forwards `LC_ALL=de_DE.UTF-8` via SSH, but locale not generated on Pi
+- **Fix:** Bootstrap now generates `en_US.UTF-8` and `de_DE.UTF-8` locales via `configure_locale()` in `system.sh`
 
-```
-bash: warning: setlocale: LC_ALL: cannot change locale (de_DE.UTF-8): No such file or directory
-```
-
-This happens because the Mac's `LC_ALL=de_DE.UTF-8` is forwarded via SSH but not installed on the Pi.
-Fix: `ssh mcapp.local "sudo dpkg-reconfigure locales"` (select de_DE.UTF-8), or ignore.
+### 7. SSE port not open in firewall (`nftables.conf`)
+- **Symptom:** SSE endpoint unreachable from network clients
+- **Fix:** Added port 2981/tcp to nftables and iptables firewall rules
