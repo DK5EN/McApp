@@ -173,7 +173,7 @@ download_libs() {
 
   local lib_files=("detect.sh" "config.sh" "system.sh" "packages.sh" "deploy.sh" "health.sh")
 
-  log_info "Piped mode detected — downloading bootstrap libraries..."
+  log_info "Piped mode detected — downloading bootstrap libraries..." >&2
 
   for lib in "${lib_files[@]}"; do
     if ! curl -fsSL --connect-timeout 10 \
