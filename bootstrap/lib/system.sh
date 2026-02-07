@@ -412,23 +412,25 @@ configure_bluetooth() {
     fi
   fi
 
-  # Install the service from template
-  local template_dir
-  if [[ -d "${INSTALL_DIR}/bootstrap/templates" ]]; then
-    template_dir="${INSTALL_DIR}/bootstrap/templates"
-  elif [[ -d "${SCRIPT_DIR}/templates" ]]; then
-    template_dir="${SCRIPT_DIR}/templates"
-  else
-    log_warn "  Cannot find templates dir, skipping bluetooth service"
-    return 0
-  fi
+  # Write the service unit inline (no external template dependency)
+  cat > "$service_file" << 'EOF'
+# McApp: Unblock Bluetooth at boot
+# Some Pi images ship with rfkill default_state=0 which blocks all radios
+# This service ensures Bluetooth is unblocked for BLE communication
 
-  if [[ -f "${template_dir}/unblock-bluetooth.service" ]]; then
-    cp "${template_dir}/unblock-bluetooth.service" "$service_file"
-  else
-    log_warn "  unblock-bluetooth.service template not found, skipping"
-    return 0
-  fi
+[Unit]
+Description=Unblock Bluetooth for McApp BLE
+After=bluetooth.service
+Before=mcapp.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/rfkill unblock bluetooth
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
 
   # Enable the service
   systemctl daemon-reload
