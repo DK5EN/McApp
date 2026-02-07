@@ -372,13 +372,24 @@ class MessageRouter:
             return
 
         initial_data = await self.storage_handler.get_smart_initial()
+        acks_list = initial_data.get("acks", [])
+
+        if has_console:
+            print(f"📦 smart_initial sending: "
+                  f"{len(initial_data['messages'])} msgs, "
+                  f"{len(initial_data['positions'])} pos, "
+                  f"{len(acks_list)} acks")
+            if acks_list:
+                for a in acks_list[:5]:
+                    print(f"  ACK: {a[:120]}")
+
         payload = {
             "type": "response",
             "msg": "smart_initial",
             "data": {
                 "messages": initial_data["messages"],
                 "positions": initial_data["positions"],
-                "acks": initial_data.get("acks", []),
+                "acks": acks_list,
             },
         }
         await self.publish(

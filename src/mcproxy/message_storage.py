@@ -264,6 +264,9 @@ class MessageStorageHandler:
                     continue
             elif '"type": "ack"' in raw:
                 acks.append(raw)
+            elif '"type": "msg"' in raw and ":ack" in raw:
+                # Inline ACK messages (type:"msg" with :ackNNN in text)
+                acks.append(raw)
             elif '"type": "pos"' in raw:
                 try:
                     data = json.loads(raw)
@@ -291,6 +294,11 @@ class MessageStorageHandler:
         for msg_list in msgs_per_dst.values():
             messages.extend(reversed(msg_list))
         positions = [json.dumps(d, ensure_ascii=False) for d in pos_per_src.values()]
+
+        if has_console:
+            print(f"📦 smart_initial: {len(messages)} msgs, "
+                  f"{len(positions)} pos, {len(acks)} acks "
+                  f"(from {len(recent_items)} total stored)")
 
         return {"messages": messages, "positions": positions, "acks": acks}
 
