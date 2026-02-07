@@ -327,7 +327,7 @@ class SQLiteStorage:
         msg_rows = await self._execute(
             "SELECT raw_json FROM messages"
             " WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
-            " AND src_type NOT IN ('BLE', 'ble', 'ble_remote')"
+            " AND COALESCE(src_type, '') NOT IN ('BLE', 'ble', 'ble_remote')"
             " ORDER BY timestamp DESC LIMIT 1000",
         )
 
@@ -405,7 +405,7 @@ class SQLiteStorage:
         """Get full message dump."""
         query = (
             "SELECT raw_json FROM messages WHERE type = 'msg'"
-            " AND src_type NOT IN ('BLE', 'ble', 'ble_remote')"
+            " AND COALESCE(src_type, '') NOT IN ('BLE', 'ble', 'ble_remote')"
             " ORDER BY timestamp"
         )
         rows = await self._execute(query)
