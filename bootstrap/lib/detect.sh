@@ -186,18 +186,13 @@ migrate_old_config() {
   local needs_update=false
 
   # Old configs might use "requests" instead of "httpx"
-  # Old configs might be missing WEATHER_SERVICE, BLE_ENABLED, etc.
+  # Old configs might be missing WEATHER_SERVICE, etc.
 
   # These will be handled by migrate_config() in config.sh
   # Just log what we found
 
   if ! jq -e '.WEATHER_SERVICE' "$CONFIG_FILE" &>/dev/null; then
     log_info "    Config missing WEATHER_SERVICE (will be added)"
-    needs_update=true
-  fi
-
-  if ! jq -e '.BLE_ENABLED' "$CONFIG_FILE" &>/dev/null; then
-    log_info "    Config missing BLE_ENABLED (will be added)"
     needs_update=true
   fi
 

@@ -382,7 +382,6 @@ migrate_config() {
     ["MAX_STORAGE_SIZE_MB"]=50
     ["WEATHER_SERVICE"]="open-meteo"
     ["BLE_DEVICE_NAME"]=""
-    ["BLE_ENABLED"]=false
   )
 
   for key in "${!defaults[@]}"; do
