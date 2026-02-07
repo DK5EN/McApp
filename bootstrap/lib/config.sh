@@ -28,10 +28,10 @@ prompt_with_default() {
   local result
 
   if [[ -n "$default" ]]; then
-    read -rp "[?] ${prompt} [${default}]: " result
+    read -rp "[?] ${prompt} [${default}]: " result </dev/tty
     echo "${result:-$default}"
   else
-    read -rp "[?] ${prompt}: " result
+    read -rp "[?] ${prompt}: " result </dev/tty
     echo "$result"
   fi
 }
@@ -68,7 +68,7 @@ prompt_node_address() {
     fi
 
     log_warn "Cannot resolve or reach '$address'. Please check the address."
-    read -rp "[?] Use anyway? (y/N): " confirm
+    read -rp "[?] Use anyway? (y/N): " confirm </dev/tty
     if [[ "${confirm,,}" == "y" ]]; then
       echo "$address"
       return 0
@@ -258,7 +258,7 @@ collect_config() {
   echo "  Station name: $station_name"
   echo ""
 
-  read -rp "[?] Save this configuration? (Y/n): " confirm
+  read -rp "[?] Save this configuration? (Y/n): " confirm </dev/tty
   if [[ "${confirm,,}" == "n" ]]; then
     log_warn "Configuration cancelled"
     exit 1
