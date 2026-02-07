@@ -48,9 +48,10 @@
   Usage                                                                         
                                                                                 
   # Fresh install, update, or repair - same command                             
-  curl -fsSL                                                                    
-  https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcapp.sh | 
-  sudo bash                                                                     
+  curl -fsSL
+  https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcapp.sh |
+  sudo bash
+  # Note: repo URL is DK5EN/McAdvChat (legacy name kept for compatibility)                                                                     
                                                                                 
   # Other options                                                               
   sudo ./mcapp.sh --check        # Dry-run                                    

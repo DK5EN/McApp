@@ -1,5 +1,8 @@
 # release.sh — McApp Unified Release Workflow
 
+> **Note:** The GitHub repo is `DK5EN/McAdvChat` (legacy name kept for compatibility).
+> The project is called **McApp**.
+
 Builds a combined tarball (backend + webapp), uploads it to GitHub Releases, and manages version numbers. Runs on Mac (the dev machine), not on the Pi.
 
 **No arguments needed** — the script auto-detects the branch and does the right thing.
