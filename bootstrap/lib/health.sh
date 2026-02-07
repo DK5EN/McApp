@@ -136,6 +136,10 @@ print_success_summary() {
   local hostname
   hostname=$(hostname -s)
 
+  # Get IP address for alternative URL
+  local ip_addr
+  ip_addr=$(hostname -I 2>/dev/null | awk '{print $1}')
+
   echo ""
   echo "╔══════════════════════════════════════════════════════════╗"
   echo "║            McApp Installation Complete                   ║"
@@ -144,17 +148,22 @@ print_success_summary() {
   echo "  Access Points:"
   echo "  ─────────────────────────────────────────────────────────"
   echo "    Web UI:     http://${hostname}.local/webapp"
+  if [[ -n "$ip_addr" ]]; then
+  echo "                http://${ip_addr}/webapp"
+  fi
   echo ""
   echo "  Service Management:"
   echo "  ─────────────────────────────────────────────────────────"
-  echo "    Status:     sudo systemctl status mcapp"
+  echo "    mcapp:      sudo systemctl status|restart mcapp"
+  echo "    mcapp-ble:  sudo systemctl status|restart mcapp-ble"
   echo "    Logs:       sudo journalctl -u mcapp -f"
-  echo "    Restart:    sudo systemctl restart mcapp"
+  echo "    Logs BLE:   sudo journalctl -u mcapp-ble -f"
   echo ""
   echo "  Configuration:"
   echo "  ─────────────────────────────────────────────────────────"
   echo "    Config:     ${CONFIG_FILE}"
-  echo "    Reconfig:   sudo ./mcapp.sh --reconfigure"
+  echo "    Reconfig:   sudo ~/bootstrap/mcapp.sh --reconfigure"
+  echo "    Upgrade:    sudo ~/bootstrap/mcapp.sh --force --dev"
   echo ""
 
   # Show callsign if configured
