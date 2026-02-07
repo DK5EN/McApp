@@ -181,6 +181,8 @@ class SQLiteStorage:
             return True
         if src_type == "BLE":
             return True
+        if message.get("transformer") in ("mh", "generic_ble"):
+            return True
         if src == "response":
             return True
         if src_type == "TEST":
@@ -231,6 +233,13 @@ class SQLiteStorage:
         await self._execute(
             "DELETE FROM messages WHERE msg = '-- invalid character --'"
             " OR msg LIKE '%No core dump%'",
+            fetch=False,
+        )
+
+        # Delete BLE register messages that leaked into storage
+        await self._execute(
+            "DELETE FROM messages WHERE src_type IN ('BLE', 'ble', 'ble_remote')"
+            " AND type NOT IN ('msg', 'pos', 'ack')",
             fetch=False,
         )
 
@@ -524,6 +533,10 @@ class SQLiteStorage:
             try:
                 parsed = json.loads(raw)
             except (json.JSONDecodeError, TypeError):
+                continue
+
+            # Skip filtered messages (matching store_message logic)
+            if self._should_filter_message(parsed):
                 continue
 
             params_list.append((

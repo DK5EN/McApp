@@ -460,7 +460,8 @@ class BLEClientRemote(BLEClientBase):
             output = dispatcher(parsed, own_call)
             if output:
                 output['timestamp'] = notification.get('timestamp', int(time.time() * 1000))
-                output['src_type'] = 'ble_remote'
+                if output.get('transformer') not in ('generic_ble', 'mh'):
+                    output['src_type'] = 'ble_remote'
                 return output
             # Fallback: return parsed directly if dispatcher returns None
             parsed['timestamp'] = notification.get('timestamp', int(time.time() * 1000))
@@ -477,7 +478,8 @@ class BLEClientRemote(BLEClientBase):
                         decoded = decode_binary_message(raw_bytes)
                         output = dispatcher(decoded, own_call)
                         if output:
-                            output['src_type'] = 'ble_remote'
+                            if output.get('transformer') not in ('generic_ble', 'mh'):
+                                output['src_type'] = 'ble_remote'
                             output['timestamp'] = notification.get(
                                 'timestamp', int(time.time() * 1000)
                             )
@@ -486,7 +488,8 @@ class BLEClientRemote(BLEClientBase):
                         decoded = decode_json_message(raw_bytes)
                         output = dispatcher(decoded, own_call)
                         if output:
-                            output['src_type'] = 'ble_remote'
+                            if output.get('transformer') not in ('generic_ble', 'mh'):
+                                output['src_type'] = 'ble_remote'
                             output['timestamp'] = notification.get(
                                 'timestamp', int(time.time() * 1000)
                             )
