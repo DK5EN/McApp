@@ -138,7 +138,7 @@ print_success_summary() {
 
   echo ""
   echo "╔══════════════════════════════════════════════════════════╗"
-  echo "║              McApp Installation Complete                  ║"
+  echo "║            McApp Installation Complete                   ║"
   echo "╚══════════════════════════════════════════════════════════╝"
   echo ""
   echo "  Access Points:"
