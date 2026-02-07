@@ -30,7 +30,7 @@ VALID_RSSI_RANGE = (-140, -30)
 VALID_SNR_RANGE = (-30, 12)
 SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
 GAP_THRESHOLD_MULTIPLIER = 6
-MIN_DATAPOINTS_FOR_STATS = 100
+MIN_DATAPOINTS_FOR_STATS = 3
 
 CREATE_SCHEMA_SQL = """
 -- Main messages table
@@ -182,7 +182,7 @@ class SQLiteStorage:
             return True
         if src_type == "BLE":
             return True
-        if message.get("transformer") in ("mh", "generic_ble"):
+        if message.get("transformer") == "generic_ble":
             return True
         if src == "response":
             return True
