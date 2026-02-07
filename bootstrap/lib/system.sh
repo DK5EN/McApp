@@ -8,6 +8,7 @@
 #──────────────────────────────────────────────────────────────────
 
 setup_system() {
+  configure_locale
   disable_unused_services
   configure_tmpfs
   configure_journald
@@ -17,6 +18,54 @@ setup_system() {
   configure_unattended_upgrades
   configure_fast_ssh_login
   configure_ssh_hardening
+}
+
+#──────────────────────────────────────────────────────────────────
+# LOCALE GENERATION
+#──────────────────────────────────────────────────────────────────
+
+configure_locale() {
+  log_info "Configuring locale..."
+
+  # Ensure locales package is installed
+  if ! dpkg -l locales &>/dev/null; then
+    apt-get update -qq
+    apt-get install -y -qq locales
+  fi
+
+  local locale_gen="/etc/locale.gen"
+  local needs_generate=false
+
+  # Locales to ensure are generated:
+  # - en_US.UTF-8: universal fallback
+  # - de_DE.UTF-8: common on German systems (SSH forwards LC_ALL from client)
+  local -a required_locales=("en_US.UTF-8" "de_DE.UTF-8")
+
+  for loc in "${required_locales[@]}"; do
+    # Check if locale is already available
+    if locale -a 2>/dev/null | grep -qi "$(echo "$loc" | sed 's/UTF-8/utf8/')"; then
+      continue
+    fi
+
+    # Uncomment in locale.gen if present but commented out
+    if grep -qE "^#\s*${loc}" "$locale_gen" 2>/dev/null; then
+      sed -i "s/^#\s*\(${loc}\)/\1/" "$locale_gen"
+      needs_generate=true
+      log_info "  Enabled ${loc} in locale.gen"
+    elif ! grep -q "^${loc}" "$locale_gen" 2>/dev/null; then
+      # Not present at all — add it
+      echo "${loc} UTF-8" >> "$locale_gen"
+      needs_generate=true
+      log_info "  Added ${loc} to locale.gen"
+    fi
+  done
+
+  if [[ "$needs_generate" == "true" ]]; then
+    locale-gen
+    log_ok "  Locales generated"
+  else
+    log_info "  Required locales already available"
+  fi
 }
 
 #──────────────────────────────────────────────────────────────────
