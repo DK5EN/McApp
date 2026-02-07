@@ -128,10 +128,9 @@ class RoutingMixin:
                 await self.send_response(response, response_target, src_type)
 
             else:
-                # Track failed attempt
-                self._track_failed_attempt(src)
                 self._mark_msg_id_processed(msg_id)
-                await self.send_response("❌ Unknown command. Try !help", response_target, src_type)
+                if has_console:
+                    print(f"📋 CommandHandler: Unknown command '{msg_text}' from {src} (discarded)")
 
         except Exception as e:
             error_type = type(e).__name__

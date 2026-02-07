@@ -79,6 +79,7 @@ class BLEClientRemote(BLEClientBase):
         retries: int = 2,
         retry_delay: float = 1.5,
         request_timeout: float | None = None,
+        quiet: bool = False,
     ) -> dict:
         """Make HTTP request to remote service, with retry on 409 (busy) and connection errors"""
         await self._ensure_session()
@@ -115,14 +116,16 @@ class BLEClientRemote(BLEClientBase):
 
             except aiohttp.ClientError as e:
                 if attempt < retries:
-                    logger.warning(
+                    log = logger.debug if quiet else logger.warning
+                    log(
                         "HTTP request failed (%s), retry %d/%d: %s",
                         e, attempt + 1, retries, endpoint
                     )
                     await self._reset_session()
                     await asyncio.sleep(retry_delay)
                     continue
-                logger.error("HTTP request failed after %d attempts: %s", retries + 1, e)
+                log_final = logger.debug if quiet else logger.error
+                log_final("HTTP request failed after %d attempts: %s", retries + 1, e)
                 raise RuntimeError(f"Connection error: {e}") from e
 
         raise RuntimeError("BLE service busy after retries")
@@ -344,7 +347,7 @@ class BLEClientRemote(BLEClientBase):
         # Check connection to remote service
         try:
             await self._ensure_session()
-            status = await self._request('GET', '/api/ble/status')
+            status = await self._request('GET', '/api/ble/status', retries=4, quiet=True)
             logger.info("Remote service status: %s", status.get('state', 'unknown'))
 
             # Update local status based on remote

@@ -5,6 +5,10 @@ import socket
 import time
 import unicodedata
 
+from .logging_setup import get_logger
+
+logger = get_logger(__name__)
+
 VERSION = "v0.48.0"
 
 
@@ -154,8 +158,14 @@ class UDPHandler:
         text = strip_invalid_utf8(data)
         message = try_repair_json(text)
 
-        if not message or "msg" not in message:
-            print(f"No msg object found in JSON: {message}")
+        if not message:
+            return
+
+        if "msg" not in message:
+            if message.get("type") == "tele":
+                logger.debug("Telemetry packet received (discarded): %s", message)
+            else:
+                logger.debug("Non-chat message without msg field: %s", message)
             return
 
         message["timestamp"] = int(time.time() * 1000)
