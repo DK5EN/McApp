@@ -178,8 +178,8 @@ build_webapp() {
 
 build_tarball() {
   local version="$1"
-  local tarball_name="mcproxy-${version}.tar.gz"
-  local prefix="mcproxy-${version}"
+  local tarball_name="mcadvchat-${version}.tar.gz"
+  local prefix="mcadvchat-${version}"
   local tmp_dir
   tmp_dir=$(mktemp -d)
   local staging="${tmp_dir}/${prefix}"
@@ -283,8 +283,8 @@ upload_production() {
 
   gh release create "$version" \
     --repo "$GITHUB_REPO" \
-    --title "MCProxy ${version}" \
-    --notes "Release ${version}" \
+    --title "McAdvChat ${version}" \
+    --notes "McAdvChat release ${version}" \
     --draft \
     "${assets[@]}"
 
@@ -302,8 +302,8 @@ upload_dev() {
 
   gh release create "$version" \
     --repo "$GITHUB_REPO" \
-    --title "MCProxy ${version} (dev)" \
-    --notes "Development pre-release ${version}" \
+    --title "McAdvChat ${version} (dev)" \
+    --notes "McAdvChat development pre-release ${version}" \
     --prerelease \
     "${assets[@]}"
 
@@ -328,7 +328,7 @@ cleanup_artifacts() {
 
 main() {
   echo ""
-  echo "  MCProxy Release Builder"
+  echo "  McAdvChat Release Builder"
   echo "  ========================"
   echo ""
 

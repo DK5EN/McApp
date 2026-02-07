@@ -1,6 +1,6 @@
 [project]
 name = "mcproxy-ble-service"
-version = "0.51.0"
+version = "1.01.0"
 description = "Remote BLE service for MCProxy MeshCom gateway"
 readme = "README.md"
 requires-python = ">=3.11"
