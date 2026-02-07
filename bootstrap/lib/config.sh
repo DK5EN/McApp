@@ -309,11 +309,19 @@ write_config() {
 }
 EOF
 
-  # Validate JSON before writing
-  if ! jq '.' "$tmp_config" >/dev/null 2>&1; then
-    log_error "Generated config is invalid JSON"
-    rm -f "$tmp_config"
-    return 1
+  # Validate JSON before writing (skip if jq not yet installed on fresh system)
+  if command -v jq >/dev/null 2>&1; then
+    if ! jq '.' "$tmp_config" >/dev/null 2>&1; then
+      log_error "Generated config is invalid JSON"
+      rm -f "$tmp_config"
+      return 1
+    fi
+  elif command -v python3 >/dev/null 2>&1; then
+    if ! python3 -c "import json; json.load(open('$tmp_config'))" 2>/dev/null; then
+      log_error "Generated config is invalid JSON"
+      rm -f "$tmp_config"
+      return 1
+    fi
   fi
 
   # Backup existing config if present
