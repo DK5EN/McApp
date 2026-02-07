@@ -12,6 +12,7 @@
 #   --force       Skip version checks, reinstall everything
 #   --reconfigure Re-prompt for configuration values
 #   --fix         Repair mode: reinstall broken components
+#   --skip        Skip system setup & packages, deploy only
 #   --dev         Install latest development pre-release
 #   --quiet       Minimal output (for cron jobs)
 #   --version     Show script version and exit
@@ -86,6 +87,7 @@ RECONFIGURE=false
 FIX_MODE=false
 QUIET=false
 DEV_MODE=false
+SKIP_TO_DEPLOY=false
 
 #──────────────────────────────────────────────────────────────────
 # LOGGING
@@ -216,6 +218,10 @@ parse_args() {
         FIX_MODE=true
         shift
         ;;
+      --skip)
+        SKIP_TO_DEPLOY=true
+        shift
+        ;;
       --dev)
         DEV_MODE=true
         GITHUB_RAW_BASE="https://raw.githubusercontent.com/DK5EN/McAdvChat/development"
@@ -254,6 +260,7 @@ Options:
   --force       Skip version checks, reinstall everything
   --reconfigure Re-prompt for configuration values
   --fix         Repair mode: reinstall broken components
+  --skip        Skip system setup & packages, deploy only
   --dev         Install latest development pre-release
   --quiet       Minimal output (for cron jobs)
   --version     Show script version and exit
@@ -274,6 +281,10 @@ Examples:
 
   # Install latest dev pre-release
   sudo ./mcapp.sh --dev
+
+  # Quick deploy only (skip system setup & packages)
+  sudo ./mcapp.sh --skip
+  sudo ./mcapp.sh --skip --dev
 
   # Change configuration
   sudo ./mcapp.sh --reconfigure
@@ -322,29 +333,38 @@ main() {
     exit 0
   fi
 
-  # Phase 1.5: Migration from old installation (if needed)
-  if [[ "$state" == "migrate" ]]; then
-    log_step "Detected old installation - migrating..."
-    migrate_old_installation
-    # After migration prep, treat as upgrade
-    state="upgrade"
-  fi
-
-  # Phase 2: Configuration (only if needed)
-  if [[ "$state" == "fresh" || "$state" == "incomplete" || "$RECONFIGURE" == "true" ]]; then
-    log_step "Collecting configuration..."
-    collect_config "$state"
+  if [[ "$SKIP_TO_DEPLOY" == "true" ]]; then
+    # --skip: jump straight to deploy, service restart, and health check
+    if [[ "$state" == "fresh" || "$state" == "incomplete" ]]; then
+      log_error "--skip requires an existing installation (state: ${state})"
+      exit 1
+    fi
+    log_info "Skipping system setup and packages (--skip)"
   else
-    log_info "Using existing configuration"
+    # Phase 1.5: Migration from old installation (if needed)
+    if [[ "$state" == "migrate" ]]; then
+      log_step "Detected old installation - migrating..."
+      migrate_old_installation
+      # After migration prep, treat as upgrade
+      state="upgrade"
+    fi
+
+    # Phase 2: Configuration (only if needed)
+    if [[ "$state" == "fresh" || "$state" == "incomplete" || "$RECONFIGURE" == "true" ]]; then
+      log_step "Collecting configuration..."
+      collect_config "$state"
+    else
+      log_info "Using existing configuration"
+    fi
+
+    # Phase 3: System setup
+    log_step "Configuring system..."
+    setup_system
+
+    # Phase 4: Package installation
+    log_step "Installing packages..."
+    install_packages
   fi
-
-  # Phase 3: System setup
-  log_step "Configuring system..."
-  setup_system
-
-  # Phase 4: Package installation
-  log_step "Installing packages..."
-  install_packages
 
   # Phase 5: Application deployment
   log_step "Deploying application..."
