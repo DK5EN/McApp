@@ -53,6 +53,30 @@ get_python_executable() {
 }
 
 #──────────────────────────────────────────────────────────────────
+# DESKTOP IMAGE DETECTION
+#──────────────────────────────────────────────────────────────────
+
+# Detect if user flashed a desktop image instead of Lite
+# Desktop images have too many packages and will OOM on Pi Zero 2W
+check_desktop_image() {
+  # Desktop images ship xserver-xorg-core; Lite images never do
+  if dpkg -l xserver-xorg-core &>/dev/null 2>&1; then
+    local pkg_count
+    pkg_count=$(dpkg --get-selections 2>/dev/null | wc -l)
+    log_error "Desktop image detected (${pkg_count} packages installed)"
+    log_error ""
+    log_error "McApp requires Raspberry Pi OS Lite (headless)."
+    log_error "The desktop image has too many packages and will cause"
+    log_error "out-of-memory errors on Pi Zero 2W (512MB RAM)."
+    log_error ""
+    log_error "Please reflash with: Raspberry Pi OS Lite (64-bit, Debian Trixie)"
+    log_error "Download: https://www.raspberrypi.com/software/operating-systems/"
+    return 1
+  fi
+  return 0
+}
+
+#──────────────────────────────────────────────────────────────────
 # INSTALLATION STATE DETECTION
 #──────────────────────────────────────────────────────────────────
 

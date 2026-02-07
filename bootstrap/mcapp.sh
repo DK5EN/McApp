@@ -323,6 +323,11 @@ main() {
   local python_version
   python_version=$(get_python_version)
 
+  # Abort early if desktop image detected (OOM risk on Pi Zero 2W)
+  if ! check_desktop_image; then
+    exit 1
+  fi
+
   log_info "Debian: ${debian_codename}"
   log_info "Python: ${python_version}"
   log_info "Install state: ${state}"

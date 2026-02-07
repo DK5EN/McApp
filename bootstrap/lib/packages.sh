@@ -13,6 +13,42 @@ install_packages() {
 }
 
 #──────────────────────────────────────────────────────────────────
+# TEMPORARY SWAP FOR APT OPERATIONS
+#──────────────────────────────────────────────────────────────────
+
+readonly APT_SWAP_FILE="/var/tmp/.mcapp-apt-swap"
+
+# Create temporary 256MB swap if none is active.
+# Uses /var/tmp (not /tmp which may be tmpfs after system.sh Phase 3).
+# Soft failure — logs warning and continues if swap creation fails.
+ensure_apt_swap() {
+  # Skip if swap is already active (system swap or previous run)
+  if [[ $(swapon --show --noheadings 2>/dev/null | wc -l) -gt 0 ]]; then
+    log_info "  Swap already active, skipping temporary swap"
+    return 0
+  fi
+
+  log_info "  Creating temporary 256MB swap for apt operations..."
+  if dd if=/dev/zero of="$APT_SWAP_FILE" bs=1M count=256 status=none 2>/dev/null \
+     && chmod 600 "$APT_SWAP_FILE" \
+     && mkswap "$APT_SWAP_FILE" >/dev/null 2>&1 \
+     && swapon "$APT_SWAP_FILE" 2>/dev/null; then
+    log_ok "  Temporary swap activated"
+  else
+    log_warn "  Could not create temporary swap (continuing without it)"
+    rm -f "$APT_SWAP_FILE" 2>/dev/null
+  fi
+}
+
+# Remove temporary swap file (idempotent)
+remove_apt_swap() {
+  if swapon --show --noheadings 2>/dev/null | grep -q "$APT_SWAP_FILE"; then
+    swapoff "$APT_SWAP_FILE" 2>/dev/null
+  fi
+  rm -f "$APT_SWAP_FILE" 2>/dev/null
+}
+
+#──────────────────────────────────────────────────────────────────
 # APT DEPENDENCIES
 #──────────────────────────────────────────────────────────────────
 
@@ -21,6 +57,10 @@ install_apt_deps() {
 
   # Update package lists and upgrade installed packages
   apt-get update -qq
+
+  # Temporary swap to prevent OOM during large upgrades (Pi Zero 2W has 512MB)
+  ensure_apt_swap
+
   log_info "Upgrading installed packages..."
   DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
   log_ok "  System packages upgraded"
@@ -51,6 +91,9 @@ install_apt_deps() {
 
   # Install all packages
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${packages[@]}"
+
+  # Clean up temporary swap
+  remove_apt_swap
 
   log_ok "  System dependencies installed"
 }
