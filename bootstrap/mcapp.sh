@@ -16,14 +16,27 @@
 #   --quiet       Minimal output (for cron jobs)
 #   --version     Show script version and exit
 
-set -euo pipefail
+set -eo pipefail
 
 #──────────────────────────────────────────────────────────────────
 # CONSTANTS
 #──────────────────────────────────────────────────────────────────
 readonly SCRIPT_VERSION="2.0.0"
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly GITHUB_RAW_BASE="https://raw.githubusercontent.com/DK5EN/McAdvChat/main"
+
+# Detect piped mode (curl | bash) — BASH_SOURCE is empty when piped
+if [[ -n "${BASH_SOURCE[0]:-}" && "${BASH_SOURCE[0]}" != "bash" ]]; then
+  readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  readonly PIPED_MODE=false
+else
+  readonly SCRIPT_DIR=""
+  readonly PIPED_MODE=true
+fi
+
+readonly GITHUB_REPO_BRANCH_DEFAULT="main"
+GITHUB_RAW_BASE="https://raw.githubusercontent.com/DK5EN/McAdvChat/${GITHUB_REPO_BRANCH_DEFAULT}"
+
+# Re-enable nounset now that BASH_SOURCE detection is done
+set -u
 
 # Installation paths
 readonly CONFIG_DIR="/etc/mcapp"
@@ -37,7 +50,7 @@ readonly GITHUB_API_BASE="https://api.github.com/repos/${GITHUB_REPO}"
 # User home directory (handles sudo correctly)
 # When running with sudo, $HOME is /root, but we want the actual user's home
 get_real_home() {
-  if [[ -n "$SUDO_USER" ]]; then
+  if [[ -n "${SUDO_USER:-}" ]]; then
     getent passwd "$SUDO_USER" | cut -d: -f6
   else
     echo "$HOME"
@@ -121,11 +134,14 @@ source_libs() {
   local lib_dir
 
   # If running from bootstrap directory, use local libs
-  if [[ -d "${SCRIPT_DIR}/lib" ]]; then
+  if [[ -n "$SCRIPT_DIR" && -d "${SCRIPT_DIR}/lib" ]]; then
     lib_dir="${SCRIPT_DIR}/lib"
   # If installed to share dir, use those
   elif [[ -d "${SHARE_DIR}/lib" ]]; then
     lib_dir="${SHARE_DIR}/lib"
+  # Piped mode: download lib files from GitHub
+  elif [[ "$PIPED_MODE" == "true" ]]; then
+    lib_dir=$(download_libs)
   else
     log_error "Cannot find library files"
     exit 1
@@ -143,6 +159,27 @@ source_libs() {
   source "${lib_dir}/deploy.sh"
   # shellcheck source=lib/health.sh
   source "${lib_dir}/health.sh"
+}
+
+# Download library files from GitHub for piped mode (curl | bash)
+download_libs() {
+  local tmp_dir
+  tmp_dir=$(mktemp -d)
+  trap "rm -rf '$tmp_dir'" EXIT
+
+  local lib_files=("detect.sh" "config.sh" "system.sh" "packages.sh" "deploy.sh" "health.sh")
+
+  log_info "Piped mode detected — downloading bootstrap libraries..."
+
+  for lib in "${lib_files[@]}"; do
+    if ! curl -fsSL --connect-timeout 10 \
+      "${GITHUB_RAW_BASE}/bootstrap/lib/${lib}" -o "${tmp_dir}/${lib}"; then
+      log_error "Failed to download lib/${lib} from ${GITHUB_RAW_BASE}"
+      exit 1
+    fi
+  done
+
+  echo "$tmp_dir"
 }
 
 #──────────────────────────────────────────────────────────────────
@@ -169,6 +206,7 @@ parse_args() {
         ;;
       --dev)
         DEV_MODE=true
+        GITHUB_RAW_BASE="https://raw.githubusercontent.com/DK5EN/McAdvChat/development"
         shift
         ;;
       --quiet)

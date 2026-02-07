@@ -19,14 +19,14 @@ Rendering on the client, the Raspberry Pi is only a lightweight proxy between a 
 
 Run this single command on a Raspberry Pi for fresh install, update, or repair:
 
-```bash
 # Install latest stable release
+```bash
 curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcapp.sh | sudo bash
 ```
 
-```bash
 # Install latest development pre-release
-curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcapp.sh | sudo bash -s -- --dev
+```bash
+curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/development/bootstrap/mcapp.sh | sudo bash -s -- --dev
 ```
 
 The script auto-detects its context and does the right thing:
