@@ -1,5 +1,5 @@
 #!/bin/bash
-# release.sh - Unified release builder for MCProxy
+# release.sh - Unified release builder for McAdvChat
 #
 # Fully automatic — just run ./release.sh (no arguments needed).
 # Detects the current branch and handles everything:
@@ -8,6 +8,7 @@
 #   development branch → Dev pre-release (auto-numbered, published)
 #
 # Produces a single combined tarball with backend + webapp.
+# Includes automatic cleanup on failure (rollback tag, release, artifacts).
 
 set -euo pipefail
 
@@ -24,6 +25,88 @@ readonly NC='\033[0m'
 log_info() { echo -e "${GREEN}==>${NC} $*" >&2; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $*" >&2; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+
+#──────────────────────────────────────────────────────────────────
+# CLEANUP STATE (used by trap handler)
+#──────────────────────────────────────────────────────────────────
+
+_CLEANUP_TAG=""           # git tag to delete on failure
+_CLEANUP_RELEASE=""       # GitHub release to delete on failure
+_CLEANUP_TARBALL=""       # tarball file to remove
+_CLEANUP_CHECKSUM=""      # checksum file to remove
+_CLEANUP_TMPDIR=""        # temp staging dir to remove
+_RELEASE_SUCCESS=false    # set to true at the very end
+
+on_failure() {
+  if [[ "$_RELEASE_SUCCESS" == true ]]; then
+    return
+  fi
+
+  echo "" >&2
+  log_error "Release failed — rolling back..."
+
+  # Remove local artifacts
+  if [[ -n "$_CLEANUP_TARBALL" && -f "${SCRIPT_DIR}/${_CLEANUP_TARBALL}" ]]; then
+    rm -f "${SCRIPT_DIR}/${_CLEANUP_TARBALL}"
+    log_warn "  Removed ${_CLEANUP_TARBALL}"
+  fi
+  if [[ -n "$_CLEANUP_CHECKSUM" && -f "${SCRIPT_DIR}/${_CLEANUP_CHECKSUM}" ]]; then
+    rm -f "${SCRIPT_DIR}/${_CLEANUP_CHECKSUM}"
+    log_warn "  Removed ${_CLEANUP_CHECKSUM}"
+  fi
+
+  # Remove temp staging directory
+  if [[ -n "$_CLEANUP_TMPDIR" && -d "$_CLEANUP_TMPDIR" ]]; then
+    rm -rf "$_CLEANUP_TMPDIR"
+    log_warn "  Removed staging directory"
+  fi
+
+  # Delete GitHub release (this also removes the remote tag it created)
+  if [[ -n "$_CLEANUP_RELEASE" ]]; then
+    if gh release view "$_CLEANUP_RELEASE" --repo "$GITHUB_REPO" &>/dev/null; then
+      gh release delete "$_CLEANUP_RELEASE" --repo "$GITHUB_REPO" --yes &>/dev/null
+      log_warn "  Deleted GitHub release ${_CLEANUP_RELEASE}"
+    fi
+  fi
+
+  # Delete local git tag
+  if [[ -n "$_CLEANUP_TAG" ]]; then
+    if git -C "$SCRIPT_DIR" tag -l "$_CLEANUP_TAG" | grep -q .; then
+      git -C "$SCRIPT_DIR" tag -d "$_CLEANUP_TAG" &>/dev/null
+      log_warn "  Deleted local tag ${_CLEANUP_TAG}"
+    fi
+    # Delete remote tag (may have been pushed by gh release create)
+    if git -C "$SCRIPT_DIR" ls-remote --tags origin "refs/tags/${_CLEANUP_TAG}" | grep -q .; then
+      git -C "$SCRIPT_DIR" push origin --delete "$_CLEANUP_TAG" &>/dev/null 2>&1 || true
+      log_warn "  Deleted remote tag ${_CLEANUP_TAG}"
+    fi
+  fi
+
+  log_error "Rollback complete."
+}
+
+trap on_failure EXIT
+
+#──────────────────────────────────────────────────────────────────
+# PRE-FLIGHT CLEANUP
+#──────────────────────────────────────────────────────────────────
+
+cleanup_stale_artifacts() {
+  local found=false
+
+  for f in "${SCRIPT_DIR}"/mcadvchat-*.tar.gz "${SCRIPT_DIR}"/mcadvchat-*.tar.gz.sha256 \
+           "${SCRIPT_DIR}"/mcproxy-*.tar.gz "${SCRIPT_DIR}"/mcproxy-*.tar.gz.sha256; do
+    if [[ -f "$f" ]]; then
+      rm -f "$f"
+      log_warn "Removed stale artifact: $(basename "$f")"
+      found=true
+    fi
+  done
+
+  if [[ "$found" == true ]]; then
+    echo "" >&2
+  fi
+}
 
 #──────────────────────────────────────────────────────────────────
 # BRANCH / MODE DETECTION
@@ -74,13 +157,13 @@ validate_tools() {
 # VERSION HELPERS
 #──────────────────────────────────────────────────────────────────
 
-# Read current version from pyproject.toml (e.g., "0.51.0")
+# Read current version from pyproject.toml (e.g., "1.01.0")
 read_pyproject_version() {
   grep -oE '^version = "([^"]+)"' "${SCRIPT_DIR}/pyproject.toml" \
     | head -1 | sed 's/version = "//;s/"//'
 }
 
-# Production: auto-bump minor version (0.51.0 → v0.52.0)
+# Production: auto-bump minor version (1.01.0 → v1.02.0)
 auto_version() {
   local current
   current=$(read_pyproject_version)
@@ -184,6 +267,10 @@ build_tarball() {
   tmp_dir=$(mktemp -d)
   local staging="${tmp_dir}/${prefix}"
 
+  # Register for cleanup on failure
+  _CLEANUP_TMPDIR="$tmp_dir"
+  _CLEANUP_TARBALL="$tarball_name"
+
   log_info "Building release tarball..."
 
   mkdir -p "$staging"
@@ -229,6 +316,7 @@ build_tarball() {
 
   # Cleanup staging
   rm -rf "$tmp_dir"
+  _CLEANUP_TMPDIR=""
 
   log_info "  Built ${tarball_name}"
   echo "$tarball_name"
@@ -237,6 +325,9 @@ build_tarball() {
 generate_checksum() {
   local tarball="$1"
   local checksum_file="${tarball}.sha256"
+
+  # Register for cleanup on failure
+  _CLEANUP_CHECKSUM="$checksum_file"
 
   log_info "Generating SHA256 checksum..."
 
@@ -259,6 +350,8 @@ commit_and_tag_production() {
   git -C "$SCRIPT_DIR" commit -m "[chore] Bump version to ${version}"
   git -C "$SCRIPT_DIR" tag -a "$version" -m "Release ${version}"
 
+  _CLEANUP_TAG="$version"
+
   log_info "  Committed and tagged ${version}"
 }
 
@@ -268,6 +361,8 @@ tag_dev() {
   log_info "Creating lightweight tag ${version}..."
 
   git -C "$SCRIPT_DIR" tag "$version"
+
+  _CLEANUP_TAG="$version"
 
   log_info "  Tagged ${version}"
 }
@@ -281,12 +376,15 @@ upload_production() {
 
   local -a assets=("${SCRIPT_DIR}/${tarball}" "${SCRIPT_DIR}/${checksum}")
 
+  # gh release create also pushes the tag to the remote
   gh release create "$version" \
     --repo "$GITHUB_REPO" \
     --title "McAdvChat ${version}" \
     --notes "McAdvChat release ${version}" \
     --draft \
     "${assets[@]}"
+
+  _CLEANUP_RELEASE="$version"
 
   log_info "  Draft release created: ${version}"
 }
@@ -300,6 +398,7 @@ upload_dev() {
 
   local -a assets=("${SCRIPT_DIR}/${tarball}" "${SCRIPT_DIR}/${checksum}")
 
+  # gh release create also pushes the tag to the remote
   gh release create "$version" \
     --repo "$GITHUB_REPO" \
     --title "McAdvChat ${version} (dev)" \
@@ -307,11 +406,13 @@ upload_dev() {
     --prerelease \
     "${assets[@]}"
 
+  _CLEANUP_RELEASE="$version"
+
   log_info "  Pre-release published: ${version}"
 }
 
 #──────────────────────────────────────────────────────────────────
-# CLEANUP
+# FINAL CLEANUP (success path)
 #──────────────────────────────────────────────────────────────────
 
 cleanup_artifacts() {
@@ -319,6 +420,13 @@ cleanup_artifacts() {
   local checksum="$2"
 
   rm -f "${SCRIPT_DIR}/${tarball}" "${SCRIPT_DIR}/${checksum}"
+
+  # Clear trap state so on_failure doesn't try to remove them again
+  _CLEANUP_TARBALL=""
+  _CLEANUP_CHECKSUM=""
+  _CLEANUP_TAG=""
+  _CLEANUP_RELEASE=""
+
   log_info "  Cleaned up local artifacts"
 }
 
@@ -339,6 +447,9 @@ main() {
 
   log_info "Mode: ${mode} (detected from branch)"
   echo ""
+
+  # Remove stale artifacts from previous (failed) runs
+  cleanup_stale_artifacts
 
   if [[ "$mode" == "production" ]]; then
     #── Production release ────────────────────────────────────────
@@ -374,6 +485,8 @@ main() {
 
     # Step 7: Cleanup
     cleanup_artifacts "$tarball" "$checksum"
+
+    _RELEASE_SUCCESS=true
 
     echo ""
     log_info "Release ${version} created successfully!"
@@ -413,15 +526,13 @@ main() {
     local checksum
     checksum=$(generate_checksum "$tarball")
 
-    # Step 5: Upload as pre-release (published, not draft)
+    # Step 5: Upload as pre-release (also pushes the tag to remote)
     upload_dev "$version" "$tarball" "$checksum"
 
-    # Step 6: Push the tag immediately (no review step for dev)
-    log_info "Pushing tag ${version}..."
-    git -C "$SCRIPT_DIR" push origin "$version"
-
-    # Step 7: Cleanup
+    # Step 6: Cleanup
     cleanup_artifacts "$tarball" "$checksum"
+
+    _RELEASE_SUCCESS=true
 
     echo ""
     log_info "Dev release ${version} published!"
