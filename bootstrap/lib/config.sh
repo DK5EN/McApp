@@ -360,6 +360,12 @@ EOF
   # Atomic move
   mv "$tmp_config" "$CONFIG_FILE"
   chmod 640 "$CONFIG_FILE"
+
+  # Ensure the service user can read the config (script runs as root via sudo)
+  local run_user="${SUDO_USER:-root}"
+  if [[ "$run_user" != "root" ]]; then
+    chown "$run_user:$run_user" "$CONFIG_FILE"
+  fi
 }
 
 # Migrate config to add missing fields (for upgrades)
@@ -405,6 +411,11 @@ migrate_config() {
   if [[ "$updated" == "true" ]]; then
     cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
     mv "$tmp_config" "$CONFIG_FILE"
+    # Preserve ownership for the service user
+    local run_user="${SUDO_USER:-root}"
+    if [[ "$run_user" != "root" ]]; then
+      chown "$run_user:$run_user" "$CONFIG_FILE"
+    fi
     log_ok "Config migrated successfully"
   else
     rm -f "$tmp_config"
