@@ -21,7 +21,7 @@ set -eo pipefail
 #──────────────────────────────────────────────────────────────────
 # CONSTANTS
 #──────────────────────────────────────────────────────────────────
-readonly SCRIPT_VERSION="2.0.3"
+readonly SCRIPT_VERSION="2.0.4"
 
 # Detect piped mode (curl | bash) — BASH_SOURCE is empty when piped
 if [[ -n "${BASH_SOURCE[0]:-}" && "${BASH_SOURCE[0]}" != "bash" ]]; then
@@ -139,11 +139,18 @@ source_libs() {
   # If installed to share dir, use those
   elif [[ -d "${SHARE_DIR}/lib" ]]; then
     lib_dir="${SHARE_DIR}/lib"
-  # Piped mode: download lib files from GitHub
+  # Piped mode: prefer local libs in user's home, then download from GitHub
   elif [[ "$PIPED_MODE" == "true" ]]; then
-    lib_dir=$(download_libs)
-    # Clean up downloaded libs when script exits
-    trap "rm -rf '$lib_dir'" EXIT
+    local real_home
+    real_home=$(get_real_home)
+    if [[ -d "${real_home}/bootstrap/lib" ]]; then
+      lib_dir="${real_home}/bootstrap/lib"
+      log_info "Piped mode — using local libs from ${lib_dir}"
+    else
+      lib_dir=$(download_libs)
+      # Clean up downloaded libs when script exits
+      trap "rm -rf '$lib_dir'" EXIT
+    fi
   else
     log_error "Cannot find library files"
     exit 1
