@@ -1,12 +1,12 @@
 [Unit]
-Description=MCProxy BLE Service
+Description=McApp BLE Service
 After=bluetooth.target dbus.service
 Wants=bluetooth.target
 
 [Service]
 Type=simple
 User={{USER}}
-WorkingDirectory={{HOME}}/mcproxy
+WorkingDirectory={{HOME}}/mcapp
 Environment="PATH={{HOME}}/.local/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="BLE_SERVICE_API_KEY={{BLE_API_KEY}}"
 Environment="PYTHONUNBUFFERED=1"
@@ -21,7 +21,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=true
-ReadWritePaths={{HOME}}/mcproxy {{HOME}}/.cache/uv
+ReadWritePaths={{HOME}}/mcapp {{HOME}}/.cache/uv
 
 [Install]
 WantedBy=multi-user.target

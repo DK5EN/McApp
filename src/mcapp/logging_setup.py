@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Centralized logging configuration for MCProxy.
+Centralized logging configuration for McApp.
 
 Replaces scattered `if has_console: print(...)` patterns with proper logging.
 Keeps emoji prefixes for visual scanning in logs.
@@ -43,7 +43,7 @@ def setup_logging(
     simple_format: bool = False,
 ) -> None:
     """
-    Configure logging for MCProxy.
+    Configure logging for McApp.
 
     Args:
         verbose: Enable DEBUG level logging (default: INFO)
@@ -98,7 +98,7 @@ def has_console() -> bool:
 
 
 # Convenience function for gradual migration
-def console_print(msg: str, level: str = "info", logger_name: str = "mcproxy") -> None:
+def console_print(msg: str, level: str = "info", logger_name: str = "mcapp") -> None:
     """
     Bridge function for migrating from print() to logging.
     Can be used during transition period.

@@ -1,4 +1,4 @@
-# BLE Service for MCProxy
+# BLE Service for McApp
 """
 Standalone BLE service that exposes Bluetooth Low Energy functionality
 via HTTP REST API and Server-Sent Events (SSE).

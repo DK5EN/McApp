@@ -1,3 +1,3 @@
 from importlib.metadata import version
 
-__version__ = version("mcproxy")
+__version__ = version("mcapp")

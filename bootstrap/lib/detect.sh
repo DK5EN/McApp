@@ -1,5 +1,5 @@
 #!/bin/bash
-# detect.sh - State detection functions for MCProxy bootstrap
+# detect.sh - State detection functions for McApp bootstrap
 # Determines: fresh install, incomplete, or upgrade
 
 #──────────────────────────────────────────────────────────────────
@@ -59,7 +59,7 @@ get_python_executable() {
 # Template placeholder used in config.json.tmpl
 readonly CONFIG_TEMPLATE_MARKER="DK0XXX-99"
 
-# Note: OLD_VENV_DIR and VENV_DIR are set by init_venv_paths() in mcproxy.sh
+# Note: OLD_VENV_DIR and VENV_DIR are set by init_venv_paths() in mcapp.sh
 # They handle the sudo case correctly (using SUDO_USER's home, not root's)
 
 # Detect installation state
@@ -104,13 +104,13 @@ needs_migration() {
   fi
 
   # systemd service points to old venv path or old C2-mc-ws.py
-  local service_file="/etc/systemd/system/mcproxy.service"
+  local service_file="/etc/systemd/system/mcapp.service"
   if [[ -f "$service_file" ]]; then
     if grep -q "C2-mc-ws.py" "$service_file" 2>/dev/null; then
       return 0
     fi
     if grep -q "~/venv\|/home/.*/venv/bin" "$service_file" 2>/dev/null; then
-      if ! grep -q "uv run mcproxy" "$service_file" 2>/dev/null; then
+      if ! grep -q "uv run mcapp" "$service_file" 2>/dev/null; then
         return 0
       fi
     fi
@@ -133,16 +133,16 @@ has_old_venv() {
   [[ -d "$OLD_VENV_DIR" ]] && [[ -f "${OLD_VENV_DIR}/bin/python" ]]
 }
 
-# Note: get_real_home() is defined in mcproxy.sh and available here
+# Note: get_real_home() is defined in mcapp.sh and available here
 
 # Perform migration from old installation
 migrate_old_installation() {
   log_info "Migrating from old installation..."
 
   # Step 1: Stop the service if running
-  if systemctl is-active --quiet mcproxy 2>/dev/null; then
-    log_info "  Stopping mcproxy service..."
-    systemctl stop mcproxy
+  if systemctl is-active --quiet mcapp 2>/dev/null; then
+    log_info "  Stopping mcapp service..."
+    systemctl stop mcapp
   fi
 
   # Step 2: Note old files (leave in place, harmless)
@@ -157,11 +157,11 @@ migrate_old_installation() {
     log_info "  Found old venv at ${old_venv} (will be preserved)"
   fi
   if [[ -d "$VENV_DIR" ]]; then
-    log_info "  Found old mcproxy-venv at ${VENV_DIR} (will be preserved)"
+    log_info "  Found old mcapp-venv at ${VENV_DIR} (will be preserved)"
   fi
 
   # Step 3: Backup systemd service file
-  local service_file="/etc/systemd/system/mcproxy.service"
+  local service_file="/etc/systemd/system/mcapp.service"
   if [[ -f "$service_file" ]]; then
     log_info "  Backing up old systemd service file..."
     cp "$service_file" "${service_file}.bak.$(date +%Y%m%d%H%M%S)"
@@ -257,7 +257,7 @@ get_installed_webapp_version() {
   echo "not_installed"
 }
 
-# Get installed MCProxy version from pyproject.toml
+# Get installed McApp version from pyproject.toml
 get_installed_scripts_version() {
   local pyproject="${INSTALL_DIR}/pyproject.toml"
 
@@ -269,7 +269,7 @@ get_installed_scripts_version() {
 }
 
 # Get remote webapp version from GitHub
-# With combined tarballs, the webapp version matches the MCProxy release version.
+# With combined tarballs, the webapp version matches the McApp release version.
 # Falls back to the old raw.githubusercontent.com method for backward compat.
 get_remote_webapp_version() {
   # Primary: webapp version is the same as the latest release tag
@@ -288,7 +288,7 @@ get_remote_webapp_version() {
     | grep -oP 'v\d+\.\d+\.\d+' | head -1 || echo "unknown"
 }
 
-# Get remote MCProxy version from GitHub Releases API
+# Get remote McApp version from GitHub Releases API
 get_remote_scripts_version() {
   local tag
   tag=$(curl -fsSL --connect-timeout 5 \
@@ -347,20 +347,20 @@ venv_is_valid() {
 check_versions_report() {
   local installed_webapp
   local remote_webapp
-  local installed_mcproxy
-  local remote_mcproxy
+  local installed_mcapp
+  local remote_mcapp
 
   installed_webapp=$(get_installed_webapp_version)
   remote_webapp=$(get_remote_webapp_version)
-  installed_mcproxy=$(get_installed_scripts_version)
-  remote_mcproxy=$(get_remote_scripts_version)
+  installed_mcapp=$(get_installed_scripts_version)
+  remote_mcapp=$(get_remote_scripts_version)
 
   echo "  Version comparison:"
   echo ""
   echo "  Component      Installed    Remote"
   echo "  ─────────────────────────────────────"
   printf "  %-14s %-12s %s\n" "Webapp" "$installed_webapp" "$remote_webapp"
-  printf "  %-14s %-12s %s\n" "MCProxy" "$installed_mcproxy" "$remote_mcproxy"
+  printf "  %-14s %-12s %s\n" "McApp" "$installed_mcapp" "$remote_mcapp"
   echo ""
 
   # Determine what would be updated
@@ -370,9 +370,9 @@ check_versions_report() {
     echo "  [DEPLOY] Webapp is current"
   fi
 
-  if [[ "$installed_mcproxy" == "not_installed" ]] || ! version_gte "$installed_mcproxy" "${remote_mcproxy#v}"; then
-    echo "  [DEPLOY] Would update MCProxy: ${installed_mcproxy} → ${remote_mcproxy}"
+  if [[ "$installed_mcapp" == "not_installed" ]] || ! version_gte "$installed_mcapp" "${remote_mcapp#v}"; then
+    echo "  [DEPLOY] Would update McApp: ${installed_mcapp} → ${remote_mcapp}"
   else
-    echo "  [DEPLOY] MCProxy is current"
+    echo "  [DEPLOY] McApp is current"
   fi
 }

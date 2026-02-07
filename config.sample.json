@@ -1,6 +1,6 @@
 {
   "CALL_SIGN": "OE0XXX-99",
-  "USER_INFO_TEXT": "MCProxy MeshCom Message Proxy",
+  "USER_INFO_TEXT": "McApp MeshCom Message Proxy",
 
   "UDP_PORT_list": 1799,
   "UDP_PORT_send": 1799,
@@ -14,7 +14,7 @@
   "SSE_PORT": 2981,
 
   "STORAGE_BACKEND": "memory",
-  "DB_PATH": "/var/lib/mcproxy/messages.db",
+  "DB_PATH": "/var/lib/mcapp/messages.db",
   "MAX_STORAGE_SIZE_MB": 100,
   "PRUNE_HOURS": 1350,
   "STORE_FILE_NAME": "mcdump.json",

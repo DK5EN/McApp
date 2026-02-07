@@ -12,7 +12,7 @@
   - ble_service/src/ble_adapter.py - Clean D-Bus/BlueZ wrapper (~600 lines)     
   - ble_service/src/main.py - FastAPI REST API + SSE endpoints                  
   - ble_service/pyproject.toml - Dependencies                                   
-  - ble_service/mcproxy-ble.service - Systemd service file                      
+  - ble_service/mcapp-ble.service - Systemd service file                      
   - ble_service/README.md - API documentation                                   
                                                                                 
   BLE Client Abstraction                                                        
@@ -41,22 +41,22 @@
   }                                                                             
                                                                                 
   Environment variable overrides:                                               
-  - MCPROXY_BLE_MODE - Override BLE mode                                        
-  - MCPROXY_BLE_URL - Override remote URL                                       
-  - MCPROXY_BLE_API_KEY - Override API key                                      
+  - MCAPP_BLE_MODE - Override BLE mode                                        
+  - MCAPP_BLE_URL - Override remote URL                                       
+  - MCAPP_BLE_API_KEY - Override API key                                      
                                                                                 
   Testing Workflow                                                              
                                                                                 
   1. OrbStack (Mac) with disabled BLE:                                          
-  export MCPROXY_BLE_MODE=disabled                                              
+  export MCAPP_BLE_MODE=disabled                                              
   python C2-mc-ws.py                                                            
   2. OrbStack with remote BLE:                                                  
   # On Pi:                                                                      
   cd ble_service && uvicorn src.main:app --host 0.0.0.0 --port 8081             
                                                                                 
   # On Mac:                                                                     
-  export MCPROXY_BLE_MODE=remote                                                
-  export MCPROXY_BLE_URL=http://pi.local:8081                                   
+  export MCAPP_BLE_MODE=remote                                                
+  export MCAPP_BLE_URL=http://pi.local:8081                                   
   python C2-mc-ws.py                                                            
   3. Pi with local BLE (unchanged default behavior):                            
   python C2-mc-ws.py  # Uses local D-Bus/BlueZ   

@@ -1,4 +1,4 @@
-# ADR: MCProxy Bootstrap Architecture Rewrite
+# ADR: McApp Bootstrap Architecture Rewrite
 
 **Date:** 2026-01-25
 **Status:** Implemented
@@ -6,10 +6,10 @@
 
 ## Context
 
-The existing MCProxy installation process consisted of 3 separate shell scripts (`install_caddy.sh`, `mc-install.sh`, `install_mcproxy.sh`) that required:
+The existing McApp installation process consisted of 3 separate shell scripts (`install_caddy.sh`, `mc-install.sh`, `install_mcapp.sh`) that required:
 - 4 separate curl commands
 - Manual editing of config.json between runs
-- Two-phase execution of install_mcproxy.sh
+- Two-phase execution of install_mcapp.sh
 
 This created poor operator experience and several technical issues:
 - Not idempotent (broke on re-run)
@@ -23,7 +23,7 @@ This created poor operator experience and several technical issues:
 
 Implement a unified bootstrap system with:
 
-1. **Single entry point** (`mcproxy.sh`) handling all scenarios
+1. **Single entry point** (`mcapp.sh`) handling all scenarios
 2. **State detection** to determine fresh/incomplete/migrate/upgrade
 3. **uv package manager** instead of pip
 4. **Idempotent operations** using marker-based config management
@@ -34,7 +34,7 @@ Implement a unified bootstrap system with:
 
 ```
 bootstrap/
-├── mcproxy.sh           # Main entry point, CLI parsing
+├── mcapp.sh             # Main entry point, CLI parsing
 ├── lib/
 │   ├── detect.sh        # State & version detection
 │   ├── config.sh        # Interactive prompts & validation
@@ -123,7 +123,7 @@ bootstrap/
 
 - Larger codebase (~2,700 lines vs ~500 lines total before)
 - More complex state machine logic
-- Two venv locations during migration period (`~/venv` + `~/mcproxy-venv`)
+- Two venv locations during migration period (`~/venv` + `~/mcapp-venv`)
 
 ### Neutral
 
@@ -134,10 +134,10 @@ bootstrap/
 
 ### Migration Path
 
-The script detects old installations by checking for `~/venv` without `~/mcproxy-venv`. Migration:
-1. Stops mcproxy service
+The script detects old installations by checking for `~/venv` without `~/mcapp-venv`. Migration:
+1. Stops mcapp service
 2. Preserves old venv (not deleted)
-3. Creates new venv at `~/mcproxy-venv`
+3. Creates new venv at `~/mcapp-venv`
 4. Updates systemd service paths
 5. Adds missing config fields
 
@@ -162,5 +162,5 @@ Before release:
 ## References
 
 - Plan document: Detailed architecture plan in conversation
-- Old scripts: `install_caddy.sh`, `mc-install.sh`, `install_mcproxy.sh`
+- Old scripts: `install_caddy.sh`, `mc-install.sh`, `install_mcapp.sh`
 - uv documentation: https://docs.astral.sh/uv/

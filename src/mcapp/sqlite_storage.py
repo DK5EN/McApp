@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SQLite storage backend for MCProxy.
+SQLite storage backend for McApp.
 
 Provides persistent message storage as an alternative to in-memory deque.
 Uses Python's built-in sqlite3 with asyncio.to_thread() for async operations.

@@ -1,10 +1,10 @@
-# MCProxy BLE Service
+# McApp BLE Service
 
 Standalone BLE service that exposes MeshCom BLE device functionality via HTTP REST API and Server-Sent Events (SSE).
 
 ## Purpose
 
-This service enables the MCProxy "brain" to run on hardware without Bluetooth support (e.g., Mac, cloud server, OrbStack VM) while the BLE service runs on a Raspberry Pi with Bluetooth hardware.
+This service enables the McApp "brain" to run on hardware without Bluetooth support (e.g., Mac, cloud server, OrbStack VM) while the BLE service runs on a Raspberry Pi with Bluetooth hardware.
 
 ## Quick Start
 
@@ -12,7 +12,7 @@ This service enables the MCProxy "brain" to run on hardware without Bluetooth su
 
 ```bash
 # Install dependencies
-cd ~/MCProxy/ble_service
+cd ~/mcapp/ble_service
 pip install -e .
 
 # Set environment variables
@@ -27,16 +27,16 @@ uvicorn src.main:app --host 0.0.0.0 --port 8081
 
 ```bash
 # Copy service file
-sudo cp mcproxy-ble.service /etc/systemd/system/
+sudo cp mcapp-ble.service /etc/systemd/system/
 
 # Edit API key
-sudo systemctl edit mcproxy-ble
+sudo systemctl edit mcapp-ble
 # Add: Environment=BLE_SERVICE_API_KEY=your-secret-key
 
 # Enable and start
 sudo systemctl daemon-reload
-sudo systemctl enable mcproxy-ble
-sudo systemctl start mcproxy-ble
+sudo systemctl enable mcapp-ble
+sudo systemctl start mcapp-ble
 ```
 
 ## API Endpoints
@@ -113,7 +113,7 @@ curl -N -H "X-API-Key: secret" \
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `BLE_SERVICE_PORT` | 8081 | HTTP server port |
-| `BLE_SERVICE_API_KEY` | mcproxy-ble-secret | API authentication key |
+| `BLE_SERVICE_API_KEY` | mcapp-ble-secret | API authentication key |
 | `BLE_SERVICE_CORS_ORIGINS` | * | Allowed CORS origins |
 
 ## Notification Format (SSE)

@@ -1,4 +1,4 @@
-# release.sh — MCProxy Unified Release Workflow
+# release.sh — McApp Unified Release Workflow
 
 Builds a combined tarball (backend + webapp), uploads it to GitHub Releases, and manages version numbers. Runs on Mac (the dev machine), not on the Pi.
 
@@ -11,7 +11,7 @@ Builds a combined tarball (backend + webapp), uploads it to GitHub Releases, and
 - `npm` — for building the Vue.js webapp
 - `shasum` — SHA256 checksum (ships with macOS)
 - `tar`, `sed`, `jq`
-- The webapp repo must be at `../webapp` relative to MCProxy
+- The webapp repo must be at `../webapp` relative to McApp
 
 ## Usage
 
@@ -59,12 +59,12 @@ git checkout development
 ## Tarball Structure (Both Modes)
 
 ```
-mcproxy-v0.52.0/
+mcapp-v0.52.0/
   pyproject.toml
   uv.lock
   config.sample.json
-  src/mcproxy/           # Python package
-  src/mcproxy/commands/  # Commands sub-package
+  src/mcapp/             # Python package
+  src/mcapp/commands/    # Commands sub-package
   ble_service/src/       # BLE service source
   ble_service/pyproject.toml
   bootstrap/             # Bootstrap scripts
@@ -100,21 +100,21 @@ Dev releases are auto-published and auto-pushed — no manual steps required.
 ### Production (default)
 
 ```bash
-sudo ./mcproxy.sh
+sudo ./mcapp.sh
 ```
 
 1. Queries `/releases/latest` for the newest stable tag (pre-releases are excluded)
-2. Downloads `mcproxy-v0.52.0.tar.gz` from the release assets
+2. Downloads `mcapp-v0.52.0.tar.gz` from the release assets
 3. Verifies SHA256 checksum
-4. Extracts to `~/mcproxy/` with `--strip-components=1`
-5. Copies `~/mcproxy/webapp/` to `/var/www/html/webapp/` (bundled SPA)
+4. Extracts to `~/mcapp/` with `--strip-components=1`
+5. Copies `~/mcapp/webapp/` to `/var/www/html/webapp/` (bundled SPA)
 6. Runs `uv sync` to install Python dependencies
-7. Renders systemd service from `bootstrap/templates/mcproxy.service`
+7. Renders systemd service from `bootstrap/templates/mcapp.service`
 
 ### Dev mode
 
 ```bash
-sudo ./mcproxy.sh --dev
+sudo ./mcapp.sh --dev
 ```
 
 1. Queries `/releases` and finds the first pre-release
@@ -132,6 +132,6 @@ pyproject.toml  ──►  importlib.metadata  ──►  __version__  ──►
                      (at runtime)              (__init__.py)      (main.py)
 ```
 
-Single source of truth is `pyproject.toml`. The Python package reads it at runtime via `importlib.metadata.version("mcproxy")`. The bootstrap reads it via `grep` from the installed `pyproject.toml`.
+Single source of truth is `pyproject.toml`. The Python package reads it at runtime via `importlib.metadata.version("mcapp")`. The bootstrap reads it via `grep` from the installed `pyproject.toml`.
 
 For dev releases, the tag (e.g., `v0.51.0-dev.3`) is written to `webapp/version.txt` but `pyproject.toml` retains the base version (`0.51.0`).

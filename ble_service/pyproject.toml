@@ -1,7 +1,7 @@
 [project]
-name = "mcproxy-ble-service"
+name = "mcapp-ble-service"
 version = "1.01.0"
-description = "Remote BLE service for MCProxy MeshCom gateway"
+description = "Remote BLE service for McApp MeshCom gateway"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"

@@ -1,10 +1,10 @@
-⏺ The MCProxy Bootstrap Architecture has been implemented. Here's what was      
+⏺ The McApp Bootstrap Architecture has been implemented. Here's what was      
   created:                                                                      
                                                                                 
   Created Files                                                                 
                                                                                 
   bootstrap/                                                                    
-  ├── mcproxy.sh           (320 lines) - Main entry point                       
+  ├── mcapp.sh             (320 lines) - Main entry point                       
   ├── lib/                                                                      
   │   ├── detect.sh        (223 lines) - State detection                        
   │   ├── config.sh        (378 lines) - Interactive config & validation        
@@ -14,7 +14,7 @@
   │   └── health.sh        (249 lines) - Health checks                          
   ├── templates/                                                                
   │   ├── config.json.tmpl  - Config template                                   
-  │   ├── mcproxy.service   - systemd unit file                                 
+  │   ├── mcapp.service     - systemd unit file                                 
   │   ├── Caddyfile.tmpl    - Caddy reverse proxy config                        
   │   ├── nftables.conf     - Firewall rules                                    
   │   └── journald.conf     - Volatile journal config                           
@@ -49,14 +49,14 @@
                                                                                 
   # Fresh install, update, or repair - same command                             
   curl -fsSL                                                                    
-  https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcproxy.sh | 
+  https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcapp.sh | 
   sudo bash                                                                     
                                                                                 
   # Other options                                                               
-  sudo ./mcproxy.sh --check        # Dry-run                                    
-  sudo ./mcproxy.sh --force        # Force reinstall                            
-  sudo ./mcproxy.sh --fix          # Repair mode                                
-  sudo ./mcproxy.sh --reconfigure  # Change config                              
+  sudo ./mcapp.sh --check        # Dry-run                                    
+  sudo ./mcapp.sh --force        # Force reinstall                            
+  sudo ./mcapp.sh --fix          # Repair mode                                
+  sudo ./mcapp.sh --reconfigure  # Change config                              
                                                       
 
 
@@ -68,8 +68,8 @@ migration support for existing installations. Here's how it works:
   ┌─────────────────────────────────────────────────────────────────┐           
   │                    Old Installation                             │           
   │  ~/venv                    (pip-based Python venv)              │           
-  │  /etc/mcadvchat/config.json (existing config)                   │           
-  │  /etc/systemd/system/mcproxy.service (points to ~/venv)         │           
+  │  /etc/mcapp/config.json (existing config)                   │           
+  │  /etc/systemd/system/mcapp.service (points to ~/venv)         │           
   └───────────────────────────────┬─────────────────────────────────┘           
                                   │                                             
                       curl ... | sudo bash                                      
@@ -78,15 +78,15 @@ migration support for existing installations. Here's how it works:
   ┌─────────────────────────────────────────────────────────────────┐           
   │                    Detection Phase                              │           
   │  detect_install_state() → "migrate"                             │           
-  │  (found ~/venv but no ~/mcproxy-venv)                           │           
+  │  (found ~/venv but no ~/mcapp-venv)                           │           
   └───────────────────────────────┬─────────────────────────────────┘           
                                   │                                             
                                   ▼                                             
   ┌─────────────────────────────────────────────────────────────────┐           
   │                    Migration Phase                              │           
-  │  1. Stop mcproxy service                                        │           
+  │  1. Stop mcapp service                                        │           
   │  2. Preserve old ~/venv (not deleted)                           │           
-  │  3. Create new ~/mcproxy-venv with uv                           │           
+  │  3. Create new ~/mcapp-venv with uv                           │           
   │  4. Update systemd service paths                                │           
   │  5. Add missing config fields (BLE_ENABLED, etc.)               │           
   └───────────────────────────────┬─────────────────────────────────┘           
@@ -94,9 +94,9 @@ migration support for existing installations. Here's how it works:
                                   ▼                                             
   ┌─────────────────────────────────────────────────────────────────┐           
   │                    New Installation                             │           
-  │  ~/mcproxy-venv            (uv-based Python venv)               │           
-  │  /etc/mcadvchat/config.json (updated with new fields)           │           
-  │  /etc/systemd/system/mcproxy.service (points to ~/mcproxy-venv) │           
+  │  ~/mcapp-venv            (uv-based Python venv)               │           
+  │  /etc/mcapp/config.json (updated with new fields)           │           
+  │  /etc/systemd/system/mcapp.service (points to ~/mcapp-venv) │           
   │  + tmpfs, nftables, journald hardening                          │           
   └─────────────────────────────────────────────────────────────────┘           
                                                                                 
@@ -108,7 +108,7 @@ migration support for existing installations. Here's how it works:
   ├──────────┼───────────────────────────────────────────┤                      
   │ Old venv │ Kept at ~/venv for rollback safety        │                      
   ├──────────┼───────────────────────────────────────────┤                      
-  │ New venv │ Created at ~/mcproxy-venv with uv         │                      
+  │ New venv │ Created at ~/mcapp-venv with uv         │                      
   ├──────────┼───────────────────────────────────────────┤                      
   │ systemd  │ Service file updated to new paths         │                      
   ├──────────┼───────────────────────────────────────────┤                      
@@ -117,7 +117,7 @@ migration support for existing installations. Here's how it works:
   Dry-Run for Existing Installs                                                 
                                                                                 
   Users can check what would happen before migrating:                           
-  sudo ./mcproxy.sh --check                                                     
+  sudo ./mcapp.sh --check                                                     
                                                                                 
   This will show:                                                               
   Current State: migrate                                                        
@@ -125,9 +125,9 @@ migration support for existing installations. Here's how it works:
   Would perform the following actions:                                          
                                                                                 
     [MIGRATE] Detected old installation (~/venv)                                
-    [MIGRATE] Stop mcproxy service                                              
+    [MIGRATE] Stop mcapp service                                              
     [MIGRATE] Preserve old venv at ~/venv                                       
-    [MIGRATE] Create new venv at ~/mcproxy-venv                                 
+    [MIGRATE] Create new venv at ~/mcapp-venv                                 
     [MIGRATE] Update systemd service paths                                      
     [MIGRATE] Add missing config fields                                         
     [SYSTEM] Configure tmpfs, firewall, journald                                

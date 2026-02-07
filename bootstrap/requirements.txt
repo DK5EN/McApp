@@ -1,4 +1,4 @@
-# MCProxy Python dependencies
+# McApp Python dependencies
 # Minimum versions for compatibility - uv will resolve latest compatible versions
 #
 # Core networking

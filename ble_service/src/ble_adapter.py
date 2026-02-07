@@ -28,7 +28,7 @@ DEVICE_INTERFACE = "org.bluez.Device1"
 GATT_CHARACTERISTIC_INTERFACE = "org.bluez.GattCharacteristic1"
 PROPERTIES_INTERFACE = "org.freedesktop.DBus.Properties"
 OBJECT_MANAGER_INTERFACE = "org.freedesktop.DBus.ObjectManager"
-AGENT_PATH = "/com/mcproxy/agent"
+AGENT_PATH = "/com/mcapp/agent"
 
 # Nordic UART Service UUIDs
 NUS_RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  # Write to device

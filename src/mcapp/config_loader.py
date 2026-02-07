@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Centralized configuration for MCProxy.
+Centralized configuration for McApp.
 
 Provides dataclass-based configuration with defaults and validation.
 Supports environment variable overrides for deployment flexibility.
@@ -70,7 +70,7 @@ class StorageConfig:
     """Message storage configuration."""
 
     backend: str = "memory"  # "memory" or "sqlite"
-    db_path: str = "/var/lib/mcproxy/messages.db"
+    db_path: str = "/var/lib/mcapp/messages.db"
     max_size_mb: int = 10
     prune_hours: int = 168  # 7 days
     dump_file: str = "mcdump.json"
@@ -91,7 +91,7 @@ class LocationConfig:
 
 @dataclass
 class Config:
-    """Main MCProxy configuration."""
+    """Main McApp configuration."""
 
     # Identity
     call_sign: str = ""
@@ -141,10 +141,10 @@ class Config:
     @staticmethod
     def _get_default_path() -> Path:
         """Get default config path based on environment."""
-        if os.getenv("MCADVCHAT_ENV") == "dev":
+        if os.getenv("MCAPP_ENV") == "dev":
             logger.debug("DEV environment detected")
-            return Path("/etc/mcadvchat/config.dev.json")
-        return Path("/etc/mcadvchat/config.json")
+            return Path("/etc/mcapp/config.dev.json")
+        return Path("/etc/mcapp/config.json")
 
     @classmethod
     def _from_dict(cls, data: dict[str, Any]) -> "Config":
@@ -168,9 +168,9 @@ class Config:
         )
 
         # BLE mode can also come from environment variable for easy override
-        ble_mode = os.getenv("MCPROXY_BLE_MODE", data.get("BLE_MODE", "local"))
-        ble_remote_url = os.getenv("MCPROXY_BLE_URL", data.get("BLE_REMOTE_URL", ""))
-        ble_api_key = os.getenv("MCPROXY_BLE_API_KEY", data.get("BLE_API_KEY", ""))
+        ble_mode = os.getenv("MCAPP_BLE_MODE", data.get("BLE_MODE", "local"))
+        ble_remote_url = os.getenv("MCAPP_BLE_URL", data.get("BLE_REMOTE_URL", ""))
+        ble_api_key = os.getenv("MCAPP_BLE_API_KEY", data.get("BLE_API_KEY", ""))
 
         ble = BLEConfig(
             mode=ble_mode,
@@ -185,7 +185,7 @@ class Config:
 
         storage = StorageConfig(
             backend=data.get("STORAGE_BACKEND", "memory"),
-            db_path=data.get("DB_PATH", "/var/lib/mcproxy/messages.db"),
+            db_path=data.get("DB_PATH", "/var/lib/mcapp/messages.db"),
             max_size_mb=data.get("MAX_STORAGE_SIZE_MB", 10),
             prune_hours=data.get("PRUNE_HOURS", 168),
             dump_file=data.get("STORE_FILE_NAME", "mcdump.json"),

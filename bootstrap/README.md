@@ -1,6 +1,6 @@
-# MCProxy Bootstrap
+# McApp Bootstrap
 
-Unified installer and updater for MCProxy - the MeshCom message proxy for ham radio operators.
+Unified installer and updater for McApp - the MeshCom message proxy for ham radio operators.
 
 > **Installation instructions, CLI options, and service management** are documented in the main [README.md](../README.md). This file covers bootstrap internals and troubleshooting only.
 
@@ -10,20 +10,20 @@ Unified installer and updater for MCProxy - the MeshCom message proxy for ham ra
 |-----------|---------|
 | lighttpd | Static file server for Vue.js webapp |
 | uv | Python package manager (creates venv via `uv sync`) |
-| mcproxy.service | systemd service for the proxy |
+| mcapp.service | systemd service for the proxy |
 | nftables/iptables | Firewall rules |
 
 ## Migrating from Old Installation
 
-If you previously installed MCProxy using the old scripts (`install_caddy.sh`, `mc-install.sh`, `install_mcproxy.sh`), the bootstrap script will automatically detect and migrate your installation.
+If you previously installed McApp using the old scripts (`install_caddy.sh`, `mc-install.sh`, `install_mcapp.sh`), the bootstrap script will automatically detect and migrate your installation.
 
 **What gets migrated:**
 - Your existing `config.json` is preserved (new fields added automatically)
 - Webapp and Python scripts are updated in place
 
 **What changes:**
-- Python venv moves from `~/venv` to `~/mcproxy` (uv-managed `.venv` inside)
-- systemd service is updated to use `uv run mcproxy`
+- Python venv moves from `~/venv` to `~/mcapp` (uv-managed `.venv` inside)
+- systemd service is updated to use `uv run mcapp`
 - New system hardening (firewall, tmpfs) is applied
 
 **Note:** The old `~/venv` is preserved (not deleted). You can remove it manually after verifying the migration worked:
@@ -47,8 +47,8 @@ The following ports are opened:
 |------|----------|---------|
 | 22 | TCP | SSH (rate limited) |
 | 80 | TCP | HTTP (lighttpd webapp) |
-| 2980 | TCP | WebSocket (MCProxy) |
-| 2981 | TCP | SSE/REST (MCProxy API) |
+| 2980 | TCP | WebSocket (McApp) |
+| 2981 | TCP | SSE/REST (McApp API) |
 | 1799 | UDP | MeshCom |
 | 5353 | UDP | mDNS (.local) |
 
@@ -67,13 +67,13 @@ The script auto-detects the Debian version and uses appropriate packages.
 
 ```bash
 # Check logs
-sudo journalctl -u mcproxy -n 50
+sudo journalctl -u mcapp -n 50
 
 # Check config validity
-jq '.' /etc/mcadvchat/config.json
+jq '.' /etc/mcapp/config.json
 
 # Check Python venv
-~/mcproxy/.venv/bin/python -c "import websockets; print('OK')"
+~/mcapp/.venv/bin/python -c "import websockets; print('OK')"
 ```
 
 ### Cannot access web UI
@@ -107,26 +107,26 @@ bluetoothctl show
 
 | Path | Purpose |
 |------|---------|
-| `/etc/mcadvchat/config.json` | Configuration file |
-| `~/mcproxy/` | MCProxy package (pyproject.toml + source) |
-| `~/mcproxy/.venv/` | Python virtual environment (uv-managed) |
+| `/etc/mcapp/config.json` | Configuration file |
+| `~/mcapp/` | McApp package (pyproject.toml + source) |
+| `~/mcapp/.venv/` | Python virtual environment (uv-managed) |
 | `/var/www/html/webapp/` | Vue.js web application |
-| `/etc/lighttpd/conf-available/99-mcproxy.conf` | lighttpd SPA rewrite + redirect |
+| `/etc/lighttpd/conf-available/99-mcapp.conf` | lighttpd SPA rewrite + redirect |
 
 ## Uninstallation
 
 ```bash
 # Stop and disable service
-sudo systemctl stop mcproxy
-sudo systemctl disable mcproxy
+sudo systemctl stop mcapp
+sudo systemctl disable mcapp
 
 # Remove files
-sudo rm -rf /etc/mcadvchat
+sudo rm -rf /etc/mcapp
 sudo rm -rf /var/www/html/webapp
-sudo rm -rf ~/mcproxy
+sudo rm -rf ~/mcapp
 
 # Remove systemd service
-sudo rm /etc/systemd/system/mcproxy.service
+sudo rm /etc/systemd/system/mcapp.service
 sudo systemctl daemon-reload
 ```
 

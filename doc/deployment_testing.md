@@ -20,8 +20,8 @@ ssh-keygen -R mcapp.local
 This skips the interactive configuration prompts during bootstrap.
 
 ```bash
-ssh mcapp.local "sudo mkdir -p /etc/mcadvchat"
-ssh mcapp.local "sudo tee /etc/mcadvchat/config.json" <<'EOF'
+ssh mcapp.local "sudo mkdir -p /etc/mcapp"
+ssh mcapp.local "sudo tee /etc/mcapp/config.json" <<'EOF'
 {
   "UDP_TARGET": "192.168.68.69",
   "UDP_PORT_send": 1799,
@@ -37,7 +37,7 @@ ssh mcapp.local "sudo tee /etc/mcadvchat/config.json" <<'EOF'
   "STAT_NAME": "DK5EN Freising McApp V 1.0",
   "HOSTNAME": "mcapp",
   "STORAGE_BACKEND": "sqlite",
-  "DB_PATH": "/var/lib/mcproxy/messages.db",
+  "DB_PATH": "/var/lib/mcapp/messages.db",
   "MAX_STORAGE_SIZE_MB": 100,
   "PRUNE_HOURS": 1350,
   "STORE_FILE_NAME": "mcdump.json",
@@ -64,14 +64,14 @@ scp -r bootstrap/ mcapp.local:~/bootstrap/
 
 > **Future:** Once the bootstrap is stable on GitHub, install directly via curl:
 >
-> Dev: `curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcproxy.sh | sudo bash -s -- --dev`
+> Dev: `curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcapp.sh | sudo bash -s -- --dev`
 >
-> Prod: `curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcproxy.sh | sudo bash`
+> Prod: `curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcapp.sh | sudo bash`
 
 ## Step 3: Run bootstrap
 
 ```bash
-ssh mcapp.local "sudo ~/bootstrap/mcproxy.sh --dev"
+ssh mcapp.local "sudo ~/bootstrap/mcapp.sh --dev"
 ```
 
 The bootstrap script will:
@@ -80,30 +80,30 @@ The bootstrap script will:
 - Set up Python environment via `uv sync` (no venv/pip)
 - Configure firewall (nftables on Trixie, iptables on Bookworm)
 - Open required ports: SSH (22), HTTP (80), WebSocket (2980), SSE (2981), UDP (1799), mDNS (5353)
-- Install and start systemd services: `mcproxy` and `mcproxy-ble`
+- Install and start systemd services: `mcapp` and `mcapp-ble`
 
 For re-runs after partial install:
 
 ```bash
-ssh mcapp.local "sudo ~/bootstrap/mcproxy.sh --dev --force"
+ssh mcapp.local "sudo ~/bootstrap/mcapp.sh --dev --force"
 ```
 
 ## Step 4: Verify deployment
 
-Both `mcproxy` (main proxy) and `mcproxy-ble` (BLE backend) must be running.
+Both `mcapp` (main proxy) and `mcapp-ble` (BLE backend) must be running.
 
 ```bash
 ssh mcapp.local 'bash -c "
-echo MCPROXY: $(systemctl is-active mcproxy)
-echo MCPROXY_BLE: $(systemctl is-active mcproxy-ble)
+echo MCAPP: $(systemctl is-active mcapp)
+echo MCAPP_BLE: $(systemctl is-active mcapp-ble)
 echo LIGHTTPD: $(systemctl is-active lighttpd)
 echo WEBAPP: $(curl -s -o /dev/null -w %{http_code} http://localhost/webapp/)
 echo WS: $(curl -s -o /dev/null -w %{http_code} http://localhost:2980 2>/dev/null && echo OPEN || echo CLOSED)
 echo SSE: $(curl -s -o /dev/null -w %{http_code} http://localhost:2981/health 2>/dev/null || echo CLOSED)
 echo UDP: $(ss -ulnp 2>/dev/null | grep -c 1799)
-echo CONFIG: $(test -f /etc/mcadvchat/config.json && echo OK || echo MISSING)
+echo CONFIG: $(test -f /etc/mcapp/config.json && echo OK || echo MISSING)
 echo UV: $(command -v uv >/dev/null 2>&1 && echo OK || echo MISSING)
-echo SQLITE: $(test -f /var/lib/mcproxy/messages.db && echo OK || echo MISSING)
+echo SQLITE: $(test -f /var/lib/mcapp/messages.db && echo OK || echo MISSING)
 echo LOCALE: $(locale -a 2>/dev/null | grep -c de_DE.utf8)
 "'
 ```
@@ -111,8 +111,8 @@ echo LOCALE: $(locale -a 2>/dev/null | grep -c de_DE.utf8)
 Expected output (all OK):
 
 ```
-MCPROXY: active
-MCPROXY_BLE: active
+MCAPP: active
+MCAPP_BLE: active
 LIGHTTPD: active
 WEBAPP: 200
 WS: OPEN
@@ -138,10 +138,10 @@ curl -s -o /dev/null -w "%{http_code}" http://mcapp.local:2981/health
 
 ```bash
 # Main proxy
-ssh mcapp.local "sudo journalctl -u mcproxy --no-pager -n 30"
+ssh mcapp.local "sudo journalctl -u mcapp --no-pager -n 30"
 
 # BLE backend
-ssh mcapp.local "sudo journalctl -u mcproxy-ble --no-pager -n 30"
+ssh mcapp.local "sudo journalctl -u mcapp-ble --no-pager -n 30"
 ```
 
 ## Iterative fix cycle
@@ -151,43 +151,43 @@ When a step fails:
 1. Read the error from ssh output or journal logs
 2. Fix the script locally in `bootstrap/`
 3. Copy to Pi: `scp -r bootstrap/ mcapp.local:~/bootstrap/`
-4. Re-run: `ssh mcapp.local "sudo ~/bootstrap/mcproxy.sh --dev --force"`
+4. Re-run: `ssh mcapp.local "sudo ~/bootstrap/mcapp.sh --dev --force"`
 
 For service-only fixes (no full bootstrap re-run needed):
 
 ```bash
 # Copy updated service template
-scp bootstrap/templates/mcproxy.service mcapp.local:~/bootstrap/templates/
+scp bootstrap/templates/mcapp.service mcapp.local:~/bootstrap/templates/
 
 # Render template and restart
 ssh mcapp.local "sudo bash -c '
   sed -e \"s|{{USER}}|martin|g\" -e \"s|{{HOME}}|/home/martin|g\" \
-    /home/martin/bootstrap/templates/mcproxy.service \
-    > /etc/systemd/system/mcproxy.service
+    /home/martin/bootstrap/templates/mcapp.service \
+    > /etc/systemd/system/mcapp.service
   systemctl daemon-reload
-  systemctl restart mcproxy
+  systemctl restart mcapp
 '"
 ```
 
 ## Bugs found and fixed during v1.01.0-dev.1 deployment
 
 ### 1. Tarball name mismatch (`deploy.sh:115-116`)
-- **Symptom:** Download failed — GitHub release has `mcadvchat-*.tar.gz`, script looked for `mcproxy-*.tar.gz`
-- **Fix:** Changed tarball prefix from `mcproxy-` to `mcadvchat-` in `download_and_install_release()`
+- **Symptom:** Download failed — GitHub release has `mcadvchat-*.tar.gz`, script looked for `mcapp-*.tar.gz`
+- **Fix:** Changed tarball prefix from `mcapp-` to `mcadvchat-` in `download_and_install_release()`
 
 ### 2. Python version detection wrong for Trixie (`detect.sh:23`)
 - **Symptom:** Bootstrap detected Python 3.14, but Trixie ships Python 3.13.5
 - **Fix:** Changed `trixie|sid` case to return `"3.13"` instead of `"3.14"`
 
-### 3. Missing `/var/log/mcproxy` directory (`deploy.sh`)
+### 3. Missing `/var/log/mcapp` directory (`deploy.sh`)
 - **Symptom:** `status=226/NAMESPACE` — systemd `ReadWritePaths` requires all paths to exist
-- **Fix:** Added `mkdir -p /var/log/mcproxy && chown` in `download_and_install_release()`
+- **Fix:** Added `mkdir -p /var/log/mcapp && chown` in `download_and_install_release()`
 
-### 4. Missing `/var/lib/mcproxy` in service ReadWritePaths (`mcproxy.service`)
+### 4. Missing `/var/lib/mcapp` in service ReadWritePaths (`mcapp.service`)
 - **Symptom:** SQLite writes would fail (caught before it happened)
-- **Fix:** Added `/var/lib/mcproxy` to `ReadWritePaths` line in template
+- **Fix:** Added `/var/lib/mcapp` to `ReadWritePaths` line in template
 
-### 5. uv cache not writable (`mcproxy.service`)
+### 5. uv cache not writable (`mcapp.service`)
 - **Symptom:** `status=2` — `Failed to initialize cache at /home/martin/.cache/uv` (read-only filesystem)
 - **Fix:** Added `{{HOME}}/.cache/uv` to `ReadWritePaths`
 

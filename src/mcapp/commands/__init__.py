@@ -1,4 +1,4 @@
-"""Commands sub-package for MCProxy CommandHandler."""
+"""Commands sub-package for McApp CommandHandler."""
 
 from .handler import COMMANDS, CommandHandler, create_command_handler
 

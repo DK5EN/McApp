@@ -1,12 +1,12 @@
 [Unit]
-Description=MCProxy BLE Service
+Description=McApp BLE Service
 After=bluetooth.target dbus.service
 Wants=bluetooth.target
 
 [Service]
 Type=simple
 User=martin
-WorkingDirectory=/home/martin/mcproxy-test
+WorkingDirectory=/home/martin/mcapp
 Environment=PATH=/home/martin/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=BLE_SERVICE_API_KEY=test-dev-key
 Environment=PYTHONUNBUFFERED=1

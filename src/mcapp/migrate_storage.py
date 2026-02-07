@@ -3,8 +3,8 @@
 Migration script to convert JSON message dumps to SQLite database.
 
 Usage:
-    python migrate_storage.py --input ~/mcdump.json --output ~/mcproxy.db
-    python migrate_storage.py --input ~/mcdump.json --output ~/mcproxy.db --dry-run
+    python migrate_storage.py --input ~/mcdump.json --output ~/mcapp.db
+    python migrate_storage.py --input ~/mcdump.json --output ~/mcapp.db --dry-run
 """
 import argparse
 import asyncio
@@ -79,12 +79,12 @@ async def migrate(
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
-        description="Migrate MCProxy JSON dumps to SQLite database",
+        description="Migrate McApp JSON dumps to SQLite database",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    python migrate_storage.py --input ~/mcdump.json --output ~/mcproxy.db
-    python migrate_storage.py --input ~/mcdump.json --output ~/mcproxy.db --dry-run
+    python migrate_storage.py --input ~/mcdump.json --output ~/mcapp.db
+    python migrate_storage.py --input ~/mcdump.json --output ~/mcapp.db --dry-run
         """,
     )
     parser.add_argument(

@@ -1,5 +1,5 @@
 #!/bin/bash
-# packages.sh - Package management for MCProxy bootstrap
+# packages.sh - Package management for McApp bootstrap
 # Handles: apt packages, uv, lighttpd
 
 #──────────────────────────────────────────────────────────────────
@@ -116,8 +116,8 @@ install_lighttpd() {
 configure_lighttpd() {
   log_info "  Configuring lighttpd..."
 
-  local conf_file="/etc/lighttpd/conf-available/99-mcproxy.conf"
-  local marker="# MCProxy SPA rewrite"
+  local conf_file="/etc/lighttpd/conf-available/99-mcapp.conf"
+  local marker="# McApp SPA rewrite"
 
   # Check if already configured
   if [[ -f "$conf_file" ]] && grep -q "$marker" "$conf_file" 2>/dev/null; then
@@ -125,9 +125,9 @@ configure_lighttpd() {
     return 0
   fi
 
-  # Create MCProxy-specific config
+  # Create McApp-specific config
   cat > "$conf_file" << 'EOF'
-# MCProxy SPA rewrite + redirect configuration
+# McApp SPA rewrite + redirect configuration
 # Enables Vue.js SPA routing and root redirect
 
 server.modules += ("mod_rewrite", "mod_redirect")
@@ -146,8 +146,8 @@ $HTTP["url"] =~ "^/webapp/" {
 EOF
 
   # Enable the config (idempotent)
-  if [[ ! -L /etc/lighttpd/conf-enabled/99-mcproxy.conf ]]; then
-    ln -sf "$conf_file" /etc/lighttpd/conf-enabled/99-mcproxy.conf
+  if [[ ! -L /etc/lighttpd/conf-enabled/99-mcapp.conf ]]; then
+    ln -sf "$conf_file" /etc/lighttpd/conf-enabled/99-mcapp.conf
   fi
 
   # Test config before reloading

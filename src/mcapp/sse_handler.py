@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Server-Sent Events (SSE) transport for MCProxy using FastAPI.
+Server-Sent Events (SSE) transport for McApp using FastAPI.
 
 This module provides an alternative to WebSocket for clients that prefer
 HTTP-based event streaming. It runs alongside the existing WebSocket server.
@@ -117,7 +117,7 @@ class SSEManager:
             await self._disconnect_all_clients()
 
         app = FastAPI(
-            title="MCProxy SSE API",
+            title="McApp SSE API",
             version=VERSION,
             description="Server-Sent Events API for MeshCom message proxy",
             lifespan=lifespan,

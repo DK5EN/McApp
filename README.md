@@ -6,7 +6,7 @@ Rendering on the client, the Raspberry Pi is only a lightweight proxy between a 
 
 - Either in-memory database or LightSQL — the SD card does not handle constant writes well
 - No PHP, as this requires page reloads, which are slow and not elegant — just a static web page is retrieved once
-- On initial page load, a dump from the McProxy gets sent to your browser. So every time you refresh your browser, you get a fresh reload.
+- On initial page load, a dump from the McApp backend gets sent to your browser. So every time you refresh your browser, you get a fresh reload.
 - Infinite scrolling is enabled, so go back to 1972 if you're so inclined
 - Try to install the app on your mobile phone by storing it as an icon on your home screen
 - Installs with an icon on your mobile phone
@@ -17,10 +17,12 @@ Run this single command on a Raspberry Pi for fresh install, update, or repair:
 
 ```bash
 # Install latest stable release
-curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcproxy.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcapp.sh | sudo bash
+```
 
+```bash
 # Install latest development pre-release
-curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcproxy.sh | sudo bash -s -- --dev
+curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcapp.sh | sudo bash -s -- --dev
 ```
 
 The script auto-detects its context and does the right thing:
@@ -35,10 +37,11 @@ The script auto-detects its context and does the right thing:
 - Raspberry Pi Zero 2W (or any Pi with ARM Cortex-A53)
 - Debian Bookworm (12) or Trixie (13)
 - Python 3.11+ (provided by the OS — no manual install needed)
-- 512MB RAM minimum
+- 512MB RAM
 - SD card (8GB+ recommended)
 - Network connectivity
 - MeshCom Node in Bluetooth range
+- Supports mDNS name resultion
 
 | Debian | Python | Firewall | Status |
 |--------|--------|----------|--------|
@@ -57,35 +60,35 @@ During first install, you'll be prompted for:
 | Node address | `mcapp.local` | MeshCom node hostname or IP |
 | Latitude | `48.2082` | Your station latitude |
 | Longitude | `16.3738` | Your station longitude |
-| Station name | `Vienna` | Name for weather reports |
+| Station name | `Munich` | Name for weather reports |
 
-Configuration is stored in `/etc/mcadvchat/config.json`.
+Configuration is stored in `/etc/mcapp/config.json`.
 
 #### Command-Line Options
 
 ```bash
-sudo ./mcproxy.sh --check       # Dry-run, show what would change
-sudo ./mcproxy.sh --force       # Force reinstall everything
-sudo ./mcproxy.sh --fix         # Repair broken installation
-sudo ./mcproxy.sh --reconfigure # Re-prompt for configuration
-sudo ./mcproxy.sh --dev         # Install latest development pre-release
-sudo ./mcproxy.sh --quiet       # Minimal output (for cron)
+sudo ./mcapp.sh --check       # Dry-run, show what would change
+sudo ./mcapp.sh --force       # Force reinstall everything
+sudo ./mcapp.sh --fix         # Repair broken installation
+sudo ./mcapp.sh --reconfigure # Re-prompt for configuration
+sudo ./mcapp.sh --dev         # Install latest development pre-release
+sudo ./mcapp.sh --quiet       # Minimal output (for cron)
 ```
 
 #### Service Management
 
 ```bash
-# MCProxy
-sudo systemctl status mcproxy       # Check status
-sudo journalctl -u mcproxy -f       # View logs
-sudo systemctl restart mcproxy      # Restart service
-sudo systemctl stop mcproxy         # Stop service
+# McApp
+sudo systemctl status mcapp       # Check status
+sudo journalctl -u mcapp -f       # View logs
+sudo systemctl restart mcapp      # Restart service
+sudo systemctl stop mcapp         # Stop service
 
 # BLE Remote Service (on Pi with Bluetooth hardware)
-sudo systemctl status mcproxy-ble   # Check status
-sudo journalctl -u mcproxy-ble -f   # View logs
-sudo systemctl restart mcproxy-ble  # Restart service
-sudo systemctl stop mcproxy-ble     # Stop service
+sudo systemctl status mcapp-ble   # Check status
+sudo journalctl -u mcapp-ble -f   # View logs
+sudo systemctl restart mcapp-ble  # Restart service
+sudo systemctl stop mcapp-ble     # Stop service
 ```
 
 #### Access Points
@@ -103,8 +106,8 @@ After installation:
 Set up a cron job for automatic updates:
 
 ```bash
-# /etc/cron.d/mcproxy-update
-0 4 * * * root curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcproxy.sh | bash --quiet 2>&1 | logger -t mcproxy-update
+# /etc/cron.d/mcapp-update
+0 4 * * * root curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcapp.sh | bash --quiet 2>&1 | logger -t mcapp-update
 ```
 
 
@@ -116,13 +119,13 @@ graph TD
 
     Browser -- "WSS" --> MeshComServer["☁️ MeshCom<br/>Internet Server"]
 
-    Browser -- "SSE / REST<br/>:2980" --> McProxy["⚙️ McProxy<br/>Service"]
+    Browser -- "SSE / REST<br/>:2980" --> McApp["⚙️ McApp<br/>Service"]
 
-    McProxy -- "HTTP / SSE<br/>:8081" --> BLEProxy["📡 BLE Proxy<br/>(FastAPI)"]
+    McApp -- "HTTP / SSE<br/>:8081" --> BLEProxy["📡 BLE Proxy<br/>(FastAPI)"]
 
     BLEProxy -- "Bluetooth<br/>GATT" --> MeshComNode["📻 MeshCom<br/>Node"]
 
-    McProxy -- "UDP :1799<br/>⇄ bidirectional" --> MeshComNode
+    McApp -- "UDP :1799<br/>⇄ bidirectional" --> MeshComNode
 ```
 
 | Chat | Map | MHeard |

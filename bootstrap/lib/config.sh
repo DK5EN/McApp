@@ -1,5 +1,5 @@
 #!/bin/bash
-# config.sh - Interactive configuration & validation for MCProxy bootstrap
+# config.sh - Interactive configuration & validation for McApp bootstrap
 # Handles user prompts, input validation, and config file management
 
 #──────────────────────────────────────────────────────────────────
@@ -121,7 +121,7 @@ prompt_station_name() {
   name=$(echo "$name" | tr -cd '[:alnum:] _-' | xargs)
 
   # Default if empty
-  [[ -z "$name" ]] && name="MCProxy Station"
+  [[ -z "$name" ]] && name="McApp Station"
 
   echo "$name"
 }
@@ -220,7 +220,7 @@ collect_config() {
   local state="$1"
 
   echo ""
-  log_info "MCProxy Configuration"
+  log_info "McApp Configuration"
   echo "──────────────────────────────────────────────────────────"
 
   # Get current values (empty if fresh/template)

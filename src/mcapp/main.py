@@ -1547,14 +1547,14 @@ async def main():
 
 
 def run():
-    """Entry point for mcproxy CLI."""
+    """Entry point for mcapp CLI."""
     global cfg, has_console, is_dev
 
     # Determine if we have a console
     has_console = sys.stdout.isatty()
 
     # Setup logging first
-    is_dev = os.getenv("MCADVCHAT_ENV") == "dev"
+    is_dev = os.getenv("MCAPP_ENV") == "dev"
     setup_logging(verbose=is_dev, simple_format=True)
 
     if is_dev:

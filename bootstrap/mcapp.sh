@@ -1,11 +1,11 @@
 #!/bin/bash
-# mcproxy.sh - Unified Installer/Updater for MCProxy
+# mcapp.sh - Unified Installer/Updater for McApp
 # Idempotent, self-healing, Trixie-compatible
 # One script for: bootstrap, configure, upgrade, repair
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcproxy.sh | bash
-#   ./mcproxy.sh [OPTIONS]
+#   curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcapp.sh | bash
+#   ./mcapp.sh [OPTIONS]
 #
 # Options:
 #   --check       Dry-run: show what would be updated
@@ -26,11 +26,11 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly GITHUB_RAW_BASE="https://raw.githubusercontent.com/DK5EN/McAdvChat/main"
 
 # Installation paths
-readonly CONFIG_DIR="/etc/mcadvchat"
+readonly CONFIG_DIR="/etc/mcapp"
 readonly CONFIG_FILE="${CONFIG_DIR}/config.json"
 readonly WEBAPP_DIR="/var/www/html/webapp"
 readonly SCRIPTS_DIR="/usr/local/bin"
-readonly SHARE_DIR="/usr/local/share/mcproxy"
+readonly SHARE_DIR="/usr/local/share/mcapp"
 readonly GITHUB_REPO="DK5EN/McAdvChat"
 readonly GITHUB_API_BASE="https://api.github.com/repos/${GITHUB_REPO}"
 
@@ -52,8 +52,8 @@ INSTALL_DIR=""
 init_paths() {
   local real_home
   real_home=$(get_real_home)
-  INSTALL_DIR="${real_home}/mcproxy"
-  VENV_DIR="${real_home}/mcproxy-venv"
+  INSTALL_DIR="${real_home}/mcapp"
+  VENV_DIR="${real_home}/mcapp-venv"
   OLD_VENV_DIR="${real_home}/venv"
 }
 
@@ -176,7 +176,7 @@ parse_args() {
         shift
         ;;
       --version)
-        echo "mcproxy.sh version ${SCRIPT_VERSION}"
+        echo "mcapp.sh version ${SCRIPT_VERSION}"
         exit 0
         ;;
       --help|-h)
@@ -194,10 +194,10 @@ parse_args() {
 
 show_help() {
   cat << EOF
-mcproxy.sh - Unified Installer/Updater for MCProxy
+mcapp.sh - Unified Installer/Updater for McApp
 
 Usage:
-  ./mcproxy.sh [OPTIONS]
+  ./mcapp.sh [OPTIONS]
 
 Options:
   --check       Dry-run: show what would be updated
@@ -211,22 +211,22 @@ Options:
 
 Examples:
   # Fresh install or update
-  curl -fsSL ${GITHUB_RAW_BASE}/bootstrap/mcproxy.sh | sudo bash
+  curl -fsSL ${GITHUB_RAW_BASE}/bootstrap/mcapp.sh | sudo bash
 
   # Check what would be updated
-  sudo ./mcproxy.sh --check
+  sudo ./mcapp.sh --check
 
   # Force reinstall everything
-  sudo ./mcproxy.sh --force
+  sudo ./mcapp.sh --force
 
   # Repair broken installation
-  sudo ./mcproxy.sh --fix
+  sudo ./mcapp.sh --fix
 
   # Install latest dev pre-release
-  sudo ./mcproxy.sh --dev
+  sudo ./mcapp.sh --dev
 
   # Change configuration
-  sudo ./mcproxy.sh --reconfigure
+  sudo ./mcapp.sh --reconfigure
 EOF
 }
 
@@ -240,7 +240,7 @@ main() {
   if [[ "$QUIET" != "true" ]]; then
     echo ""
     echo "╔══════════════════════════════════════════════════════════╗"
-    echo "║           MCProxy Bootstrap v${SCRIPT_VERSION}                      ║"
+    echo "║           McApp Bootstrap v${SCRIPT_VERSION}                        ║"
     echo "║   MeshCom Message Proxy for Raspberry Pi                 ║"
     echo "╚══════════════════════════════════════════════════════════╝"
     echo ""
@@ -342,10 +342,10 @@ dry_run_report() {
       echo "  [PACKAGES] Install uv package manager"
       echo "  [PACKAGES] Install apt packages (jq, curl, screen, etc.)"
       echo "  [PACKAGES] Install and configure lighttpd"
-      echo "  [DEPLOY] Download release tarball to ~/mcproxy"
+      echo "  [DEPLOY] Download release tarball to ~/mcapp"
       echo "  [DEPLOY] Run uv sync to install Python dependencies"
       echo "  [DEPLOY] Download and install webapp"
-      echo "  [SERVICES] Enable and start mcproxy, lighttpd"
+      echo "  [SERVICES] Enable and start mcapp, lighttpd"
       ;;
     incomplete)
       echo "  [CONFIG] Resume configuration prompts"
@@ -355,10 +355,10 @@ dry_run_report() {
       ;;
     migrate)
       echo "  [MIGRATE] Detected old installation (/usr/local/bin scripts)"
-      echo "  [MIGRATE] Stop mcproxy service"
-      echo "  [MIGRATE] Download release tarball to ~/mcproxy"
+      echo "  [MIGRATE] Stop mcapp service"
+      echo "  [MIGRATE] Download release tarball to ~/mcapp"
       echo "  [MIGRATE] Run uv sync for dependencies"
-      echo "  [MIGRATE] Update systemd service to use 'uv run mcproxy'"
+      echo "  [MIGRATE] Update systemd service to use 'uv run mcapp'"
       echo "  [MIGRATE] Add missing config fields"
       echo "  [SYSTEM] Configure tmpfs, firewall, journald"
       echo "  [PACKAGES] Install uv, update dependencies"

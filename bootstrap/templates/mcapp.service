@@ -1,5 +1,5 @@
 [Unit]
-Description=MCProxy - MeshCom Message Proxy
+Description=McApp - MeshCom Message Proxy
 Documentation=https://github.com/DK5EN/McAdvChat
 After=network-online.target bluetooth.target
 Wants=network-online.target
@@ -8,10 +8,10 @@ Wants=network-online.target
 Type=simple
 User={{USER}}
 Group={{USER}}
-WorkingDirectory={{HOME}}/mcproxy
+WorkingDirectory={{HOME}}/mcapp
 Environment="PATH={{HOME}}/.local/bin:/usr/local/bin:/usr/bin:/bin"
-Environment="MCADVCHAT_ENV=prod"
-ExecStart={{HOME}}/.local/bin/uv run mcproxy
+Environment="MCAPP_ENV=prod"
+ExecStart={{HOME}}/.local/bin/uv run mcapp
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -21,7 +21,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=true
-ReadWritePaths=/var/log/mcproxy /etc/mcadvchat /var/lib/mcproxy {{HOME}}/mcproxy {{HOME}}/.cache/uv
+ReadWritePaths=/var/log/mcapp /etc/mcapp /var/lib/mcapp {{HOME}}/mcapp {{HOME}}/.cache/uv
 
 [Install]
 WantedBy=multi-user.target

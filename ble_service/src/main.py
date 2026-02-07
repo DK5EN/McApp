@@ -30,7 +30,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuration from environment
-API_KEY = os.getenv("BLE_SERVICE_API_KEY", "mcproxy-ble-secret")
+API_KEY = os.getenv("BLE_SERVICE_API_KEY", "mcapp-ble-secret")
 CORS_ORIGINS = os.getenv("BLE_SERVICE_CORS_ORIGINS", "*").split(",")
 
 # Global state
@@ -89,7 +89,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="MCProxy BLE Service",
+    title="McApp BLE Service",
     description="Remote BLE access for MeshCom devices",
     version="0.1.0",
     lifespan=lifespan

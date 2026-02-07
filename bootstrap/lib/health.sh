@@ -1,5 +1,5 @@
 #!/bin/bash
-# health.sh - Health checks for MCProxy bootstrap
+# health.sh - Health checks for McApp bootstrap
 # Validates services, endpoints, and configuration
 
 #──────────────────────────────────────────────────────────────────
@@ -14,7 +14,7 @@ health_check() {
   echo "──────────────────────────────────────────────────────────"
 
   # Check services
-  if ! check_service "mcproxy"; then all_passed=false; fi
+  if ! check_service "mcapp"; then all_passed=false; fi
   if ! check_service "lighttpd"; then all_passed=false; fi
 
   # Check endpoints
@@ -134,7 +134,7 @@ print_success_summary() {
 
   echo ""
   echo "╔══════════════════════════════════════════════════════════╗"
-  echo "║              MCProxy Installation Complete               ║"
+  echo "║              McApp Installation Complete                  ║"
   echo "╚══════════════════════════════════════════════════════════╝"
   echo ""
   echo "  Access Points:"
@@ -143,14 +143,14 @@ print_success_summary() {
   echo ""
   echo "  Service Management:"
   echo "  ─────────────────────────────────────────────────────────"
-  echo "    Status:     sudo systemctl status mcproxy"
-  echo "    Logs:       sudo journalctl -u mcproxy -f"
-  echo "    Restart:    sudo systemctl restart mcproxy"
+  echo "    Status:     sudo systemctl status mcapp"
+  echo "    Logs:       sudo journalctl -u mcapp -f"
+  echo "    Restart:    sudo systemctl restart mcapp"
   echo ""
   echo "  Configuration:"
   echo "  ─────────────────────────────────────────────────────────"
   echo "    Config:     ${CONFIG_FILE}"
-  echo "    Reconfig:   sudo ./mcproxy.sh --reconfigure"
+  echo "    Reconfig:   sudo ./mcapp.sh --reconfigure"
   echo ""
 
   # Show callsign if configured
@@ -193,7 +193,7 @@ print_diagnostic_info() {
   echo ""
 
   echo "Services:"
-  for svc in mcproxy lighttpd bluetooth avahi-daemon; do
+  for svc in mcapp lighttpd bluetooth avahi-daemon; do
     local status
     if systemctl is-active --quiet "$svc" 2>/dev/null; then
       status="running"

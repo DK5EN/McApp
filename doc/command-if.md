@@ -1,10 +1,10 @@
-# MCProxy Command Interface
+# McApp Command Interface
 
 ## 1. Overview
 
-This document describes the command interface for MCProxy, a message proxy for MeshCom (LoRa mesh network for ham radio operators). MCProxy bridges MeshCom nodes with web clients via WebSocket, processing chat commands that arrive over UDP (from LoRa nodes) or BLE (from ESP32 devices).
+This document describes the command interface for McApp, a message proxy for MeshCom (LoRa mesh network for ham radio operators). McApp bridges MeshCom nodes with web clients via WebSocket, processing chat commands that arrive over UDP (from LoRa nodes) or BLE (from ESP32 devices).
 
-Commands are prefixed with `!` and can be executed locally or routed to remote MCProxy nodes across the LoRa mesh. This document covers:
+Commands are prefixed with `!` and can be executed locally or routed to remote McApp nodes across the LoRa mesh. This document covers:
 
 - The network topology and participants involved in command routing
 - The unified target extraction algorithm that determines where a command executes
@@ -24,13 +24,13 @@ All commands are uppercase-normalized on receipt. Callsigns follow the pattern `
 graph LR
     subgraph "Local Site"
         FE["Frontend<br/>(Vue.js SPA)"]
-        MC["MCProxy<br/>(DK5EN-1, Pi Zero)"]
+        MC["McApp<br/>(DK5EN-1, Pi Zero)"]
         HL["HeltecV3 Local<br/>(ESP32 LoRa)"]
     end
 
     subgraph "Remote Site"
         HR["HeltecV3 Remote<br/>(ESP32 LoRa)"]
-        MR["MCProxy Remote<br/>(e.g. DB0ED-99, Pi)"]
+        MR["McApp Remote<br/>(e.g. DB0ED-99, Pi)"]
     end
 
     FE -- "WSS:2981<br/>(via Caddy)" --> MC
@@ -45,10 +45,10 @@ graph LR
 | Node | Role | Connection |
 |------|------|------------|
 | Frontend (Vue.js SPA) | Web client for chat and monitoring | WebSocket via Caddy reverse proxy |
-| MCProxy Local (DK5EN-1) | Message router, command processor | Pi Zero, hub of all connections |
-| HeltecV3 Local | ESP32 LoRa transceiver | UDP:1799 or BLE GATT to MCProxy |
+| McApp Local (DK5EN-1) | Message router, command processor | Pi Zero, hub of all connections |
+| HeltecV3 Local | ESP32 LoRa transceiver | UDP:1799 or BLE GATT to McApp |
 | HeltecV3 Remote | ESP32 LoRa transceiver at remote site | 433 MHz mesh link to local HeltecV3 |
-| MCProxy Remote (DB0ED-99) | Remote command processor | BLE to remote HeltecV3 |
+| McApp Remote (DB0ED-99) | Remote command processor | BLE to remote HeltecV3 |
 
 ---
 
@@ -56,7 +56,7 @@ graph LR
 
 ### 3.1 Message Anatomy
 
-Every message flowing through MCProxy carries three key fields:
+Every message flowing through McApp carries three key fields:
 
 | Field | Description | Example |
 |-------|-------------|---------|
@@ -68,7 +68,7 @@ The `src` field is normalized by extracting only the first callsign before any c
 
 ### 3.2 Target Extraction Algorithm
 
-The `extract_target_callsign()` function uses a unified algorithm for ALL commands. It determines which MCProxy node should execute a given command.
+The `extract_target_callsign()` function uses a unified algorithm for ALL commands. It determines which McApp node should execute a given command.
 
 **Priority order:**
 
@@ -96,7 +96,7 @@ The `extract_target_callsign()` function uses a unified algorithm for ALL comman
 
 ### 3.3 Suppression Logic (Outbound Commands)
 
-When our node (MCProxy Local) sends a command message outbound toward the mesh, the `should_suppress_outbound()` method decides whether to actually transmit it or keep it local. This prevents commands intended for local execution from being broadcast over the LoRa mesh.
+When our node (McApp Local) sends a command message outbound toward the mesh, the `should_suppress_outbound()` method decides whether to actually transmit it or keep it local. This prevents commands intended for local execution from being broadcast over the LoRa mesh.
 
 **Decision flow:**
 
@@ -122,7 +122,7 @@ When our node (MCProxy Local) sends a command message outbound toward the mesh, 
 
 ### 3.4 Execution Decision Matrix
 
-The `_should_execute_command()` method determines whether an incoming command should be processed by this MCProxy node. It returns a tuple of `(should_execute: bool, target_type: str | None)` where `target_type` is `"direct"` or `"group"`.
+The `_should_execute_command()` method determines whether an incoming command should be processed by this McApp node. It returns a tuple of `(should_execute: bool, target_type: str | None)` where `target_type` is `"direct"` or `"group"`.
 
 | # | src | dst | target | Execute? | Type | Rationale |
 |---|-----|-----|--------|----------|------|-----------|
@@ -507,7 +507,7 @@ A user types `!wx` in the web frontend. The command is processed locally and the
 ```mermaid
 sequenceDiagram
     participant FE as Frontend
-    participant MC as MCProxy (DK5EN-1)
+    participant MC as McApp (DK5EN-1)
 
     FE->>MC: WSS: {"src":"DK5EN-1", "dst":"DK5EN-1", "msg":"!wx"}
     Note over MC: Suppression check:<br/>src=us, no target --> SUPPRESS
@@ -524,10 +524,10 @@ A user types `!wx target:DB0ED-99` in the web frontend. The command is sent over
 ```mermaid
 sequenceDiagram
     participant FE as Frontend
-    participant MC as MCProxy (DK5EN-1)
+    participant MC as McApp (DK5EN-1)
     participant HL as HeltecV3 Local
     participant HR as HeltecV3 Remote
-    participant MR as MCProxy Remote (DB0ED-99)
+    participant MR as McApp Remote (DB0ED-99)
 
     FE->>MC: WSS: {"src":"DK5EN-1", "dst":"DB0ED-99",<br/>"msg":"!wx target:DB0ED-99"}
     Note over MC: Suppression check:<br/>target=DB0ED-99 (not us)<br/>--> NO SUPPRESSION
@@ -549,10 +549,10 @@ A remote operator sends `!stats hours:12` directly to our callsign.
 
 ```mermaid
 sequenceDiagram
-    participant MR as MCProxy Remote (DB0ED-99)
+    participant MR as McApp Remote (DB0ED-99)
     participant HR as HeltecV3 Remote
     participant HL as HeltecV3 Local
-    participant MC as MCProxy (DK5EN-1)
+    participant MC as McApp (DK5EN-1)
     participant FE as Frontend
 
     MR->>HR: BLE: {"src":"DB0ED-99", "dst":"DK5EN-1",<br/>"msg":"!stats hours:12"}
@@ -572,10 +572,10 @@ A remote operator sends `!mheard target:DK5EN-1` to a group channel. Only execut
 
 ```mermaid
 sequenceDiagram
-    participant MR as MCProxy Remote (DB0ED-99)
+    participant MR as McApp Remote (DB0ED-99)
     participant HR as HeltecV3 Remote
     participant HL as HeltecV3 Local
-    participant MC as MCProxy (DK5EN-1)
+    participant MC as McApp (DK5EN-1)
 
     MR->>HR: BLE: {"src":"DB0ED-99", "dst":"12345",<br/>"msg":"!mheard target:DK5EN-1"}
     HR->>HL: 433 MHz LoRa
@@ -598,7 +598,7 @@ A local user pings a remote station with a 3-ping test.
 ```mermaid
 sequenceDiagram
     participant FE as Frontend
-    participant MC as MCProxy (DK5EN-1)
+    participant MC as McApp (DK5EN-1)
     participant HL as HeltecV3 Local
     participant HR as HeltecV3 Remote
 
@@ -634,7 +634,7 @@ The `target:` parameter is special -- it controls **where** a command executes, 
 
 | Value | Meaning |
 |-------|---------|
-| `target:DB0ED-99` | Execute on the remote MCProxy node DB0ED-99 |
+| `target:DB0ED-99` | Execute on the remote McApp node DB0ED-99 |
 | `target:DK5EN-1` | Execute on DK5EN-1 (if that is us, it is local) |
 | `target:LOCAL` | Explicitly execute locally, even if other callsigns appear |
 | (omitted) | No routing preference; positional fallback may still detect a target |
@@ -720,7 +720,7 @@ When a user accumulates 3 failed attempts within 5 minutes, they are blocked for
 
 ### 7.4 Response Chunking
 
-LoRa messages have a hard limit of approximately 140 bytes. MCProxy splits long responses into chunks:
+LoRa messages have a hard limit of approximately 140 bytes. McApp splits long responses into chunks:
 
 | Parameter | Value |
 |-----------|-------|
@@ -770,7 +770,7 @@ RTT measurement depends on the mesh echoing the message back with a `{xxx}` suff
 
 ### 8.6 In-Memory State
 
-All command state (blocklist, topic beacons, ping tests, throttle/dedup caches) is held in memory. A restart of the MCProxy service clears:
+All command state (blocklist, topic beacons, ping tests, throttle/dedup caches) is held in memory. A restart of the McApp service clears:
 - The kick-ban blocklist
 - All active topic beacons
 - All pending ping tests

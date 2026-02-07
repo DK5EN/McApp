@@ -1,5 +1,5 @@
 #!/bin/bash
-# deploy.sh - Application deployment for MCProxy bootstrap
+# deploy.sh - Application deployment for McApp bootstrap
 # Handles: release tarball download, webapp, version management, systemd
 
 #──────────────────────────────────────────────────────────────────
@@ -49,7 +49,7 @@ get_latest_prerelease_version() {
 }
 
 # Read installed version from pyproject.toml in INSTALL_DIR
-get_installed_mcproxy_version() {
+get_installed_mcapp_version() {
   local pyproject="${INSTALL_DIR}/pyproject.toml"
 
   if [[ -f "$pyproject" ]]; then
@@ -63,12 +63,12 @@ deploy_release() {
   local force="${1:-false}"
   local dev_mode="${2:-false}"
 
-  log_info "Checking MCProxy release deployment..."
+  log_info "Checking McApp release deployment..."
 
   local installed_version
   local remote_version
 
-  installed_version=$(get_installed_mcproxy_version)
+  installed_version=$(get_installed_mcapp_version)
 
   if [[ "$dev_mode" == "true" ]]; then
     remote_version=$(get_latest_prerelease_version)
@@ -84,15 +84,15 @@ deploy_release() {
   if [[ "$force" == "true" ]]; then
     log_info "  Force mode: reinstalling release"
   elif [[ "$installed_version" == "not_installed" ]]; then
-    log_info "  MCProxy not installed, downloading..."
+    log_info "  McApp not installed, downloading..."
   elif [[ "$remote_version" == "unknown" ]]; then
     log_warn "  Cannot check remote version, skipping update"
     return 0
   elif version_gte "$installed_version" "${remote_version#v}"; then
-    log_info "  MCProxy is up to date"
+    log_info "  McApp is up to date"
     return 0
   else
-    log_info "  Updating MCProxy: ${installed_version} → ${remote_version}"
+    log_info "  Updating McApp: ${installed_version} → ${remote_version}"
   fi
 
   download_and_install_release "$remote_version"
@@ -110,10 +110,10 @@ download_and_install_release() {
     fi
   fi
 
-  log_info "  Downloading MCProxy ${version}..."
+  log_info "  Downloading McApp ${version}..."
 
-  local tarball_name="mcadvchat-${version}.tar.gz"
-  local checksum_name="mcadvchat-${version}.tar.gz.sha256"
+  local tarball_name="mcapp-${version}.tar.gz"
+  local checksum_name="mcapp-${version}.tar.gz.sha256"
   local release_url="https://github.com/${GITHUB_REPO}/releases/download/${version}"
   local tmp_dir
   tmp_dir=$(mktemp -d)
@@ -156,15 +156,15 @@ download_and_install_release() {
   chown -R "$run_user:$run_user" "$INSTALL_DIR"
 
   # Create runtime directories required by systemd ReadWritePaths
-  mkdir -p /var/lib/mcproxy
-  chown "$run_user:$run_user" /var/lib/mcproxy
-  mkdir -p /var/log/mcproxy
-  chown "$run_user:$run_user" /var/log/mcproxy
+  mkdir -p /var/lib/mcapp
+  chown "$run_user:$run_user" /var/lib/mcapp
+  mkdir -p /var/log/mcapp
+  chown "$run_user:$run_user" /var/log/mcapp
 
   # Cleanup
   rm -rf "$tmp_dir"
 
-  log_ok "  MCProxy ${version} deployed to ${INSTALL_DIR}"
+  log_ok "  McApp ${version} deployed to ${INSTALL_DIR}"
 }
 
 #──────────────────────────────────────────────────────────────────
@@ -368,8 +368,8 @@ configure_systemd_service() {
   local run_home
   run_home=$(getent passwd "$run_user" | cut -d: -f6)
 
-  # --- mcproxy.service ---
-  local mcproxy_service="/etc/systemd/system/mcproxy.service"
+  # --- mcapp.service ---
+  local mcapp_service="/etc/systemd/system/mcapp.service"
   local template_dir
 
   # Find template directory
@@ -382,16 +382,16 @@ configure_systemd_service() {
     return 1
   fi
 
-  # Render mcproxy.service from template
+  # Render mcapp.service from template
   sed -e "s|{{USER}}|${run_user}|g" \
       -e "s|{{HOME}}|${run_home}|g" \
-      "${template_dir}/mcproxy.service" > "$mcproxy_service"
+      "${template_dir}/mcapp.service" > "$mcapp_service"
 
-  log_info "  mcproxy.service configured"
+  log_info "  mcapp.service configured"
 
-  # --- mcproxy-ble.service (optional) ---
-  if [[ -f "${template_dir}/mcproxy-ble.service" ]]; then
-    local ble_service="/etc/systemd/system/mcproxy-ble.service"
+  # --- mcapp-ble.service (optional) ---
+  if [[ -f "${template_dir}/mcapp-ble.service" ]]; then
+    local ble_service="/etc/systemd/system/mcapp-ble.service"
 
     # Read BLE API key from config if available
     local ble_api_key=""
@@ -402,9 +402,9 @@ configure_systemd_service() {
     sed -e "s|{{USER}}|${run_user}|g" \
         -e "s|{{HOME}}|${run_home}|g" \
         -e "s|{{BLE_API_KEY}}|${ble_api_key}|g" \
-        "${template_dir}/mcproxy-ble.service" > "$ble_service"
+        "${template_dir}/mcapp-ble.service" > "$ble_service"
 
-    log_info "  mcproxy-ble.service configured"
+    log_info "  mcapp-ble.service configured"
   fi
 
   systemctl daemon-reload
@@ -413,7 +413,7 @@ configure_systemd_service() {
 enable_and_start_services() {
   log_info "  Enabling and starting services..."
 
-  local -a services=("lighttpd" "mcproxy" "mcproxy-ble")
+  local -a services=("lighttpd" "mcapp" "mcapp-ble")
   local failed=false
 
   for svc in "${services[@]}"; do

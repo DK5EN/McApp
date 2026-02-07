@@ -40,7 +40,7 @@
     "SSE_HOST": "0.0.0.0",                                                      
     "SSE_PORT": 2981,                                                           
     "STORAGE_BACKEND": "memory",                                                
-    "DB_PATH": "/var/lib/mcproxy/messages.db"                                   
+    "DB_PATH": "/var/lib/mcapp/messages.db"                                   
   }                                                                             
                                                                                 
   Usage                                                                         
@@ -49,7 +49,7 @@
   pip install -r requirements.txt                                               
                                                                                 
   # Migrate existing data to SQLite (optional)                                  
-  python migrate_storage.py --input ~/mcdump.json --output ~/mcproxy.db         
+  python migrate_storage.py --input ~/mcdump.json --output ~/mcapp.db         
                                                                                 
   # Run with SSE enabled (add to config.json)                                   
   # "SSE_ENABLED": true                                                         
