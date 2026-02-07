@@ -123,6 +123,9 @@ class MessageStorageHandler:
         if src_type == "BLE":
             return True
 
+        if message.get("transformer") in ("mh", "generic_ble"):
+            return True
+
         if src == "response":
             return True
 

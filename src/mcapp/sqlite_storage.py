@@ -107,6 +107,19 @@ class SQLiteStorage:
                         "INSERT INTO schema_version (version) VALUES (?)",
                         (SCHEMA_VERSION,),
                     )
+
+                # Purge any BLE register messages that leaked into storage
+                c1 = conn.execute(
+                    "DELETE FROM messages WHERE src_type IN ('BLE', 'ble', 'ble_remote')"
+                )
+                c2 = conn.execute(
+                    "DELETE FROM messages"
+                    " WHERE raw_json LIKE '%\"transformer\": \"generic_ble\"%'"
+                )
+                purged = c1.rowcount + c2.rowcount
+                if purged > 0:
+                    logger.info("Startup cleanup: purged %d leaked BLE register rows", purged)
+
                 conn.commit()
 
         await asyncio.to_thread(_init_db)
@@ -236,10 +249,13 @@ class SQLiteStorage:
             fetch=False,
         )
 
-        # Delete BLE register messages that leaked into storage
+        # Delete ALL BLE/register messages from storage (regardless of type column)
         await self._execute(
-            "DELETE FROM messages WHERE src_type IN ('BLE', 'ble', 'ble_remote')"
-            " AND type NOT IN ('msg', 'pos', 'ack')",
+            "DELETE FROM messages WHERE src_type IN ('BLE', 'ble', 'ble_remote')",
+            fetch=False,
+        )
+        await self._execute(
+            "DELETE FROM messages WHERE raw_json LIKE '%\"transformer\": \"generic_ble\"%'",
             fetch=False,
         )
 
@@ -305,9 +321,93 @@ class SQLiteStorage:
 
         return msg_msgs + pos_msgs
 
+    async def get_smart_initial(self, limit_per_dst: int = 15) -> dict:
+        """Get smart initial payload: last N messages per dst + latest pos per src + ACKs."""
+        # Messages: recent non-ack messages, excluding BLE register data
+        msg_rows = await self._execute(
+            "SELECT raw_json FROM messages"
+            " WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
+            " AND src_type NOT IN ('BLE', 'ble', 'ble_remote')"
+            " ORDER BY timestamp DESC LIMIT 1000",
+        )
+
+        # Group by dst, limit per dst
+        msgs_per_dst: dict[str, list[str]] = defaultdict(list)
+        for row in msg_rows:
+            raw = row["raw_json"]
+            try:
+                data = json.loads(raw)
+                dst = data.get("dst")
+                if dst and len(msgs_per_dst[dst]) < limit_per_dst:
+                    msgs_per_dst[dst].append(raw)
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+        messages = []
+        for msg_list in msgs_per_dst.values():
+            messages.extend(reversed(msg_list))
+
+        # Positions: latest per source with field merging
+        pos_rows = await self._execute(
+            "SELECT raw_json FROM messages"
+            " WHERE type = 'pos'"
+            " ORDER BY timestamp DESC LIMIT 500",
+        )
+
+        pos_per_src: dict[str, dict] = {}
+        for row in pos_rows:
+            raw = row["raw_json"]
+            try:
+                data = json.loads(raw)
+                src = data.get("src")
+                if not src:
+                    continue
+                if src not in pos_per_src:
+                    pos_per_src[src] = data
+                else:
+                    existing = pos_per_src[src]
+                    for key in (
+                        "via", "lat", "long", "alt", "battery_level",
+                        "firmware", "fw_sub", "aprs_symbol",
+                        "aprs_symbol_group", "rssi", "snr", "hw_id",
+                        "lora_mod", "mesh",
+                    ):
+                        if key not in existing and key in data:
+                            existing[key] = data[key]
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+        positions = [json.dumps(d, ensure_ascii=False) for d in pos_per_src.values()]
+
+        # ACKs: both type="ack" and inline ack messages
+        ack_rows = await self._execute(
+            "SELECT raw_json FROM messages"
+            " WHERE type = 'ack' OR (type = 'msg' AND msg LIKE '%:ack%')"
+            " ORDER BY timestamp DESC LIMIT 200",
+        )
+        acks = [row["raw_json"] for row in ack_rows]
+
+        logger.info(
+            "smart_initial: %d msgs, %d pos, %d acks",
+            len(messages), len(positions), len(acks),
+        )
+        return {"messages": messages, "positions": positions, "acks": acks}
+
+    async def get_summary(self) -> dict:
+        """Get message count per destination."""
+        rows = await self._execute(
+            "SELECT dst, COUNT(*) as cnt FROM messages"
+            " WHERE type = 'msg' AND msg NOT LIKE '%:ack%' GROUP BY dst",
+        )
+        return {row["dst"]: row["cnt"] for row in rows if row["dst"]}
+
     async def get_full_dump(self) -> list[str]:
         """Get full message dump."""
-        query = "SELECT raw_json FROM messages WHERE type = 'msg' ORDER BY timestamp"
+        query = (
+            "SELECT raw_json FROM messages WHERE type = 'msg'"
+            " AND src_type NOT IN ('BLE', 'ble', 'ble_remote')"
+            " ORDER BY timestamp"
+        )
         rows = await self._execute(query)
         return [row["raw_json"] for row in rows]
 
