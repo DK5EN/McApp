@@ -1,4 +1,4 @@
-# Deployment Testing: McAdvChat on Fresh Raspberry Pi
+# Deployment Testing: McApp on Fresh Raspberry Pi
 
 ## Prerequisites
 
@@ -6,7 +6,7 @@
   - Trixie: Python 3.13, nftables firewall
   - Bookworm: Python 3.11, iptables firewall
 - SSH access: `ssh mcapp.local`
-- GitHub release: `McAdvChat v1.01.0-dev.1` or later pre-release
+- GitHub release: `McApp v1.01.0-dev.1` or later pre-release
 - Package manager: `uv` (installed by bootstrap, never pip/venv)
 
 ## Step 0: Clear stale SSH host key (fresh SD card)
@@ -67,9 +67,9 @@ scp -r bootstrap mcapp.local:~
 
 > **Future:** Once the bootstrap is stable on GitHub, install directly via curl:
 >
-> Dev: `curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcapp.sh | sudo bash -s -- --dev`
+> Dev: `curl -fsSL https://raw.githubusercontent.com/DK5EN/McApp/main/bootstrap/mcapp.sh | sudo bash -s -- --dev`
 >
-> Prod: `curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcapp.sh | sudo bash`
+> Prod: `curl -fsSL https://raw.githubusercontent.com/DK5EN/McApp/main/bootstrap/mcapp.sh | sudo bash`
 
 ## Step 3: Run bootstrap
 
@@ -175,8 +175,8 @@ ssh mcapp.local "sudo bash -c '
 ## Bugs found and fixed during v1.01.0-dev.1 deployment
 
 ### 1. Tarball name mismatch (`deploy.sh:115-116`)
-- **Symptom:** Download failed — GitHub release has `mcadvchat-*.tar.gz`, script looked for `mcapp-*.tar.gz`
-- **Fix:** Changed tarball prefix from `mcapp-` to `mcadvchat-` in `download_and_install_release()`
+- **Symptom:** Download failed — tarball name mismatch between release asset and script expectation
+- **Fix:** Aligned tarball prefix to `mcapp-` in `download_and_install_release()`
 
 ### 2. Python version detection wrong for Trixie (`detect.sh:23`)
 - **Symptom:** Bootstrap detected Python 3.14, but Trixie ships Python 3.13.5
