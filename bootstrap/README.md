@@ -55,7 +55,7 @@ The following ports are opened:
 
 | Debian | Python | Firewall | Status |
 |--------|--------|----------|--------|
-| Trixie (13) | 3.14 | nftables | Primary target |
+| Trixie (13) | 3.13 | nftables | Primary target |
 | Bookworm (12) | 3.11 | iptables | Supported |
 
 The script auto-detects the Debian version and uses appropriate packages.

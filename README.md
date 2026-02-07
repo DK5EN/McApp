@@ -34,10 +34,18 @@ The script auto-detects its context and does the right thing:
 
 - Raspberry Pi Zero 2W (or any Pi with ARM Cortex-A53)
 - Debian Bookworm (12) or Trixie (13)
+- Python 3.11+ (provided by the OS — no manual install needed)
 - 512MB RAM minimum
 - SD card (8GB+ recommended)
 - Network connectivity
 - MeshCom Node in Bluetooth range
+
+| Debian | Python | Firewall | Status |
+|--------|--------|----------|--------|
+| Trixie (13) | 3.13 | nftables | Primary target |
+| Bookworm (12) | 3.11 | iptables | Supported |
+
+The bootstrap script auto-detects the Debian version and uses the appropriate Python and firewall packages.
 
 #### Configuration
 

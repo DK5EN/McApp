@@ -1,7 +1,7 @@
 [project]
 name = "mcproxy"
 version = "1.01.0"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
     "websockets>=14.0",
     "dbus-next>=0.2.3",
@@ -28,7 +28,7 @@ members = ["ble_service"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py314"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
