@@ -20,6 +20,10 @@ health_check() {
   # Check endpoints
   if ! check_webapp_endpoint; then all_passed=false; fi
   if ! check_udp_port; then all_passed=false; fi
+  if ! check_sse_endpoint; then all_passed=false; fi
+
+  # Check data
+  if ! check_sqlite_db; then all_passed=false; fi
 
   # Check config
   if ! check_config_valid; then all_passed=false; fi
@@ -75,6 +79,33 @@ check_udp_port() {
   done
 
   printf "  %-20s ${RED}[FAIL]${NC} port not listening\n" "udp (meshcom):"
+  return 1
+}
+
+check_sse_endpoint() {
+  # Retry a few times — SSE server may need seconds to start
+  local attempts=5
+  for ((i=1; i<=attempts; i++)); do
+    if curl -fsSL --connect-timeout 3 "http://localhost:2981/health" &>/dev/null; then
+      printf "  %-20s ${GREEN}[OK]${NC} responding\n" "sse (2981):"
+      return 0
+    fi
+    sleep 2
+  done
+
+  printf "  %-20s ${RED}[FAIL]${NC} not responding\n" "sse (2981):"
+  return 1
+}
+
+check_sqlite_db() {
+  local db_path="/var/lib/mcapp/messages.db"
+
+  if [[ -f "$db_path" ]]; then
+    printf "  %-20s ${GREEN}[OK]${NC} exists\n" "sqlite db:"
+    return 0
+  fi
+
+  printf "  %-20s ${RED}[FAIL]${NC} missing\n" "sqlite db:"
   return 1
 }
 
