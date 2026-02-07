@@ -108,19 +108,6 @@ class SQLiteStorage:
                         (SCHEMA_VERSION,),
                     )
 
-                # Purge BLE register messages that leaked into storage
-                # (only 'BLE' src_type + transformer-tagged rows, NOT 'ble_remote' which is legit)
-                c1 = conn.execute(
-                    "DELETE FROM messages WHERE src_type = 'BLE'"
-                )
-                c2 = conn.execute(
-                    "DELETE FROM messages"
-                    " WHERE raw_json LIKE '%\"transformer\": \"generic_ble\"%'"
-                )
-                purged = c1.rowcount + c2.rowcount
-                if purged > 0:
-                    logger.info("Startup cleanup: purged %d leaked BLE register rows", purged)
-
                 conn.commit()
 
         await asyncio.to_thread(_init_db)
@@ -247,16 +234,6 @@ class SQLiteStorage:
         await self._execute(
             "DELETE FROM messages WHERE msg = '-- invalid character --'"
             " OR msg LIKE '%No core dump%'",
-            fetch=False,
-        )
-
-        # Delete BLE register messages (src_type 'BLE' = register data, not 'ble_remote')
-        await self._execute(
-            "DELETE FROM messages WHERE src_type = 'BLE'",
-            fetch=False,
-        )
-        await self._execute(
-            "DELETE FROM messages WHERE raw_json LIKE '%\"transformer\": \"generic_ble\"%'",
             fetch=False,
         )
 
