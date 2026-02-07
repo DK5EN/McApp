@@ -49,35 +49,20 @@ bootstrap/
 
 ### State Machine
 
-```
-                    ┌─────────────────┐
-                    │   curl | bash   │
-                    └────────┬────────┘
-                             │
-                    ┌────────▼────────┐
-                    │  detect_state() │
-                    └────────┬────────┘
-                             │
-        ┌────────────────────┼────────────────────┐
-        │                    │                    │
-        ▼                    ▼                    ▼
-   ┌─────────┐         ┌──────────┐         ┌─────────┐
-   │  fresh  │         │ migrate  │         │ upgrade │
-   │         │         │          │         │         │
-   │ prompts │         │ preserve │         │ version │
-   │ install │         │ config   │         │ check   │
-   └────┬────┘         │ new venv │         │ update  │
-        │              └────┬─────┘         └────┬────┘
-        │                   │                    │
-        └───────────────────┼────────────────────┘
-                            │
-                    ┌───────▼───────┐
-                    │ setup_system  │
-                    │ install_pkgs  │
-                    │ deploy_app    │
-                    │ activate_svcs │
-                    │ health_check  │
-                    └───────────────┘
+```mermaid
+flowchart TD
+    CURL["curl | bash"]
+    DETECT["detect_state()"]
+
+    CURL --> DETECT
+
+    DETECT --> FRESH["**fresh**<br/><br/>prompts<br/>install"]
+    DETECT --> MIGRATE["**migrate**<br/><br/>preserve config<br/>new venv"]
+    DETECT --> UPGRADE["**upgrade**<br/><br/>version check<br/>update"]
+
+    FRESH --> COMMON["setup_system<br/>install_pkgs<br/>deploy_app<br/>activate_svcs<br/>health_check"]
+    MIGRATE --> COMMON
+    UPGRADE --> COMMON
 ```
 
 ## Alternatives Considered
@@ -146,7 +131,6 @@ The script detects old installations by checking for `~/venv` without `~/mcapp-v
 | Aspect | Bookworm (12) | Trixie (13) |
 |--------|---------------|-------------|
 | Python | 3.11 | 3.14 |
-| Caddy repo | `debian bookworm main` | `debian trixie main` |
 | Firewall | iptables (legacy) | nftables |
 
 ### Testing Requirements

@@ -24,27 +24,17 @@
   Total: 2,584 lines                                                            
                                                                                 
   Key Features Implemented                                                      
-  ┌────────────────────────┬──────────────────────────────────────────────┐     
-  │        Feature         │                Implementation                │     
-  ├────────────────────────┼──────────────────────────────────────────────┤     
-  │ Single unified command │ curl ... | sudo bash for all scenarios       │     
-  ├────────────────────────┼──────────────────────────────────────────────┤     
-  │ State detection        │ fresh / incomplete / upgrade modes           │     
-  ├────────────────────────┼──────────────────────────────────────────────┤     
-  │ Debian version support │ Auto-detect Bookworm (3.11) vs Trixie (3.14) │     
-  ├────────────────────────┼──────────────────────────────────────────────┤     
-  │ Interactive prompts    │ Callsign, node, coordinates with validation  │     
-  ├────────────────────────┼──────────────────────────────────────────────┤     
-  │ SD card protection     │ tmpfs for /var/log, /tmp, volatile journald  │     
-  ├────────────────────────┼──────────────────────────────────────────────┤     
-  │ Firewall               │ nftables (Trixie) with iptables fallback     │     
-  ├────────────────────────┼──────────────────────────────────────────────┤     
-  │ uv package manager     │ 10-100x faster than pip                      │     
-  ├────────────────────────┼──────────────────────────────────────────────┤     
-  │ Idempotent operations  │ Safe to re-run without breaking things       │     
-  ├────────────────────────┼──────────────────────────────────────────────┤     
-  │ Health checks          │ Services, endpoints, config validation       │     
-  └────────────────────────┴──────────────────────────────────────────────┘     
+  | Feature | Implementation |
+  |---------|---------------|
+  | Single unified command | `curl ... \| sudo bash` for all scenarios |
+  | State detection | fresh / incomplete / upgrade modes |
+  | Debian version support | Auto-detect Bookworm (3.11) vs Trixie (3.14) |
+  | Interactive prompts | Callsign, node, coordinates with validation |
+  | SD card protection | tmpfs for /var/log, /tmp, volatile journald |
+  | Firewall | nftables (Trixie) with iptables fallback |
+  | uv package manager | 10-100x faster than pip |
+  | Idempotent operations | Safe to re-run without breaking things |
+  | Health checks | Services, endpoints, config validation |     
   Usage                                                                         
                                                                                 
   # Fresh install, update, or repair - same command                             
@@ -66,55 +56,25 @@ migration support for existing installations. Here's how it works:
                                                                                 
   Migration Flow                                                                
                                                                                 
-  ┌─────────────────────────────────────────────────────────────────┐           
-  │                    Old Installation                             │           
-  │  ~/venv                    (pip-based Python venv)              │           
-  │  /etc/mcapp/config.json (existing config)                   │           
-  │  /etc/systemd/system/mcapp.service (points to ~/venv)         │           
-  └───────────────────────────────┬─────────────────────────────────┘           
-                                  │                                             
-                      curl ... | sudo bash                                      
-                                  │                                             
-                                  ▼                                             
-  ┌─────────────────────────────────────────────────────────────────┐           
-  │                    Detection Phase                              │           
-  │  detect_install_state() → "migrate"                             │           
-  │  (found ~/venv but no ~/mcapp-venv)                           │           
-  └───────────────────────────────┬─────────────────────────────────┘           
-                                  │                                             
-                                  ▼                                             
-  ┌─────────────────────────────────────────────────────────────────┐           
-  │                    Migration Phase                              │           
-  │  1. Stop mcapp service                                        │           
-  │  2. Preserve old ~/venv (not deleted)                           │           
-  │  3. Create new ~/mcapp-venv with uv                           │           
-  │  4. Update systemd service paths                                │           
-  │  5. Add missing config fields (BLE_ENABLED, etc.)               │           
-  └───────────────────────────────┬─────────────────────────────────┘           
-                                  │                                             
-                                  ▼                                             
-  ┌─────────────────────────────────────────────────────────────────┐           
-  │                    New Installation                             │           
-  │  ~/mcapp-venv            (uv-based Python venv)               │           
-  │  /etc/mcapp/config.json (updated with new fields)           │           
-  │  /etc/systemd/system/mcapp.service (points to ~/mcapp-venv) │           
-  │  + tmpfs, nftables, journald hardening                          │           
-  └─────────────────────────────────────────────────────────────────┘           
+  ```mermaid
+  flowchart TD
+      OLD["**Old Installation**<br/>~/venv (pip-based Python venv)<br/>/etc/mcapp/config.json<br/>mcapp.service → ~/venv"]
+
+      OLD -- "curl ... | sudo bash" --> DETECT["**Detection Phase**<br/>detect_install_state() → migrate<br/>(found ~/venv but no ~/mcapp-venv)"]
+
+      DETECT --> MIG["**Migration Phase**<br/>1. Stop mcapp service<br/>2. Preserve old ~/venv<br/>3. Create ~/mcapp-venv with uv<br/>4. Update systemd service paths<br/>5. Add missing config fields"]
+
+      MIG --> NEW["**New Installation**<br/>~/mcapp-venv (uv-based Python venv)<br/>config.json (updated with new fields)<br/>mcapp.service → ~/mcapp-venv<br/>+ tmpfs, nftables, journald hardening"]
+  ```           
                                                                                 
   Key Points                                                                    
-  ┌──────────┬───────────────────────────────────────────┐                      
-  │  Aspect  │                 Behavior                  │                      
-  ├──────────┼───────────────────────────────────────────┤                      
-  │ Config   │ Preserved, new fields added automatically │                      
-  ├──────────┼───────────────────────────────────────────┤                      
-  │ Old venv │ Kept at ~/venv for rollback safety        │                      
-  ├──────────┼───────────────────────────────────────────┤                      
-  │ New venv │ Created at ~/mcapp-venv with uv         │                      
-  ├──────────┼───────────────────────────────────────────┤                      
-  │ systemd  │ Service file updated to new paths         │                      
-  ├──────────┼───────────────────────────────────────────┤                      
-  │ Prompts  │ None (uses existing config values)        │                      
-  └──────────┴───────────────────────────────────────────┘                      
+  | Aspect | Behavior |
+  |--------|----------|
+  | Config | Preserved, new fields added automatically |
+  | Old venv | Kept at ~/venv for rollback safety |
+  | New venv | Created at ~/mcapp-venv with uv |
+  | systemd | Service file updated to new paths |
+  | Prompts | None (uses existing config values) |                      
   Dry-Run for Existing Installs                                                 
                                                                                 
   Users can check what would happen before migrating:                           

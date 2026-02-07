@@ -2,51 +2,32 @@
 
 ## Standard Deployment (Pi with local Bluetooth)
 
-```
-                    ┌─────────────────────────────┐
-                    │     Web Clients              │
-                    │   (Vue.js SPA Frontend)      │
-                    └─────────────┬───────────────┘
-                                  │
-                    ┌─────────────┴───────────────┐
-                    │ SSE :2981                    │
-                    │ (GET /events + POST /api/send│
-                    │  via lighttpd reverse proxy) │
-                    └─────────────┬───────────────┘
-                                  │
-    ┌─────────────────────────────▼─────────────────────────────┐
-    │                MESSAGE ROUTER                             │
-    │           (Central Hub - C2-mc-ws.py)                     │
-    │                                                           │
-    │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐   │
-    │  │ UDP Handler │  │ BLE Client  │  │ SSE Handler     │   │
-    │  │             │  │ (local mode)│  │ (FastAPI)       │   │
-    │  │ Port :1799  │  │ D-Bus/BlueZ │  │ Port :2981      │   │
-    │  └─────────────┘  └─────────────┘  └─────────────────┘   │
-    │                                                           │
-    │  ┌─────────────────────────────────────────────────────┐  │
-    │  │         MessageStorageHandler                       │  │
-    │  │    (In-memory deque + JSON/SQLite persistence)      │  │
-    │  └─────────────────────────────────────────────────────┘  │
-    └─────────────┬───────────────┬─────────────────────────────┘
-                  │               │
-                  │ UDP:1799      │ Bluetooth GATT
-                  │               │ (BLE characteristics)
-                  ▼               ▼
-    ┌─────────────────────┐   ┌─────────────────────┐
-    │    MeshCom Node     │   │   ESP32 LoRa Node   │
-    │  (192.168.68.xxx)   │   │    (MC-xxxxxx)      │
-    │                     │   │                     │
-    │ ┌─────────────────┐ │   │ ┌─────────────────┐ │
-    │ │ LoRa Mesh Radio │ │   │ │ LoRa Mesh Radio │ │
-    │ │ APRS Decoder    │ │   │ │ APRS Generator  │ │
-    │ │ Message Router  │ │   │ │ GPS Module      │ │
-    │ └─────────────────┘ │   │ └─────────────────┘ │
-    └─────────────────────┘   └─────────────────────┘
-                  │                       │
-                  └───────────────────────┘
-                     433MHz LoRa Mesh
-                   (Ham Radio Frequencies)
+```mermaid
+flowchart TD
+    WC["Web Clients<br/>(Vue.js SPA Frontend)"]
+    SSE["SSE :2981<br/>(GET /events + POST /api/send<br/>via lighttpd reverse proxy)"]
+
+    WC --> SSE
+    SSE --> MR
+
+    subgraph MR["MESSAGE ROUTER (Central Hub - C2-mc-ws.py)"]
+        UDP["UDP Handler<br/>Port :1799"]
+        BLE["BLE Client (local mode)<br/>D-Bus/BlueZ"]
+        SSEH["SSE Handler (FastAPI)<br/>Port :2981"]
+        MSH["MessageStorageHandler<br/>(In-memory deque + JSON/SQLite persistence)"]
+    end
+
+    subgraph MCN["MeshCom Node (192.168.68.xxx)"]
+        LR1["LoRa Mesh Radio<br/>APRS Decoder<br/>Message Router"]
+    end
+
+    subgraph ESP["ESP32 LoRa Node (MC-xxxxxx)"]
+        LR2["LoRa Mesh Radio<br/>APRS Generator<br/>GPS Module"]
+    end
+
+    UDP -- "UDP:1799" --> MCN
+    BLE -- "Bluetooth GATT<br/>(BLE characteristics)" --> ESP
+    MCN <-. "433MHz LoRa Mesh<br/>(Ham Radio Frequencies)" .-> ESP
 ```
 
 ## Distributed Deployment (Remote BLE Service)
@@ -54,58 +35,36 @@
 McApp runs on a server without Bluetooth hardware.
 A separate BLE service on a Pi exposes BLE via HTTP/SSE.
 
-```
-    ┌─────────────────────────────┐
-    │     Web Clients              │
-    │   (Vue.js SPA Frontend)      │
-    └─────────────┬───────────────┘
-                  │ SSE :2981
-                  │ (via lighttpd)
-                  ▼
-    ┌─────────────────────────────────────────────────────┐
-    │  McApp Brain (Mac, OrbStack, or any server)         │
-    │                                                     │
-    │  ┌───────────┐  ┌────────────┐  ┌───────────────┐   │
-    │  │UDP Handler│  │ BLE Client │  │ SSE Handler   │   │
-    │  │ :1799     │  │(remote mode)│  │ (FastAPI)     │   │
-    │  └─────┬─────┘  └──────┬─────┘  │ :2981         │   │
-    │        │               │        └───────────────┘   │
-    │        │               │ HTTP/SSE                    │
-    │  ┌─────────────────────────────────────────────┐     │
-    │  │    MessageStorageHandler                    │     │
-    │  │  (In-memory deque + JSON/SQLite)            │     │
-    │  └─────────────────────────────────────────────┘     │
-    └────────┬───────────────┼────────────────────────────┘
-             │               │
-             │ UDP:1799      │ HTTP :8081
-             ▼               ▼
-    ┌─────────────────┐   ┌───────────────────────────────────┐
-    │  MeshCom Node   │   │  BLE Service (Raspberry Pi)       │
-    │ (192.168.68.xxx)│   │                                   │
-    │                 │   │  FastAPI (REST + SSE)  :8081      │
-    │ ┌─────────────┐ │   │  D-Bus/BlueZ interface            │
-    │ │ LoRa Mesh   │ │   │                                   │
-    │ │ Radio       │ │   │  POST /api/ble/connect            │
-    │ └─────────────┘ │   │  POST /api/ble/send               │
-    └─────────────────┘   │  GET  /api/ble/notifications (SSE)│
-             │            │  GET  /api/ble/status              │
-             │            └──────────────┬────────────────────┘
-             │                           │ Bluetooth GATT
-             │                           ▼
-             │            ┌─────────────────────┐
-             │            │   ESP32 LoRa Node   │
-             │            │    (MC-xxxxxx)      │
-             │            │                     │
-             │            │ ┌─────────────────┐ │
-             │            │ │ LoRa Mesh Radio │ │
-             │            │ │ APRS Generator  │ │
-             │            │ │ GPS Module      │ │
-             │            │ └─────────────────┘ │
-             │            └─────────────────────┘
-             │                       │
-             └───────────────────────┘
-                433MHz LoRa Mesh
-              (Ham Radio Frequencies)
+```mermaid
+flowchart TD
+    WC2["Web Clients<br/>(Vue.js SPA Frontend)"]
+
+    WC2 -- "SSE :2981<br/>(via lighttpd)" --> Brain
+
+    subgraph Brain["McApp Brain (Mac, OrbStack, or any server)"]
+        UDP2["UDP Handler<br/>:1799"]
+        BLE2["BLE Client<br/>(remote mode)"]
+        SSEH2["SSE Handler (FastAPI)<br/>:2981"]
+        MSH2["MessageStorageHandler<br/>(In-memory deque + JSON/SQLite)"]
+    end
+
+    subgraph BLES["BLE Service (Raspberry Pi)"]
+        FA["FastAPI (REST + SSE) :8081<br/>D-Bus/BlueZ interface"]
+        EP["POST /api/ble/connect<br/>POST /api/ble/send<br/>GET /api/ble/notifications SSE<br/>GET /api/ble/status"]
+    end
+
+    subgraph MCN2["MeshCom Node (192.168.68.xxx)"]
+        LR3["LoRa Mesh Radio"]
+    end
+
+    subgraph ESP2["ESP32 LoRa Node (MC-xxxxxx)"]
+        LR4["LoRa Mesh Radio<br/>APRS Generator<br/>GPS Module"]
+    end
+
+    UDP2 -- "UDP:1799" --> MCN2
+    BLE2 -- "HTTP/SSE :8081" --> BLES
+    BLES -- "Bluetooth GATT" --> ESP2
+    MCN2 <-. "433MHz LoRa Mesh<br/>(Ham Radio Frequencies)" .-> ESP2
 ```
 
 ## BLE Mode Selection
