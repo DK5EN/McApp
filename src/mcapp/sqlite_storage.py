@@ -378,6 +378,37 @@ class SQLiteStorage:
         )
         return {row["dst"]: row["cnt"] for row in rows if row["dst"]}
 
+    async def get_messages_page(
+        self, dst: str, before_timestamp: int | None = None, limit: int = 20
+    ) -> dict:
+        """Get a page of messages for a destination, cursor-based."""
+        if before_timestamp is None:
+            before_timestamp = int(time.time() * 1000)
+
+        if dst and dst != '*':
+            query = (
+                "SELECT raw_json FROM messages"
+                " WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
+                " AND dst = ? AND timestamp < ?"
+                " ORDER BY timestamp DESC LIMIT ?"
+            )
+            params = (dst, before_timestamp, limit + 1)
+        else:
+            query = (
+                "SELECT raw_json FROM messages"
+                " WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
+                " AND timestamp < ?"
+                " ORDER BY timestamp DESC LIMIT ?"
+            )
+            params = (before_timestamp, limit + 1)
+
+        rows = await self._execute(query, params)
+
+        has_more = len(rows) > limit
+        result = [row["raw_json"] for row in rows[:limit]]
+        result.reverse()
+        return {"messages": result, "has_more": has_more}
+
     async def get_full_dump(self) -> list[str]:
         """Get full message dump."""
         query = (
