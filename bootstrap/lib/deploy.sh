@@ -196,8 +196,8 @@ deploy_webapp_from_tarball() {
   installed_version=$(get_installed_webapp_version)
 
   # Read version from the bundled webapp
-  if [[ -f "${INSTALL_DIR}/webapp/version.txt" ]]; then
-    tarball_version=$(cat "${INSTALL_DIR}/webapp/version.txt")
+  if [[ -f "${INSTALL_DIR}/webapp/version.html" ]]; then
+    tarball_version=$(cat "${INSTALL_DIR}/webapp/version.html")
   else
     tarball_version="unknown"
   fi

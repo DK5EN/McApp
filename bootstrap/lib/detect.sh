@@ -259,17 +259,17 @@ config_has_template_values() {
 #──────────────────────────────────────────────────────────────────
 
 # Get installed webapp version
-# Checks version.txt first (new combined tarball format), then version.html (legacy)
+# Checks version.html first (current format), then version.txt (legacy)
 get_installed_webapp_version() {
-  # New format: plain text version.txt from combined tarball
-  if [[ -f "${WEBAPP_DIR}/version.txt" ]]; then
-    cat "${WEBAPP_DIR}/version.txt" 2>/dev/null || echo "unknown"
+  # Current format: plain text version.html
+  if [[ -f "${WEBAPP_DIR}/version.html" ]]; then
+    cat "${WEBAPP_DIR}/version.html" 2>/dev/null || echo "unknown"
     return
   fi
 
-  # Legacy format: version.html
-  if [[ -f "${WEBAPP_DIR}/version.html" ]]; then
-    grep -oP 'v\d+\.\d+\.\d+' "${WEBAPP_DIR}/version.html" 2>/dev/null | head -1 || echo "unknown"
+  # Legacy format: version.txt
+  if [[ -f "${WEBAPP_DIR}/version.txt" ]]; then
+    cat "${WEBAPP_DIR}/version.txt" 2>/dev/null || echo "unknown"
     return
   fi
 

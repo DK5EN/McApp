@@ -251,9 +251,9 @@ build_webapp() {
   fi
 
   # Write version.txt into dist for bootstrap version detection
-  echo "$version" > "${WEBAPP_DIR}/dist/version.txt"
+  echo "$version" > "${WEBAPP_DIR}/dist/version.html"
 
-  log_info "  Webapp built successfully (version.txt: ${version})"
+  log_info "  Webapp built successfully (version.html: ${version})"
 }
 
 #──────────────────────────────────────────────────────────────────
