@@ -299,7 +299,7 @@ table inet filter {
     ct state established,related accept
 
     # SSH (rate limited)
-    tcp dport 22 ct state new limit rate 3/minute accept
+    tcp dport 22 ct state new limit rate 6/minute accept
 
     # HTTP (lighttpd webapp)
     tcp dport 80 accept
@@ -314,7 +314,9 @@ table inet filter {
     udp dport 1799 accept
 
     # mDNS for .local hostname resolution (avahi)
-    udp dport 5353 accept
+    # Restrict to multicast destinations per mDNS protocol spec
+    ip daddr 224.0.0.251 udp dport 5353 accept
+    ip6 daddr ff02::fb udp dport 5353 accept
 
     # ICMP (ping)
     icmp type echo-request accept
