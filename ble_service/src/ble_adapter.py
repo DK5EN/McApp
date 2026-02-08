@@ -286,7 +286,14 @@ class BLEAdapter:
                     await self._attempt_connection(mac, path)
                     self._connected_mac = mac
                     self._status.state = ConnectionState.CONNECTED
-                    self._status.device = BLEDevice(name="", address=mac)
+                    # Read device name from BlueZ D-Bus
+                    try:
+                        name = (await self.props_iface.call_get(
+                            DEVICE_INTERFACE, "Name"
+                        )).value
+                    except Exception:
+                        name = ""
+                    self._status.device = BLEDevice(name=name, address=mac)
                     self._status.last_activity = time.time()
 
                     # Start keepalive

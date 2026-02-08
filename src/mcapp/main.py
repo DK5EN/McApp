@@ -298,7 +298,7 @@ class MessageRouter:
             await self._handle_ble_disconnect_command()
 
         elif command == "connect BLE":
-            await self._handle_ble_connect_command(MAC)
+            await self._handle_ble_connect_command(MAC, websocket)
 
         elif command == "resolve-ip":
             await self._handle_resolve_ip_command(MAC)
@@ -548,7 +548,7 @@ class MessageRouter:
         else:
             logger.warning("BLE client not available for unpair")
 
-    async def _handle_ble_connect_command(self, MAC):
+    async def _handle_ble_connect_command(self, MAC, websocket=None):
         """Handle BLE connect command"""
         client = self._get_ble_client()
         if not client:
@@ -574,6 +574,8 @@ class MessageRouter:
 
         if status.state == ConnectionState.CONNECTED:
             await self._query_ble_registers()
+            # Send connection info (device_name, device_address) to frontend
+            await self._handle_ble_info_command(websocket)
 
     async def _handle_ble_disconnect_command(self):
         """Handle BLE disconnect command"""
