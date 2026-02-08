@@ -656,6 +656,10 @@ class MessageStorageHandler:
                     "callsign": callsign,
                     "rssi": round(mean(rssi_values), 2),
                     "snr": round(mean(snr_values), 2),
+                    "rssi_min": min(rssi_values),
+                    "rssi_max": max(rssi_values),
+                    "snr_min": round(min(snr_values), 2),
+                    "snr_max": round(max(snr_values), 2),
                     "count": count
                 })
 
@@ -774,6 +778,10 @@ class MessageStorageHandler:
             "callsign": callsign,
             "rssi": None,
             "snr": None,
+            "rssi_min": None,
+            "rssi_max": None,
+            "snr_min": None,
+            "snr_max": None,
             "count": None,
             "segment_id": f"{callsign}_gap_{from_seg}_to_{to_seg}",
             "segment_size": 1,
