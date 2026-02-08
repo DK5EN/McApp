@@ -154,6 +154,19 @@ class WebSocketManager:
                     'dst': data.get("dst")
                 })
 
+        elif message_type == "page_request":
+            # Paginated message fetch — route to get_messages_page command
+            if self.message_router:
+                await self.message_router.route_command(
+                    "get_messages_page",
+                    websocket=websocket,
+                    data={
+                        "dst": data.get("dst", "*"),
+                        "before": data.get("before"),
+                        "limit": data.get("limit", 20),
+                    },
+                )
+
         else:
             # Publish UDP message to router
             if self.message_router:
