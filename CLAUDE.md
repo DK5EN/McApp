@@ -134,19 +134,32 @@ flowchart TD
     end
 ```
 
-**Initialization Flow** (in `src/mcapp/main.py`, `run()` function):
+**Initialization Flow** (in `src/mcapp/main.py`, `main()` function):
 ```python
-storage_handler = MessageStorageHandler(message_store, MAX_STORE_SIZE_MB)
-message_router = MessageRouter(storage_handler)
+# 1. Storage — SQLite (with migration) or in-memory deque fallback
+if cfg.storage.backend == "sqlite" and SQLITE_AVAILABLE:
+    storage_handler = await create_sqlite_storage(...)
+else:
+    storage_handler = MessageStorageHandler(deque(), cfg.storage.max_size_mb)
 
-command_handler = create_command_handler(...)
+# 2. Central router
+message_router = MessageRouter(storage_handler)
+message_router.set_callsign(cfg.call_sign)
+
+# 3. GPS caching from BLE → updates weather service location
+message_router.subscribe("ble_notification", _cache_gps)
+
+# 4. Protocol handlers
+command_handler = create_command_handler(message_router, storage_handler, ...)
 message_router.register_protocol('commands', command_handler)
 
 udp_handler = UDPHandler(..., message_router=message_router)
 message_router.register_protocol('udp', udp_handler)
 
-websocket_manager = WebSocketManager(WS_HOST, WS_PORT, message_router)
+websocket_manager = WebSocketManager(cfg.websocket.host, cfg.websocket.port, message_router)
 message_router.register_protocol('websocket', websocket_manager)
+
+# 5. Optional: SSE manager, BLE client (local/remote/disabled)
 ```
 
 **Message Types & Subscriptions:**
@@ -234,50 +247,25 @@ sudo journalctl -u mcapp.service -f
 sudo systemctl restart mcapp.service
 ```
 
-## OrbStack Development (macOS)
-
-OrbStack provides fast ARM64 Linux VMs on Apple Silicon, enabling McApp development without physical Pi hardware. See `orb-testing.md` for full documentation.
-
-### Quick Start
-
-```bash
-# Create Debian VM (matches Pi target)
-orb create debian:trixie mcapp-dev
-orb shell mcapp-dev
-
-# Run with BLE disabled (no Bluetooth in VM)
-export MCAPP_BLE_MODE=disabled
-uv run mcapp
-```
-
-### Testing Scenarios
+## BLE Testing Modes
 
 | Scenario | BLE Mode | Setup |
 |----------|----------|-------|
-| Non-BLE features | `disabled` | Just set env var |
+| Non-BLE features | `disabled` | `export MCAPP_BLE_MODE=disabled` |
 | Real BLE via Pi | `remote` | Run BLE service on Pi, point URL to it |
 | Production on Pi | `local` | Default, uses D-Bus/BlueZ directly |
 
-### Remote BLE Testing
-
+Remote BLE testing:
 ```bash
 # On Pi: Start BLE service
 cd ble_service
 uvicorn src.main:app --host 0.0.0.0 --port 8081
 
-# On Mac/OrbStack: Connect to remote BLE
+# On Mac/OrbStack/other: Connect to remote BLE
 export MCAPP_BLE_MODE=remote
 export MCAPP_BLE_URL=http://pi.local:8081
 export MCAPP_BLE_API_KEY=your-secret-key
 uv run mcapp
-```
-
-### Snapshots
-
-```bash
-orb snapshot create mcapp-dev pre-test   # Save state
-orb snapshot restore mcapp-dev pre-test  # Restore
-orb snapshot list mcapp-dev              # List snapshots
 ```
 
 ## Configuration
@@ -311,15 +299,15 @@ Dev config: `/etc/mcapp/config.dev.json` (auto-selected when `MCAPP_ENV=dev`)
 
 ## Dependencies
 
-Python packages (installed via uv in `~/mcapp-venv`):
+Python packages (managed via `uv`, see `pyproject.toml`):
 - `websockets>=14.0`: WebSocket server
 - `dbus-next>=0.2.3`: BlueZ D-Bus interface for BLE (local mode)
 - `timezonefinder>=6.5.0`: Timezone detection for node time sync
-- `httpx>=0.28.0`: Async HTTP client for weather API
+- `requests>=2.31.0`: HTTP client for weather API (DWD BrightSky + OpenMeteo)
 - `aiohttp>=3.9.0`: Async HTTP client for remote BLE
 - `aiohttp-sse-client>=0.2.1`: SSE client for remote BLE notifications
 - `fastapi>=0.115.0`: REST API framework (SSE transport, BLE service)
-- `uvicorn>=0.34.0`: ASGI server for FastAPI
+- `uvicorn[standard]>=0.34.0`: ASGI server for FastAPI
 - `sse-starlette>=2.0.0`: SSE support for FastAPI
 - `pydantic>=2.0`: Data validation
 
@@ -389,36 +377,6 @@ The bootstrap script:
 
 See `bootstrap/README.md` for full documentation.
 
-### Pi SD-Card Hardening (`pi-harden.sh`)
-
-Idempotent script for Raspberry Pi (Debian Trixie) that optimizes for SD card longevity, security, and fast SSH login. Safe to run repeatedly — each section checks current state before modifying.
-
-```bash
-scp pi-harden.sh mcapp.local:~/
-ssh mcapp.local "sudo bash ~/pi-harden.sh"
-```
-
-**What it does:**
-
-| Step | Action | Benefit |
-|------|--------|---------|
-| Disable services | Stops ModemManager, cloud-init, udisks2, e2scrub, serial-getty | Fewer writes, faster boot |
-| Unattended upgrades | Security-only auto-updates, no auto-reboot | Patched without intervention |
-| tmpfs /var/log | 30M RAM-backed log directory | Eliminates log writes to SD |
-| Journald volatile | `Storage=volatile`, 20M max | No persistent journal on disk |
-| Fast SSH login | Disables MOTD scripts, pam_motd, DNS lookup | Sub-second login |
-| SSHD hardening | ed25519-only, modern ciphers, no root login, MaxAuthTries 3 | Reduced attack surface |
-| Logrotate | Reduces retention to 2 rotations | Less disk churn |
-
-**Idempotency:** Uses marker comments in `/etc/fstab`, `grep -q` checks, and state detection so re-runs skip already-applied changes. A reboot is recommended after first run.
-
-### Legacy Installation (Deprecated)
-
-The old scripts remain for reference but are deprecated:
-- `install_caddy.sh` - Caddy + lighttpd setup
-- `mc-install.sh` - Webapp deployment
-- `install_mcapp.sh` - Python venv and service setup
-
 ## Project Directory Structure
 
 ```
@@ -428,8 +386,6 @@ MCProxy/
 ├── config.sample.json       # Configuration template
 ├── deploy-to-pi.sh          # Deploy code to Pi via SSH/SCP
 ├── release.sh               # Unified release builder (gh CLI)
-├── pi-harden.sh             # SD-card longevity & security hardening
-├── orb-testing.md           # OrbStack development guide
 │
 ├── src/mcapp/               # Main Python package
 │   ├── __init__.py          # Version export (__version__)
@@ -491,10 +447,11 @@ bootstrap/
 │   ├── deploy.sh        # Webapp + Python script deployment
 │   └── health.sh        # Health checks and diagnostics
 ├── templates/
-│   ├── config.json.tmpl # Configuration template
-│   ├── mcapp.service    # systemd unit file
-│   ├── nftables.conf    # Firewall rules
-│   └── journald.conf    # Volatile journal config
+│   ├── config.json.tmpl   # Configuration template
+│   ├── mcapp.service      # systemd unit file
+│   ├── mcapp-ble.service  # BLE service systemd unit
+│   ├── nftables.conf      # Firewall rules
+│   └── journald.conf      # Volatile journal config
 ├── requirements.txt     # Python dependencies (minimum versions)
 └── README.md            # Installation documentation
 ```
