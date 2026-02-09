@@ -21,7 +21,7 @@ class CTCPingMixin:
         """Check if message is an ACK with :ackXXX pattern"""
         if not msg:
             return False
-        pattern = r"\s+:ack\d{3}$"
+        pattern = r"\s*:ack\d{3}$"
         result = bool(re.search(pattern, msg))
         return result
 
@@ -184,7 +184,7 @@ class CTCPingMixin:
                 if "," in src_raw:
                     print(f"🏓 ACK path processing: '{src_raw}' → originator: '{src}'")
 
-            match = re.search(r"\s+:ack(\d{3})$", msg)
+            match = re.search(r"\s*:ack(\d{3})$", msg)
             if not match:
                 return
 
