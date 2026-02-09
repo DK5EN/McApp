@@ -219,7 +219,7 @@ class CTCPingMixin:
             rtt = receive_time - sent_time
 
             result = {
-                "sequence": ping_info.get("sequence_info", ""),
+                "sequence": ping_info.get("sequence_info") or "",
                 "rtt": rtt,
                 "status": "success",
                 "timestamp": receive_time,
@@ -427,7 +427,7 @@ class CTCPingMixin:
                 return
 
             timeout_result = {
-                "sequence": ping_info.get("sequence_info", ""),
+                "sequence": ping_info.get("sequence_info") or "",
                 "rtt": None,
                 "status": "timeout",
                 "timestamp": time.time(),
@@ -491,7 +491,7 @@ class CTCPingMixin:
         except (ValueError, TypeError):
             return "❌ Invalid repeat count"
 
-        await self._start_ping_test(ping_target, payload_size, repeat_count, requester)
+        asyncio.create_task(self._start_ping_test(ping_target, payload_size, repeat_count, requester))
 
         return (
             f"🏓 Ping test to {ping_target}"
