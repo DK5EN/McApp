@@ -234,7 +234,10 @@ class CTCPingMixin:
                     completed_seqs = test_summary.get("completed_sequences", set())
                     if sequence and sequence in completed_seqs:
                         if has_console:
-                            print(f"🏓 Sequence {sequence} already completed, ignoring duplicate ACK {ack_id}")
+                            print(
+                                f"🏓 Sequence {sequence} already completed,"
+                                f" ignoring duplicate ACK {ack_id}"
+                            )
                         del self.active_pings[ack_id]
                         return
 
@@ -253,7 +256,9 @@ class CTCPingMixin:
                         f" to {ping_info['target']}:"
                         f" RTT = {rtt_ms:.1f}ms"
                     )
-                    await self._send_ping_result(ping_info["requester"], result_msg, ping_info["target"])
+                    await self._send_ping_result(
+                        ping_info["requester"], result_msg, ping_info["target"]
+                    )
 
                     if has_console:
                         print(
@@ -458,7 +463,9 @@ class CTCPingMixin:
                     f" to {ping_info['target']}:"
                     f" timeout (no ACK after 30s)"
                 )
-                await self._send_ping_result(ping_info["requester"], timeout_msg, ping_info["target"])
+                await self._send_ping_result(
+                    ping_info["requester"], timeout_msg, ping_info["target"]
+                )
 
             if has_console:
                 print(f"⏰ Timeout processed: ID={message_id}, Test complete: {test_completed}")
@@ -501,7 +508,9 @@ class CTCPingMixin:
         except (ValueError, TypeError):
             return "❌ Invalid repeat count"
 
-        asyncio.create_task(self._start_ping_test(ping_target, payload_size, repeat_count, requester))
+        asyncio.create_task(
+            self._start_ping_test(ping_target, payload_size, repeat_count, requester)
+        )
 
         return (
             f"🏓 Ping test to {ping_target}"
@@ -628,7 +637,9 @@ class CTCPingMixin:
             test_summary = self.ping_tests[test_id]
 
             if error_msg:
-                await self._send_ping_result(test_summary["requester"], f"🏓 {error_msg}", test_summary["target"])
+                await self._send_ping_result(
+                    test_summary["requester"], f"🏓 {error_msg}", test_summary["target"]
+                )
             else:
                 results = test_summary["results"]
                 total_pings = test_summary["total_pings"]
@@ -687,7 +698,9 @@ class CTCPingMixin:
                         f" {payload_size}B payload"
                     )
 
-                await self._send_ping_result(test_summary["requester"], summary_msg, test_summary["target"])
+                await self._send_ping_result(
+                    test_summary["requester"], summary_msg, test_summary["target"]
+                )
 
             del self.ping_tests[test_id]
 
