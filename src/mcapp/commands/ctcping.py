@@ -138,10 +138,22 @@ class CTCPingMixin:
                     f" {list(self.ping_tests.keys()) if hasattr(self, 'ping_tests') else 'None'}"
                 )
 
+            # Use actual send time if available, fall back to echo receipt time
+            sent_time = time.time()
+            if test_id and test_id in self.ping_tests:
+                send_times = self.ping_tests[test_id].get("send_times", {})
+                if sequence_info and sequence_info in send_times:
+                    sent_time = send_times[sequence_info]
+
+            if message_id in self.active_pings:
+                if has_console:
+                    print(f"🔍 Echo {message_id} already tracked, ignoring duplicate")
+                return
+
             ping_info = {
                 "target": dst,
                 "original_msg": original_msg,
-                "sent_time": time.time(),
+                "sent_time": sent_time,
                 "requester": src,
                 "status": "waiting_ack",
                 "sequence_info": sequence_info,
@@ -231,7 +243,7 @@ class CTCPingMixin:
                         f" to {ping_info['target']}:"
                         f" RTT = {rtt_ms:.1f}ms"
                     )
-                    await self._send_ping_result(ping_info["requester"], result_msg)
+                    await self._send_ping_result(ping_info["requester"], result_msg, ping_info["target"])
 
                     if has_console:
                         print(
@@ -264,80 +276,6 @@ class CTCPingMixin:
                         )
 
             del self.active_pings[ack_id]
-
-        except Exception as e:
-            if has_console:
-                print(f"❌ Error handling ACK message: {e}")
-
-    async def _handle_ack_message_old(self, message_data: dict):
-        """Handle ACK message and calculate RTT"""
-        try:
-            src_raw = message_data.get("src", "").upper()
-            dst = message_data.get("dst", "").upper()
-            msg = message_data.get("msg", "")
-
-            src = src_raw.split(",")[0].strip() if "," in src_raw else src_raw.strip()
-
-            if has_console:
-                if "," in src_raw:
-                    print(f"🏓 ACK path processing: '{src_raw}' → originator: '{src}'")
-
-            match = re.search(r"\s+:ack(\d{3})$", msg)
-            if not match:
-                return
-
-            ack_id = match.group(1)
-
-            if ack_id not in self.active_pings:
-                if has_console:
-                    print(f"🏓 Received ACK {ack_id} from {src}, but no matching ping found")
-                return
-
-            ping_info = self.active_pings[ack_id]
-
-            if src != ping_info["target"] or dst != self.my_callsign:
-                if has_console:
-                    print(
-                        f"🏓 ACK {ack_id} verification"
-                        f" failed: src={src},"
-                        f" expected={ping_info['target']}"
-                    )
-                return
-
-            receive_time = time.time()
-            sent_time = ping_info["sent_time"]
-            rtt = receive_time - sent_time
-
-            result = {
-                "sequence": ping_info.get("sequence_info", ""),
-                "rtt": rtt,
-                "status": "success",
-                "timestamp": receive_time,
-            }
-
-            test_id = ping_info.get("test_id")
-
-            test_completed = (
-                await self._record_ping_result(test_id, result) if test_id else False
-            )
-
-            del self.active_pings[ack_id]
-
-            if test_id and test_id in self.ping_tests:
-                rtt_ms = rtt * 1000
-                result_msg = (
-                    f"🏓 Ping {result['sequence']} to {ping_info['target']}: RTT = {rtt_ms:.1f}ms"
-                )
-                await self._send_ping_result(ping_info["requester"], result_msg)
-
-            if has_console:
-                print(
-                    f"🏓 ACK processed:"
-                    f" ID={ack_id},"
-                    f" RTT={rtt * 1000:.1f}ms,"
-                    f" Test complete:"
-                    f" {test_completed}"
-                )
 
         except Exception as e:
             if has_console:
@@ -390,35 +328,6 @@ class CTCPingMixin:
                 and completion_event_key in self._completion_events
             ):
                 del self._completion_events[completion_event_key]
-
-    async def _complete_test_old(self, test_id: str):
-        """Complete a test: cancel monitor, send summary, cleanup"""
-        try:
-            if test_id not in self.ping_tests:
-                if has_console:
-                    print(f"🧹 Test {test_id} already cleaned up")
-                return
-
-            test_summary = self.ping_tests[test_id]
-
-            monitor_task = test_summary.get("monitor_task")
-            if monitor_task and not monitor_task.done():
-                if has_console:
-                    print(f"🧹 Cancelling monitor task for {test_id}")
-                monitor_task.cancel()
-                try:
-                    await monitor_task
-                except asyncio.CancelledError:
-                    pass
-
-            test_summary["status"] = "completed"
-            test_summary["end_time"] = time.time()
-
-            await self._send_test_summary(test_id)
-
-        except Exception as e:
-            if has_console:
-                print(f"❌ Error completing test {test_id}: {e}")
 
     async def _record_ping_result(self, test_id: str, result: dict) -> bool:
         """Record ping result and check for test completion (updated for idempotent design)"""
@@ -539,7 +448,7 @@ class CTCPingMixin:
                     f" to {ping_info['target']}:"
                     f" timeout (no ACK after 30s)"
                 )
-                await self._send_ping_result(ping_info["requester"], timeout_msg)
+                await self._send_ping_result(ping_info["requester"], timeout_msg, ping_info["target"])
 
             if has_console:
                 print(f"⏰ Timeout processed: ID={message_id}, Test complete: {test_completed}")
@@ -639,7 +548,7 @@ class CTCPingMixin:
                 print(f"❌ Ping test error: {e}")
 
             test_summary["status"] = "error"
-            await self._send_ping_result(requester, f"🏓 Ping test error: {str(e)[:50]}")
+            await self._send_ping_result(requester, f"🏓 Ping test error: {str(e)[:50]}", target)
 
     async def _send_ping_message(
         self, target: str, message: str, sequence: int, total: int, requester: str, test_id: str
@@ -647,6 +556,11 @@ class CTCPingMixin:
         """Send a single ping message and track it"""
         try:
             if self.message_router:
+                send_time = time.time()
+                if test_id in self.ping_tests:
+                    self.ping_tests[test_id].setdefault("send_times", {})
+                    self.ping_tests[test_id]["send_times"][f"{sequence}/{total}"] = send_time
+
                 message_data = {"dst": target, "msg": message, "src_type": "ctcping", "type": "msg"}
 
                 await self.message_router.publish("ctcping", "udp_message", message_data)
@@ -700,7 +614,7 @@ class CTCPingMixin:
             test_summary = self.ping_tests[test_id]
 
             if error_msg:
-                await self._send_ping_result(test_summary["requester"], f"🏓 {error_msg}")
+                await self._send_ping_result(test_summary["requester"], f"🏓 {error_msg}", test_summary["target"])
             else:
                 results = test_summary["results"]
                 total_pings = test_summary["total_pings"]
@@ -759,7 +673,7 @@ class CTCPingMixin:
                         f" {payload_size}B payload"
                     )
 
-                await self._send_ping_result(test_summary["requester"], summary_msg)
+                await self._send_ping_result(test_summary["requester"], summary_msg, test_summary["target"])
 
             del self.ping_tests[test_id]
 
@@ -773,20 +687,27 @@ class CTCPingMixin:
 
                 traceback.print_exc()
 
-    async def _send_ping_result(self, requester: str, result_message: str):
+    async def _send_ping_result(self, requester: str, result_message: str, target: str = ""):
         """Send ping result to requester"""
         try:
             if self.message_router:
-                result_data = {
-                    "dst": requester,
-                    "msg": result_message,
-                    "src_type": "ctcping_result",
-                    "type": "msg",
-                }
-
                 if requester == self.my_callsign:
+                    result_data = {
+                        "src": self.my_callsign,
+                        "dst": target or requester,
+                        "msg": result_message,
+                        "src_type": "node",
+                        "type": "msg",
+                        "timestamp": int(time.time() * 1000),
+                    }
                     await self.message_router.publish("ctcping", "websocket_message", result_data)
                 else:
+                    result_data = {
+                        "dst": requester,
+                        "msg": result_message,
+                        "src_type": "ctcping_result",
+                        "type": "msg",
+                    }
                     await self.message_router.publish("ctcping", "udp_message", result_data)
 
         except Exception as e:
