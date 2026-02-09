@@ -692,13 +692,15 @@ class CTCPingMixin:
         try:
             if self.message_router:
                 if requester == self.my_callsign:
+                    now_ms = int(time.time() * 1000)
                     result_data = {
                         "src": self.my_callsign,
                         "dst": target or requester,
                         "msg": result_message,
+                        "msg_id": now_ms,
                         "src_type": "node",
                         "type": "msg",
-                        "timestamp": int(time.time() * 1000),
+                        "timestamp": now_ms,
                     }
                     await self.message_router.publish("ctcping", "websocket_message", result_data)
                 else:
