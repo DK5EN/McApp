@@ -34,24 +34,23 @@ class CTCPingMixin:
         return result
 
     def _is_ping_message(self, msg: str) -> bool:
-        """Check if message looks like a ping test message"""
+        """Check if message looks like a ping test message (not the 'started' message)"""
         if not msg:
             return False
 
         msg_lower = msg.lower()
 
-        has_ping_test = "ping test" in msg_lower
+        has_sequence = bool(re.search(r"ping test \d+/\d+", msg_lower))
         has_measurement = any(
             term in msg_lower
             for term in [
-                "to",
                 "mea",
                 "measure",
                 "roundtrip",
             ]
         )
 
-        return has_ping_test and has_measurement
+        return has_sequence and has_measurement
 
     def _extract_sequence_info(self, msg: str) -> Optional[str]:
         """Extract sequence info from ping message"""
@@ -231,6 +230,17 @@ class CTCPingMixin:
                 test_summary = self.ping_tests[test_id]
 
                 if test_summary["status"] == "running":
+                    sequence = ping_info.get("sequence_info") or ""
+                    completed_seqs = test_summary.get("completed_sequences", set())
+                    if sequence and sequence in completed_seqs:
+                        if has_console:
+                            print(f"🏓 Sequence {sequence} already completed, ignoring duplicate ACK {ack_id}")
+                        del self.active_pings[ack_id]
+                        return
+
+                    if sequence:
+                        completed_seqs.add(sequence)
+
                     test_summary["results"].append(result)
                     test_summary["completed"] += 1
 
@@ -517,12 +527,16 @@ class CTCPingMixin:
             "timeouts": 0,
             "status": "running",
             "monitor_task": None,
+            "completed_sequences": set(),
         }
 
         self.ping_tests[test_id] = test_summary
 
         try:
             for sequence in range(1, repeat_count + 1):
+                if test_summary["status"] != "running":
+                    break
+
                 base_msg = f"Ping test {sequence}/{repeat_count} to measure roundtrip"
 
                 if len(base_msg) > payload_size:
