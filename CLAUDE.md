@@ -15,7 +15,7 @@ flowchart TD
 
     WC -- "SSE:2981 (via lighttpd proxy)" --> MR
 
-    subgraph MR["MESSAGE ROUTER (C2-mc-ws.py)"]
+    subgraph MR["MESSAGE ROUTER (src/mcapp/main.py)"]
         UDP["UDP Handler<br/>:1799"]
         BLE["BLE Client<br/>(local mode)"]
         WS["WS Mgr<br/>:2980"]
@@ -48,12 +48,19 @@ flowchart TD
 
 ### Core Components
 
-- **C2-mc-ws.py**: Main entry point. Initializes MessageRouter and all protocol handlers
+All source lives in `src/mcapp/`. Entry point: `mcapp.main:run` (invoked via `uv run mcapp`).
+
+- **main.py**: Main entry point. Defines `MessageRouter` (central pub/sub hub) and initializes all protocol handlers
 - **message_storage.py**: In-memory message store with JSON persistence, pruning, and parallel mheard statistics processing
+- **sqlite_storage.py**: Optional SQLite storage backend with cursor-based pagination and schema versioning
 - **udp_handler.py**: UDP listener/sender for MeshCom node communication (port 1799)
 - **websocket_handler.py**: WebSocket server for web clients (port 2980)
-- **command_handler.py**: Chat command processor (`!wx`, `!mheard`, `!stats`, `!dice`, etc.)
-- **config_loader.py**: Dataclass-based configuration with environment variable overrides
+- **sse_handler.py**: Optional SSE transport alternative (FastAPI-based, port 2981). Import-guarded — only loads if FastAPI is available
+- **commands/**: Modular command system using mixin architecture (see Command System section below)
+- **config_loader.py**: Dataclass-based configuration with `MCAPP_*` environment variable overrides
+- **logging_setup.py**: Centralized logging with `EmojiFormatter`, `get_logger()`, `has_console()` detection
+- **meteo.py**: `WeatherService` class — hybrid DWD BrightSky + OpenMeteo weather provider
+- **migrate_storage.py**: Migration utility for deque → SQLite storage backend transition
 
 ### BLE Abstraction Layer
 
@@ -91,13 +98,30 @@ Located in `ble_service/` - a FastAPI service that exposes BLE hardware via HTTP
 - `BLEClient`: D-Bus based BLE connection with keep-alive and auto-reconnect
 - `CommandHandler`: Extensible command system with throttling and abuse protection
 
+### Command System (Mixin Architecture)
+
+The `src/mcapp/commands/` package uses a mixin-based design where `CommandHandler` is assembled from specialized mixins:
+
+- **handler.py** — `CommandHandler` class + `COMMANDS` registry + `create_command_handler()` factory
+- **routing.py** — `RoutingMixin`: message reception, intent-based routing to the correct command
+- **response.py** — `ResponseMixin`: response delivery back to mesh
+- **dedup.py** — `DedupMixin`: duplicate message detection
+- **simple_commands.py** — `SimpleCommandsMixin`: `!dice`, `!time`, `!userinfo`
+- **data_commands.py** — `DataCommandsMixin`: `!search`, `!stats`, `!mheard`, `!pos`
+- **weather_command.py** — `WeatherCommandMixin`: `!wx` / `!weather`
+- **admin_commands.py** — `AdminCommandsMixin`: `!kb` (kick-ban), `!topic`
+- **topic_beacon.py** — `TopicBeaconMixin`: group beacon management
+- **ctcping.py** — `CTCPingMixin`: CTCSS/ping feature
+- **constants.py** — Shared constants
+- **tests.py** — Built-in test suite (`run_all_tests()`)
+
 ### Module Integration
 
-The `MessageRouter` (defined in `C2-mc-ws.py:56-539`) is the central pub/sub hub that connects all protocol handlers:
+The `MessageRouter` (defined in `src/mcapp/main.py`) is the central pub/sub hub that connects all protocol handlers:
 
 ```mermaid
 flowchart TD
-    subgraph Main["C2-mc-ws.py (main entry point)"]
+    subgraph Main["main.py (main entry point)"]
         subgraph Router["MessageRouter (Central Pub/Sub Hub)"]
             SUBS["_subscribers: message_type → handler_functions"]
             PROTO["_protocols: protocol_name → handler_instance"]
@@ -105,12 +129,12 @@ flowchart TD
 
         Router --> UDPH["UDPHandler<br/>(udp_handler.py)"]
         Router --> WSM2["WSManager<br/>(websocket_handler.py)"]
-        Router --> BLEF["BLE funcs<br/>(ble_handler.py)"]
-        Router --> CMDH["CommandHdlr<br/>(command_handler.py)"]
+        Router --> BLEF["BLE Client<br/>(ble_client*.py)"]
+        Router --> CMDH["CommandHdlr<br/>(commands/)"]
     end
 ```
 
-**Initialization Flow** (`main()` at line 904):
+**Initialization Flow** (in `src/mcapp/main.py`, `run()` function):
 ```python
 storage_handler = MessageStorageHandler(message_store, MAX_STORE_SIZE_MB)
 message_router = MessageRouter(storage_handler)
@@ -182,23 +206,31 @@ The McApp code is deployed to `~/mcapp/` on that machine.
 ## Code Quality
 
 - **Python**: `uvx ruff check` is mandatory — zero tolerance for errors and warnings
-- **Frontend**: `npx eslint` is mandatory — zero tolerance for errors and warnings
+- **Frontend** (webapp repo): `npx eslint` is mandatory — zero tolerance for errors and warnings
 - All issues must be resolved before committing
+- **Ruff config** (in `pyproject.toml`): `line-length = 100`, `target-version = "py311"`, rules: `["E", "F", "I", "W"]`
+- **Git branches**: `development` (default), `main` (production)
+- **Commit format**: `[type] description` — types: feat, fix, perf, refactor, chore, docs, test
 
 ## Development Commands
 
 ```bash
 # Run in development mode (enables verbose logging)
-./dev.sh
-
-# Run with uv
 export MCAPP_ENV=dev
 uv run mcapp
 
-# View service logs
-sudo journalctl -u mcapp.service -f
+# Lint (must pass before committing)
+uvx ruff check
+uvx ruff check --fix   # Auto-fix
 
-# Restart production service
+# Deploy code to Pi (copies src/, syncs deps, restarts services)
+./deploy-to-pi.sh
+
+# Create a release (auto-detects branch: main → production, development → pre-release)
+./release.sh
+
+# On Pi: view service logs / restart
+sudo journalctl -u mcapp.service -f
 sudo systemctl restart mcapp.service
 ```
 
@@ -215,7 +247,7 @@ orb shell mcapp-dev
 
 # Run with BLE disabled (no Bluetooth in VM)
 export MCAPP_BLE_MODE=disabled
-python C2-mc-ws.py
+uv run mcapp
 ```
 
 ### Testing Scenarios
@@ -237,7 +269,7 @@ uvicorn src.main:app --host 0.0.0.0 --port 8081
 export MCAPP_BLE_MODE=remote
 export MCAPP_BLE_URL=http://pi.local:8081
 export MCAPP_BLE_API_KEY=your-secret-key
-python C2-mc-ws.py
+uv run mcapp
 ```
 
 ### Snapshots
@@ -320,9 +352,15 @@ All commands start with `!` and are processed by CommandHandler:
 
 ## Testing
 
-Built-in test suites run at startup (when `has_console` is true):
+There is no pytest — tests are built into the application and run at startup (when `has_console()` returns true, i.e., running in a terminal):
 - Suppression logic tests via `message_router.test_suppression_logic()`
-- Command handler tests via `command_handler.run_all_tests()`
+- Command handler tests via `command_handler.run_all_tests()` (in `src/mcapp/commands/tests.py`)
+
+## Debugging
+
+- **USR1 signal**: Send `kill -USR1 <pid>` to print a stack trace at the current hang point (handler in `main.py`)
+- **`has_console()`** detection (in `logging_setup.py`) controls startup test execution and verbose output
+- **`EmojiFormatter`** in `logging_setup.py` uses emoji prefixes for visual log scanning
 
 ## GitHub Repository
 
@@ -385,31 +423,53 @@ The old scripts remain for reference but are deprecated:
 
 ```
 MCProxy/
-├── C2-mc-ws.py              # Main entry point
-├── config_loader.py         # Configuration management
-├── message_storage.py       # Message persistence
-├── udp_handler.py           # UDP protocol handler
-├── websocket_handler.py     # WebSocket server
-├── command_handler.py       # Chat command processor
-├── ble_handler.py           # Legacy D-Bus/BlueZ implementation
-├── ble_client.py            # BLE abstraction interface
-├── ble_client_local.py      # Local BLE (wraps ble_handler)
-├── ble_client_remote.py     # Remote BLE (HTTP/SSE)
-├── ble_client_disabled.py   # No-op stub
-├── sse_handler.py           # SSE transport (optional)
-├── sqlite_storage.py        # SQLite backend (optional)
-├── pi-harden.sh             # SD-card longevity & security hardening
+├── pyproject.toml           # Project config (hatchling build, uv workspace)
+├── uv.lock                  # Locked dependencies
 ├── config.sample.json       # Configuration template
-├── requirements.txt         # Python dependencies
+├── deploy-to-pi.sh          # Deploy code to Pi via SSH/SCP
+├── release.sh               # Unified release builder (gh CLI)
+├── pi-harden.sh             # SD-card longevity & security hardening
 ├── orb-testing.md           # OrbStack development guide
 │
-├── ble_service/             # Standalone BLE service
+├── src/mcapp/               # Main Python package
+│   ├── __init__.py          # Version export (__version__)
+│   ├── main.py              # Entry point + MessageRouter
+│   ├── config_loader.py     # Dataclass-based configuration
+│   ├── logging_setup.py     # Centralized logging + EmojiFormatter
+│   ├── message_storage.py   # In-memory deque + JSON persistence
+│   ├── sqlite_storage.py    # SQLite storage backend (optional)
+│   ├── migrate_storage.py   # Deque → SQLite migration utility
+│   ├── udp_handler.py       # UDP protocol handler
+│   ├── websocket_handler.py # WebSocket server
+│   ├── sse_handler.py       # SSE transport (optional, FastAPI)
+│   ├── meteo.py             # WeatherService (DWD + OpenMeteo)
+│   ├── ble_client.py        # BLE abstraction interface + factory
+│   ├── ble_client_local.py  # Local BLE (wraps ble_handler)
+│   ├── ble_client_remote.py # Remote BLE (HTTP/SSE)
+│   ├── ble_client_disabled.py # No-op stub
+│   ├── ble_handler.py       # Legacy D-Bus/BlueZ implementation
+│   └── commands/            # Modular command system (mixin-based)
+│       ├── __init__.py
+│       ├── handler.py       # CommandHandler + COMMANDS registry
+│       ├── routing.py       # RoutingMixin
+│       ├── response.py      # ResponseMixin
+│       ├── dedup.py         # DedupMixin
+│       ├── simple_commands.py
+│       ├── data_commands.py
+│       ├── weather_command.py
+│       ├── admin_commands.py
+│       ├── topic_beacon.py
+│       ├── ctcping.py
+│       ├── constants.py
+│       └── tests.py         # Built-in test suite
+│
+├── ble_service/             # Standalone BLE service (uv workspace member)
 │   ├── src/
 │   │   ├── __init__.py
 │   │   ├── main.py          # FastAPI REST + SSE
 │   │   └── ble_adapter.py   # Clean D-Bus wrapper
 │   ├── pyproject.toml
-│   ├── mcapp-ble.service   # Systemd service
+│   ├── mcapp-ble.service    # Systemd service
 │   └── README.md            # API documentation
 │
 └── bootstrap/               # Installation scripts
@@ -456,7 +516,7 @@ For distributed setups where McApp runs on a different machine than the Bluetoot
 ```bash
 # On Pi with Bluetooth hardware
 cd ~/mcapp/ble_service
-pip install -e .
+uv sync
 
 # Configure API key
 export BLE_SERVICE_API_KEY=your-secret-key

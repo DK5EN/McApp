@@ -734,10 +734,5 @@ def main():
         logger.error(f"Unerwarteter Fehler: {e}")
         sys.exit(1)
 
-def get_current_weather() -> Dict[str, Any]:
-    """API-Funktion für Integration"""
-    weather_service = WeatherService()
-    return weather_service.get_weather_data()
-
 if __name__ == "__main__":
     main()

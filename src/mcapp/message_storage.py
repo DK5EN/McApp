@@ -2,6 +2,7 @@
 import asyncio
 import concurrent.futures
 import json
+import logging
 import os
 import sys
 import time
@@ -9,6 +10,8 @@ from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from functools import partial
 from statistics import mean
+
+logger = logging.getLogger(__name__)
 
 VERSION = "v0.46.0"
 
@@ -87,7 +90,7 @@ class MessageStorageHandler:
     async def store_message(self, message: dict, raw: str):
         """Store a message with automatic size management"""
         if not isinstance(message, dict):
-            print("store_message: invalid input, message is None or not a dict")
+            logger.warning("store_message: invalid input, message is None or not a dict")
             return
 
         timestamped = {

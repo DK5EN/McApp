@@ -38,12 +38,6 @@ client = None
 has_console = sys.stdout.isatty()
 
 
-
-def get_current_timestamp() -> str:
-    """Get current UTC timestamp in ISO format"""
-    return datetime.utcnow().isoformat()
-
-
 def calc_fcs(msg):
     """Calculate frame checksum"""
     fcs = 0

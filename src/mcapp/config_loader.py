@@ -247,37 +247,9 @@ class Config:
             json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
         logger.info("Saved config to %s", path)
 
-    def get_raw(self, key: str, default: Any = None) -> Any:
-        """
-        Get raw config value for backward compatibility.
-
-        This allows gradual migration from old config access patterns.
-        """
-        return self._raw.get(key, default)
-
 
 def hours_to_dd_hhmm(hours: int) -> str:
     """Convert hours to human-readable days/hours format."""
     days = hours // 24
     remainder_hours = hours % 24
     return f"{days:02d} day(s) {remainder_hours:02d}:00h"
-
-
-# Singleton instance for easy access
-_config: Config | None = None
-
-
-def get_config(reload: bool = False) -> Config:
-    """
-    Get the global config instance.
-
-    Args:
-        reload: Force reload from file.
-
-    Returns:
-        Config instance.
-    """
-    global _config
-    if _config is None or reload:
-        _config = Config.load()
-    return _config

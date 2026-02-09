@@ -237,8 +237,10 @@ class MessageRouter:
                 await handler(routed_message)
 
             except Exception as e:
-                print(f"MessageRouter ERROR: Failed to route {message_type}"
-                      f" to {handler.__name__}: {e}")
+                self._logger.error(
+                    "Failed to route %s to %s: %s",
+                    message_type, handler.__name__, e, exc_info=True
+                )
 
     def get_protocol(self, name: str):
         """Get a registered protocol handler"""
@@ -1061,191 +1063,6 @@ class MessageValidator:
         return f"Target is {target} → send to mesh"
 
 
-# In command_handler.py - neue Test-Methode hinzufügen:
-
-def test_kickban_logic(self):
-    """Test kick-ban functionality"""
-    if has_console:
-        print("\n🧪 Testing Kick-Ban Logic:")
-        print("=" * 40)
-
-    # (requester, args, initial_blocked, expected_result_contains,
-    #  expected_blocked_after, description)
-    admin = self.admin_callsign_base
-    test_cases = [
-        # === Admin Tests ===
-        (admin, {}, set(),
-         "Blocklist is empty", set(), "Empty list display"),
-        (admin, {'callsign': 'list'}, set(),
-         "Blocklist is empty", set(), "Explicit list command"),
-
-        # === Add to blocklist ===
-        (admin, {'callsign': 'OE1ABC-5'}, set(),
-         "🚫 OE1ABC-5 blocked", {'OE1ABC-5'},
-         "Add callsign to blocklist"),
-        (admin, {'callsign': 'OE1ABC-5'}, {'OE1ABC-5'},
-         "already blocked", {'OE1ABC-5'},
-         "Add already blocked callsign"),
-
-        # === Remove from blocklist ===
-        (admin, {'callsign': 'OE1ABC-5', 'action': 'del'},
-         {'OE1ABC-5'}, "✅ OE1ABC-5 unblocked", set(),
-         "Remove from blocklist"),
-        (admin, {'callsign': 'OE1ABC-5', 'action': 'del'},
-         set(), "was not blocked", set(),
-         "Remove non-blocked callsign"),
-
-        # === List with content ===
-        (admin, {}, {'OE1ABC-5', 'W1XYZ-1'},
-         "🚫 Blocked: OE1ABC-5, W1XYZ-1",
-         {'OE1ABC-5', 'W1XYZ-1'}, "List multiple blocked"),
-
-        # === Clear all ===
-        (admin, {'callsign': 'delall'},
-         {'OE1ABC-5', 'W1XYZ-1'}, "✅ Cleared 2 blocked",
-         set(), "Clear all blocked"),
-        (admin, {'callsign': 'delall'}, set(),
-         "✅ Cleared 0 blocked", set(), "Clear empty list"),
-
-        # === Self-blocking prevention ===
-        (admin, {'callsign': self.my_callsign}, set(),
-         "❌ Cannot block own callsign", set(),
-         "Prevent self-blocking (exact)"),
-        (admin, {'callsign': f'{admin}-99'}, set(),
-         "❌ Cannot block own callsign", set(),
-         "Prevent self-blocking (base)"),
-
-        # === Invalid callsigns ===
-        (admin, {'callsign': 'INVALID'}, set(),
-         "❌ Invalid callsign format", set(),
-         "Invalid callsign format"),
-        (admin, {'callsign': 'TOO-LONG-123'}, set(),
-         "❌ Invalid callsign format", set(),
-         "Invalid callsign (too long)"),
-
-        # === Non-admin tests ===
-        ("OE1ABC-5", {}, set(),
-         "❌ Admin access required", set(),
-         "Non-admin list attempt"),
-        ("OE1ABC-5", {'callsign': 'W1XYZ-1'}, set(),
-         "❌ Admin access required", set(),
-         "Non-admin block attempt"),
-        ("OE1ABC-5", {'callsign': 'delall'}, {'OE1ABC-5'},
-         "❌ Admin access required", {'OE1ABC-5'},
-         "Non-admin clear attempt"),
-    ]
-
-    results = []
-    for (
-        requester, args, initial_blocked,
-        expected_contains, expected_blocked_after, description
-    ) in test_cases:
-        # Setup test environment
-        old_blocked = self.blocked_callsigns.copy()
-        self.blocked_callsigns = initial_blocked.copy()
-
-        try:
-            # Execute command
-            #result = await self.handle_kickban(args, requester)
-            result = self.handle_kickban(args, requester)
-
-            # Check result contains expected text
-            result_match = expected_contains.lower() in result.lower()
-
-            # Check final state
-            state_match = self.blocked_callsigns == expected_blocked_after
-
-            overall_pass = result_match and state_match
-            status = "✅ PASS" if overall_pass else "❌ FAIL"
-
-            results.append((status, description, overall_pass))
-
-            if has_console:
-                print(f"{status} | {description}")
-                print(f"     Requester: {requester}")
-                print(f"     Args: {args}")
-                print(f"     Result: '{result}'")
-                if not result_match:
-                    print(f"     ❌ Result should contain: '{expected_contains}'")
-                if not state_match:
-                    print(f"     ❌ Expected blocked: {expected_blocked_after}")
-                    print(f"     ❌ Actual blocked: {self.blocked_callsigns}")
-                print()
-
-        except Exception as e:
-            status = "❌ ERROR"
-            results.append((status, description, False))
-            if has_console:
-                print(f"{status} | {description}")
-                print(f"     Exception: {e}")
-                print()
-
-        finally:
-            # Restore original state
-            self.blocked_callsigns = old_blocked
-
-    # Summary
-    passed = sum(1 for r in results if r[2])
-    total = len(results)
-
-    if has_console:
-        print(f"🧪 Kick-Ban Test Summary: {passed}/{total} tests passed")
-        if passed == total:
-            print("🎉 All kick-ban tests passed!")
-        else:
-            print("⚠️ Some kick-ban tests failed!")
-
-            # Show failed tests
-            failed_tests = [r for r in results if not r[2]]
-            if failed_tests:
-                print("\n❌ Failed Tests:")
-                for status, description, _ in failed_tests:
-                    print(f"   • {description}")
-
-        print("=" * 40)
-
-    return passed == total
-
-# Auch eine Test-Methode für die Message-Blocking Integration:
-def test_message_blocking_integration(self):
-    """Test message blocking integration with MessageRouter"""
-    if has_console:
-        print("\n🧪 Testing Message Blocking Integration:")
-        print("=" * 45)
-
-    # This would test the MessageRouter integration
-    # For now, just a placeholder that tests the logic
-    test_callsigns = [
-        ("OE1ABC-5", True, "Normal callsign should pass"),
-        ("W1XYZ-1", True, "Different callsign should pass"),
-        ("INVALID", False, "Invalid callsign should be handled"),
-    ]
-
-    results = []
-    for callsign, should_pass, description in test_callsigns:
-        # Test the blocking logic
-        self.blocked_callsigns = {"OE1ABC-5"}  # Block OE1ABC-5
-
-        # Simulate checking if callsign is blocked
-        is_blocked = callsign in self.blocked_callsigns
-        result_correct = (not is_blocked) == should_pass
-
-        status = "✅ PASS" if result_correct else "❌ FAIL"
-        results.append((status, description, result_correct))
-
-        if has_console:
-            print(f"{status} | {description}")
-            print(f"     Callsign: {callsign}, Blocked: {is_blocked}, Should pass: {should_pass}")
-
-    passed = sum(1 for r in results if r[2])
-    total = len(results)
-
-    if has_console:
-        print(f"🧪 Blocking Integration Summary: {passed}/{total} tests passed")
-        print("=" * 45)
-
-
-
 async def main():
     # Initialize storage backend based on config
     if cfg.storage.backend == "sqlite" and SQLITE_AVAILABLE:
@@ -1396,8 +1213,7 @@ async def main():
         while True:
             line = sys.stdin.readline()
             if not line:
-                time.sleep(1)
-                continue
+                break
             if line.strip() == "q":
                 loop.call_soon_threadsafe(stop_event.set)
                 break
@@ -1457,17 +1273,6 @@ async def main():
         logger.info("BLE: local mode (D-Bus/BlueZ)")
     else:
         logger.info("BLE: disabled")
-
-
-########### debug
-#
-#
-#    signal.signal(signal.SIGUSR1, debug_signal_handler)
-#    print("🔍 DEBUG: Send 'kill -USR1 <pid>' to get stack trace")
-#
-#
-########### debug
-
 
     suppression_passed = True  # Default values
     command_handler_passed = True

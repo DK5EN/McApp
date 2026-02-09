@@ -139,6 +139,8 @@ async def lifespan(app: FastAPI):
     global ble_adapter
 
     logger.info("Starting BLE Service")
+    if API_KEY == "mcapp-ble-secret":
+        logger.warning("Using default API key — set BLE_SERVICE_API_KEY for production")
     ble_adapter = BLEAdapter(notification_callback=notification_callback)
     ble_adapter._disconnect_callback = _on_adapter_disconnect
 
