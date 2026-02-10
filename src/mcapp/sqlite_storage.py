@@ -55,6 +55,10 @@ CREATE INDEX IF NOT EXISTS idx_messages_src ON messages(src);
 CREATE INDEX IF NOT EXISTS idx_messages_dst ON messages(dst);
 CREATE INDEX IF NOT EXISTS idx_messages_type ON messages(type);
 
+-- Composite indexes for heavy query patterns
+CREATE INDEX IF NOT EXISTS idx_messages_type_timestamp ON messages(type, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_type_dst_timestamp ON messages(type, dst, timestamp DESC);
+
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY
@@ -97,6 +101,9 @@ class SQLiteStorage:
 
         def _init_db() -> None:
             with sqlite3.connect(self.db_path) as conn:
+                # Enable WAL mode for better concurrent read/write performance
+                conn.execute("PRAGMA journal_mode=WAL")
+
                 conn.executescript(CREATE_SCHEMA_SQL)
 
                 # Check/set schema version
@@ -210,14 +217,48 @@ class SQLiteStorage:
 
         return await asyncio.to_thread(_get_size)
 
-    async def prune_messages(self, prune_hours: int, block_list: list[str]) -> int:
-        """Prune old messages and blocked sources."""
-        cutoff_ms = int((datetime.utcnow() - timedelta(hours=prune_hours)).timestamp() * 1000)
+    async def prune_messages(
+        self,
+        prune_hours: int,
+        block_list: list[str],
+        prune_hours_pos: int = 192,
+        prune_hours_ack: int = 192,
+    ) -> int:
+        """Prune old messages with type-based retention.
 
-        # Delete by time
+        Args:
+            prune_hours: Retention for chat messages (type='msg'), default 30 days.
+            block_list: Callsigns to delete unconditionally.
+            prune_hours_pos: Retention for position data (type='pos'), default 8 days.
+            prune_hours_ack: Retention for ACKs (type='ack'), default 8 days.
+        """
+        now = datetime.utcnow()
+        cutoff_msg_ms = int((now - timedelta(hours=prune_hours)).timestamp() * 1000)
+        cutoff_pos_ms = int((now - timedelta(hours=prune_hours_pos)).timestamp() * 1000)
+        cutoff_ack_ms = int((now - timedelta(hours=prune_hours_ack)).timestamp() * 1000)
+
+        # Delete by type-specific retention
         await self._execute(
-            "DELETE FROM messages WHERE timestamp < ?",
-            (cutoff_ms,),
+            "DELETE FROM messages WHERE type = 'msg' AND timestamp < ?",
+            (cutoff_msg_ms,),
+            fetch=False,
+        )
+        await self._execute(
+            "DELETE FROM messages WHERE type = 'pos' AND timestamp < ?",
+            (cutoff_pos_ms,),
+            fetch=False,
+        )
+        await self._execute(
+            "DELETE FROM messages WHERE type = 'ack' AND timestamp < ?",
+            (cutoff_ack_ms,),
+            fetch=False,
+        )
+        # Catch-all for any other types: use the shortest retention
+        min_cutoff_ms = max(cutoff_pos_ms, cutoff_ack_ms)
+        await self._execute(
+            "DELETE FROM messages WHERE type NOT IN ('msg', 'pos', 'ack')"
+            " AND timestamp < ?",
+            (min_cutoff_ms,),
             fetch=False,
         )
 
@@ -237,8 +278,8 @@ class SQLiteStorage:
             fetch=False,
         )
 
-        # Vacuum to reclaim space
-        await self._execute("VACUUM", fetch=False)
+        # Update query planner statistics after bulk deletes
+        await self._execute("ANALYZE", fetch=False)
 
         count = await self.get_message_count()
         logger.info("After pruning: %d messages remaining", count)

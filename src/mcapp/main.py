@@ -8,6 +8,7 @@ import sys
 import time
 import traceback
 from collections import defaultdict, deque
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # BLE client abstraction - supports local, remote, and disabled modes
@@ -37,7 +38,7 @@ except ImportError:
     SSE_AVAILABLE = False
 
 try:
-    from .sqlite_storage import create_sqlite_storage
+    from .sqlite_storage import SQLiteStorage, create_sqlite_storage
     SQLITE_AVAILABLE = True
 except ImportError:
     SQLITE_AVAILABLE = False
@@ -1076,7 +1077,11 @@ async def main():
             migrated_path = dump_path.with_suffix(".json.migrated")
             dump_path.rename(migrated_path)
             logger.info("Migrated dump file → %s (%d messages imported)", migrated_path, count)
-        await storage_handler.prune_messages(cfg.storage.prune_hours, block_list)
+        await storage_handler.prune_messages(
+            cfg.storage.prune_hours, block_list,
+            prune_hours_pos=cfg.storage.prune_hours_pos,
+            prune_hours_ack=cfg.storage.prune_hours_ack,
+        )
     else:
         # Default to in-memory storage
         if cfg.storage.backend == "sqlite" and not SQLITE_AVAILABLE:
@@ -1275,7 +1280,54 @@ async def main():
 
 ### unit tests
 
+    # Nightly pruning task — runs at 04:00 local time
+    async def _nightly_prune():
+        """Background task: prune old messages daily at 04:00."""
+        while not stop_event.is_set():
+            now = datetime.now()
+            tomorrow_4am = now.replace(hour=4, minute=0, second=0, microsecond=0)
+            if tomorrow_4am <= now:
+                tomorrow_4am += timedelta(days=1)
+            wait_seconds = (tomorrow_4am - now).total_seconds()
+            logger.info("Next DB prune scheduled in %.0fh at 04:00", wait_seconds / 3600)
+
+            # Wait until 04:00 or stop event, whichever comes first
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=wait_seconds)
+                break  # stop_event was set
+            except asyncio.TimeoutError:
+                pass  # Timer expired — time to prune
+
+            if stop_event.is_set():
+                break
+
+            logger.info("Starting nightly DB prune...")
+            try:
+                if hasattr(storage_handler, 'prune_messages') and isinstance(
+                    storage_handler, SQLiteStorage
+                ):
+                    remaining = await storage_handler.prune_messages(
+                        cfg.storage.prune_hours, block_list,
+                        prune_hours_pos=cfg.storage.prune_hours_pos,
+                        prune_hours_ack=cfg.storage.prune_hours_ack,
+                    )
+                    logger.info("Nightly prune complete: %d messages remaining", remaining)
+                else:
+                    storage_handler.prune_messages(cfg.storage.prune_hours, block_list)
+                    logger.info("Nightly prune complete (memory backend)")
+            except Exception as e:
+                logger.error("Nightly prune failed: %s", e)
+
+    prune_task = asyncio.create_task(_nightly_prune())
+
     await stop_event.wait()
+
+    # Cancel the nightly prune task
+    prune_task.cancel()
+    try:
+        await prune_task
+    except asyncio.CancelledError:
+        pass
 
     logger.info("Stopping proxy server, saving to disc ..")
 
@@ -1360,7 +1412,11 @@ def run():
     # Log configuration summary
     logger.info("WX Service for %s (location from GPS device)",
                 cfg.location.station_name or "unnamed")
-    logger.info("Messages older than %s get deleted", hours_to_dd_hhmm(cfg.storage.prune_hours))
+    logger.info(
+        "Retention: msgs %s, pos/ack %s",
+        hours_to_dd_hhmm(cfg.storage.prune_hours),
+        hours_to_dd_hhmm(cfg.storage.prune_hours_pos),
+    )
     logger.info("Messages store limited to %dMB", cfg.storage.max_size_mb)
 
     if cfg.storage.backend == "sqlite":

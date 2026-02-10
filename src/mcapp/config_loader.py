@@ -64,7 +64,9 @@ class StorageConfig:
     backend: str = "memory"  # "memory" or "sqlite"
     db_path: str = "/var/lib/mcapp/messages.db"
     max_size_mb: int = 10
-    prune_hours: int = 168  # 7 days
+    prune_hours: int = 720  # 30 days — retention for chat messages
+    prune_hours_pos: int = 192  # 8 days — retention for position data
+    prune_hours_ack: int = 192  # 8 days — retention for ACKs
     dump_file: str = "mcdump.json"
 
 
@@ -173,7 +175,9 @@ class Config:
             backend=data.get("STORAGE_BACKEND", "memory"),
             db_path=data.get("DB_PATH", "/var/lib/mcapp/messages.db"),
             max_size_mb=data.get("MAX_STORAGE_SIZE_MB", 10),
-            prune_hours=data.get("PRUNE_HOURS", 168),
+            prune_hours=data.get("PRUNE_HOURS", 720),
+            prune_hours_pos=data.get("PRUNE_HOURS_POS", 192),
+            prune_hours_ack=data.get("PRUNE_HOURS_ACK", 192),
             dump_file=data.get("STORE_FILE_NAME", "mcdump.json"),
         )
 
@@ -217,6 +221,8 @@ class Config:
             "DB_PATH": self.storage.db_path,
             "MAX_STORAGE_SIZE_MB": self.storage.max_size_mb,
             "PRUNE_HOURS": self.storage.prune_hours,
+            "PRUNE_HOURS_POS": self.storage.prune_hours_pos,
+            "PRUNE_HOURS_ACK": self.storage.prune_hours_ack,
             "STORE_FILE_NAME": self.storage.dump_file,
             "LAT": self.location.latitude,
             "LONG": self.location.longitude,

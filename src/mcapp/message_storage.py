@@ -151,7 +151,7 @@ class MessageStorageHandler:
         """Get current storage size in MB"""
         return self.message_store_size / (1024 * 1024)
 
-    def prune_messages(self, prune_hours, block_list):
+    def prune_messages(self, prune_hours, block_list, **_kwargs):
         """Prune old messages and blocked sources"""
         cutoff = datetime.utcnow() - timedelta(hours=prune_hours)
         temp_store = deque()
