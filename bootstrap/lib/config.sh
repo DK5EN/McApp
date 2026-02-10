@@ -306,9 +306,6 @@ write_config() {
   "UDP_PORT_send": 1799,
   "UDP_PORT_list": 1799,
 
-  "WS_HOST": "127.0.0.1",
-  "WS_PORT": 2980,
-
   "SSE_ENABLED": true,
   "SSE_HOST": "0.0.0.0",
   "SSE_PORT": 2981,

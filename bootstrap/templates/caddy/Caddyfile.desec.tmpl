@@ -1,0 +1,19 @@
+{
+    dynamic_dns {
+        provider desec {env.DESEC_TOKEN}
+        domains {
+            dedyn.io {env.DESEC_SUBDOMAIN}
+        }
+        check_interval 5m
+        versions ipv4
+    }
+}
+
+{$TLS_HOSTNAME} {
+    tls {
+        dns desec {env.DESEC_TOKEN}
+        protocols tls1.3
+    }
+
+    reverse_proxy localhost:80
+}

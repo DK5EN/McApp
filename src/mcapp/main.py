@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import asyncio
-import errno
 import json
 import os
 import re
@@ -20,7 +19,6 @@ from .logging_setup import get_logger, setup_logging
 from .logging_setup import has_console as check_console
 from .message_storage import MessageStorageHandler
 from .udp_handler import UDPHandler
-from .websocket_handler import WebSocketManager
 
 # Legacy imports - only backend_resolve_ip still needed (no ble_client equivalent yet)
 try:
@@ -1135,11 +1133,7 @@ async def main():
     )
     message_router.register_protocol('udp', udp_handler)
 
-    # WebSocket Manager
-    websocket_manager = WebSocketManager(cfg.websocket.host, cfg.websocket.port, message_router)
-    message_router.register_protocol('websocket', websocket_manager)
-
-    # SSE Manager (optional)
+    # SSE Manager (REST API + Server-Sent Events)
     sse_manager = None
     if cfg.sse.enabled and SSE_AVAILABLE:
         weather_service = getattr(command_handler, 'weather_service', None)
@@ -1191,16 +1185,6 @@ async def main():
             message_router=message_router,
         )
         await ble_client.start()
-
-    try:
-        await websocket_manager.start_server()
-    except OSError as e:
-        if e.errno == errno.EADDRINUSE:
-            logger.error("Address %s:%d already in use", cfg.websocket.host, cfg.websocket.port)
-            logger.info("Tip: Is another instance running? Try 'lsof -i :%d'", cfg.websocket.port)
-            sys.exit(1)
-        else:
-            raise
 
     # Start SSE server if enabled
     if sse_manager:
@@ -1327,14 +1311,7 @@ async def main():
     except asyncio.TimeoutError:
         logger.warning("UDP stop timeout")
 
-    try:
-        # Step 4: Stop WebSocket server
-        logger.info("Stopping WebSocket server...")
-        await asyncio.wait_for(websocket_manager.stop_server(), timeout=3.0)
-    except asyncio.TimeoutError:
-        logger.warning("WebSocket stop timeout")
-
-    # Step 5: Stop SSE server if running
+    # Step 4: Stop SSE server if running
     if sse_manager:
         try:
             logger.info("Stopping SSE server...")

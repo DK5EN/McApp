@@ -160,16 +160,112 @@ check_venv() {
 }
 
 #──────────────────────────────────────────────────────────────────
+# NETWORK NAME DETECTION
+#──────────────────────────────────────────────────────────────────
+
+# Populates NETWORK_URLS[] and NETWORK_LABELS[] with verified access points.
+# Uses getent hosts as the sole verification mechanism (always available on Debian).
+# Sets AVAHI_RUNNING to true/false for the mDNS warning.
+detect_network_names() {
+  NETWORK_URLS=()
+  NETWORK_LABELS=()
+  AVAHI_RUNNING=false
+
+  local hostname
+  hostname=$(hostname -s)
+
+  local ip_addr
+  ip_addr=$(hostname -I 2>/dev/null | awk '{print $1}')
+
+  # Associative array for deduplication (requires Bash 4+)
+  declare -A seen_hosts
+
+  # Helper: add a URL if the host hasn't been seen yet
+  _add_url() {
+    local host="$1" scheme="$2" label="$3"
+    if [[ -z "$host" || -n "${seen_hosts[$host]+x}" ]]; then
+      return
+    fi
+    seen_hosts["$host"]=1
+    NETWORK_URLS+=("${scheme}://${host}/webapp")
+    NETWORK_LABELS+=("$label")
+  }
+
+  # 1. TLS hostname (from config.json)
+  if [[ -f "$CONFIG_FILE" ]] && command -v jq &>/dev/null; then
+    local tls_enabled tls_hostname
+    tls_enabled=$(jq -r '.TLS_ENABLED // false' "$CONFIG_FILE" 2>/dev/null)
+    tls_hostname=$(jq -r '.TLS_HOSTNAME // ""' "$CONFIG_FILE" 2>/dev/null)
+    if [[ "$tls_enabled" == "true" && -n "$tls_hostname" ]]; then
+      _add_url "$tls_hostname" "https" "TLS"
+    fi
+  fi
+
+  # 2. mDNS (.local via avahi-daemon)
+  if systemctl is-active --quiet avahi-daemon 2>/dev/null; then
+    AVAHI_RUNNING=true
+    if getent hosts "${hostname}.local" &>/dev/null; then
+      _add_url "${hostname}.local" "http" "mDNS"
+    fi
+  fi
+
+  # 3. System domain (from dnsdomainname)
+  if command -v dnsdomainname &>/dev/null; then
+    local sys_domain
+    sys_domain=$(dnsdomainname 2>/dev/null)
+    if [[ -n "$sys_domain" ]]; then
+      local sys_fqdn="${hostname}.${sys_domain}"
+      if getent hosts "$sys_fqdn" &>/dev/null; then
+        _add_url "$sys_fqdn" "http" "DNS"
+      fi
+    fi
+  fi
+
+  # 4. Fritz!Box (common for German ham radio operators)
+  if getent hosts "${hostname}.fritz.box" &>/dev/null; then
+    _add_url "${hostname}.fritz.box" "http" "Fritz!Box"
+  fi
+
+  # 5. resolv.conf search/domain entries
+  if [[ -f /etc/resolv.conf ]]; then
+    local domains
+    domains=$(awk '/^(search|domain)/ {for(i=2;i<=NF;i++) print $i}' /etc/resolv.conf)
+    local domain
+    for domain in $domains; do
+      local fqdn="${hostname}.${domain}"
+      if getent hosts "$fqdn" &>/dev/null; then
+        _add_url "$fqdn" "http" "DNS"
+      fi
+    done
+  fi
+
+  # 6. Reverse DNS of own IP
+  if [[ -n "$ip_addr" ]]; then
+    local rdns_hosts
+    rdns_hosts=$(getent hosts "$ip_addr" 2>/dev/null | awk '{for(i=2;i<=NF;i++) print $i}')
+    local rdns_host
+    for rdns_host in $rdns_hosts; do
+      # Skip bare hostnames (no dot) and localhost entries
+      if [[ "$rdns_host" == *"."* && "$rdns_host" != "localhost"* ]]; then
+        _add_url "$rdns_host" "http" "rDNS"
+      fi
+    done
+  fi
+
+  # 7. IP address (always added, no verification needed)
+  if [[ -n "$ip_addr" ]]; then
+    _add_url "$ip_addr" "http" "IP"
+  fi
+
+  unset -f _add_url
+}
+
+#──────────────────────────────────────────────────────────────────
 # SUCCESS SUMMARY
 #──────────────────────────────────────────────────────────────────
 
 print_success_summary() {
-  local hostname
-  hostname=$(hostname -s)
-
-  # Get IP address for alternative URL
-  local ip_addr
-  ip_addr=$(hostname -I 2>/dev/null | awk '{print $1}')
+  detect_network_names
 
   echo ""
   echo "╔══════════════════════════════════════════════════════════╗"
@@ -178,10 +274,21 @@ print_success_summary() {
   echo ""
   echo "  Access Points:"
   echo "  ─────────────────────────────────────────────────────────"
-  echo "    Web UI:     http://${hostname}.local/webapp"
-  if [[ -n "$ip_addr" ]]; then
-  echo "                http://${ip_addr}/webapp"
+
+  local i
+  for i in "${!NETWORK_URLS[@]}"; do
+    if [[ $i -eq 0 ]]; then
+      printf "    Web UI:     %s  (%s)\n" "${NETWORK_URLS[$i]}" "${NETWORK_LABELS[$i]}"
+    else
+      printf "                %s  (%s)\n" "${NETWORK_URLS[$i]}" "${NETWORK_LABELS[$i]}"
+    fi
+  done
+
+  if [[ "$AVAHI_RUNNING" != "true" ]]; then
+    echo ""
+    echo "    Note: avahi-daemon is not running (mDNS/.local disabled)"
   fi
+
   echo ""
   echo "  Service Management:"
   echo "  ─────────────────────────────────────────────────────────"

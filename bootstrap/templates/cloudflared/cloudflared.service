@@ -1,0 +1,16 @@
+[Unit]
+Description=Cloudflare Tunnel for McApp
+Documentation=https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/cloudflared tunnel --config /etc/cloudflared/config.yml run
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=5s
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

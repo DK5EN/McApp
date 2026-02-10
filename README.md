@@ -98,13 +98,56 @@ sudo systemctl stop mcapp-ble     # Stop service
 
 #### Access Points
 
-After installation:
+After installation, all client traffic goes through port 80 (lighttpd):
 
-| Service | URL |
-|---------|-----|
-| Web UI | `http://<hostname>.local/webapp` |
-| SSE Stream | `http://<hostname>.local:2980` |
-| BLE Service API | `http://<pi-hostname>.local:8081` |
+| Service | URL | Notes |
+|---------|-----|-------|
+| Web UI | `http://<hostname>.local/webapp/` | Vue.js SPA |
+| SSE Stream | `http://<hostname>.local/events` | Proxied to FastAPI :2981 |
+| REST API | `http://<hostname>.local/api/send` | Proxied to FastAPI :2981 |
+| Health Check | `http://<hostname>.local/health` | Proxied to FastAPI :2981 |
+| BLE Service | `http://<pi-hostname>.local:8081` | Only for distributed BLE setups |
+
+No high ports are exposed to clients. lighttpd reverse-proxies `/events`, `/api/`, and `/health` to the FastAPI backend on `127.0.0.1:2981`.
+
+#### Firewall Ports
+
+| Port | Protocol | Direction | Purpose |
+|------|----------|-----------|---------|
+| 22/tcp | SSH | inbound | Remote administration (rate limited) |
+| 80/tcp | HTTP | inbound | lighttpd (webapp + API proxy) |
+| 1799/udp | UDP | bidirectional | MeshCom node communication |
+| 5353/udp | mDNS | inbound | `.local` hostname resolution |
+| 2981/tcp | HTTP | localhost only | FastAPI SSE/REST (not exposed externally) |
+
+#### TLS Remote Access (Optional)
+
+To access McApp securely over the internet with HTTPS, run the standalone TLS setup script after confirming your local setup works:
+
+```bash
+sudo ./ssl-tunnel-setup.sh
+```
+
+This installs **Caddy** as a TLS reverse proxy with automated Let's Encrypt certificates (DNS-01 challenge) and built-in DDNS updates. Supported DNS providers:
+
+| Provider | Type | Port Forwarding |
+|----------|------|-----------------|
+| DuckDNS | Free DDNS | 443 required |
+| Cloudflare | Own domain | 443 required |
+| deSEC.io | Free DDNS | 443 required |
+| Cloudflare Tunnel | Outbound tunnel | None needed |
+
+After setup, your McApp is available at `https://your-hostname/webapp/`.
+
+```bash
+sudo ./ssl-tunnel-setup.sh --status   # Check TLS status
+sudo ./ssl-tunnel-setup.sh --remove   # Revert to plain HTTP
+```
+
+For more details see:
+- `doc/tls-architecture.md` — architecture diagrams
+- `doc/sops/tls-maintenance.md` — maintenance procedures
+- `doc/2026-02-10_1200-tls-remote-access-ADR.md` — design rationale
 
 #### Automatic Updates
 
@@ -124,7 +167,9 @@ graph TD
 
     Browser -- "WSS" --> MeshComServer["☁️ MeshCom<br/>Internet Server"]
 
-    Browser -- "SSE / REST<br/>:2980" --> McApp["⚙️ McApp<br/>Service"]
+    Browser -- "HTTP :80" --> Lighttpd["🔀 lighttpd<br/>(static files + proxy)"]
+
+    Lighttpd -- "/events, /api/" --> McApp["⚙️ McApp<br/>FastAPI :2981"]
 
     McApp -- "HTTP / SSE<br/>:8081" --> BLEProxy["📡 BLE Proxy<br/>(FastAPI)"]
 

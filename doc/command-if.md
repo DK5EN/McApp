@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-This document describes the command interface for McApp, a message proxy for MeshCom (LoRa mesh network for ham radio operators). McApp bridges MeshCom nodes with web clients via WebSocket, processing chat commands that arrive over UDP (from LoRa nodes) or BLE (from ESP32 devices).
+This document describes the command interface for McApp, a message proxy for MeshCom (LoRa mesh network for ham radio operators). McApp bridges MeshCom nodes with web clients via SSE/REST, processing chat commands that arrive over UDP (from LoRa nodes) or BLE (from ESP32 devices).
 
 Commands are prefixed with `!` and can be executed locally or routed to remote McApp nodes across the LoRa mesh. This document covers:
 
@@ -502,19 +502,19 @@ Perform a ping test to a remote station with round-trip time (RTT) measurement. 
 
 ### 5.1 Local Execution (Command suppressed, response via WebSocket)
 
-A user types `!wx` in the web frontend. The command is processed locally and the response is sent back through WebSocket only -- it never reaches the LoRa mesh.
+A user types `!wx` in the web frontend. The command is processed locally and the response is sent back through SSE only -- it never reaches the LoRa mesh.
 
 ```mermaid
 sequenceDiagram
     participant FE as Frontend
     participant MC as McApp (DK5EN-1)
 
-    FE->>MC: WSS: {"src":"DK5EN-1", "dst":"DK5EN-1", "msg":"!wx"}
+    FE->>MC: SSE: {"src":"DK5EN-1", "dst":"DK5EN-1", "msg":"!wx"}
     Note over MC: Suppression check:<br/>src=us, no target --> SUPPRESS
     Note over MC: Execution check:<br/>src=us, no target --> EXECUTE (local)
     MC->>MC: handle_weather()
-    MC->>FE: WSS: {"src":"DK5EN-1", "msg":"26.5C ..."}
-    Note over MC: Response sent directly<br/>via WebSocket (self-response path)
+    MC->>FE: SSE: {"src":"DK5EN-1", "msg":"26.5C ..."}
+    Note over MC: Response sent directly<br/>via SSE (self-response path)
 ```
 
 ### 5.2 Remote Execution (Command routed via LoRa mesh)
@@ -529,7 +529,7 @@ sequenceDiagram
     participant HR as HeltecV3 Remote
     participant MR as McApp Remote (DB0ED-99)
 
-    FE->>MC: WSS: {"src":"DK5EN-1", "dst":"DB0ED-99",<br/>"msg":"!wx target:DB0ED-99"}
+    FE->>MC: SSE: {"src":"DK5EN-1", "dst":"DB0ED-99",<br/>"msg":"!wx target:DB0ED-99"}
     Note over MC: Suppression check:<br/>target=DB0ED-99 (not us)<br/>--> NO SUPPRESSION
     MC->>HL: UDP:1799: {"dst":"DB0ED-99", "msg":"!WX TARGET:DB0ED-99"}
     Note over MC: Execution check:<br/>src=us, target=other<br/>--> NO EXECUTION
@@ -540,7 +540,7 @@ sequenceDiagram
     MR->>HR: BLE: {"dst":"DK5EN-1", "msg":"22.1C ..."}
     HR->>HL: 433 MHz LoRa
     HL->>MC: UDP:1799 notification
-    MC->>FE: WSS: {"src":"DB0ED-99", "msg":"22.1C ..."}
+    MC->>FE: SSE: {"src":"DB0ED-99", "msg":"22.1C ..."}
 ```
 
 ### 5.3 Incoming P2P Command (Remote station sends command to us)
@@ -563,7 +563,7 @@ sequenceDiagram
     MC->>HL: UDP:1799: {"dst":"DB0ED-99", "msg":"Stats (last 12h): ..."}
     HL->>HR: 433 MHz LoRa
     HR->>MR: BLE notification
-    MC->>FE: WSS: broadcast (for local display)
+    MC->>FE: SSE: broadcast (for local display)
 ```
 
 ### 5.4 Incoming Group Command (Remote station sends command to group)
@@ -602,11 +602,11 @@ sequenceDiagram
     participant HL as HeltecV3 Local
     participant HR as HeltecV3 Remote
 
-    FE->>MC: WSS: !ctcping call:DB0ED-99 repeat:3
+    FE->>MC: SSE: !ctcping call:DB0ED-99 repeat:3
 
     Note over MC: Start ping test<br/>test_id = DB0ED-99_timestamp
 
-    MC->>FE: WSS: "Ping test started: 3 pings..."
+    MC->>FE: SSE: "Ping test started: 3 pings..."
 
     loop For each ping (1/3, 2/3, 3/3)
         MC->>HL: UDP:1799: "Ping test N/3 to measure roundtrip..."
@@ -616,12 +616,12 @@ sequenceDiagram
         HR->>HL: 433 MHz: ACK ":ackXXX"
         HL->>MC: UDP: ":ackXXX"
         Note over MC: ACK received,<br/>RTT = now - echo_time
-        MC->>FE: WSS: "Ping N/3: RTT = XXXms"
+        MC->>FE: SSE: "Ping N/3: RTT = XXXms"
         Note over MC: 20s delay before next ping
     end
 
     Note over MC: All pings complete
-    MC->>FE: WSS: "Ping summary: 3/3 replies,<br/>0% loss, RTT min/avg/max = ..."
+    MC->>FE: SSE: "Ping summary: 3/3 replies,<br/>0% loss, RTT min/avg/max = ..."
 ```
 
 ---

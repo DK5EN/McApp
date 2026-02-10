@@ -76,8 +76,7 @@ class SSEManager:
     """
     Manages SSE connections and message broadcasting.
 
-    Mirrors the WebSocketManager pattern for consistent integration
-    with the MessageRouter.
+    Manages SSE connections and integrates with the MessageRouter.
     """
 
     def __init__(
@@ -95,7 +94,7 @@ class SSEManager:
         self._server_task: asyncio.Task | None = None
         self._shutdown_event = asyncio.Event()
 
-        # Subscribe to messages (same as WebSocketManager)
+        # Subscribe to messages from the router
         if message_router:
             message_router.subscribe("mesh_message", self._broadcast_handler)
             message_router.subscribe("websocket_message", self._broadcast_handler)

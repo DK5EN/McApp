@@ -30,8 +30,6 @@ ssh mcapp.local "sudo tee /etc/mcapp/config.json" <<'EOF'
   "UDP_TARGET": "192.168.68.69",
   "UDP_PORT_send": 1799,
   "UDP_PORT_list": 1799,
-  "WS_HOST": "127.0.0.1",
-  "WS_PORT": 2980,
   "SSE_ENABLED": true,
   "SSE_HOST": "0.0.0.0",
   "SSE_PORT": 2981,
@@ -87,7 +85,7 @@ The bootstrap script will:
 - Generate locales (`en_US.UTF-8`, `de_DE.UTF-8`) to suppress SSH locale warnings
 - Set up Python environment via `uv sync` (no venv/pip)
 - Configure firewall (nftables on Trixie, iptables on Bookworm)
-- Open required ports: SSH (22), HTTP (80), WebSocket (2980), SSE (2981), UDP (1799), mDNS (5353)
+- Open required ports: SSH (22), HTTP (80), UDP (1799), mDNS (5353)
 - Install and start systemd services: `mcapp` and `mcapp-ble`
 
 For re-runs after partial install:
@@ -106,8 +104,7 @@ echo MCAPP: $(systemctl is-active mcapp)
 echo MCAPP_BLE: $(systemctl is-active mcapp-ble)
 echo LIGHTTPD: $(systemctl is-active lighttpd)
 echo WEBAPP: $(curl -s -o /dev/null -w %{http_code} http://localhost/webapp/)
-echo WS: $(curl -s -o /dev/null -w %{http_code} http://localhost:2980 2>/dev/null && echo OPEN || echo CLOSED)
-echo SSE: $(curl -s -o /dev/null -w %{http_code} http://localhost:2981/health 2>/dev/null || echo CLOSED)
+echo SSE: $(curl -s -o /dev/null -w %{http_code} http://localhost/health 2>/dev/null || echo CLOSED)
 echo UDP: $(ss -ulnp 2>/dev/null | grep -c 1799)
 echo CONFIG: $(test -f /etc/mcapp/config.json && echo OK || echo MISSING)
 echo UV: $(command -v uv >/dev/null 2>&1 && echo OK || echo MISSING)
@@ -123,7 +120,6 @@ MCAPP: active
 MCAPP_BLE: active
 LIGHTTPD: active
 WEBAPP: 200
-WS: OPEN
 SSE: 200
 UDP: 1
 CONFIG: OK
@@ -134,12 +130,12 @@ LOCALE: 1
 
 ### Firewall verification
 
-Confirm that WebSocket and SSE ports are reachable from the network:
+Confirm that the webapp and API are reachable from the network via lighttpd (port 80):
 
 ```bash
 # From your Mac (not on the Pi)
-curl -s -o /dev/null -w "%{http_code}" http://mcapp.local:2980
-curl -s -o /dev/null -w "%{http_code}" http://mcapp.local:2981/health
+curl -s -o /dev/null -w "%{http_code}" http://mcapp.local/webapp/
+curl -s -o /dev/null -w "%{http_code}" http://mcapp.local/health
 ```
 
 ## Step 5: Check logs
@@ -207,6 +203,7 @@ ssh mcapp.local "sudo bash -c '
 ### 7. SSE port not open in firewall (`nftables.conf`)
 - **Symptom:** SSE endpoint unreachable from network clients
 - **Fix:** Added port 2981/tcp to nftables and iptables firewall rules
+- **Note:** Port 2981 is no longer exposed externally — SSE is now proxied through lighttpd on port 80 (`/events`, `/api/`, `/health`)
 
 ### 8. SCP fails with SFTP protocol (`deployment_testing.md`)
 - **Symptom:** `scp: realpath bootstrap/: No such file` — upload directory fails

@@ -28,14 +28,6 @@ class UDPConfig:
 
 
 @dataclass
-class WebSocketConfig:
-    """WebSocket transport configuration."""
-
-    host: str = "127.0.0.1"
-    port: int = 2980
-
-
-@dataclass
 class SSEConfig:
     """Server-Sent Events transport configuration."""
 
@@ -99,7 +91,6 @@ class Config:
 
     # Transport configurations
     udp: UDPConfig = field(default_factory=UDPConfig)
-    websocket: WebSocketConfig = field(default_factory=WebSocketConfig)
     sse: SSEConfig = field(default_factory=SSEConfig)
     ble: BLEConfig = field(default_factory=BLEConfig)
 
@@ -156,11 +147,6 @@ class Config:
             target=data.get("UDP_TARGET", "localhost"),
         )
 
-        websocket = WebSocketConfig(
-            host=data.get("WS_HOST", "127.0.0.1"),
-            port=data.get("WS_PORT", 2980),
-        )
-
         sse = SSEConfig(
             enabled=data.get("SSE_ENABLED", False),
             host=data.get("SSE_HOST", "0.0.0.0"),
@@ -201,7 +187,6 @@ class Config:
             call_sign=data.get("CALL_SIGN", ""),
             user_info_text=data.get("USER_INFO_TEXT", ""),
             udp=udp,
-            websocket=websocket,
             sse=sse,
             ble=ble,
             storage=storage,
@@ -217,8 +202,6 @@ class Config:
             "UDP_PORT_list": self.udp.port_listen,
             "UDP_PORT_send": self.udp.port_send,
             "UDP_TARGET": self.udp.target,
-            "WS_HOST": self.websocket.host,
-            "WS_PORT": self.websocket.port,
             "SSE_ENABLED": self.sse.enabled,
             "SSE_HOST": self.sse.host,
             "SSE_PORT": self.sse.port,

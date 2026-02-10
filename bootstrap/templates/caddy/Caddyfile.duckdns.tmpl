@@ -1,0 +1,19 @@
+{
+    dynamic_dns {
+        provider duckdns {env.DUCKDNS_TOKEN}
+        domains {
+            duckdns.org {env.DUCKDNS_SUBDOMAIN}
+        }
+        check_interval 5m
+        versions ipv4
+    }
+}
+
+{$TLS_HOSTNAME} {
+    tls {
+        dns duckdns {env.DUCKDNS_TOKEN}
+        protocols tls1.3
+    }
+
+    reverse_proxy localhost:80
+}

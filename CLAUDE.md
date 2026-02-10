@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-McApp is a message proxy service for MeshCom (LoRa mesh network for ham radio operators). It bridges MeshCom nodes with web clients via WebSocket, supporting both UDP and Bluetooth Low Energy (BLE) connections. The system runs on Raspberry Pi and serves a Vue.js web application.
+McApp is a message proxy service for MeshCom (LoRa mesh network for ham radio operators). It bridges MeshCom nodes with web clients via SSE/REST (FastAPI), supporting both UDP and Bluetooth Low Energy (BLE) connections. The system runs on Raspberry Pi and serves a Vue.js web application through lighttpd.
 
 ## Architecture
 
@@ -13,13 +13,21 @@ McApp is a message proxy service for MeshCom (LoRa mesh network for ham radio op
 flowchart TD
     WC["Web Clients (Vue.js SPA)"]
 
-    WC -- "SSE:2981 (via lighttpd proxy)" --> MR
+    WC -- "HTTP :80" --> LH
 
-    subgraph MR["MESSAGE ROUTER (src/mcapp/main.py)"]
-        UDP["UDP Handler<br/>:1799"]
-        BLE["BLE Client<br/>(local mode)"]
-        WS["WS Mgr<br/>:2980"]
-        MSH["MessageStorageHandler<br/>(In-memory deque + JSON persistence)"]
+    subgraph Pi["Raspberry Pi Zero 2W"]
+        LH["lighttpd :80<br/>(static files + proxy)"]
+        FA["FastAPI :2981<br/>(SSE + REST API)"]
+
+        subgraph MR["MESSAGE ROUTER (src/mcapp/main.py)"]
+            UDP["UDP Handler<br/>:1799"]
+            BLE["BLE Client<br/>(local mode)"]
+            MSH["MessageStorageHandler"]
+        end
+
+        LH -- "/webapp/ → static files" --> LH
+        LH -- "/events, /api/ → proxy" --> FA
+        FA --> MR
     end
 
     UDP -- "UDP:1799" --> MCN["MeshCom Node<br/>(192.168.68.xxx)"]
@@ -31,7 +39,7 @@ flowchart TD
 flowchart TD
     subgraph Brain["McApp Brain (Mac, OrbStack, or any server)"]
         UDP2["UDP Handler"]
-        WSM["WebSocket Manager"]
+        SSE2["SSE Manager"]
         BLE2["BLE Client"]
         CMD["Command Handler"]
     end
@@ -42,7 +50,7 @@ flowchart TD
     end
 
     UDP2 -- "UDP:1799" --> MCN2["MeshCom Node"]
-    WSM -- "WS:2980" --> WC2["Web Clients"]
+    SSE2 -- "SSE/REST :2981" --> WC2["Web Clients"]
     BLE2 -- "HTTP/SSE" --> BLES
 ```
 
@@ -54,8 +62,7 @@ All source lives in `src/mcapp/`. Entry point: `mcapp.main:run` (invoked via `uv
 - **message_storage.py**: In-memory message store with JSON persistence, pruning, and parallel mheard statistics processing
 - **sqlite_storage.py**: Optional SQLite storage backend with cursor-based pagination and schema versioning
 - **udp_handler.py**: UDP listener/sender for MeshCom node communication (port 1799)
-- **websocket_handler.py**: WebSocket server for web clients (port 2980)
-- **sse_handler.py**: Optional SSE transport alternative (FastAPI-based, port 2981). Import-guarded — only loads if FastAPI is available
+- **sse_handler.py**: SSE/REST API transport (FastAPI-based, port 2981). Proxied through lighttpd on port 80. Import-guarded — only loads if FastAPI is available
 - **commands/**: Modular command system using mixin architecture (see Command System section below)
 - **config_loader.py**: Dataclass-based configuration with `MCAPP_*` environment variable overrides
 - **logging_setup.py**: Centralized logging with `EmojiFormatter`, `get_logger()`, `has_console()` detection
@@ -87,7 +94,7 @@ Located in `ble_service/` - a FastAPI service that exposes BLE hardware via HTTP
 
 1. Messages arrive via UDP (from MeshCom node) or BLE (from ESP32)
 2. MessageRouter publishes to subscribers based on message type
-3. Messages are stored, broadcast to WebSocket clients, and processed for commands
+3. Messages are stored, broadcast to SSE clients, and processed for commands
 4. Outbound messages from clients go through suppression logic before mesh transmission
 
 ### Key Classes
@@ -128,7 +135,7 @@ flowchart TD
         end
 
         Router --> UDPH["UDPHandler<br/>(udp_handler.py)"]
-        Router --> WSM2["WSManager<br/>(websocket_handler.py)"]
+        Router --> SSE2["SSEManager<br/>(sse_handler.py)"]
         Router --> BLEF["BLE Client<br/>(ble_client*.py)"]
         Router --> CMDH["CommandHdlr<br/>(commands/)"]
     end
@@ -156,35 +163,32 @@ message_router.register_protocol('commands', command_handler)
 udp_handler = UDPHandler(..., message_router=message_router)
 message_router.register_protocol('udp', udp_handler)
 
-websocket_manager = WebSocketManager(cfg.websocket.host, cfg.websocket.port, message_router)
-message_router.register_protocol('websocket', websocket_manager)
-
-# 5. Optional: SSE manager, BLE client (local/remote/disabled)
+# 5. SSE manager (REST API + Server-Sent Events), BLE client (local/remote/disabled)
 ```
 
 **Message Types & Subscriptions:**
 
 | Message Type | Subscribers | Purpose |
 |--------------|-------------|---------|
-| `mesh_message` | WSManager, StorageHandler | Messages from LoRa mesh |
-| `ble_notification` | WSManager, StorageHandler, CommandHandler | BLE device notifications |
-| `ble_status` | WSManager | BLE connection status updates |
-| `websocket_message` | WSManager | Messages to broadcast to clients |
+| `mesh_message` | SSEManager, StorageHandler | Messages from LoRa mesh |
+| `ble_notification` | SSEManager, StorageHandler, CommandHandler | BLE device notifications |
+| `ble_status` | SSEManager | BLE connection status updates |
+| `websocket_message` | SSEManager | Messages to broadcast to clients |
 | `ble_message` | BLE handler | Outbound messages via BLE |
 | `udp_message` | UDP handler | Outbound messages via UDP |
 
-**Incoming Message Flow (BLE → WebSocket clients):**
+**Incoming Message Flow (BLE → SSE clients):**
 1. BLE device sends GATT notification
 2. `BLEClient._on_props_changed()` receives raw bytes
 3. `notification_handler()` parses JSON or binary format
 4. `message_router.publish('ble', 'ble_notification', data)`
-5. `WebSocketManager._broadcast_handler()` receives via subscription
-6. Broadcasts JSON to all connected WebSocket clients
+5. `SSEManager._broadcast_handler()` receives via subscription
+6. Broadcasts via SSE to all connected clients
 
-**Outgoing Message Flow (WebSocket client → Mesh):**
-1. Client sends message via WebSocket
-2. `WebSocketManager._process_client_message()` routes by type
-3. `message_router.publish('websocket', 'udp_message', data)`
+**Outgoing Message Flow (Client → Mesh):**
+1. Client sends message via `POST /api/send`
+2. `SSEManager` routes by type (command, BLE, or UDP message)
+3. `message_router.publish('sse', 'udp_message', data)`
 4. `MessageRouter._udp_message_handler()` applies suppression logic
 5. `UDPHandler.send_message()` sends JSON to MeshCom node
 
@@ -272,7 +276,7 @@ uv run mcapp
 
 Configuration lives in `/etc/mcapp/config.json`:
 - `UDP_PORT_list/send`: Port 1799 for MeshCom node
-- `WS_HOST/PORT`: WebSocket server (127.0.0.1:2980)
+- `SSE_ENABLED/SSE_HOST/SSE_PORT`: SSE/REST API (0.0.0.0:2981, proxied via lighttpd)
 - `CALL_SIGN`: Node callsign for command handling
 - `LAT/LONG/STAT_NAME`: Location for weather service
 - `PRUNE_HOURS`: Message retention period (default 168h = 7 days)
@@ -300,7 +304,6 @@ Dev config: `/etc/mcapp/config.dev.json` (auto-selected when `MCAPP_ENV=dev`)
 ## Dependencies
 
 Python packages (managed via `uv`, see `pyproject.toml`):
-- `websockets>=14.0`: WebSocket server
 - `dbus-next>=0.2.3`: BlueZ D-Bus interface for BLE (local mode)
 - `timezonefinder>=6.5.0`: Timezone detection for node time sync
 - `requests>=2.31.0`: HTTP client for weather API (DWD BrightSky + OpenMeteo)
@@ -386,6 +389,7 @@ MCProxy/
 ├── config.sample.json       # Configuration template
 ├── deploy-to-pi.sh          # Deploy code to Pi via SSH/SCP
 ├── release.sh               # Unified release builder (gh CLI)
+├── ssl-tunnel-setup.sh      # TLS remote access setup (standalone, not part of bootstrap)
 │
 ├── src/mcapp/               # Main Python package
 │   ├── __init__.py          # Version export (__version__)
@@ -396,8 +400,7 @@ MCProxy/
 │   ├── sqlite_storage.py    # SQLite storage backend (optional)
 │   ├── migrate_storage.py   # Deque → SQLite migration utility
 │   ├── udp_handler.py       # UDP protocol handler
-│   ├── websocket_handler.py # WebSocket server
-│   ├── sse_handler.py       # SSE transport (optional, FastAPI)
+│   ├── sse_handler.py       # SSE/REST API transport (FastAPI, port 2981)
 │   ├── meteo.py             # WeatherService (DWD + OpenMeteo)
 │   ├── ble_client.py        # BLE abstraction interface + factory
 │   ├── ble_client_local.py  # Local BLE (wraps ble_handler)
@@ -428,10 +431,15 @@ MCProxy/
 │   ├── mcapp-ble.service    # Systemd service
 │   └── README.md            # API documentation
 │
-└── bootstrap/               # Installation scripts
-    ├── mcapp.sh             # Main entry point
-    ├── lib/                 # Script modules
-    └── templates/           # Config templates
+├── bootstrap/               # Installation scripts
+│   ├── mcapp.sh             # Main entry point
+│   ├── lib/                 # Script modules
+│   └── templates/           # Config templates (incl. caddy/, cloudflared/)
+│
+└── doc/                     # Documentation
+    ├── tls-architecture.md  # TLS setup diagrams
+    └── sops/
+        └── tls-maintenance.md  # Standard operating procedures
 ```
 
 ## Bootstrap Directory Structure
@@ -450,8 +458,16 @@ bootstrap/
 │   ├── config.json.tmpl   # Configuration template
 │   ├── mcapp.service      # systemd unit file
 │   ├── mcapp-ble.service  # BLE service systemd unit
-│   ├── nftables.conf      # Firewall rules
-│   └── journald.conf      # Volatile journal config
+│   ├── nftables.conf      # Firewall rules (ports 22, 80, 1799)
+│   ├── journald.conf      # Volatile journal config
+│   ├── caddy/             # TLS reverse proxy templates
+│   │   ├── Caddyfile.duckdns.tmpl
+│   │   ├── Caddyfile.cloudflare.tmpl
+│   │   ├── Caddyfile.desec.tmpl
+│   │   └── caddy.service
+│   └── cloudflared/       # Cloudflare Tunnel templates
+│       ├── config.yml.tmpl
+│       └── cloudflared.service
 ├── requirements.txt     # Python dependencies (minimum versions)
 └── README.md            # Installation documentation
 ```
@@ -497,6 +513,27 @@ The BLE service exposes:
 - `GET /health` - Health check
 
 See `ble_service/README.md` for full API documentation.
+
+## TLS Remote Access (Optional)
+
+For internet access with TLS encryption, run the standalone setup script:
+
+```bash
+sudo ./ssl-tunnel-setup.sh
+```
+
+This adds Caddy as a TLS reverse proxy with automated Let's Encrypt DNS-01 certificates and DDNS updates. Supports DuckDNS, Cloudflare, deSEC.io, and Cloudflare Tunnel.
+
+**Architecture with TLS:**
+```
+Browser (HTTPS) → Caddy:443 (TLS) → lighttpd:80 → {
+    /webapp/  → static files
+    /events   → proxy to FastAPI:2981
+    /api/     → proxy to FastAPI:2981
+}
+```
+
+See `doc/tls-architecture.md` for diagrams and `doc/sops/tls-maintenance.md` for maintenance procedures.
 
 ## Troubleshooting
 

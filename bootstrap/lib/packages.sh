@@ -173,10 +173,13 @@ configure_lighttpd() {
 
   # Create McApp-specific config
   cat > "$conf_file" << 'EOF'
-# McApp SPA rewrite + redirect configuration
-# Enables Vue.js SPA routing and root redirect
+# McApp SPA rewrite + redirect + API proxy configuration
+# Enables Vue.js SPA routing, root redirect, and reverse proxy to FastAPI
 
-server.modules += ("mod_rewrite", "mod_redirect")
+server.modules += ("mod_rewrite", "mod_redirect", "mod_proxy")
+
+# Enable streaming for SSE (Server-Sent Events) — prevents buffering
+server.stream-response-body = 2
 
 # Redirect root to webapp
 $HTTP["url"] == "/" {
@@ -188,6 +191,19 @@ $HTTP["url"] =~ "^/webapp/" {
     url.rewrite-if-not-file = (
         "^/webapp/(.*)$" => "/webapp/index.html"
     )
+}
+
+# Reverse proxy: SSE event stream + REST API → FastAPI on port 2981
+$HTTP["url"] =~ "^/events" {
+    proxy.server = ("" => (("host" => "127.0.0.1", "port" => 2981)))
+}
+
+$HTTP["url"] =~ "^/api/" {
+    proxy.server = ("" => (("host" => "127.0.0.1", "port" => 2981)))
+}
+
+$HTTP["url"] =~ "^/health" {
+    proxy.server = ("" => (("host" => "127.0.0.1", "port" => 2981)))
 }
 EOF
 
