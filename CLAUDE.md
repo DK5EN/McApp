@@ -60,7 +60,7 @@ All source lives in `src/mcapp/`. Entry point: `mcapp.main:run` (invoked via `uv
 
 - **main.py**: Main entry point. Defines `MessageRouter` (central pub/sub hub) and initializes all protocol handlers
 - **message_storage.py**: In-memory message store with JSON persistence, pruning, and parallel mheard statistics processing
-- **sqlite_storage.py**: Optional SQLite storage backend with cursor-based pagination and schema versioning
+- **sqlite_storage.py**: SQLite storage backend (WAL mode) with cursor-based pagination, type-based retention, composite indexes, and nightly pruning
 - **udp_handler.py**: UDP listener/sender for MeshCom node communication (port 1799)
 - **sse_handler.py**: SSE/REST API transport (FastAPI-based, port 2981). Proxied through lighttpd on port 80. Import-guarded — only loads if FastAPI is available
 - **commands/**: Modular command system using mixin architecture (see Command System section below)
@@ -279,7 +279,9 @@ Configuration lives in `/etc/mcapp/config.json`:
 - `SSE_ENABLED/SSE_HOST/SSE_PORT`: SSE/REST API (0.0.0.0:2981, proxied via lighttpd)
 - `CALL_SIGN`: Node callsign for command handling
 - `LAT/LONG/STAT_NAME`: Location for weather service
-- `PRUNE_HOURS`: Message retention period (default 168h = 7 days)
+- `PRUNE_HOURS`: Chat message retention (default 720h = 30 days)
+- `PRUNE_HOURS_POS`: Position data retention (default 192h = 8 days)
+- `PRUNE_HOURS_ACK`: ACK retention (default 192h = 8 days)
 - `MAX_STORAGE_SIZE_MB`: In-memory store limit
 
 Dev config: `/etc/mcapp/config.dev.json` (auto-selected when `MCAPP_ENV=dev`)
@@ -300,6 +302,33 @@ Dev config: `/etc/mcapp/config.dev.json` (auto-selected when `MCAPP_ENV=dev`)
 - `MCAPP_BLE_MODE` - Override BLE mode without editing config
 - `MCAPP_BLE_URL` - Override remote BLE service URL
 - `MCAPP_BLE_API_KEY` - Override API key
+
+### SQLite Storage Backend
+
+The SQLite backend (`sqlite_storage.py`) is the default for production deployments.
+
+**Journal mode:** WAL (Write-Ahead Logging) for concurrent reads during writes.
+
+**Indexes:**
+
+| Index | Columns | Purpose |
+|-------|---------|---------|
+| `idx_messages_timestamp` | `timestamp` | Time-range filters, MHeard query |
+| `idx_messages_src` | `src` | Source callsign lookups |
+| `idx_messages_dst` | `dst` | Destination lookups |
+| `idx_messages_type` | `type` | Type filters |
+| `idx_messages_type_timestamp` | `type, timestamp DESC` | Smart initial payload, recent messages |
+| `idx_messages_type_dst_timestamp` | `type, dst, timestamp DESC` | Paginated channel queries |
+
+**Retention (type-based pruning):**
+
+| Message Type | Retention | Config Key |
+|--------------|-----------|------------|
+| `msg` (chat) | 30 days | `PRUNE_HOURS` (720) |
+| `pos` (positions) | 8 days | `PRUNE_HOURS_POS` (192) |
+| `ack` (acknowledgements) | 8 days | `PRUNE_HOURS_ACK` (192) |
+
+**Nightly pruning:** A background asyncio task runs at 04:00 local time, deleting expired messages per type and running `ANALYZE` to keep query planner statistics fresh. Pruning also runs once at startup.
 
 ## Dependencies
 
