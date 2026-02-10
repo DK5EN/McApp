@@ -163,10 +163,9 @@ configure_lighttpd() {
   log_info "  Configuring lighttpd..."
 
   local conf_file="/etc/lighttpd/conf-available/99-mcapp.conf"
-  local marker="# McApp SPA rewrite"
 
-  # Check if already configured
-  if [[ -f "$conf_file" ]] && grep -q "$marker" "$conf_file" 2>/dev/null; then
+  # Check if already configured (must include mod_proxy for API/SSE reverse proxy)
+  if [[ -f "$conf_file" ]] && grep -q "mod_proxy" "$conf_file" 2>/dev/null; then
     log_info "  lighttpd already configured"
     return 0
   fi
