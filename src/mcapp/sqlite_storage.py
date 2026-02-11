@@ -22,12 +22,13 @@ VERSION = "v0.50.0"
 logger = get_logger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Constants matching message_storage.py
 BUCKET_SECONDS = 5 * 60
 VALID_RSSI_RANGE = (-140, -30)
 VALID_SNR_RANGE = (-30, 12)
+DEDUP_WINDOW_MS = 5 * 60 * 1000  # 5-minute dedup window (milliseconds)
 SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
 GAP_THRESHOLD_MULTIPLIER = 6
 MIN_DATAPOINTS_FOR_STATS = 3
@@ -36,7 +37,7 @@ CREATE_SCHEMA_SQL = """
 -- Main messages table
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    msg_id TEXT UNIQUE,
+    msg_id TEXT,
     src TEXT NOT NULL,
     dst TEXT NOT NULL,
     msg TEXT,
@@ -58,6 +59,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_type ON messages(type);
 -- Composite indexes for heavy query patterns
 CREATE INDEX IF NOT EXISTS idx_messages_type_timestamp ON messages(type, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_type_dst_timestamp ON messages(type, dst, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_msgid_timestamp ON messages(msg_id, timestamp DESC);
 
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -174,6 +176,13 @@ class SQLiteStorage:
                     logger.info("Migrating schema v%d → v2", current_version)
                     conn.executescript(CREATE_SCHEMA_V2_SQL)
                     self._backfill_new_tables(conn)
+
+                if current_version < 3:
+                    logger.info(
+                        "Migrating schema v%d → v3: removing msg_id UNIQUE constraint",
+                        current_version,
+                    )
+                    self._migrate_v2_to_v3(conn)
 
                 if row is None:
                     conn.execute(
@@ -316,6 +325,47 @@ class SQLiteStorage:
         """)
         bucket_count = conn.execute("SELECT changes()").fetchone()[0]
         logger.info("Pre-aggregated %d signal_buckets entries", bucket_count)
+
+    @staticmethod
+    def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
+        """Remove UNIQUE constraint from msg_id (SQLite requires table recreation)."""
+        conn.executescript("""
+            CREATE TABLE messages_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                msg_id TEXT,
+                src TEXT NOT NULL,
+                dst TEXT NOT NULL,
+                msg TEXT,
+                type TEXT DEFAULT 'msg',
+                timestamp INTEGER NOT NULL,
+                rssi INTEGER,
+                snr REAL,
+                src_type TEXT,
+                raw_json TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            INSERT INTO messages_new SELECT * FROM messages;
+
+            DROP TABLE messages;
+
+            ALTER TABLE messages_new RENAME TO messages;
+
+            -- Recreate all existing indexes
+            CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_messages_src ON messages(src);
+            CREATE INDEX IF NOT EXISTS idx_messages_dst ON messages(dst);
+            CREATE INDEX IF NOT EXISTS idx_messages_type ON messages(type);
+            CREATE INDEX IF NOT EXISTS idx_messages_type_timestamp
+                ON messages(type, timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_messages_type_dst_timestamp
+                ON messages(type, dst, timestamp DESC);
+
+            -- New dedup index
+            CREATE INDEX IF NOT EXISTS idx_messages_msgid_timestamp
+                ON messages(msg_id, timestamp DESC);
+        """)
+        logger.info("Schema v3 migration complete: msg_id UNIQUE constraint removed")
 
     async def _init_bucket_accumulators(self) -> None:
         """Load current partial buckets from signal_log into memory."""
@@ -465,8 +515,10 @@ class SQLiteStorage:
                        gw = COALESCE(excluded.gw, station_positions.gw),
                        via_shortest = CASE
                            WHEN excluded.via_shortest = '' THEN ''
-                           WHEN station_positions.via_shortest = '' THEN station_positions.via_shortest
-                           WHEN LENGTH(excluded.via_shortest) < LENGTH(station_positions.via_shortest)
+                           WHEN station_positions.via_shortest = ''
+                               THEN station_positions.via_shortest
+                           WHEN LENGTH(excluded.via_shortest)
+                               < LENGTH(station_positions.via_shortest)
                                THEN excluded.via_shortest
                            ELSE station_positions.via_shortest END,
                        via_paths = CASE WHEN excluded.via_paths != '[]'
@@ -610,14 +662,24 @@ class SQLiteStorage:
                 )
                 return
 
-        query = """
-            INSERT OR IGNORE INTO messages
-            (msg_id, src, dst, msg, type, timestamp, rssi, snr, src_type, raw_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """
-        params = (msg_id, src, dst, msg, msg_type, timestamp, rssi, snr, src_type, raw)
+        # Time-windowed dedup: reject only if same msg_id was seen within 5 minutes.
+        # MHeard beacons (msg_id=None) skip this check — they have their own 2-min throttle above.
+        if msg_id is not None:
+            existing = await self._execute(
+                "SELECT 1 FROM messages WHERE msg_id = ? AND timestamp > ? LIMIT 1",
+                (msg_id, timestamp - DEDUP_WINDOW_MS),
+            )
+            if existing:
+                return
 
-        await self._execute(query, params, fetch=False)
+        params = (msg_id, src, dst, msg, msg_type, timestamp, rssi, snr, src_type, raw)
+        await self._execute(
+            "INSERT INTO messages"
+            " (msg_id, src, dst, msg, type, timestamp, rssi, snr, src_type, raw_json)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params,
+            fetch=False,
+        )
 
     def _should_filter_message(self, message: dict[str, Any]) -> bool:
         """Check if message should be filtered out."""
@@ -762,7 +824,7 @@ class SQLiteStorage:
         cutoff_ms = now_ms - (8 * 24 * 60 * 60 * 1000)  # 8 days ago
         bucket_5min_ms = BUCKET_SECONDS * 1000
 
-        result = await self._execute(
+        await self._execute(
             f"""
             INSERT OR REPLACE INTO signal_buckets
                 (callsign, bucket_ts, bucket_size, rssi_avg, rssi_min, rssi_max,
@@ -1444,7 +1506,7 @@ class SQLiteStorage:
 
         # Bulk insert
         insert_query = """
-            INSERT OR IGNORE INTO messages
+            INSERT INTO messages
             (msg_id, src, dst, msg, type, timestamp, rssi, snr, src_type, raw_json, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
