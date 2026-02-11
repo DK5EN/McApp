@@ -425,8 +425,9 @@ class MessageRouter:
         dst = params.get('dst', '*')
         before = params.get('before', int(time.time() * 1000))
         limit = min(params.get('limit', 20), 100)
+        src = params.get('src')  # Own callsign for DM conversation pagination
 
-        page_data = await self.storage_handler.get_messages_page(dst, before, limit)
+        page_data = await self.storage_handler.get_messages_page(dst, before, limit, src=src)
         payload = {
             "type": "response",
             "msg": "messages_page",

@@ -334,14 +334,17 @@ class SSEManager:
             try:
                 if request.type == "page_request":
                     # Paginated message fetch — response via SSE stream
+                    page_data = {
+                        "dst": request.dst,
+                        "before": getattr(request, "before", None),
+                        "limit": getattr(request, "limit", 20),
+                    }
+                    if request.src:
+                        page_data["src"] = request.src
                     await self.message_router.route_command(
                         "get_messages_page",
                         websocket=None,
-                        data={
-                            "dst": request.dst,
-                            "before": getattr(request, "before", None),
-                            "limit": getattr(request, "limit", 20),
-                        },
+                        data=page_data,
                     )
                 elif request.type == "command":
                     # Route command through message router

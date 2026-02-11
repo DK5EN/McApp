@@ -1020,13 +1020,31 @@ class SQLiteStorage:
         return {row["dst"]: row["cnt"] for row in rows if row["dst"]}
 
     async def get_messages_page(
-        self, dst: str, before_timestamp: int | None = None, limit: int = 20
+        self, dst: str, before_timestamp: int | None = None, limit: int = 20,
+        src: str | None = None,
     ) -> dict:
-        """Get a page of messages for a destination, cursor-based."""
+        """Get a page of messages for a destination, cursor-based.
+
+        For personal DMs (dst is a callsign, not a group number), pass src
+        to query both directions of the conversation.
+        """
         if before_timestamp is None:
             before_timestamp = int(time.time() * 1000)
 
-        if dst:
+        is_dm = dst and src and not dst.isdigit() and dst != '*'
+
+        if is_dm:
+            # DM conversation: fetch messages in both directions
+            query = (
+                "SELECT raw_json FROM messages"
+                " WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
+                " AND ((dst = ? AND src LIKE ?) OR (dst = ? AND src LIKE ?))"
+                " AND timestamp < ?"
+                " ORDER BY timestamp DESC LIMIT ?"
+            )
+            # Use LIKE with % suffix to match callsign variants (e.g. OE5HWN-12)
+            params = (dst, src + '%', src, dst + '%', before_timestamp, limit + 1)
+        elif dst:
             query = (
                 "SELECT raw_json FROM messages"
                 " WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
