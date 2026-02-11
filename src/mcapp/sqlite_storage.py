@@ -170,6 +170,30 @@ class SQLiteStorage:
         snr = message.get("snr")
         src_type = message.get("src_type", "")
 
+        # MHeard throttle: BLE MHeard entries have no msg_id and arrive very
+        # frequently (~98/hr per station).  Instead of inserting a new row every
+        # time, update the most recent entry for the same callsign if it is
+        # within the throttle window.  This reduces DB bloat by ~90%.
+        if not msg_id and src_type == "ble" and msg_type == "pos":
+            throttle_ms = 120_000  # 2 minutes
+            existing = await self._execute(
+                "SELECT id FROM messages"
+                " WHERE src = ? AND src_type = 'ble'"
+                " AND type = 'pos' AND msg_id IS NULL"
+                " AND timestamp > ?"
+                " ORDER BY timestamp DESC LIMIT 1",
+                (src, timestamp - throttle_ms),
+            )
+            if existing:
+                await self._execute(
+                    "UPDATE messages"
+                    " SET rssi = ?, snr = ?, timestamp = ?, raw_json = ?"
+                    " WHERE id = ?",
+                    (rssi, snr, timestamp, raw, existing[0]["id"]),
+                    fetch=False,
+                )
+                return
+
         query = """
             INSERT OR IGNORE INTO messages
             (msg_id, src, dst, msg, type, timestamp, rssi, snr, src_type, raw_json)
@@ -366,6 +390,7 @@ class SQLiteStorage:
             messages.extend(reversed(msg_list))
 
         # Positions: latest per source with field merging
+        # Normalize comma-separated src ("DL7OSX-1,DB0HOB-12") to callsign + via
         pos_rows = await self._execute(
             "SELECT raw_json FROM messages"
             " WHERE type = 'pos'"
@@ -377,21 +402,53 @@ class SQLiteStorage:
             raw = row["raw_json"]
             try:
                 data = json.loads(raw)
-                src = data.get("src")
-                if not src:
+                raw_src = data.get("src", "")
+                if not raw_src:
                     continue
-                if src not in pos_per_src:
-                    pos_per_src[src] = data
+
+                # Normalize: split relay path into callsign + via
+                parts = raw_src.split(",")
+                callsign = parts[0].strip()
+                via = ",".join(p.strip() for p in parts[1:]) if len(parts) > 1 else ""
+
+                # Store normalized src and extracted via
+                data["src"] = callsign
+                if via and "via" not in data:
+                    data["via"] = via
+
+                if callsign not in pos_per_src:
+                    pos_per_src[callsign] = data
                 else:
-                    existing = pos_per_src[src]
+                    existing = pos_per_src[callsign]
+                    existing_via = existing.get("via", "")
+                    incoming_via = data.get("via", "")
+
+                    # Path preference: shorter path wins (direct beats relayed)
+                    if incoming_via and not existing_via:
+                        pass  # Existing is direct — keep it
+                    elif not incoming_via and existing_via:
+                        existing["via"] = ""  # Incoming is direct — update
+                    elif incoming_via and existing_via:
+                        # Both relayed: prefer shorter chain
+                        if len(incoming_via.split(",")) < len(existing_via.split(",")):
+                            existing["via"] = incoming_via
+
+                    # Fill missing fields from this entry
                     for key in (
-                        "via", "lat", "long", "alt", "battery_level",
+                        "lat", "long", "alt", "battery_level",
                         "firmware", "fw_sub", "aprs_symbol",
-                        "aprs_symbol_group", "rssi", "snr", "hw_id",
+                        "aprs_symbol_group", "hw_id",
                         "lora_mod", "mesh",
                     ):
                         if key not in existing and key in data:
                             existing[key] = data[key]
+
+                    # RSSI/SNR: prefer non-zero values (direct reception)
+                    for key in ("rssi", "snr"):
+                        incoming_val = data.get(key)
+                        existing_val = existing.get(key)
+                        if incoming_val and not existing_val:
+                            existing[key] = incoming_val
             except (json.JSONDecodeError, TypeError):
                 continue
 
