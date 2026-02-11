@@ -37,7 +37,9 @@ class ResponseMixin:
 
                 # Send directly via WebSocket, bypass BLE routing
                 if self.message_router:
+                    msg_id = f"{int(time.time()):08X}_{i}"
                     websocket_message = {
+                        "msg_id": msg_id,
                         "src": self.my_callsign,
                         "dst": recipient,
                         "msg": chunk,
@@ -48,6 +50,12 @@ class ResponseMixin:
                     await self.message_router.publish(
                         "command", "websocket_message", websocket_message
                     )
+
+                    # Persist self-response to DB so it survives page reload
+                    if self.storage_handler:
+                        import json
+                        raw_json = json.dumps(websocket_message)
+                        await self.storage_handler.store_message(websocket_message, raw_json)
 
             else:
                 # Send via message router
