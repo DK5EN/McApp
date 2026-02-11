@@ -913,34 +913,31 @@ class SQLiteStorage:
 
         return msg_msgs + pos_msgs
 
-    async def get_smart_initial(self, limit_per_dst: int = 15) -> dict:
+    async def get_smart_initial(self, limit_per_dst: int = 20) -> dict:
         """Get smart initial payload: last N messages per dst + latest pos per src + ACKs.
 
         Positions now come from station_positions table (one pre-merged row per
         station) instead of scanning/merging from the messages table.
         """
-        # Messages: recent non-ack messages, excluding BLE register data
-        msg_rows = await self._execute(
-            "SELECT raw_json FROM messages"
-            " WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
-            " ORDER BY timestamp DESC LIMIT 1000",
+        # Get all active destinations
+        dst_rows = await self._execute(
+            "SELECT DISTINCT dst FROM messages"
+            " WHERE type = 'msg' AND msg NOT LIKE '%:ack%'",
         )
 
-        # Group by dst, limit per dst
-        msgs_per_dst: dict[str, list[str]] = defaultdict(list)
-        for row in msg_rows:
-            raw = row["raw_json"]
-            try:
-                data = json.loads(raw)
-                dst = data.get("dst")
-                if dst and len(msgs_per_dst[dst]) < limit_per_dst:
-                    msgs_per_dst[dst].append(raw)
-            except (json.JSONDecodeError, TypeError):
-                continue
-
+        # Per-destination queries — each uses idx_messages_type_dst_timestamp
         messages = []
-        for msg_list in msgs_per_dst.values():
-            messages.extend(reversed(msg_list))
+        for dst_row in dst_rows:
+            dst = dst_row["dst"]
+            if not dst:
+                continue
+            rows = await self._execute(
+                "SELECT raw_json FROM messages"
+                " WHERE type = 'msg' AND msg NOT LIKE '%:ack%' AND dst = ?"
+                " ORDER BY timestamp DESC LIMIT ?",
+                (dst, limit_per_dst),
+            )
+            messages.extend(row["raw_json"] for row in reversed(rows))
 
         # Positions: read from station_positions table (pre-merged, one row per station)
         pos_rows = await self._execute(
@@ -1029,7 +1026,7 @@ class SQLiteStorage:
         if before_timestamp is None:
             before_timestamp = int(time.time() * 1000)
 
-        if dst and dst != '*':
+        if dst:
             query = (
                 "SELECT raw_json FROM messages"
                 " WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
