@@ -267,12 +267,23 @@ configure_nftables() {
   local nft_conf="/etc/nftables.conf"
   local marker="# McApp firewall rules"
 
-  # Check if our rules already exist
+  # Check if our rules already exist and are up to date
   if grep -q "$marker" "$nft_conf" 2>/dev/null; then
-    # Update existing rules if SSE port 2981 is missing
+    local needs_update=false
+
+    # Update if SSE port 2981 is missing
     if ! grep -q "dport 2981" "$nft_conf" 2>/dev/null; then
       log_info "  Updating nftables rules (adding SSE port 2981)..."
-    else
+      needs_update=true
+    fi
+
+    # Update if LAN SSH exemption is missing
+    if ! grep -q "192.168.0.0/16" "$nft_conf" 2>/dev/null; then
+      log_info "  Updating nftables rules (adding LAN SSH exemption)..."
+      needs_update=true
+    fi
+
+    if [[ "$needs_update" == "false" ]]; then
       log_info "  nftables rules already configured"
       return 0
     fi
@@ -298,7 +309,10 @@ table inet filter {
     # Allow established/related connections
     ct state established,related accept
 
-    # SSH (rate limited)
+    # SSH - allow local LAN without rate limiting
+    ip saddr { 192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12 } tcp dport 22 accept
+
+    # SSH - rate limit external connections (6 new per minute)
     tcp dport 22 ct state new limit rate 6/minute accept
 
     # HTTP (lighttpd webapp)
@@ -370,7 +384,12 @@ configure_iptables_legacy() {
   # Allow established connections
   iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
-  # SSH with rate limiting
+  # SSH - allow local LAN without rate limiting
+  iptables -A INPUT -p tcp --dport 22 -s 192.168.0.0/16 -j ACCEPT
+  iptables -A INPUT -p tcp --dport 22 -s 10.0.0.0/8 -j ACCEPT
+  iptables -A INPUT -p tcp --dport 22 -s 172.16.0.0/12 -j ACCEPT
+
+  # SSH - rate limit external connections
   iptables -A INPUT -p tcp --dport 22 -m state --state NEW -m recent --set
   iptables -A INPUT -p tcp --dport 22 -m state --state NEW -m recent --update --seconds 60 --hitcount 4 -j DROP
   iptables -A INPUT -p tcp --dport 22 -j ACCEPT
