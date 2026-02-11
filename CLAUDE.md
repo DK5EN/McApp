@@ -305,30 +305,47 @@ Dev config: `/etc/mcapp/config.dev.json` (auto-selected when `MCAPP_ENV=dev`)
 
 ### SQLite Storage Backend
 
-The SQLite backend (`sqlite_storage.py`) is the default for production deployments.
+The SQLite backend (`sqlite_storage.py`) is the default for production deployments. Schema version 2 introduced dedicated tables for positions and signal data (see `doc/2026-02-11_1400-position-signal-architecture-ADR.md` for full architecture).
 
 **Journal mode:** WAL (Write-Ahead Logging) for concurrent reads during writes.
+
+**Tables (Schema V2):**
+
+| Table | Purpose |
+|-------|---------|
+| `messages` | Chat messages and ACKs. Legacy dual-write still receives `type='pos'` for backwards compatibility |
+| `station_positions` | One row per station (UPSERT). Location from position beacons, signal from MHeard beacons — updated independently |
+| `signal_log` | Raw RSSI/SNR measurements from every MHeard beacon (~130/hour) |
+| `signal_buckets` | Pre-aggregated time buckets (5-min for 8d, 1-hour for 365d) for mHeard charts |
+
+**Key design principle:** MHeard beacons (RSSI/SNR, no coordinates) and position beacons (lat/lon, no signal) are completely disjoint packet types. `station_positions` merges them per callsign with independent field-group updates — signal fields never overwrite location fields and vice versa.
 
 **Indexes:**
 
 | Index | Columns | Purpose |
 |-------|---------|---------|
-| `idx_messages_timestamp` | `timestamp` | Time-range filters, MHeard query |
+| `idx_messages_timestamp` | `timestamp` | Time-range filters |
 | `idx_messages_src` | `src` | Source callsign lookups |
 | `idx_messages_dst` | `dst` | Destination lookups |
 | `idx_messages_type` | `type` | Type filters |
 | `idx_messages_type_timestamp` | `type, timestamp DESC` | Smart initial payload, recent messages |
 | `idx_messages_type_dst_timestamp` | `type, dst, timestamp DESC` | Paginated channel queries |
+| `idx_signal_log_cs_ts` | `callsign, timestamp DESC` | Signal log time-range queries |
 
-**Retention (type-based pruning):**
+**Retention (nightly pruning at 04:00):**
 
-| Message Type | Retention | Config Key |
-|--------------|-----------|------------|
-| `msg` (chat) | 30 days | `PRUNE_HOURS` (720) |
-| `pos` (positions) | 8 days | `PRUNE_HOURS_POS` (192) |
-| `ack` (acknowledgements) | 8 days | `PRUNE_HOURS_ACK` (192) |
+| Table / Type | Retention | Notes |
+|--------------|-----------|-------|
+| `messages` type `msg` | 30 days | Chat messages |
+| `messages` type `pos`/`ack` | 8 days | Legacy dual-write |
+| `signal_log` | 8 days | Raw MHeard measurements |
+| `signal_buckets` (5-min) | 8 days | Fine-grained chart data |
+| `signal_buckets` (1-hour) | 365 days | Long-term trend data |
+| `station_positions` | 30 days since `last_seen` | Stale stations removed |
 
-**Nightly pruning:** A background asyncio task runs at 04:00 local time, deleting expired messages per type and running `ANALYZE` to keep query planner statistics fresh. Pruning also runs once at startup.
+**Nightly job (04:00):** Prunes expired data, aggregates old 5-min buckets into 1-hour buckets, runs `ANALYZE` for query planner freshness. Also runs pruning once at startup.
+
+**In-memory bucket accumulation:** 5-minute signal buckets are accumulated in memory as MHeard beacons arrive, then flushed to `signal_buckets` on bucket rollover. On startup, partial buckets are recovered from `signal_log`.
 
 ## Dependencies
 
@@ -466,6 +483,7 @@ MCProxy/
 │   └── templates/           # Config templates (incl. caddy/, cloudflared/)
 │
 └── doc/                     # Documentation
+    ├── 2026-02-11_1400-position-signal-architecture-ADR.md  # Position/signal table architecture ADR
     ├── tls-architecture.md  # TLS setup diagrams
     └── sops/
         └── tls-maintenance.md  # Standard operating procedures
