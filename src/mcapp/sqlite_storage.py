@@ -22,7 +22,7 @@ VERSION = "v0.50.0"
 logger = get_logger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Constants matching message_storage.py
 BUCKET_SECONDS = 5 * 60
@@ -75,6 +75,62 @@ CREATE TABLE IF NOT EXISTS mheard_cache (
 );
 """
 
+# New tables for separated position/signal architecture (schema v2)
+CREATE_SCHEMA_V2_SQL = """
+-- Latest position per station (one row per unique callsign)
+CREATE TABLE IF NOT EXISTS station_positions (
+    callsign        TEXT PRIMARY KEY,
+    lat             REAL,
+    long            REAL,
+    alt             REAL,
+    lat_dir         TEXT DEFAULT '',
+    long_dir        TEXT DEFAULT '',
+    hw_id           INTEGER,
+    firmware        TEXT,
+    fw_sub          TEXT,
+    aprs_symbol     TEXT,
+    aprs_symbol_group TEXT,
+    batt            INTEGER,
+    lora_mod        INTEGER,
+    mesh            INTEGER,
+    gw              INTEGER DEFAULT 0,
+    rssi            INTEGER,
+    snr             REAL,
+    via_shortest    TEXT DEFAULT '',
+    via_paths       TEXT DEFAULT '[]',
+    position_ts     INTEGER,
+    signal_ts       INTEGER,
+    last_seen       INTEGER,
+    source          TEXT DEFAULT 'local'
+);
+
+-- Raw RSSI/SNR measurements from MHeard beacons
+CREATE TABLE IF NOT EXISTS signal_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    callsign    TEXT NOT NULL,
+    timestamp   INTEGER NOT NULL,
+    rssi        INTEGER NOT NULL,
+    snr         REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_signal_log_cs_ts ON signal_log(callsign, timestamp DESC);
+
+-- Pre-aggregated time buckets for chart rendering
+CREATE TABLE IF NOT EXISTS signal_buckets (
+    callsign    TEXT NOT NULL,
+    bucket_ts   INTEGER NOT NULL,
+    bucket_size INTEGER NOT NULL,
+    rssi_avg    REAL,
+    rssi_min    INTEGER,
+    rssi_max    INTEGER,
+    snr_avg     REAL,
+    snr_min     REAL,
+    snr_max     REAL,
+    count       INTEGER,
+    PRIMARY KEY (callsign, bucket_ts, bucket_size)
+);
+"""
+
 
 class SQLiteStorage:
     """
@@ -88,6 +144,9 @@ class SQLiteStorage:
         self.db_path = Path(db_path)
         self.max_size_mb = max_size_mb
         self._initialized = False
+
+        # In-memory bucket accumulators: {(callsign, bucket_start_ms): {"rssi": [], "snr": []}}
+        self._bucket_accumulators: dict[tuple[str, int], dict[str, list]] = {}
 
         # Ensure parent directory exists
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -106,20 +165,324 @@ class SQLiteStorage:
 
                 conn.executescript(CREATE_SCHEMA_SQL)
 
-                # Check/set schema version
+                # Check/set schema version and run migrations
                 cursor = conn.execute("SELECT version FROM schema_version LIMIT 1")
                 row = cursor.fetchone()
+                current_version = row[0] if row else 0
+
+                if current_version < 2:
+                    logger.info("Migrating schema v%d → v2", current_version)
+                    conn.executescript(CREATE_SCHEMA_V2_SQL)
+                    self._backfill_new_tables(conn)
+
                 if row is None:
                     conn.execute(
                         "INSERT INTO schema_version (version) VALUES (?)",
+                        (SCHEMA_VERSION,),
+                    )
+                elif current_version < SCHEMA_VERSION:
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
                         (SCHEMA_VERSION,),
                     )
 
                 conn.commit()
 
         await asyncio.to_thread(_init_db)
+
+        # Initialize bucket accumulators from existing signal_log
+        await self._init_bucket_accumulators()
+
         self._initialized = True
         logger.info("SQLite database initialized")
+
+    @staticmethod
+    def _backfill_new_tables(conn: sqlite3.Connection) -> None:
+        """Backfill station_positions and signal_log from existing messages."""
+        # 1. Backfill signal_log from MHeard beacons (rssi IS NOT NULL, no msg_id)
+        conn.execute("""
+            INSERT OR IGNORE INTO signal_log (callsign, timestamp, rssi, snr)
+            SELECT
+                CASE WHEN INSTR(src, ',') > 0
+                     THEN SUBSTR(src, 1, INSTR(src, ',') - 1)
+                     ELSE src END,
+                timestamp, rssi, snr
+            FROM messages
+            WHERE type = 'pos'
+              AND rssi IS NOT NULL AND snr IS NOT NULL
+              AND msg_id IS NULL
+        """)
+        signal_count = conn.execute("SELECT changes()").fetchone()[0]
+        logger.info("Backfilled %d signal_log entries", signal_count)
+
+        # 2. Backfill station_positions from position beacons (have lat/long)
+        # Use most recent position per callsign
+        conn.execute("""
+            INSERT OR REPLACE INTO station_positions
+                (callsign, lat, long, alt, lat_dir, long_dir, hw_id, firmware, fw_sub,
+                 aprs_symbol, aprs_symbol_group, batt, gw, via_shortest,
+                 position_ts, last_seen, source)
+            SELECT
+                callsign, lat, long, alt, lat_dir, long_dir, hw_id, firmware, fw_sub,
+                aprs_symbol, aprs_symbol_group, batt, gw, via,
+                timestamp, timestamp, 'local'
+            FROM (
+                SELECT
+                    CASE WHEN INSTR(src, ',') > 0
+                         THEN SUBSTR(src, 1, INSTR(src, ',') - 1)
+                         ELSE src END AS callsign,
+                    CASE WHEN INSTR(src, ',') > 0
+                         THEN SUBSTR(src, INSTR(src, ',') + 1)
+                         ELSE '' END AS via,
+                    json_extract(raw_json, '$.lat') AS lat,
+                    json_extract(raw_json, '$.long') AS long,
+                    json_extract(raw_json, '$.alt') AS alt,
+                    json_extract(raw_json, '$.lat_dir') AS lat_dir,
+                    json_extract(raw_json, '$.long_dir') AS long_dir,
+                    json_extract(raw_json, '$.hw_id') AS hw_id,
+                    json_extract(raw_json, '$.firmware') AS firmware,
+                    json_extract(raw_json, '$.fw_sub') AS fw_sub,
+                    json_extract(raw_json, '$.aprs_symbol') AS aprs_symbol,
+                    json_extract(raw_json, '$.aprs_symbol_group') AS aprs_symbol_group,
+                    json_extract(raw_json, '$.batt') AS batt,
+                    json_extract(raw_json, '$.gw') AS gw,
+                    timestamp,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY CASE WHEN INSTR(src, ',') > 0
+                                         THEN SUBSTR(src, 1, INSTR(src, ',') - 1)
+                                         ELSE src END
+                        ORDER BY timestamp DESC
+                    ) AS rn
+                FROM messages
+                WHERE type = 'pos'
+                  AND raw_json IS NOT NULL
+                  AND json_extract(raw_json, '$.lat') IS NOT NULL
+                  AND json_extract(raw_json, '$.lat') != 0
+            ) ranked
+            WHERE rn = 1
+        """)
+        pos_count = conn.execute("SELECT changes()").fetchone()[0]
+        logger.info("Backfilled %d station_positions entries", pos_count)
+
+        # 3. Update signal fields from MHeard beacons (latest per callsign)
+        conn.execute("""
+            UPDATE station_positions
+            SET rssi = sub.rssi,
+                snr = sub.snr,
+                signal_ts = sub.timestamp,
+                last_seen = MAX(COALESCE(station_positions.last_seen, 0), sub.timestamp)
+            FROM (
+                SELECT callsign, rssi, snr, timestamp
+                FROM signal_log
+                WHERE (callsign, timestamp) IN (
+                    SELECT callsign, MAX(timestamp) FROM signal_log GROUP BY callsign
+                )
+            ) sub
+            WHERE station_positions.callsign = sub.callsign
+        """)
+        sig_update_count = conn.execute("SELECT changes()").fetchone()[0]
+        logger.info("Updated %d station_positions with signal data", sig_update_count)
+
+        # 4. Insert signal-only stations (heard via MHeard but never sent position)
+        conn.execute("""
+            INSERT OR IGNORE INTO station_positions (callsign, rssi, snr, signal_ts, last_seen)
+            SELECT callsign, rssi, snr, timestamp, timestamp
+            FROM signal_log
+            WHERE (callsign, timestamp) IN (
+                SELECT callsign, MAX(timestamp) FROM signal_log GROUP BY callsign
+            )
+              AND callsign NOT IN (SELECT callsign FROM station_positions)
+        """)
+        sig_only = conn.execute("SELECT changes()").fetchone()[0]
+        logger.info("Added %d signal-only station_positions entries", sig_only)
+
+        # 5. Pre-aggregate signal_buckets from signal_log
+        bucket_ms = BUCKET_SECONDS * 1000
+        conn.execute(f"""
+            INSERT OR REPLACE INTO signal_buckets
+                (callsign, bucket_ts, bucket_size, rssi_avg, rssi_min, rssi_max,
+                 snr_avg, snr_min, snr_max, count)
+            SELECT
+                callsign,
+                (timestamp / {bucket_ms}) * {bucket_ms} AS bucket_ts,
+                {bucket_ms},
+                AVG(rssi), MIN(rssi), MAX(rssi),
+                AVG(snr), MIN(snr), MAX(snr),
+                COUNT(*)
+            FROM signal_log
+            WHERE rssi BETWEEN {VALID_RSSI_RANGE[0]} AND {VALID_RSSI_RANGE[1]}
+              AND snr BETWEEN {VALID_SNR_RANGE[0]} AND {VALID_SNR_RANGE[1]}
+            GROUP BY callsign, bucket_ts
+        """)
+        bucket_count = conn.execute("SELECT changes()").fetchone()[0]
+        logger.info("Pre-aggregated %d signal_buckets entries", bucket_count)
+
+    async def _init_bucket_accumulators(self) -> None:
+        """Load current partial buckets from signal_log into memory."""
+        bucket_ms = BUCKET_SECONDS * 1000
+        now_ms = int(time.time() * 1000)
+        # Load signal_log entries from the current (partial) bucket period
+        current_bucket_start = (now_ms // bucket_ms) * bucket_ms
+        rows = await self._execute(
+            "SELECT callsign, timestamp, rssi, snr FROM signal_log"
+            " WHERE timestamp >= ?"
+            " AND rssi BETWEEN ? AND ? AND snr BETWEEN ? AND ?",
+            (current_bucket_start,
+             VALID_RSSI_RANGE[0], VALID_RSSI_RANGE[1],
+             VALID_SNR_RANGE[0], VALID_SNR_RANGE[1]),
+        )
+        for row in rows:
+            key = (row["callsign"], current_bucket_start)
+            if key not in self._bucket_accumulators:
+                self._bucket_accumulators[key] = {"rssi": [], "snr": []}
+            self._bucket_accumulators[key]["rssi"].append(row["rssi"])
+            self._bucket_accumulators[key]["snr"].append(row["snr"])
+        if rows:
+            logger.info(
+                "Loaded %d signal_log entries into %d partial buckets",
+                len(rows), len(self._bucket_accumulators),
+            )
+
+    def _accumulate_signal(self, callsign: str, timestamp_ms: int,
+                           rssi: int, snr: float) -> list[tuple]:
+        """Accumulate a signal measurement into the in-memory bucket.
+
+        Returns a list of (callsign, bucket_ts, bucket_size, rssi_avg, rssi_min,
+        rssi_max, snr_avg, snr_min, snr_max, count) tuples for completed buckets
+        that should be flushed to the database.
+        """
+        bucket_ms = BUCKET_SECONDS * 1000
+        bucket_start = (timestamp_ms // bucket_ms) * bucket_ms
+        key = (callsign, bucket_start)
+
+        if key not in self._bucket_accumulators:
+            self._bucket_accumulators[key] = {"rssi": [], "snr": []}
+
+        self._bucket_accumulators[key]["rssi"].append(rssi)
+        self._bucket_accumulators[key]["snr"].append(snr)
+
+        # Check for completed (old) buckets for this callsign
+        completed = []
+        keys_to_remove = []
+        for k, v in self._bucket_accumulators.items():
+            if k[0] == callsign and k[1] < bucket_start:
+                rssi_vals = v["rssi"]
+                snr_vals = v["snr"]
+                if rssi_vals and snr_vals:
+                    completed.append((
+                        callsign, k[1], bucket_ms,
+                        round(mean(rssi_vals), 2), min(rssi_vals), max(rssi_vals),
+                        round(mean(snr_vals), 2), round(min(snr_vals), 2),
+                        round(max(snr_vals), 2), len(rssi_vals),
+                    ))
+                keys_to_remove.append(k)
+
+        for k in keys_to_remove:
+            del self._bucket_accumulators[k]
+
+        return completed
+
+    async def _flush_completed_buckets(self, completed: list[tuple]) -> None:
+        """Write completed buckets to signal_buckets table."""
+        if not completed:
+            return
+        await self._execute_many(
+            "INSERT OR REPLACE INTO signal_buckets"
+            " (callsign, bucket_ts, bucket_size, rssi_avg, rssi_min, rssi_max,"
+            "  snr_avg, snr_min, snr_max, count)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            completed,
+        )
+
+    async def _upsert_station_position(
+        self, callsign: str, data: dict[str, Any], update_type: str
+    ) -> None:
+        """Upsert station_positions table based on packet type.
+
+        update_type: 'signal' (MHeard) or 'position' (position beacon)
+        """
+        timestamp = data.get("timestamp", int(time.time() * 1000))
+
+        if update_type == "signal":
+            await self._execute(
+                """INSERT INTO station_positions (callsign, rssi, snr, signal_ts, last_seen,
+                       hw_id, lora_mod, mesh)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(callsign) DO UPDATE SET
+                       rssi = excluded.rssi,
+                       snr = excluded.snr,
+                       signal_ts = excluded.signal_ts,
+                       last_seen = MAX(station_positions.last_seen, excluded.last_seen),
+                       hw_id = COALESCE(excluded.hw_id, station_positions.hw_id),
+                       lora_mod = COALESCE(excluded.lora_mod, station_positions.lora_mod),
+                       mesh = COALESCE(excluded.mesh, station_positions.mesh)
+                """,
+                (callsign, data.get("rssi"), data.get("snr"), timestamp, timestamp,
+                 data.get("hw_id"), data.get("lora_mod"), data.get("mesh")),
+                fetch=False,
+            )
+
+        elif update_type == "position":
+            via = data.get("via", "")
+            via_paths_json = json.dumps([{"path": via, "last_seen": timestamp}]) if via else "[]"
+
+            await self._execute(
+                """INSERT INTO station_positions
+                       (callsign, lat, long, alt, lat_dir, long_dir,
+                        hw_id, firmware, fw_sub, aprs_symbol, aprs_symbol_group,
+                        batt, gw, via_shortest, via_paths,
+                        position_ts, last_seen, source)
+                   VALUES (?, ?, ?, ?, ?, ?,
+                           ?, ?, ?, ?, ?,
+                           ?, ?, ?, ?,
+                           ?, ?, 'local')
+                   ON CONFLICT(callsign) DO UPDATE SET
+                       lat = COALESCE(excluded.lat, station_positions.lat),
+                       long = COALESCE(excluded.long, station_positions.long),
+                       alt = COALESCE(excluded.alt, station_positions.alt),
+                       lat_dir = CASE WHEN excluded.lat_dir != '' THEN excluded.lat_dir
+                                      ELSE station_positions.lat_dir END,
+                       long_dir = CASE WHEN excluded.long_dir != '' THEN excluded.long_dir
+                                       ELSE station_positions.long_dir END,
+                       hw_id = COALESCE(excluded.hw_id, station_positions.hw_id),
+                       firmware = CASE WHEN excluded.firmware IS NOT NULL
+                                            AND excluded.firmware != ''
+                                       THEN excluded.firmware
+                                       ELSE station_positions.firmware END,
+                       fw_sub = CASE WHEN excluded.fw_sub IS NOT NULL
+                                          AND excluded.fw_sub != ''
+                                     THEN excluded.fw_sub
+                                     ELSE station_positions.fw_sub END,
+                       aprs_symbol = CASE WHEN excluded.aprs_symbol IS NOT NULL
+                                               AND excluded.aprs_symbol != ''
+                                          THEN excluded.aprs_symbol
+                                          ELSE station_positions.aprs_symbol END,
+                       aprs_symbol_group = CASE WHEN excluded.aprs_symbol_group IS NOT NULL
+                                                     AND excluded.aprs_symbol_group != ''
+                                                THEN excluded.aprs_symbol_group
+                                                ELSE station_positions.aprs_symbol_group END,
+                       batt = COALESCE(excluded.batt, station_positions.batt),
+                       gw = COALESCE(excluded.gw, station_positions.gw),
+                       via_shortest = CASE
+                           WHEN excluded.via_shortest = '' THEN ''
+                           WHEN station_positions.via_shortest = '' THEN station_positions.via_shortest
+                           WHEN LENGTH(excluded.via_shortest) < LENGTH(station_positions.via_shortest)
+                               THEN excluded.via_shortest
+                           ELSE station_positions.via_shortest END,
+                       via_paths = CASE WHEN excluded.via_paths != '[]'
+                           THEN excluded.via_paths ELSE station_positions.via_paths END,
+                       position_ts = excluded.position_ts,
+                       last_seen = MAX(station_positions.last_seen, excluded.last_seen)
+                """,
+                (callsign, data.get("lat"), data.get("long"), data.get("alt"),
+                 data.get("lat_dir", ""), data.get("long_dir", ""),
+                 data.get("hw_id"), data.get("firmware"), data.get("fw_sub"),
+                 data.get("aprs_symbol"), data.get("aprs_symbol_group"),
+                 data.get("batt"), data.get("gw"),
+                 via, via_paths_json,
+                 timestamp, timestamp),
+                fetch=False,
+            )
 
     async def _execute(
         self,
@@ -151,7 +514,11 @@ class SQLiteStorage:
         await asyncio.to_thread(_run)
 
     async def store_message(self, message: dict[str, Any], raw: str) -> None:
-        """Store a message with automatic filtering."""
+        """Store a message with automatic filtering.
+
+        Dual-writes to both the legacy messages table AND the new
+        station_positions/signal_log tables.
+        """
         if not isinstance(message, dict):
             logger.warning("store_message: invalid input, message is not a dict")
             return
@@ -170,11 +537,60 @@ class SQLiteStorage:
         snr = message.get("snr")
         src_type = message.get("src_type", "")
 
+        # Normalize callsign from relay path
+        parts = src.split(",")
+        callsign = parts[0].strip() if parts else src
+        via = ",".join(p.strip() for p in parts[1:]) if len(parts) > 1 else ""
+
+        # --- NEW: Dual-write to new tables ---
+        is_mheard = not msg_id and src_type == "ble" and msg_type == "pos"
+        is_position = msg_type == "pos" and not is_mheard
+
+        if is_mheard and rssi is not None and snr is not None:
+            # MHeard beacon → signal_log + station_positions (signal fields)
+            if (VALID_RSSI_RANGE[0] <= rssi <= VALID_RSSI_RANGE[1]
+                    and VALID_SNR_RANGE[0] <= snr <= VALID_SNR_RANGE[1]):
+                await self._execute(
+                    "INSERT INTO signal_log (callsign, timestamp, rssi, snr)"
+                    " VALUES (?, ?, ?, ?)",
+                    (callsign, timestamp, rssi, snr),
+                    fetch=False,
+                )
+                # Accumulate into bucket and flush completed ones
+                completed = self._accumulate_signal(callsign, timestamp, rssi, snr)
+                await self._flush_completed_buckets(completed)
+
+            await self._upsert_station_position(callsign, message, "signal")
+
+        elif is_position:
+            # Position beacon → station_positions (location fields)
+            pos_data = {**message, "via": via}
+            # Extract fields from raw_json if not in message dict
+            try:
+                raw_parsed = json.loads(raw) if isinstance(raw, str) else {}
+            except (json.JSONDecodeError, TypeError):
+                raw_parsed = {}
+
+            for field in ("lat", "long", "alt", "lat_dir", "long_dir", "hw_id",
+                          "firmware", "fw_sub", "aprs_symbol", "aprs_symbol_group",
+                          "batt", "gw"):
+                if field not in pos_data or pos_data[field] is None:
+                    val = raw_parsed.get(field)
+                    if val is not None:
+                        pos_data[field] = val
+
+            # Only upsert if we have coordinates
+            lat = pos_data.get("lat")
+            lon = pos_data.get("long")
+            if lat and lon and lat != 0 and lon != 0:
+                await self._upsert_station_position(callsign, pos_data, "position")
+
+        # --- LEGACY: Write to messages table (dual-write) ---
         # MHeard throttle: BLE MHeard entries have no msg_id and arrive very
         # frequently (~98/hr per station).  Instead of inserting a new row every
         # time, update the most recent entry for the same callsign if it is
         # within the throttle window.  This reduces DB bloat by ~90%.
-        if not msg_id and src_type == "ble" and msg_type == "pos":
+        if is_mheard:
             throttle_ms = 120_000  # 2 minutes
             existing = await self._execute(
                 "SELECT id FROM messages"
@@ -302,12 +718,83 @@ class SQLiteStorage:
             fetch=False,
         )
 
+        # --- Prune new tables ---
+        # signal_log: 8 days
+        await self._execute(
+            "DELETE FROM signal_log WHERE timestamp < ?",
+            (cutoff_pos_ms,),
+            fetch=False,
+        )
+        # signal_buckets: 5-min buckets = 8 days, 1-hour buckets = 365 days
+        await self._execute(
+            "DELETE FROM signal_buckets WHERE bucket_size = ? AND bucket_ts < ?",
+            (BUCKET_SECONDS * 1000, cutoff_pos_ms),
+            fetch=False,
+        )
+        cutoff_1h_ms = int((now - timedelta(days=365)).timestamp() * 1000)
+        await self._execute(
+            "DELETE FROM signal_buckets WHERE bucket_size = 3600000 AND bucket_ts < ?",
+            (cutoff_1h_ms,),
+            fetch=False,
+        )
+        # station_positions: optionally prune stations not seen in 30 days
+        cutoff_30d_ms = int((now - timedelta(days=30)).timestamp() * 1000)
+        await self._execute(
+            "DELETE FROM station_positions WHERE last_seen IS NOT NULL AND last_seen < ?",
+            (cutoff_30d_ms,),
+            fetch=False,
+        )
+
         # Update query planner statistics after bulk deletes
         await self._execute("ANALYZE", fetch=False)
 
         count = await self.get_message_count()
         logger.info("After pruning: %d messages remaining", count)
         return count
+
+    async def aggregate_hourly_buckets(self) -> int:
+        """Aggregate old 5-min buckets into 1-hour buckets.
+
+        Called by the nightly prune job. Takes 5-min buckets older than 8 days
+        and rolls them up into 1-hour buckets for long-term storage.
+        """
+        now_ms = int(time.time() * 1000)
+        cutoff_ms = now_ms - (8 * 24 * 60 * 60 * 1000)  # 8 days ago
+        bucket_5min_ms = BUCKET_SECONDS * 1000
+
+        result = await self._execute(
+            f"""
+            INSERT OR REPLACE INTO signal_buckets
+                (callsign, bucket_ts, bucket_size, rssi_avg, rssi_min, rssi_max,
+                 snr_avg, snr_min, snr_max, count)
+            SELECT
+                callsign,
+                (bucket_ts / 3600000) * 3600000 AS hour_ts,
+                3600000,
+                SUM(rssi_avg * count) / SUM(count),
+                MIN(rssi_min), MAX(rssi_max),
+                SUM(snr_avg * count) / SUM(count),
+                MIN(snr_min), MAX(snr_max),
+                SUM(count)
+            FROM signal_buckets
+            WHERE bucket_size = {bucket_5min_ms}
+              AND bucket_ts < ?
+            GROUP BY callsign, hour_ts
+            """,
+            (cutoff_ms,),
+            fetch=False,
+        )
+
+        # Remove the aggregated 5-min buckets
+        await self._execute(
+            f"DELETE FROM signal_buckets WHERE bucket_size = {bucket_5min_ms}"
+            " AND bucket_ts < ?",
+            (cutoff_ms,),
+            fetch=False,
+        )
+
+        logger.info("Aggregated old 5-min buckets into hourly buckets")
+        return 0
 
     async def get_initial_payload(self) -> list[str]:
         """Get initial payload for websocket clients."""
@@ -365,7 +852,11 @@ class SQLiteStorage:
         return msg_msgs + pos_msgs
 
     async def get_smart_initial(self, limit_per_dst: int = 15) -> dict:
-        """Get smart initial payload: last N messages per dst + latest pos per src + ACKs."""
+        """Get smart initial payload: last N messages per dst + latest pos per src + ACKs.
+
+        Positions now come from station_positions table (one pre-merged row per
+        station) instead of scanning/merging from the messages table.
+        """
         # Messages: recent non-ack messages, excluding BLE register data
         msg_rows = await self._execute(
             "SELECT raw_json FROM messages"
@@ -389,83 +880,63 @@ class SQLiteStorage:
         for msg_list in msgs_per_dst.values():
             messages.extend(reversed(msg_list))
 
-        # Positions: latest per source with field merging
-        # Normalize comma-separated src ("DL7OSX-1,DB0HOB-12") to callsign + via
+        # Positions: read from station_positions table (pre-merged, one row per station)
         pos_rows = await self._execute(
-            """
-            WITH ranked_pos AS (
-                SELECT raw_json,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY CASE
-                               WHEN INSTR(src, ',') > 0
-                               THEN SUBSTR(src, 1, INSTR(src, ',') - 1)
-                               ELSE src
-                           END
-                           ORDER BY timestamp DESC
-                       ) AS rn
-                FROM messages
-                WHERE type = 'pos'
-            )
-            SELECT raw_json FROM ranked_pos WHERE rn <= 3
-            """,
+            "SELECT * FROM station_positions",
         )
 
-        pos_per_src: dict[str, dict] = {}
+        positions = []
         for row in pos_rows:
-            raw = row["raw_json"]
-            try:
-                data = json.loads(raw)
-                raw_src = data.get("src", "")
-                if not raw_src:
-                    continue
+            # Build a position dict matching the format the frontend expects
+            pos_data: dict[str, Any] = {
+                "type": "pos",
+                "src": row["callsign"],
+                "src_type": "lora" if row["source"] == "local" else "www",
+                "dst": "",
+                "via": row["via_shortest"] or "",
+                "timestamp": row["last_seen"] or 0,
+            }
+            # Location fields
+            if row["lat"] is not None:
+                pos_data["lat"] = row["lat"]
+            if row["long"] is not None:
+                pos_data["long"] = row["long"]
+            if row["alt"] is not None:
+                pos_data["alt"] = row["alt"]
+            if row["lat_dir"]:
+                pos_data["lat_dir"] = row["lat_dir"]
+            if row["long_dir"]:
+                pos_data["long_dir"] = row["long_dir"]
+            # Hardware/firmware
+            if row["hw_id"] is not None:
+                pos_data["hw_id"] = row["hw_id"]
+            if row["firmware"]:
+                pos_data["firmware"] = row["firmware"]
+            if row["fw_sub"]:
+                pos_data["fw_sub"] = row["fw_sub"]
+            if row["aprs_symbol"]:
+                pos_data["aprs_symbol"] = row["aprs_symbol"]
+            if row["aprs_symbol_group"]:
+                pos_data["aprs_symbol_group"] = row["aprs_symbol_group"]
+            if row["batt"] is not None:
+                pos_data["batt"] = row["batt"]
+            if row["gw"] is not None:
+                pos_data["gw"] = row["gw"]
+            # Signal quality (from MHeard beacons)
+            if row["rssi"] is not None:
+                pos_data["rssi"] = row["rssi"]
+            if row["snr"] is not None:
+                pos_data["snr"] = row["snr"]
+            # MHeard-specific fields
+            if row["lora_mod"] is not None:
+                pos_data["lora_mod"] = row["lora_mod"]
+            if row["mesh"] is not None:
+                pos_data["mesh"] = row["mesh"]
+            # Via paths for relay line drawing
+            if row["via_paths"] and row["via_paths"] != "[]":
+                pos_data["via_paths"] = row["via_paths"]
 
-                # Normalize: split relay path into callsign + via
-                parts = raw_src.split(",")
-                callsign = parts[0].strip()
-                via = ",".join(p.strip() for p in parts[1:]) if len(parts) > 1 else ""
-
-                # Store normalized src and extracted via
-                data["src"] = callsign
-                if via and "via" not in data:
-                    data["via"] = via
-
-                if callsign not in pos_per_src:
-                    pos_per_src[callsign] = data
-                else:
-                    existing = pos_per_src[callsign]
-                    existing_via = existing.get("via", "")
-                    incoming_via = data.get("via", "")
-
-                    # Path preference: shorter path wins (direct beats relayed)
-                    if incoming_via and not existing_via:
-                        pass  # Existing is direct — keep it
-                    elif not incoming_via and existing_via:
-                        existing["via"] = ""  # Incoming is direct — update
-                    elif incoming_via and existing_via:
-                        # Both relayed: prefer shorter chain
-                        if len(incoming_via.split(",")) < len(existing_via.split(",")):
-                            existing["via"] = incoming_via
-
-                    # Fill missing fields from this entry
-                    for key in (
-                        "lat", "long", "alt", "battery_level",
-                        "firmware", "fw_sub", "aprs_symbol",
-                        "aprs_symbol_group", "hw_id",
-                        "lora_mod", "mesh",
-                    ):
-                        if key not in existing and key in data:
-                            existing[key] = data[key]
-
-                    # RSSI/SNR: prefer non-zero values (direct reception)
-                    for key in ("rssi", "snr"):
-                        incoming_val = data.get(key)
-                        existing_val = existing.get(key)
-                        if incoming_val and not existing_val:
-                            existing[key] = incoming_val
-            except (json.JSONDecodeError, TypeError):
-                continue
-
-        positions = [json.dumps(d, ensure_ascii=False) for d in pos_per_src.values()]
+            positions.append(json.dumps(pos_data, ensure_ascii=False))
 
         # ACKs: both type="ack" and inline ack messages
         ack_rows = await self._execute(
@@ -530,24 +1001,113 @@ class SQLiteStorage:
         return [row["raw_json"] for row in rows]
 
     async def process_mheard_store_parallel(self, progress_callback=None) -> list[dict[str, Any]]:
-        """Process messages for MHeard statistics."""
+        """Process messages for MHeard statistics.
+
+        Reads from pre-aggregated signal_buckets table instead of scanning
+        all messages. Falls back to legacy scan if signal_buckets is empty.
+        """
         now_ms = int(time.time() * 1000)
         cutoff_ms = now_ms - SEVEN_DAYS_MS
+        bucket_5min_ms = BUCKET_SECONDS * 1000
 
         if progress_callback:
             await progress_callback("start", "Querying database...")
 
-        # Query aggregated data directly from SQLite
+        # Try reading from pre-aggregated signal_buckets first
+        bucket_rows = await self._execute(
+            "SELECT callsign, bucket_ts, rssi_avg, rssi_min, rssi_max,"
+            "       snr_avg, snr_min, snr_max, count"
+            " FROM signal_buckets"
+            " WHERE bucket_size = ? AND bucket_ts >= ?",
+            (bucket_5min_ms, cutoff_ms),
+        )
+
+        if bucket_rows:
+            # Use pre-aggregated data — much faster
+            logger.info("Using %d pre-aggregated signal_buckets", len(bucket_rows))
+
+            if progress_callback:
+                await progress_callback("bucketing", f"Processing {len(bucket_rows)} buckets...")
+
+            # Also flush any in-memory partial buckets before building result
+            await self._flush_all_accumulators()
+
+            # Build result with gap markers from pre-aggregated buckets
+            gap_threshold = GAP_THRESHOLD_MULTIPLIER * BUCKET_SECONDS
+
+            # Group by callsign
+            callsign_data: dict[str, list[dict]] = defaultdict(list)
+            for row in bucket_rows:
+                callsign_data[row["callsign"]].append(row)
+
+            final_result = []
+            for callsign, entries in callsign_data.items():
+                if len(entries) < MIN_DATAPOINTS_FOR_STATS:
+                    continue
+
+                if progress_callback:
+                    await progress_callback("gaps", f"Analyzing {callsign}...", callsign)
+
+                entries.sort(key=lambda x: x["bucket_ts"])
+                segment_id = 0
+                prev_time = None
+
+                for entry in entries:
+                    # bucket_ts is in ms, convert to seconds for gap check
+                    bucket_time = entry["bucket_ts"] // 1000
+
+                    if prev_time and (bucket_time - prev_time) > gap_threshold:
+                        final_result.append({
+                            "src_type": "STATS",
+                            "timestamp": bucket_time - BUCKET_SECONDS,
+                            "callsign": callsign,
+                            "rssi": None, "snr": None,
+                            "rssi_min": None, "rssi_max": None,
+                            "snr_min": None, "snr_max": None,
+                            "count": None,
+                            "segment_id": f"{callsign}_gap_{segment_id}_to_{segment_id + 1}",
+                            "segment_size": 1,
+                            "is_gap_marker": True,
+                        })
+                        segment_id += 1
+
+                    final_result.append({
+                        "src_type": "STATS",
+                        "timestamp": bucket_time,
+                        "callsign": callsign,
+                        "rssi": entry["rssi_avg"],
+                        "snr": entry["snr_avg"],
+                        "rssi_min": entry["rssi_min"],
+                        "rssi_max": entry["rssi_max"],
+                        "snr_min": entry["snr_min"],
+                        "snr_max": entry["snr_max"],
+                        "count": entry["count"],
+                        "segment_id": f"{callsign}_seg_{segment_id}",
+                        "segment_size": 1,
+                    })
+                    prev_time = bucket_time
+
+            result = sorted(final_result, key=lambda x: (x["callsign"], x["timestamp"]))
+
+            if progress_callback:
+                stats_entries = [r for r in result if not r.get("is_gap_marker")]
+                callsign_count = (
+                    len(set(e["callsign"] for e in stats_entries)) if stats_entries else 0
+                )
+                await progress_callback(
+                    "done",
+                    f"{len(stats_entries)} data points for {callsign_count} stations",
+                )
+            return result
+
+        # --- Fallback: legacy scan from messages table ---
+        logger.info("signal_buckets empty, falling back to legacy messages scan")
+
         query = """
-            SELECT
-                src,
-                timestamp,
-                rssi,
-                snr
+            SELECT src, timestamp, rssi, snr
             FROM messages
             WHERE timestamp >= ?
-                AND rssi IS NOT NULL
-                AND snr IS NOT NULL
+                AND rssi IS NOT NULL AND snr IS NOT NULL
                 AND rssi BETWEEN ? AND ?
                 AND snr BETWEEN ? AND ?
         """
@@ -558,12 +1118,11 @@ class SQLiteStorage:
         )
 
         rows = await self._execute(query, params)
-        logger.info("Processing %d rows for mheard statistics", len(rows))
+        logger.info("Processing %d rows for mheard statistics (legacy)", len(rows))
 
         if progress_callback:
             await progress_callback("bucketing", f"Processing {len(rows)} rows...")
 
-        # Group by bucket and callsign
         buckets: dict[tuple[int, str], dict[str, list]] = defaultdict(
             lambda: {"rssi": [], "snr": []}
         )
@@ -572,34 +1131,55 @@ class SQLiteStorage:
             src = row["src"]
             if not src:
                 continue
-
             timestamp_ms = row["timestamp"]
             bucket_time = int(timestamp_ms // 1000 // BUCKET_SECONDS * BUCKET_SECONDS)
-
-            # Handle comma-separated callsigns
             callsigns = [s.strip() for s in src.split(",")]
             for call in callsigns:
                 key = (bucket_time, call)
                 buckets[key]["rssi"].append(row["rssi"])
                 buckets[key]["snr"].append(row["snr"])
 
-        # Build result with gap markers
         if progress_callback:
-            result = await self._build_stats_with_gaps_async(
-                buckets, progress_callback
-            )
+            result = await self._build_stats_with_gaps_async(buckets, progress_callback)
         else:
             result = self._build_stats_with_gaps(buckets)
 
         if progress_callback:
             stats_entries = [r for r in result if not r.get("is_gap_marker")]
-            callsign_count = len(set(e["callsign"] for e in stats_entries)) if stats_entries else 0
+            callsign_count = (
+                len(set(e["callsign"] for e in stats_entries)) if stats_entries else 0
+            )
             await progress_callback(
                 "done",
                 f"{len(stats_entries)} data points for {callsign_count} stations",
             )
 
         return result
+
+    async def _flush_all_accumulators(self) -> None:
+        """Flush all in-memory bucket accumulators to the database."""
+        if not self._bucket_accumulators:
+            return
+        bucket_ms = BUCKET_SECONDS * 1000
+        flush_data = []
+        for (callsign, bucket_start), values in self._bucket_accumulators.items():
+            rssi_vals = values["rssi"]
+            snr_vals = values["snr"]
+            if rssi_vals and snr_vals:
+                flush_data.append((
+                    callsign, bucket_start, bucket_ms,
+                    round(mean(rssi_vals), 2), min(rssi_vals), max(rssi_vals),
+                    round(mean(snr_vals), 2), round(min(snr_vals), 2),
+                    round(max(snr_vals), 2), len(rssi_vals),
+                ))
+        if flush_data:
+            await self._execute_many(
+                "INSERT OR REPLACE INTO signal_buckets"
+                " (callsign, bucket_ts, bucket_size, rssi_avg, rssi_min, rssi_max,"
+                "  snr_avg, snr_min, snr_max, count)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                flush_data,
+            )
 
     def _build_stats_with_gaps(
         self,

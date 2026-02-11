@@ -1311,6 +1311,9 @@ async def main():
                         prune_hours_pos=cfg.storage.prune_hours_pos,
                         prune_hours_ack=cfg.storage.prune_hours_ack,
                     )
+                    # Aggregate old 5-min signal buckets into 1-hour buckets
+                    if hasattr(storage_handler, 'aggregate_hourly_buckets'):
+                        await storage_handler.aggregate_hourly_buckets()
                     logger.info("Nightly prune complete: %d messages remaining", remaining)
                 else:
                     storage_handler.prune_messages(cfg.storage.prune_hours, block_list)
