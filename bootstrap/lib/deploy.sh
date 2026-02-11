@@ -3,6 +3,30 @@
 # Handles: release tarball download, webapp, version management, systemd
 
 #──────────────────────────────────────────────────────────────────
+# BACKUP ROTATION (keep max 3 old copies)
+#──────────────────────────────────────────────────────────────────
+
+prune_old_backups() {
+  local base_path="$1"
+  local keep=3
+
+  # Find .bak.* directories matching the base path, sorted oldest first
+  local -a backups
+  mapfile -t backups < <(ls -1dt "${base_path}".bak.* 2>/dev/null)
+
+  if (( ${#backups[@]} <= keep )); then
+    return 0
+  fi
+
+  # Remove excess backups (oldest first, keep newest $keep)
+  local i
+  for (( i=keep; i<${#backups[@]}; i++ )); do
+    rm -rf "${backups[$i]}"
+    log_info "  Removed old backup: ${backups[$i]}"
+  done
+}
+
+#──────────────────────────────────────────────────────────────────
 # MAIN DEPLOYMENT FUNCTION
 #──────────────────────────────────────────────────────────────────
 
@@ -143,6 +167,7 @@ download_and_install_release() {
     local backup_dir="${INSTALL_DIR}.bak.$(date +%Y%m%d%H%M%S)"
     cp -a "$INSTALL_DIR" "$backup_dir"
     log_info "  Backed up existing installation to ${backup_dir}"
+    prune_old_backups "$INSTALL_DIR"
   fi
 
   # Create install directory
@@ -221,6 +246,7 @@ deploy_webapp_from_tarball() {
     local backup_dir="${WEBAPP_DIR}.bak.$(date +%Y%m%d%H%M%S)"
     cp -a "$WEBAPP_DIR" "$backup_dir"
     log_info "  Backed up existing webapp to ${backup_dir}"
+    prune_old_backups "$WEBAPP_DIR"
   fi
 
   # Copy from tarball to webapp serve dir
@@ -300,6 +326,7 @@ download_webapp() {
     local backup_dir="${WEBAPP_DIR}.bak.$(date +%Y%m%d%H%M%S)"
     cp -a "$WEBAPP_DIR" "$backup_dir"
     log_info "  Backed up existing webapp to ${backup_dir}"
+    prune_old_backups "$WEBAPP_DIR"
   fi
 
   # Extract webapp

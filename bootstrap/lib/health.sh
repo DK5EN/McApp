@@ -21,6 +21,7 @@ health_check() {
   if ! check_webapp_endpoint; then all_passed=false; fi
   if ! check_udp_port; then all_passed=false; fi
   if ! check_sse_endpoint; then all_passed=false; fi
+  if ! check_lighttpd_proxy; then all_passed=false; fi
 
   # Check data
   if ! check_sqlite_db; then all_passed=false; fi
@@ -94,6 +95,18 @@ check_sse_endpoint() {
   done
 
   printf "  %-20s ${RED}[FAIL]${NC} not responding\n" "sse (2981):"
+  return 1
+}
+
+check_lighttpd_proxy() {
+  # Verify lighttpd proxies /api/ and /events to FastAPI on port 2981
+  # Uses /health endpoint which exists on both direct and proxied paths
+  if curl -fsSL --connect-timeout 3 "http://localhost/health" &>/dev/null; then
+    printf "  %-20s ${GREEN}[OK]${NC} proxying to FastAPI\n" "lighttpd proxy:"
+    return 0
+  fi
+
+  printf "  %-20s ${RED}[FAIL]${NC} proxy not working\n" "lighttpd proxy:"
   return 1
 }
 
