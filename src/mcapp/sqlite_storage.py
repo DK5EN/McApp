@@ -59,6 +59,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_type ON messages(type);
 -- Composite indexes for heavy query patterns
 CREATE INDEX IF NOT EXISTS idx_messages_type_timestamp ON messages(type, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_type_dst_timestamp ON messages(type, dst, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_type_src_timestamp ON messages(type, src, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_msgid_timestamp ON messages(msg_id, timestamp DESC);
 
 -- Schema version tracking
@@ -360,6 +361,8 @@ class SQLiteStorage:
                 ON messages(type, timestamp DESC);
             CREATE INDEX IF NOT EXISTS idx_messages_type_dst_timestamp
                 ON messages(type, dst, timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_messages_type_src_timestamp
+                ON messages(type, src, timestamp DESC);
 
             -- New dedup index
             CREATE INDEX IF NOT EXISTS idx_messages_msgid_timestamp
@@ -1034,17 +1037,26 @@ class SQLiteStorage:
         is_dm = dst and src and not dst.isdigit() and dst != '*'
 
         if is_dm:
-            # DM conversation: fetch messages in both directions
-            # Use LIKE with % suffix for both dst and src to match SSID variants
-            # (e.g. OE5HWN matches OE5HWN-12, DK5EN matches DK5EN-12)
+            # DM conversation: fetch messages in both directions using UNION ALL
+            # so each branch can independently use idx_messages_type_dst_timestamp
+            # and idx_messages_type_src_timestamp for fast index scans.
+            # LIKE with % suffix matches SSID variants (OE5HWN → OE5HWN-12).
             query = (
-                "SELECT raw_json FROM messages"
-                " WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
-                " AND ((dst LIKE ? AND src LIKE ?) OR (dst LIKE ? AND src LIKE ?))"
-                " AND timestamp < ?"
-                " ORDER BY timestamp DESC LIMIT ?"
+                "SELECT raw_json FROM ("
+                " SELECT raw_json, timestamp FROM messages"
+                "  WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
+                "  AND dst LIKE ? AND src LIKE ? AND timestamp < ?"
+                " UNION ALL"
+                " SELECT raw_json, timestamp FROM messages"
+                "  WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
+                "  AND dst LIKE ? AND src LIKE ? AND timestamp < ?"
+                ") ORDER BY timestamp DESC LIMIT ?"
             )
-            params = (dst + '%', src + '%', src + '%', dst + '%', before_timestamp, limit + 1)
+            params = (
+                dst + '%', src + '%', before_timestamp,
+                src + '%', dst + '%', before_timestamp,
+                limit + 1,
+            )
         elif dst:
             query = (
                 "SELECT raw_json FROM messages"
