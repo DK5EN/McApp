@@ -1035,15 +1035,16 @@ class SQLiteStorage:
 
         if is_dm:
             # DM conversation: fetch messages in both directions
+            # Use LIKE with % suffix for both dst and src to match SSID variants
+            # (e.g. OE5HWN matches OE5HWN-12, DK5EN matches DK5EN-12)
             query = (
                 "SELECT raw_json FROM messages"
                 " WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
-                " AND ((dst = ? AND src LIKE ?) OR (dst = ? AND src LIKE ?))"
+                " AND ((dst LIKE ? AND src LIKE ?) OR (dst LIKE ? AND src LIKE ?))"
                 " AND timestamp < ?"
                 " ORDER BY timestamp DESC LIMIT ?"
             )
-            # Use LIKE with % suffix to match callsign variants (e.g. OE5HWN-12)
-            params = (dst, src + '%', src, dst + '%', before_timestamp, limit + 1)
+            params = (dst + '%', src + '%', src + '%', dst + '%', before_timestamp, limit + 1)
         elif dst:
             query = (
                 "SELECT raw_json FROM messages"
