@@ -392,9 +392,22 @@ class SQLiteStorage:
         # Positions: latest per source with field merging
         # Normalize comma-separated src ("DL7OSX-1,DB0HOB-12") to callsign + via
         pos_rows = await self._execute(
-            "SELECT raw_json FROM messages"
-            " WHERE type = 'pos'"
-            " ORDER BY timestamp DESC LIMIT 500",
+            """
+            WITH ranked_pos AS (
+                SELECT raw_json,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY CASE
+                               WHEN INSTR(src, ',') > 0
+                               THEN SUBSTR(src, 1, INSTR(src, ',') - 1)
+                               ELSE src
+                           END
+                           ORDER BY timestamp DESC
+                       ) AS rn
+                FROM messages
+                WHERE type = 'pos'
+            )
+            SELECT raw_json FROM ranked_pos WHERE rn <= 3
+            """,
         )
 
         pos_per_src: dict[str, dict] = {}
