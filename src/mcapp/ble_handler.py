@@ -365,7 +365,7 @@ def parse_aprs_position(message):
     # Battery level: /B=085
     battery_match = re.search(r"/B=(\d{3})", message)
     if battery_match:
-        result["battery_level"] = int(battery_match.group(1))
+        result["batt"] = int(battery_match.group(1))
 
     # Groups: /R=...;...;...
     group_match = re.search(r"/R=((?:\d{1,5};?){1,6})", message)
@@ -376,6 +376,53 @@ def parse_aprs_position(message):
                 result[f"group_{i}"] = int(g)
 
     return result
+
+
+def parse_aprs_telemetry(message):
+    """Parse APRS T# telemetry format.
+
+    Format: T#seq,v1,v2,v3,v4,v5,bits
+    MeshCom convention: v1=qfe, v2=temp1, v3=hum, v4=qnh, v5=co2
+    """
+    import re
+    match = re.match(
+        r'T#(\d+),([\d.]+),([\d.]+),([\d.]+),([\d.]+),([\d.]+),(\d+)',
+        message,
+    )
+    if not match:
+        return None
+
+    seq, v1, v2, v3, v4, v5, _bits = match.groups()
+
+    result = {"tele_seq": int(seq)}
+    try:
+        result["qfe"] = float(v1)
+        result["temp1"] = float(v2)
+        result["hum"] = float(v3)
+        result["qnh"] = float(v4)
+        v5_val = float(v5)
+        if v5_val > 0:
+            result["co2"] = int(v5_val)
+    except ValueError:
+        pass
+
+    return result
+
+
+def transform_tele(input_dict, own_callsign=""):
+    """Transform a BLE telemetry message (APRS T# format)."""
+    tele = parse_aprs_telemetry(input_dict.get("message", "")) or {}
+    src, _ = split_path(input_dict["path"], own_callsign)
+    return {
+        "transformer": "tele",
+        "type": "tele",
+        "src": src,
+        "msg_id": hex_msg_id(input_dict["msg_id"]),
+        "msg": input_dict.get("message", ""),
+        "hw_id": input_dict.get("hardware_id"),
+        **tele,
+        **transform_common_fields(input_dict, own_callsign),
+    }
 
 
 def split_path(path: str, own_callsign: str = "") -> tuple[str, str]:
@@ -499,6 +546,9 @@ def dispatcher(input_dict, own_callsign=""):
         return transform_msg(input_dict, own_callsign)
 
     elif input_dict.get("payload_type") == 33:
+        msg = input_dict.get("message", "")
+        if msg.startswith("T#"):
+            return transform_tele(input_dict, own_callsign)
         return transform_pos(input_dict, own_callsign)
 
     elif input_dict.get("payload_type") == 65:

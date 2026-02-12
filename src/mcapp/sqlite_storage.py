@@ -7,6 +7,7 @@ Uses Python's built-in sqlite3 with asyncio.to_thread() for async operations.
 """
 import asyncio
 import json
+import re
 import sqlite3
 import time
 from collections import defaultdict
@@ -22,7 +23,7 @@ VERSION = "v0.50.0"
 logger = get_logger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Constants matching message_storage.py
 BUCKET_SECONDS = 5 * 60
@@ -32,6 +33,31 @@ DEDUP_WINDOW_MS = 5 * 60 * 1000  # 5-minute dedup window (milliseconds)
 SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
 GAP_THRESHOLD_MULTIPLIER = 6
 MIN_DATAPOINTS_FOR_STATS = 3
+
+# Columns to SELECT when building message JSON (avoids fetching raw_json)
+_MSG_SELECT = (
+    "msg_id, src, dst, msg, type, timestamp, rssi, snr, src_type,"
+    " via, hw_id, lora_mod, max_hop, mesh_info, firmware, fw_sub,"
+    " last_hw_id, last_sending, transformer, echo_id, acked, send_success"
+)
+
+
+def compute_conversation_key(src: str, dst: str) -> str | None:
+    """Compute conversation key for message grouping.
+
+    Groups → dst, DMs → sorted base callsigns joined with '<>'.
+    """
+    if not dst:
+        return None
+    if dst.isdigit() or dst == "TEST":
+        return dst
+    if dst == "*":
+        return "*"
+    # DM: strip SSIDs, sort alphabetically
+    base_src = src.split("-")[0]
+    base_dst = dst.split("-")[0]
+    pair = sorted([base_src, base_dst])
+    return f"{pair[0]}<>{pair[1]}"
 
 CREATE_SCHEMA_SQL = """
 -- Main messages table
@@ -184,6 +210,13 @@ class SQLiteStorage:
                         current_version,
                     )
                     self._migrate_v2_to_v3(conn)
+
+                if current_version < 4:
+                    logger.info(
+                        "Migrating schema v%d → v4: new columns, telemetry, conversation_key",
+                        current_version,
+                    )
+                    self._migrate_v3_to_v4(conn)
 
                 if row is None:
                     conn.execute(
@@ -369,6 +402,164 @@ class SQLiteStorage:
                 ON messages(msg_id, timestamp DESC);
         """)
         logger.info("Schema v3 migration complete: msg_id UNIQUE constraint removed")
+
+    @staticmethod
+    def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
+        """Schema v3 → v4: new columns, telemetry table, conversation_key, ACK matching."""
+        # --- 1. New columns on messages table ---
+        for col, typedef in [
+            ("via", "TEXT"),
+            ("hw_id", "INTEGER"),
+            ("lora_mod", "INTEGER"),
+            ("max_hop", "INTEGER"),
+            ("mesh_info", "INTEGER"),
+            ("firmware", "TEXT"),
+            ("fw_sub", "TEXT"),
+            ("last_hw_id", "INTEGER"),
+            ("last_sending", "TEXT"),
+            ("transformer", "TEXT"),
+            ("echo_id", "TEXT"),
+            ("acked", "INTEGER DEFAULT 0"),
+            ("send_success", "INTEGER DEFAULT 0"),
+            ("conversation_key", "TEXT"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE messages ADD COLUMN {col} {typedef}")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
+        # --- 2. Telemetry columns on station_positions ---
+        for col, typedef in [
+            ("temp1", "REAL"),
+            ("temp2", "REAL"),
+            ("hum", "REAL"),
+            ("qfe", "REAL"),
+            ("qnh", "REAL"),
+            ("gas", "INTEGER"),
+            ("co2", "INTEGER"),
+            ("telemetry_ts", "INTEGER"),
+        ]:
+            try:
+                conn.execute(
+                    f"ALTER TABLE station_positions ADD COLUMN {col} {typedef}"
+                )
+            except sqlite3.OperationalError:
+                pass
+
+        # --- 3. Telemetry table ---
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS telemetry (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                callsign TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                temp1 REAL, temp2 REAL, hum REAL,
+                qfe REAL, qnh REAL, gas INTEGER, co2 INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_telemetry_cs_ts
+                ON telemetry(callsign, timestamp DESC);
+        """)
+
+        # --- 4. New indexes ---
+        conn.executescript("""
+            CREATE INDEX IF NOT EXISTS idx_messages_echo_id
+                ON messages(echo_id) WHERE echo_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_messages_convkey_ts
+                ON messages(conversation_key, timestamp DESC)
+                WHERE type = 'msg';
+        """)
+
+        # --- 5. Backfill columns from raw_json ---
+        conn.execute("""
+            UPDATE messages SET
+                via = json_extract(raw_json, '$.via'),
+                hw_id = json_extract(raw_json, '$.hw_id'),
+                lora_mod = json_extract(raw_json, '$.lora_mod'),
+                max_hop = json_extract(raw_json, '$.max_hop'),
+                mesh_info = json_extract(raw_json, '$.mesh_info'),
+                firmware = json_extract(raw_json, '$.firmware'),
+                fw_sub = json_extract(raw_json, '$.fw_sub'),
+                last_hw_id = json_extract(raw_json, '$.last_hw_id'),
+                last_sending = json_extract(raw_json, '$.last_sending'),
+                transformer = json_extract(raw_json, '$.transformer')
+            WHERE raw_json IS NOT NULL
+        """)
+        backfill_count = conn.execute("SELECT changes()").fetchone()[0]
+        logger.info("Backfilled %d messages from raw_json", backfill_count)
+
+        # --- 6. Echo ID backfill ---
+        echo_count = 0
+        rows = conn.execute(
+            "SELECT id, msg FROM messages WHERE type = 'msg' AND msg LIKE '%{%'"
+        ).fetchall()
+        for row_id, msg in rows:
+            match = re.search(r'\{(\d+)$', msg or '')
+            if match:
+                conn.execute(
+                    "UPDATE messages SET echo_id = ? WHERE id = ?",
+                    (match.group(1), row_id),
+                )
+                echo_count += 1
+        logger.info("Backfilled %d echo_id values", echo_count)
+
+        # --- 7. Conversation key backfill ---
+        # Groups (numeric dst)
+        conn.execute("""
+            UPDATE messages SET conversation_key = dst
+            WHERE type = 'msg' AND conversation_key IS NULL
+            AND dst GLOB '[0-9]*'
+        """)
+        # TEST and broadcast
+        conn.execute("""
+            UPDATE messages SET conversation_key = dst
+            WHERE type = 'msg' AND conversation_key IS NULL
+            AND dst IN ('TEST', '*')
+        """)
+        # DMs: need Python loop for SSID stripping + alphabetical sort
+        dm_rows = conn.execute("""
+            SELECT id, src, dst FROM messages
+            WHERE type = 'msg' AND conversation_key IS NULL
+            AND dst != '' AND NOT dst GLOB '[0-9]*'
+            AND dst NOT IN ('TEST', '*')
+        """).fetchall()
+        dm_count = 0
+        for row_id, src, dst in dm_rows:
+            key = compute_conversation_key(src or '', dst or '')
+            if key:
+                conn.execute(
+                    "UPDATE messages SET conversation_key = ? WHERE id = ?",
+                    (key, row_id),
+                )
+                dm_count += 1
+        logger.info("Backfilled conversation_key: %d DMs", dm_count)
+
+        # --- 8. ACK matching: link ACK rows → send_success on originals ---
+        ack_rows = conn.execute("""
+            SELECT id, json_extract(raw_json, '$.ack_id') AS ack_id
+            FROM messages WHERE type = 'ack' AND raw_json IS NOT NULL
+        """).fetchall()
+        matched = 0
+        for _, ack_id in ack_rows:
+            if ack_id:
+                result = conn.execute(
+                    "SELECT id FROM messages WHERE msg_id = ? AND type = 'msg'"
+                    " ORDER BY timestamp DESC LIMIT 1",
+                    (ack_id,),
+                ).fetchone()
+                if result:
+                    conn.execute(
+                        "UPDATE messages SET send_success = 1 WHERE id = ?",
+                        (result[0],),
+                    )
+                    matched += 1
+        # Delete all ACK rows (now redundant — state is in send_success column)
+        deleted = conn.execute("SELECT COUNT(*) FROM messages WHERE type = 'ack'").fetchone()[0]
+        conn.execute("DELETE FROM messages WHERE type = 'ack'")
+        logger.info(
+            "ACK migration: matched %d of %d ACKs, deleted %d ACK rows",
+            matched, len(ack_rows), deleted,
+        )
+
+        logger.info("Schema v4 migration complete")
 
     async def _init_bucket_accumulators(self) -> None:
         """Load current partial buckets from signal_log into memory."""
@@ -572,7 +763,8 @@ class SQLiteStorage:
         """Store a message with automatic filtering.
 
         Dual-writes to both the legacy messages table AND the new
-        station_positions/signal_log tables.
+        station_positions/signal_log tables.  Handles ACK matching,
+        echo_id extraction, conversation_key computation, and telemetry routing.
         """
         if not isinstance(message, dict):
             logger.warning("store_message: invalid input, message is not a dict")
@@ -592,12 +784,70 @@ class SQLiteStorage:
         snr = message.get("snr")
         src_type = message.get("src_type", "")
 
+        # Extract new columns from message dict
+        via_field = message.get("via", "")
+        hw_id = message.get("hw_id")
+        lora_mod = message.get("lora_mod")
+        max_hop = message.get("max_hop")
+        mesh_info = message.get("mesh_info")
+        firmware = message.get("firmware")
+        fw_sub = message.get("fw_sub")
+        last_hw_id = message.get("last_hw_id")
+        last_sending = message.get("last_sending")
+        transformer = message.get("transformer")
+
         # Normalize callsign from relay path
         parts = src.split(",")
         callsign = parts[0].strip() if parts else src
-        via = ",".join(p.strip() for p in parts[1:]) if len(parts) > 1 else ""
+        relay_via = ",".join(p.strip() for p in parts[1:]) if len(parts) > 1 else ""
+        msg_via = via_field or relay_via
 
-        # --- NEW: Dual-write to new tables ---
+        # --- Early exit: Telemetry → dedicated table ---
+        if msg_type == "tele":
+            await self.store_telemetry(callsign, message)
+            return
+
+        # --- Early exit: Binary ACK → set send_success on original, skip INSERT ---
+        if msg_type == "ack":
+            ack_id = message.get("ack_id")
+            if ack_id:
+                await self._execute(
+                    "UPDATE messages SET send_success = 1 WHERE id = ("
+                    "  SELECT id FROM messages WHERE msg_id = ? AND type = 'msg'"
+                    "  ORDER BY timestamp DESC LIMIT 1"
+                    ")",
+                    (ack_id,),
+                    fetch=False,
+                )
+            return  # Don't store ACK as a separate row
+
+        # Compute echo_id (extract {NNN from end of message text)
+        echo_id = None
+        if msg_type == "msg" and msg:
+            echo_match = re.search(r'\{(\d+)$', msg)
+            if echo_match:
+                echo_id = echo_match.group(1)
+
+        # Compute conversation_key for fast DM queries
+        conversation_key = (
+            compute_conversation_key(callsign, dst) if msg_type == "msg" else None
+        )
+
+        # --- Inline ACK matching (:ackNNN → set acked on original) ---
+        if msg and ':ack' in msg:
+            ack_match = re.search(r':ack(\d+)', msg)
+            if ack_match:
+                ack_num = ack_match.group(1)
+                await self._execute(
+                    "UPDATE messages SET acked = 1 WHERE id = ("
+                    "  SELECT id FROM messages WHERE echo_id = ? AND type = 'msg'"
+                    "  ORDER BY timestamp DESC LIMIT 1"
+                    ")",
+                    (ack_num,),
+                    fetch=False,
+                )
+
+        # --- Dual-write to new tables ---
         is_mheard = not msg_id and src_type == "ble" and msg_type == "pos"
         is_position = msg_type == "pos" and not is_mheard
 
@@ -619,7 +869,7 @@ class SQLiteStorage:
 
         elif is_position:
             # Position beacon → station_positions (location fields)
-            pos_data = {**message, "via": via}
+            pos_data = {**message, "via": relay_via}
             # Extract fields from raw_json if not in message dict
             try:
                 raw_parsed = json.loads(raw) if isinstance(raw, str) else {}
@@ -666,7 +916,7 @@ class SQLiteStorage:
                 return
 
         # Time-windowed dedup: reject only if same msg_id was seen within 5 minutes.
-        # MHeard beacons (msg_id=None) skip this check — they have their own 2-min throttle above.
+        # MHeard beacons (msg_id=None) skip this check — they have their own throttle.
         if msg_id is not None:
             existing = await self._execute(
                 "SELECT 1 FROM messages WHERE msg_id = ? AND timestamp > ? LIMIT 1",
@@ -675,12 +925,88 @@ class SQLiteStorage:
             if existing:
                 return
 
-        params = (msg_id, src, dst, msg, msg_type, timestamp, rssi, snr, src_type, raw)
+        params = (
+            msg_id, src, dst, msg, msg_type, timestamp, rssi, snr, src_type, raw,
+            msg_via, hw_id, lora_mod, max_hop, mesh_info, firmware, fw_sub,
+            last_hw_id, last_sending, transformer, echo_id, conversation_key,
+        )
         await self._execute(
             "INSERT INTO messages"
-            " (msg_id, src, dst, msg, type, timestamp, rssi, snr, src_type, raw_json)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " (msg_id, src, dst, msg, type, timestamp, rssi, snr, src_type, raw_json,"
+            "  via, hw_id, lora_mod, max_hop, mesh_info, firmware, fw_sub,"
+            "  last_hw_id, last_sending, transformer, echo_id, conversation_key)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             params,
+            fetch=False,
+        )
+
+    @staticmethod
+    def _build_message_dict(row: dict[str, Any]) -> dict[str, Any]:
+        """Build a message dict from column values (replaces raw_json reads)."""
+        data: dict[str, Any] = {
+            "msg_id": row.get("msg_id"),
+            "src": row.get("src", ""),
+            "dst": row.get("dst", ""),
+            "msg": row.get("msg", ""),
+            "type": row.get("type", "msg"),
+            "timestamp": row.get("timestamp", 0),
+            "src_type": row.get("src_type", ""),
+        }
+        # Optional numeric fields
+        for field in ("rssi", "snr", "hw_id", "lora_mod", "max_hop", "mesh_info",
+                       "last_hw_id"):
+            val = row.get(field)
+            if val is not None:
+                data[field] = val
+        # Optional text fields
+        for field in ("via", "firmware", "fw_sub", "last_sending", "transformer"):
+            val = row.get(field)
+            if val is not None and val != "":
+                data[field] = val
+        # ACK tracking flags
+        if row.get("acked"):
+            data["acked"] = 1
+        if row.get("send_success"):
+            data["send_success"] = 1
+        return data
+
+    async def store_telemetry(self, callsign: str, data: dict[str, Any]) -> None:
+        """Store telemetry in dedicated table and update station_positions."""
+        timestamp = data.get("timestamp", int(time.time() * 1000))
+        temp1 = data.get("temp1")
+        temp2 = data.get("temp2")
+        hum = data.get("hum")
+        qfe = data.get("qfe")
+        qnh = data.get("qnh")
+        gas = data.get("gas")
+        co2 = data.get("co2")
+
+        await self._execute(
+            "INSERT INTO telemetry"
+            " (callsign, timestamp, temp1, temp2, hum, qfe, qnh, gas, co2)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (callsign, timestamp, temp1, temp2, hum, qfe, qnh, gas, co2),
+            fetch=False,
+        )
+
+        # Update station_positions with latest telemetry values
+        await self._execute(
+            """INSERT INTO station_positions
+                   (callsign, temp1, temp2, hum, qfe, qnh, gas, co2,
+                    telemetry_ts, last_seen)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(callsign) DO UPDATE SET
+                   temp1 = COALESCE(excluded.temp1, station_positions.temp1),
+                   temp2 = COALESCE(excluded.temp2, station_positions.temp2),
+                   hum = COALESCE(excluded.hum, station_positions.hum),
+                   qfe = COALESCE(excluded.qfe, station_positions.qfe),
+                   qnh = COALESCE(excluded.qnh, station_positions.qnh),
+                   gas = COALESCE(excluded.gas, station_positions.gas),
+                   co2 = COALESCE(excluded.co2, station_positions.co2),
+                   telemetry_ts = excluded.telemetry_ts,
+                   last_seen = MAX(station_positions.last_seen, excluded.last_seen)
+            """,
+            (callsign, temp1, temp2, hum, qfe, qnh, gas, co2, timestamp, timestamp),
             fetch=False,
         )
 
@@ -784,6 +1110,12 @@ class SQLiteStorage:
         )
 
         # --- Prune new tables ---
+        # telemetry: 8 days (same as signal_log)
+        await self._execute(
+            "DELETE FROM telemetry WHERE timestamp < ?",
+            (cutoff_pos_ms,),
+            fetch=False,
+        )
         # signal_log: 8 days
         await self._execute(
             "DELETE FROM signal_log WHERE timestamp < ?",
@@ -863,49 +1195,37 @@ class SQLiteStorage:
 
     async def get_initial_payload(self) -> list[str]:
         """Get initial payload for websocket clients."""
-        # Get recent messages grouped by destination
-        msgs_query = """
-            SELECT raw_json FROM messages
+        msgs_query = f"""
+            SELECT {_MSG_SELECT} FROM messages
             WHERE type = 'msg' AND msg NOT LIKE '%:ack%'
             ORDER BY timestamp DESC
             LIMIT 1000
         """
         msg_rows = await self._execute(msgs_query)
 
-        # Get recent positions grouped by source
-        pos_query = """
-            SELECT raw_json FROM messages
+        pos_query = f"""
+            SELECT {_MSG_SELECT} FROM messages
             WHERE type = 'pos'
             ORDER BY timestamp DESC
             LIMIT 500
         """
         pos_rows = await self._execute(pos_query)
 
-        # Process like MessageStorageHandler
         msgs_per_dst: dict[str, list[str]] = defaultdict(list)
         pos_per_src: dict[str, list[str]] = defaultdict(list)
 
         for row in msg_rows:
-            raw = row["raw_json"]
-            try:
-                data = json.loads(raw)
-                dst = data.get("dst")
-                if dst and len(msgs_per_dst[dst]) < 50:
-                    msgs_per_dst[dst].append(raw)
-            except (json.JSONDecodeError, TypeError):
-                continue
+            data = self._build_message_dict(row)
+            dst = data.get("dst")
+            if dst and len(msgs_per_dst[dst]) < 50:
+                msgs_per_dst[dst].append(json.dumps(data, ensure_ascii=False))
 
         for row in pos_rows:
-            raw = row["raw_json"]
-            try:
-                data = json.loads(raw)
-                src = data.get("src")
-                if src and len(pos_per_src[src]) < 50:
-                    pos_per_src[src].append(raw)
-            except (json.JSONDecodeError, TypeError):
-                continue
+            data = self._build_message_dict(row)
+            src = data.get("src")
+            if src and len(pos_per_src[src]) < 50:
+                pos_per_src[src].append(json.dumps(data, ensure_ascii=False))
 
-        # Flatten
         msg_msgs = []
         for msg_list in msgs_per_dst.values():
             msg_msgs.extend(reversed(msg_list))
@@ -935,12 +1255,15 @@ class SQLiteStorage:
             if not dst:
                 continue
             rows = await self._execute(
-                "SELECT raw_json FROM messages"
+                f"SELECT {_MSG_SELECT} FROM messages"
                 " WHERE type = 'msg' AND msg NOT LIKE '%:ack%' AND dst = ?"
                 " ORDER BY timestamp DESC LIMIT ?",
                 (dst, limit_per_dst),
             )
-            messages.extend(row["raw_json"] for row in reversed(rows))
+            messages.extend(
+                json.dumps(self._build_message_dict(row), ensure_ascii=False)
+                for row in reversed(rows)
+            )
 
         # Positions: read from station_positions table (pre-merged, one row per station)
         pos_rows = await self._execute(
@@ -997,16 +1320,23 @@ class SQLiteStorage:
             # Via paths for relay line drawing
             if row["via_paths"] and row["via_paths"] != "[]":
                 pos_data["via_paths"] = row["via_paths"]
+            # Telemetry fields
+            for tf in ("temp1", "temp2", "hum", "qfe", "qnh", "gas", "co2"):
+                if row.get(tf) is not None:
+                    pos_data[tf] = row[tf]
 
             positions.append(json.dumps(pos_data, ensure_ascii=False))
 
-        # ACKs: both type="ack" and inline ack messages
+        # Inline ACK messages (binary ACK rows no longer exist after v4 migration)
         ack_rows = await self._execute(
-            "SELECT raw_json FROM messages"
-            " WHERE type = 'ack' OR (type = 'msg' AND msg LIKE '%:ack%')"
+            f"SELECT {_MSG_SELECT} FROM messages"
+            " WHERE type = 'msg' AND msg LIKE '%:ack%'"
             " ORDER BY timestamp DESC LIMIT 200",
         )
-        acks = [row["raw_json"] for row in ack_rows]
+        acks = [
+            json.dumps(self._build_message_dict(row), ensure_ascii=False)
+            for row in ack_rows
+        ]
 
         logger.info(
             "smart_initial: %d msgs, %d pos, %d acks",
@@ -1015,12 +1345,14 @@ class SQLiteStorage:
         return {"messages": messages, "positions": positions, "acks": acks}
 
     async def get_summary(self) -> dict:
-        """Get message count per destination."""
+        """Get message count per destination (uses conversation_key where available)."""
         rows = await self._execute(
-            "SELECT dst, COUNT(*) as cnt FROM messages"
-            " WHERE type = 'msg' AND msg NOT LIKE '%:ack%' GROUP BY dst",
+            "SELECT COALESCE(conversation_key, dst) AS key, COUNT(*) as cnt"
+            " FROM messages"
+            " WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
+            " GROUP BY key",
         )
-        return {row["dst"]: row["cnt"] for row in rows if row["dst"]}
+        return {row["key"]: row["cnt"] for row in rows if row["key"]}
 
     async def get_messages_page(
         self, dst: str, before_timestamp: int | None = None, limit: int = 20,
@@ -1029,7 +1361,7 @@ class SQLiteStorage:
         """Get a page of messages for a destination, cursor-based.
 
         For personal DMs (dst is a callsign, not a group number), pass src
-        to query both directions of the conversation.
+        to query via conversation_key for a single-index scan.
         """
         if before_timestamp is None:
             before_timestamp = int(time.time() * 1000)
@@ -1037,29 +1369,17 @@ class SQLiteStorage:
         is_dm = dst and src and not dst.isdigit() and dst != '*'
 
         if is_dm:
-            # DM conversation: fetch messages in both directions using UNION ALL
-            # so each branch can independently use idx_messages_type_dst_timestamp
-            # and idx_messages_type_src_timestamp for fast index scans.
-            # LIKE with % suffix matches SSID variants (OE5HWN → OE5HWN-12).
+            # DM: compute conversation_key and use idx_messages_convkey_ts
+            conv_key = compute_conversation_key(src, dst)
             query = (
-                "SELECT raw_json FROM ("
-                " SELECT raw_json, timestamp FROM messages"
-                "  WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
-                "  AND dst LIKE ? AND src LIKE ? AND timestamp < ?"
-                " UNION ALL"
-                " SELECT raw_json, timestamp FROM messages"
-                "  WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
-                "  AND dst LIKE ? AND src LIKE ? AND timestamp < ?"
-                ") ORDER BY timestamp DESC LIMIT ?"
+                f"SELECT {_MSG_SELECT} FROM messages"
+                " WHERE type = 'msg' AND conversation_key = ?"
+                " AND timestamp < ? ORDER BY timestamp DESC LIMIT ?"
             )
-            params = (
-                dst + '%', src + '%', before_timestamp,
-                src + '%', dst + '%', before_timestamp,
-                limit + 1,
-            )
+            params = (conv_key, before_timestamp, limit + 1)
         elif dst:
             query = (
-                "SELECT raw_json FROM messages"
+                f"SELECT {_MSG_SELECT} FROM messages"
                 " WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
                 " AND dst = ? AND timestamp < ?"
                 " ORDER BY timestamp DESC LIMIT ?"
@@ -1067,7 +1387,7 @@ class SQLiteStorage:
             params = (dst, before_timestamp, limit + 1)
         else:
             query = (
-                "SELECT raw_json FROM messages"
+                f"SELECT {_MSG_SELECT} FROM messages"
                 " WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
                 " AND timestamp < ?"
                 " ORDER BY timestamp DESC LIMIT ?"
@@ -1077,18 +1397,24 @@ class SQLiteStorage:
         rows = await self._execute(query, params)
 
         has_more = len(rows) > limit
-        result = [row["raw_json"] for row in rows[:limit]]
+        result = [
+            json.dumps(self._build_message_dict(row), ensure_ascii=False)
+            for row in rows[:limit]
+        ]
         result.reverse()
         return {"messages": result, "has_more": has_more}
 
     async def get_full_dump(self) -> list[str]:
         """Get full message dump."""
         query = (
-            "SELECT raw_json FROM messages WHERE type = 'msg'"
+            f"SELECT {_MSG_SELECT} FROM messages WHERE type = 'msg'"
             " ORDER BY timestamp"
         )
         rows = await self._execute(query)
-        return [row["raw_json"] for row in rows]
+        return [
+            json.dumps(self._build_message_dict(row), ensure_ascii=False)
+            for row in rows
+        ]
 
     async def process_mheard_store_parallel(self, progress_callback=None) -> list[dict[str, Any]]:
         """Process messages for MHeard statistics.
@@ -1476,19 +1802,12 @@ class SQLiteStorage:
         cutoff_ms = int((time.time() - days * 86400) * 1000)
 
         rows = await self._execute(
-            "SELECT raw_json FROM messages WHERE timestamp >= ? ORDER BY timestamp DESC",
+            f"SELECT {_MSG_SELECT} FROM messages"
+            " WHERE timestamp >= ? ORDER BY timestamp DESC",
             (cutoff_ms,),
         )
 
-        results = []
-        for row in rows:
-            try:
-                raw_data = json.loads(row["raw_json"])
-                results.append(raw_data)
-            except (json.JSONDecodeError, TypeError):
-                continue
-
-        return results
+        return [self._build_message_dict(row) for row in rows]
 
     async def get_positions(self, callsign: str, days: int) -> list[dict]:
         """Get position data for a callsign."""

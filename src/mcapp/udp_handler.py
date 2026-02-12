@@ -163,9 +163,11 @@ class UDPHandler:
 
         if "msg" not in message:
             if message.get("type") == "tele":
-                logger.debug("Telemetry packet received (discarded): %s", message)
-            else:
-                logger.debug("Non-chat message without msg field: %s", message)
+                message["timestamp"] = int(time.time() * 1000)
+                if self.message_router:
+                    await self.message_router.publish('udp', 'mesh_message', message)
+                return
+            logger.debug("Non-chat message without msg field: %s", message)
             return
 
         message["timestamp"] = int(time.time() * 1000)
