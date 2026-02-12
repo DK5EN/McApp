@@ -55,7 +55,7 @@ def is_allowed_char(ch: str) -> bool:
     if category.startswith("S") or category.startswith("P") or "EMOJI" in unicodedata.name(ch, ""):
         return True
 
-    print("Illigal character detected and suppressed")
+    logger.error("Invalid character: %r (U+%04X, %s)", ch, ord(ch), unicodedata.name(ch, "UNKNOWN"))
     return False
 
 
