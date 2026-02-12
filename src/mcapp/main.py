@@ -1106,7 +1106,6 @@ async def main():
         lon = data.get("LON", 0)
         if lat != 0 and lon != 0:
             message_router.cached_gps = {"lat": lat, "lon": lon}
-            logger.info("GPS cached: %.4f, %.4f", lat, lon)
             # Update weather service if available
             cmd_handler = message_router.get_protocol('commands')
             if cmd_handler:
