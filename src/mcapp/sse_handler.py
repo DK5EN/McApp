@@ -164,8 +164,7 @@ class SSEManager:
                             self.message_router.storage_handler
                             if self.message_router else None
                         )
-                        if storage and hasattr(storage, 'get_smart_initial'):
-                            # SQLite backend — use smart_initial
+                        if storage:
                             initial_data = await storage.get_smart_initial()
                             logger.info(
                                 "SSE client %s: sending smart_initial"
@@ -186,36 +185,6 @@ class SSEManager:
                                 "msg": "summary",
                                 "data": summary,
                             })
-                        elif storage:
-                            # In-memory backend — old dump path
-                            initial_payload = await storage.get_initial_payload()
-                            logger.info(
-                                "SSE client %s: sending initial payload"
-                                " (%d items)",
-                                client_id, len(initial_payload),
-                            )
-                            yield self._format_sse_event({
-                                "type": "response",
-                                "msg": "message dump",
-                                "data": initial_payload,
-                            })
-
-                            full_data = await storage.get_full_dump()
-                            logger.info(
-                                "SSE client %s: sending full dump"
-                                " (%d items)",
-                                client_id, len(full_data),
-                            )
-                            if full_data:
-                                CHUNK_SIZE = 20000
-                                for i in range(0, len(full_data), CHUNK_SIZE):
-                                    yield self._format_sse_event({
-                                        "type": "response",
-                                        "msg": "message dump",
-                                        "data": full_data[
-                                            i:i + CHUNK_SIZE
-                                        ],
-                                    })
                         else:
                             logger.warning(
                                 "SSE client %s: no storage handler available",

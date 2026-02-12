@@ -61,13 +61,11 @@ class BLEConfig:
 class StorageConfig:
     """Message storage configuration."""
 
-    backend: str = "memory"  # "memory" or "sqlite"
     db_path: str = "/var/lib/mcapp/messages.db"
     max_size_mb: int = 10
     prune_hours: int = 720  # 30 days — retention for chat messages
     prune_hours_pos: int = 192  # 8 days — retention for position data
     prune_hours_ack: int = 192  # 8 days — retention for ACKs
-    dump_file: str = "mcdump.json"
 
 
 @dataclass
@@ -172,13 +170,11 @@ class Config:
         )
 
         storage = StorageConfig(
-            backend=data.get("STORAGE_BACKEND", "memory"),
             db_path=data.get("DB_PATH", "/var/lib/mcapp/messages.db"),
             max_size_mb=data.get("MAX_STORAGE_SIZE_MB", 10),
             prune_hours=data.get("PRUNE_HOURS", 720),
             prune_hours_pos=data.get("PRUNE_HOURS_POS", 192),
             prune_hours_ack=data.get("PRUNE_HOURS_ACK", 192),
-            dump_file=data.get("STORE_FILE_NAME", "mcdump.json"),
         )
 
         location = LocationConfig(
@@ -217,13 +213,11 @@ class Config:
             "BLE_READ_UUID": self.ble.read_uuid,
             "BLE_WRITE_UUID": self.ble.write_uuid,
             "BLE_HELLO_BYTES": self.ble.hello_bytes.hex(),
-            "STORAGE_BACKEND": self.storage.backend,
             "DB_PATH": self.storage.db_path,
             "MAX_STORAGE_SIZE_MB": self.storage.max_size_mb,
             "PRUNE_HOURS": self.storage.prune_hours,
             "PRUNE_HOURS_POS": self.storage.prune_hours_pos,
             "PRUNE_HOURS_ACK": self.storage.prune_hours_ack,
-            "STORE_FILE_NAME": self.storage.dump_file,
             "LAT": self.location.latitude,
             "LONG": self.location.longitude,
             "STAT_NAME": self.location.station_name,

@@ -1,8 +1,6 @@
 """SimpleCommandsMixin: dice, time, help, userinfo, position commands."""
 
-import json
 import random
-import time
 from datetime import datetime
 
 
@@ -105,38 +103,7 @@ class SimpleCommandsMixin:
         if not self.storage_handler:
             return "❌ Message storage not available"
 
-        if hasattr(self.storage_handler, 'get_positions'):
-            positions = await self.storage_handler.get_positions(callsign, days)
-        else:
-            cutoff_time = time.time() - (days * 24 * 60 * 60)
-
-            positions = []
-            for item in reversed(list(self.storage_handler.message_store)):
-                try:
-                    raw_data = json.loads(item["raw"])
-                    timestamp = raw_data.get("timestamp", 0)
-
-                    if timestamp < cutoff_time * 1000:
-                        continue
-
-                    if raw_data.get("type") != "pos":
-                        continue
-
-                    src = raw_data.get("src", "")
-                    if callsign not in src.upper():
-                        continue
-
-                    lat = raw_data.get("lat")
-                    lon = raw_data.get("long")
-
-                    if lat and lon:
-                        time_str = time.strftime("%H:%M", time.localtime(timestamp / 1000))
-                        positions.append(
-                            {"lat": lat, "lon": lon, "time": time_str, "timestamp": timestamp}
-                        )
-
-                except (json.JSONDecodeError, KeyError):
-                    continue
+        positions = await self.storage_handler.get_positions(callsign, days)
 
         if not positions:
             return f"🔍 No position data for {callsign} in last {days} day(s)"

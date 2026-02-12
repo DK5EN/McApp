@@ -7,7 +7,7 @@ import signal
 import sys
 import time
 import traceback
-from collections import defaultdict, deque
+from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -18,7 +18,6 @@ from .config_loader import Config, hours_to_dd_hhmm
 # New modular imports
 from .logging_setup import get_logger, setup_logging
 from .logging_setup import has_console as check_console
-from .message_storage import MessageStorageHandler
 from .udp_handler import UDPHandler
 
 # Legacy imports - only backend_resolve_ip still needed (no ble_client equivalent yet)
@@ -37,13 +36,8 @@ try:
 except ImportError:
     SSE_AVAILABLE = False
 
-try:
-    from .sqlite_storage import SQLiteStorage, create_sqlite_storage
-    SQLITE_AVAILABLE = True
-except ImportError:
-    SQLITE_AVAILABLE = False
-
 from . import __version__
+from .sqlite_storage import create_sqlite_storage
 
 VERSION = f"v{__version__}"
 
@@ -272,15 +266,12 @@ class MessageRouter:
         elif command == "get_messages_page":
             await self._handle_messages_page_command(websocket, data or {})
 
-        # Message dump commands
+        # Message dump commands (legacy clients redirect to smart_initial)
         elif command in ["send message dump", "send pos dump"]:
-            await self._handle_message_dump_command(websocket)
+            await self._handle_smart_initial_command(websocket)
 
         elif command == "mheard dump":
             await self._handle_mheard_dump_command(websocket)
-
-        elif command == "dump to fs":
-            await self._handle_dump_to_fs_command()
 
         # BLE commands
         elif command == "scan BLE":
@@ -336,43 +327,8 @@ class MessageRouter:
             }
             await self.publish('router', 'websocket_message', error_msg)
 
-    async def _handle_message_dump_command(self, websocket):
-        """Handle message dump commands"""
-        # Get initial payload
-        preview = {
-            "type": "response",
-            "msg": "message dump",
-            "data": self.storage_handler.get_initial_payload()
-        }
-        await self.publish('router', 'websocket_direct', {'websocket': websocket, 'data': preview})
-        await asyncio.sleep(0)
-
-        # Send full dump in chunks
-        CHUNK_SIZE = 20000
-        full_data = self.storage_handler.get_full_dump()
-        total = len(full_data)
-
-        if has_console:
-            print("total:", total)
-
-        for i in range(0, total, CHUNK_SIZE):
-            if has_console:
-                print("sending message chunk ", i)
-            chunk = full_data[i:i+CHUNK_SIZE]
-            full = {
-                "type": "response",
-                "msg": "message dump",
-                "data": chunk
-            }
-            await self.publish('router', 'websocket_direct', {'websocket': websocket, 'data': full})
-            await asyncio.sleep(0)
-
     async def _handle_smart_initial_command(self, websocket):
         """Handle smart initial payload - sends only last N messages per dst + summary."""
-        if not hasattr(self.storage_handler, 'get_smart_initial'):
-            await self._handle_message_dump_command(websocket)
-            return
-
         initial_data = await self.storage_handler.get_smart_initial()
         acks_list = initial_data.get("acks", [])
 
@@ -401,9 +357,6 @@ class MessageRouter:
 
     async def _handle_summary_command(self, websocket):
         """Handle summary command - sends message counts per destination."""
-        if not hasattr(self.storage_handler, 'get_summary'):
-            return
-
         summary = await self.storage_handler.get_summary()
         payload = {
             "type": "response",
@@ -419,9 +372,6 @@ class MessageRouter:
 
     async def _handle_messages_page_command(self, websocket, params):
         """Handle paginated message fetch."""
-        if not hasattr(self.storage_handler, 'get_messages_page'):
-            return
-
         dst = params.get('dst', '*')
         before = params.get('before', int(time.time() * 1000))
         limit = min(params.get('limit', 20), 100)
@@ -479,11 +429,6 @@ class MessageRouter:
         else:
             # SSE client — broadcast to all connected clients
             await self.publish('router', 'websocket_message', payload)
-
-    async def _handle_dump_to_fs_command(self):
-        """Handle dump to filesystem command"""
-        self.storage_handler.save_dump(cfg.storage.dump_file)
-        self._logger.info("Daten gespeichert in %s", cfg.storage.dump_file)
 
     # BLE command handlers - route through ble_client abstraction
     def _get_ble_client(self):
@@ -1064,34 +1009,24 @@ class MessageValidator:
 
 
 async def main():
-    # Initialize storage backend based on config
-    if cfg.storage.backend == "sqlite" and SQLITE_AVAILABLE:
-        logger.info("Using SQLite storage backend")
-        storage_handler = await create_sqlite_storage(
-            cfg.storage.db_path,
-            cfg.storage.max_size_mb
-        )
-        # One-time migration: import mcdump.json into SQLite, then rename to prevent re-import
-        dump_path = Path(cfg.storage.dump_file)
-        if dump_path.exists():
-            count = await storage_handler.load_dump(cfg.storage.dump_file)
-            migrated_path = dump_path.with_suffix(".json.migrated")
-            dump_path.rename(migrated_path)
-            logger.info("Migrated dump file → %s (%d messages imported)", migrated_path, count)
-        await storage_handler.prune_messages(
-            cfg.storage.prune_hours, block_list,
-            prune_hours_pos=cfg.storage.prune_hours_pos,
-            prune_hours_ack=cfg.storage.prune_hours_ack,
-        )
-    else:
-        # Default to in-memory storage
-        if cfg.storage.backend == "sqlite" and not SQLITE_AVAILABLE:
-            logger.warning("SQLite requested but not available, using memory storage")
-        logger.info("Using in-memory storage backend")
-        message_store = deque()
-        storage_handler = MessageStorageHandler(message_store, cfg.storage.max_size_mb)
-        storage_handler.load_dump(cfg.storage.dump_file)
-        storage_handler.prune_messages(cfg.storage.prune_hours, block_list)
+    # Initialize SQLite storage backend
+    logger.info("Using SQLite storage backend: %s", cfg.storage.db_path)
+    storage_handler = await create_sqlite_storage(
+        cfg.storage.db_path,
+        cfg.storage.max_size_mb
+    )
+    # One-time migration: import mcdump.json into SQLite, then rename to prevent re-import
+    dump_path = Path("mcdump.json")
+    if dump_path.exists():
+        count = await storage_handler.load_dump(str(dump_path))
+        migrated_path = dump_path.with_suffix(".json.migrated")
+        dump_path.rename(migrated_path)
+        logger.info("Migrated dump file → %s (%d messages imported)", migrated_path, count)
+    await storage_handler.prune_messages(
+        cfg.storage.prune_hours, block_list,
+        prune_hours_pos=cfg.storage.prune_hours_pos,
+        prune_hours_ack=cfg.storage.prune_hours_ack,
+    )
 
     message_router = MessageRouter(storage_handler)
     message_router.set_callsign(cfg.call_sign)
@@ -1303,21 +1238,13 @@ async def main():
 
             logger.info("Starting nightly DB prune...")
             try:
-                if hasattr(storage_handler, 'prune_messages') and isinstance(
-                    storage_handler, SQLiteStorage
-                ):
-                    remaining = await storage_handler.prune_messages(
-                        cfg.storage.prune_hours, block_list,
-                        prune_hours_pos=cfg.storage.prune_hours_pos,
-                        prune_hours_ack=cfg.storage.prune_hours_ack,
-                    )
-                    # Aggregate old 5-min signal buckets into 1-hour buckets
-                    if hasattr(storage_handler, 'aggregate_hourly_buckets'):
-                        await storage_handler.aggregate_hourly_buckets()
-                    logger.info("Nightly prune complete: %d messages remaining", remaining)
-                else:
-                    storage_handler.prune_messages(cfg.storage.prune_hours, block_list)
-                    logger.info("Nightly prune complete (memory backend)")
+                remaining = await storage_handler.prune_messages(
+                    cfg.storage.prune_hours, block_list,
+                    prune_hours_pos=cfg.storage.prune_hours_pos,
+                    prune_hours_ack=cfg.storage.prune_hours_ack,
+                )
+                await storage_handler.aggregate_hourly_buckets()
+                logger.info("Nightly prune complete: %d messages remaining", remaining)
             except Exception as e:
                 logger.error("Nightly prune failed: %s", e)
 
@@ -1376,19 +1303,6 @@ async def main():
 
     logger.info("All services stopped")
 
-    # Save data — only dump to JSON for in-memory backend; SQLite persists automatically
-    try:
-        if cfg.storage.backend != "sqlite" and hasattr(storage_handler, 'save_dump'):
-            if asyncio.iscoroutinefunction(storage_handler.save_dump):
-                await storage_handler.save_dump(cfg.storage.dump_file)
-            else:
-                storage_handler.save_dump(cfg.storage.dump_file)
-            logger.info("Data saved to %s", cfg.storage.dump_file)
-        else:
-            logger.info("SQLite backend — no dump file needed")
-    except Exception as e:
-        logger.error("Error saving data: %s", e)
-
     logger.info("Shutdown complete")
 
     # Force clean process exit after successful cleanup
@@ -1422,10 +1336,7 @@ def run():
     )
     logger.info("Messages store limited to %dMB", cfg.storage.max_size_mb)
 
-    if cfg.storage.backend == "sqlite":
-        logger.info("SQLite storage backend: %s", cfg.storage.db_path)
-    else:
-        logger.info("Messages will be stored on exit: %s", cfg.storage.dump_file)
+    logger.info("SQLite storage: %s", cfg.storage.db_path)
 
     if cfg.sse.enabled:
         logger.info("SSE transport enabled on port %d", cfg.sse.port)

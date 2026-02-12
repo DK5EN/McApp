@@ -1,8 +1,6 @@
 """DataCommandsMixin: search, stats, mheard commands."""
 
-import json
 import time
-from collections import defaultdict
 
 
 class DataCommandsMixin:
@@ -38,20 +36,9 @@ class DataCommandsMixin:
         destinations = set()
         sids_activity = {}
 
-        if hasattr(self.storage_handler, 'search_messages'):
-            raw_messages = await self.storage_handler.search_messages(
-                user, days, search_type,
-            )
-        else:
-            cutoff_time = time.time() - (days * 24 * 60 * 60)
-            raw_messages = []
-            for item in reversed(list(self.storage_handler.message_store)):
-                try:
-                    raw_data = json.loads(item["raw"])
-                    if raw_data.get("timestamp", 0) >= cutoff_time * 1000:
-                        raw_messages.append(raw_data)
-                except (json.JSONDecodeError, KeyError):
-                    continue
+        raw_messages = await self.storage_handler.search_messages(
+            user, days, search_type,
+        )
 
         for raw_data in raw_messages:
             try:
@@ -135,39 +122,10 @@ class DataCommandsMixin:
         if not self.storage_handler:
             return "❌ Message storage not available"
 
-        if hasattr(self.storage_handler, 'get_stats'):
-            stats = await self.storage_handler.get_stats(hours)
-            msg_count = stats["msg_count"]
-            pos_count = stats["pos_count"]
-            users = stats["users"]
-        else:
-            cutoff_time = time.time() - (hours * 60 * 60)
-            msg_count = 0
-            pos_count = 0
-            users = set()
-
-            for item in self.storage_handler.message_store:
-                try:
-                    raw_data = json.loads(item["raw"])
-                    timestamp = raw_data.get("timestamp", 0)
-
-                    if timestamp < cutoff_time * 1000:
-                        continue
-
-                    msg_type = raw_data.get("type", "")
-                    src = raw_data.get("src", "")
-
-                    if msg_type == "msg":
-                        msg_count += 1
-
-                        if src:
-                            users.add(src.split(",")[0])
-
-                    elif msg_type == "pos":
-                        pos_count += 1
-
-                except (json.JSONDecodeError, KeyError):
-                    continue
+        stats = await self.storage_handler.get_stats(hours)
+        msg_count = stats["msg_count"]
+        pos_count = stats["pos_count"]
+        users = stats["users"]
 
         total = msg_count + pos_count
         avg_per_hour = round(total / max(hours, 1), 1)
@@ -188,36 +146,7 @@ class DataCommandsMixin:
         if not self.storage_handler:
             return "❌ Message storage not available"
 
-        if hasattr(self.storage_handler, 'get_mheard_stations'):
-            stations = await self.storage_handler.get_mheard_stations(limit, msg_type)
-        else:
-            stations = defaultdict(
-                lambda: {"last_msg": 0, "msg_count": 0, "last_pos": 0, "pos_count": 0}
-            )
-
-            for item in list(self.storage_handler.message_store)[-4000:]:
-                try:
-                    raw_data = json.loads(item["raw"])
-                    data_type = raw_data.get("type", "")
-                    src = raw_data.get("src", "")
-                    timestamp = raw_data.get("timestamp", 0)
-
-                    if data_type not in ["msg", "pos"] or not src:
-                        continue
-
-                    call = src.split(",")[0]
-
-                    if data_type == "msg":
-                        stations[call]["msg_count"] += 1
-                        if timestamp > stations[call]["last_msg"]:
-                            stations[call]["last_msg"] = timestamp
-                    elif data_type == "pos":
-                        stations[call]["pos_count"] += 1
-                        if timestamp > stations[call]["last_pos"]:
-                            stations[call]["last_pos"] = timestamp
-
-                except (json.JSONDecodeError, KeyError):
-                    continue
+        stations = await self.storage_handler.get_mheard_stations(limit, msg_type)
 
         lines = []
 
