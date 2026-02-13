@@ -159,7 +159,6 @@ d /var/log/lighttpd  0755 www-data www-data -
 d /var/log/journal   0755 root     root     -
 d /var/log/apt       0755 root     root     -
 d /var/log/private   0700 root     root     -
-d /var/log/chrony    0755 _chrony  _chrony  -
 d /var/log/unattended-upgrades 0755 root root -
 EOF
 
