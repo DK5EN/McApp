@@ -995,6 +995,9 @@ class SQLiteStorage:
 
     async def store_telemetry(self, callsign: str, data: dict[str, Any]) -> None:
         """Store telemetry in dedicated table and update station_positions."""
+        if not callsign:
+            return
+
         timestamp = data.get("timestamp", int(time.time() * 1000))
         temp1 = data.get("temp1")
         temp2 = data.get("temp2")
@@ -1003,6 +1006,11 @@ class SQLiteStorage:
         qnh = data.get("qnh")
         gas = data.get("gas")
         co2 = data.get("co2")
+
+        # Skip all-zero readings (own node without sensors)
+        values = (temp1, temp2, hum, qfe, qnh, gas, co2)
+        if all(v is None or v == 0 for v in values):
+            return
 
         logger.info(
             "Telemetry from %s: temp1=%s hum=%s qfe=%s qnh=%s",
