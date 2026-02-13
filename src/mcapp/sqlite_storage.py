@@ -23,7 +23,7 @@ VERSION = "v0.50.0"
 logger = get_logger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # Constants matching message_storage.py
 BUCKET_SECONDS = 5 * 60
@@ -110,10 +110,10 @@ CREATE_SCHEMA_V2_SQL = """
 CREATE TABLE IF NOT EXISTS station_positions (
     callsign        TEXT PRIMARY KEY,
     lat             REAL,
-    long            REAL,
+    lon             REAL,
     alt             REAL,
     lat_dir         TEXT DEFAULT '',
-    long_dir        TEXT DEFAULT '',
+    lon_dir         TEXT DEFAULT '',
     hw_id           INTEGER,
     firmware        TEXT,
     fw_sub          TEXT,
@@ -218,6 +218,13 @@ class SQLiteStorage:
                     )
                     self._migrate_v3_to_v4(conn)
 
+                if current_version < 5:
+                    logger.info(
+                        "Migrating schema v%d → v5: rename long→lon, long_dir→lon_dir",
+                        current_version,
+                    )
+                    self._migrate_v4_to_v5(conn)
+
                 if row is None:
                     conn.execute(
                         "INSERT INTO schema_version (version) VALUES (?)",
@@ -258,15 +265,15 @@ class SQLiteStorage:
         signal_count = conn.execute("SELECT changes()").fetchone()[0]
         logger.info("Backfilled %d signal_log entries", signal_count)
 
-        # 2. Backfill station_positions from position beacons (have lat/long)
+        # 2. Backfill station_positions from position beacons (have lat/lon)
         # Use most recent position per callsign
         conn.execute("""
             INSERT OR REPLACE INTO station_positions
-                (callsign, lat, long, alt, lat_dir, long_dir, hw_id, firmware, fw_sub,
+                (callsign, lat, lon, alt, lat_dir, lon_dir, hw_id, firmware, fw_sub,
                  aprs_symbol, aprs_symbol_group, batt, gw, via_shortest,
                  position_ts, last_seen, source)
             SELECT
-                callsign, lat, long, alt, lat_dir, long_dir, hw_id, firmware, fw_sub,
+                callsign, lat, lon, alt, lat_dir, lon_dir, hw_id, firmware, fw_sub,
                 aprs_symbol, aprs_symbol_group, batt, gw, via,
                 timestamp, timestamp, 'local'
             FROM (
@@ -278,10 +285,10 @@ class SQLiteStorage:
                          THEN SUBSTR(src, INSTR(src, ',') + 1)
                          ELSE '' END AS via,
                     json_extract(raw_json, '$.lat') AS lat,
-                    json_extract(raw_json, '$.long') AS long,
+                    json_extract(raw_json, '$.long') AS lon,
                     json_extract(raw_json, '$.alt') AS alt,
                     json_extract(raw_json, '$.lat_dir') AS lat_dir,
-                    json_extract(raw_json, '$.long_dir') AS long_dir,
+                    json_extract(raw_json, '$.long_dir') AS lon_dir,
                     json_extract(raw_json, '$.hw_id') AS hw_id,
                     json_extract(raw_json, '$.firmware') AS firmware,
                     json_extract(raw_json, '$.fw_sub') AS fw_sub,
@@ -561,6 +568,13 @@ class SQLiteStorage:
 
         logger.info("Schema v4 migration complete")
 
+    @staticmethod
+    def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
+        """Schema v4 → v5: rename long→lon, long_dir→lon_dir in station_positions."""
+        conn.execute("ALTER TABLE station_positions RENAME COLUMN long TO lon")
+        conn.execute("ALTER TABLE station_positions RENAME COLUMN long_dir TO lon_dir")
+        logger.info("Schema v5 migration complete: long→lon, long_dir→lon_dir")
+
     async def _init_bucket_accumulators(self) -> None:
         """Load current partial buckets from signal_log into memory."""
         bucket_ms = BUCKET_SECONDS * 1000
@@ -672,7 +686,7 @@ class SQLiteStorage:
 
             await self._execute(
                 """INSERT INTO station_positions
-                       (callsign, lat, long, alt, lat_dir, long_dir,
+                       (callsign, lat, lon, alt, lat_dir, lon_dir,
                         hw_id, firmware, fw_sub, aprs_symbol, aprs_symbol_group,
                         batt, gw, via_shortest, via_paths,
                         position_ts, last_seen, source)
@@ -682,12 +696,12 @@ class SQLiteStorage:
                            ?, ?, 'local')
                    ON CONFLICT(callsign) DO UPDATE SET
                        lat = COALESCE(excluded.lat, station_positions.lat),
-                       long = COALESCE(excluded.long, station_positions.long),
+                       lon = COALESCE(excluded.lon, station_positions.lon),
                        alt = COALESCE(excluded.alt, station_positions.alt),
                        lat_dir = CASE WHEN excluded.lat_dir != '' THEN excluded.lat_dir
                                       ELSE station_positions.lat_dir END,
-                       long_dir = CASE WHEN excluded.long_dir != '' THEN excluded.long_dir
-                                       ELSE station_positions.long_dir END,
+                       lon_dir = CASE WHEN excluded.lon_dir != '' THEN excluded.lon_dir
+                                       ELSE station_positions.lon_dir END,
                        hw_id = COALESCE(excluded.hw_id, station_positions.hw_id),
                        firmware = CASE WHEN excluded.firmware IS NOT NULL
                                             AND excluded.firmware != ''
@@ -720,8 +734,8 @@ class SQLiteStorage:
                        position_ts = excluded.position_ts,
                        last_seen = MAX(station_positions.last_seen, excluded.last_seen)
                 """,
-                (callsign, data.get("lat"), data.get("long"), data.get("alt"),
-                 data.get("lat_dir", ""), data.get("long_dir", ""),
+                (callsign, data.get("lat"), data.get("lon"), data.get("alt"),
+                 data.get("lat_dir", ""), data.get("lon_dir", ""),
                  data.get("hw_id"), data.get("firmware"), data.get("fw_sub"),
                  data.get("aprs_symbol"), data.get("aprs_symbol_group"),
                  data.get("batt"), data.get("gw"),
@@ -876,17 +890,21 @@ class SQLiteStorage:
             except (json.JSONDecodeError, TypeError):
                 raw_parsed = {}
 
-            for field in ("lat", "long", "alt", "lat_dir", "long_dir", "hw_id",
+            # Fallback keys for historical raw_json (used "long"/"long_dir")
+            _raw_fallback = {"lon": "long", "lon_dir": "long_dir"}
+            for field in ("lat", "lon", "alt", "lat_dir", "lon_dir", "hw_id",
                           "firmware", "fw_sub", "aprs_symbol", "aprs_symbol_group",
                           "batt", "gw"):
                 if field not in pos_data or pos_data[field] is None:
                     val = raw_parsed.get(field)
+                    if val is None and field in _raw_fallback:
+                        val = raw_parsed.get(_raw_fallback[field])
                     if val is not None:
                         pos_data[field] = val
 
             # Only upsert if we have coordinates
             lat = pos_data.get("lat")
-            lon = pos_data.get("long")
+            lon = pos_data.get("lon")
             if lat and lon and lat != 0 and lon != 0:
                 await self._upsert_station_position(callsign, pos_data, "position")
 
@@ -1289,14 +1307,14 @@ class SQLiteStorage:
             # Location fields
             if row["lat"] is not None:
                 pos_data["lat"] = row["lat"]
-            if row["long"] is not None:
-                pos_data["long"] = row["long"]
+            if row["lon"] is not None:
+                pos_data["lon"] = row["lon"]
             if row["alt"] is not None:
                 pos_data["alt"] = row["alt"]
             if row["lat_dir"]:
                 pos_data["lat_dir"] = row["lat_dir"]
-            if row["long_dir"]:
-                pos_data["long_dir"] = row["long_dir"]
+            if row["lon_dir"]:
+                pos_data["lon_dir"] = row["lon_dir"]
             # Hardware/firmware
             if row["hw_id"] is not None:
                 pos_data["hw_id"] = row["hw_id"]
@@ -1831,7 +1849,7 @@ class SQLiteStorage:
             try:
                 raw_data = json.loads(row["raw_json"])
                 lat = raw_data.get("lat")
-                lon = raw_data.get("long")
+                lon = raw_data.get("lon") or raw_data.get("long")
                 timestamp = raw_data.get("timestamp", 0)
                 if lat and lon:
                     time_str = time.strftime("%H:%M", time.localtime(timestamp / 1000))

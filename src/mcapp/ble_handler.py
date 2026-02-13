@@ -350,8 +350,8 @@ def parse_aprs_position(message):
         "transformer2": "APRS",
         "lat": round(lat, 4),
         #"lat_dir": lat_dir,
-        "long": round(lon, 4),
-        #"long_dir": lon_dir,
+        "lon": round(lon, 4),
+        #"lon_dir": lon_dir,
         "aprs_symbol": symbol or "?",
         "aprs_symbol_group": symbol_group,
     }

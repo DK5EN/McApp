@@ -305,11 +305,11 @@ Dev config: `/etc/mcapp/config.dev.json` (auto-selected when `MCAPP_ENV=dev`)
 
 ### SQLite Storage Backend
 
-The SQLite backend (`sqlite_storage.py`) is the default for production deployments. Schema version 2 introduced dedicated tables for positions and signal data (see `doc/2026-02-11_1400-position-signal-architecture-ADR.md` for full architecture).
+The SQLite backend (`sqlite_storage.py`) is the default for production deployments. Schema version 5 introduced dedicated tables for positions and signal data (see `doc/2026-02-11_1400-position-signal-architecture-ADR.md` for full architecture).
 
 **Journal mode:** WAL (Write-Ahead Logging) for concurrent reads during writes.
 
-**Tables (Schema V2):**
+**Tables (Schema V5):**
 
 | Table | Purpose |
 |-------|---------|
@@ -422,7 +422,7 @@ conn.close()
 \""
 ```
 
-**Schema version:** 4 (WAL mode enabled)
+**Schema version:** 5 (WAL mode enabled)
 
 ### Tables
 
@@ -434,7 +434,7 @@ conn.close()
 | `signal_buckets` | ~7k | Pre-aggregated 5-min and 1-hour signal buckets |
 | `telemetry` | ~20 | Temperature, humidity, pressure readings |
 | `mheard_cache` | 0 | Unused cache table |
-| `schema_version` | 1 | Current schema version (4) |
+| `schema_version` | 1 | Current schema version (5) |
 
 ### Key columns in `messages`
 
@@ -477,9 +477,9 @@ import sqlite3
 from datetime import datetime
 conn = sqlite3.connect('/var/lib/mcapp/messages.db')
 conn.row_factory = sqlite3.Row
-for r in conn.execute('SELECT callsign, lat, long, rssi, snr, last_seen FROM station_positions WHERE lat IS NOT NULL ORDER BY last_seen DESC LIMIT 10'):
+for r in conn.execute('SELECT callsign, lat, lon, rssi, snr, last_seen FROM station_positions WHERE lat IS NOT NULL ORDER BY last_seen DESC LIMIT 10'):
     dt = datetime.fromtimestamp(r['last_seen'] / 1000) if r['last_seen'] else None
-    print(f'{r[\\\"callsign\\\"]}: ({r[\\\"lat\\\"]}, {r[\\\"long\\\"]}) rssi={r[\\\"rssi\\\"]} snr={r[\\\"snr\\\"]} last={dt}')
+    print(f'{r[\\\"callsign\\\"]}: ({r[\\\"lat\\\"]}, {r[\\\"lon\\\"]}) rssi={r[\\\"rssi\\\"]} snr={r[\\\"snr\\\"]} last={dt}')
 conn.close()
 \""
 
