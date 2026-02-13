@@ -305,11 +305,11 @@ Dev config: `/etc/mcapp/config.dev.json` (auto-selected when `MCAPP_ENV=dev`)
 
 ### SQLite Storage Backend
 
-The SQLite backend (`sqlite_storage.py`) is the default for production deployments. Schema version 5 introduced dedicated tables for positions and signal data (see `doc/2026-02-11_1400-position-signal-architecture-ADR.md` for full architecture).
+The SQLite backend (`sqlite_storage.py`) is the default for production deployments. Schema version 6 introduced dedicated tables for positions and signal data (see `doc/2026-02-11_1400-position-signal-architecture-ADR.md` for full architecture).
 
 **Journal mode:** WAL (Write-Ahead Logging) for concurrent reads during writes.
 
-**Tables (Schema V5):**
+**Tables (Schema V6):**
 
 | Table | Purpose |
 |-------|---------|
@@ -422,7 +422,7 @@ conn.close()
 \""
 ```
 
-**Schema version:** 5 (WAL mode enabled)
+**Schema version:** 6 (WAL mode enabled)
 
 ### Tables
 
@@ -434,7 +434,7 @@ conn.close()
 | `signal_buckets` | ~7k | Pre-aggregated 5-min and 1-hour signal buckets |
 | `telemetry` | ~20 | Temperature, humidity, pressure readings |
 | `mheard_cache` | 0 | Unused cache table |
-| `schema_version` | 1 | Current schema version (5) |
+| `schema_version` | 1 | Current schema version (6) |
 
 ### Key columns in `messages`
 

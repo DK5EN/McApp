@@ -237,11 +237,13 @@ class SQLiteStorage:
                     self._migrate_v4_to_v5(conn)
                     _set_schema_version(conn, 5)
 
-                # Idempotent column additions (safe to run on every startup)
-                try:
-                    conn.execute("ALTER TABLE telemetry ADD COLUMN alt REAL")
-                except sqlite3.OperationalError:
-                    pass  # Column already exists
+                if current_version < 6:
+                    logger.info(
+                        "Migrating schema v%d → v6: add alt column to telemetry",
+                        current_version,
+                    )
+                    self._migrate_v5_to_v6(conn)
+                    _set_schema_version(conn, 6)
 
         await asyncio.to_thread(_init_db)
 
@@ -590,6 +592,14 @@ class SQLiteStorage:
             logger.info("Schema v5 migration complete: long→lon, long_dir→lon_dir")
         else:
             logger.info("Schema v5 migration skipped: columns already named lon/lon_dir")
+
+    @staticmethod
+    def _migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
+        """V5 → V6: Add altitude column to telemetry table."""
+        try:
+            conn.execute("ALTER TABLE telemetry ADD COLUMN alt REAL")
+        except sqlite3.OperationalError:
+            pass  # Column already exists (idempotent)
 
     async def _init_bucket_accumulators(self) -> None:
         """Load current partial buckets from signal_log into memory."""
