@@ -371,6 +371,8 @@ class SQLiteStorage:
     def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
         """Remove UNIQUE constraint from msg_id (SQLite requires table recreation)."""
         conn.executescript("""
+            DROP TABLE IF EXISTS messages_new;
+
             CREATE TABLE messages_new (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 msg_id TEXT,
