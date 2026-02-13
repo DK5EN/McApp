@@ -375,6 +375,22 @@ def parse_aprs_position(message):
             if g.isdigit():
                 result[f"group_{i}"] = int(g)
 
+    # Weather fields from weather stations (e.g. DK5EN-12)
+    # /P=940.3 (QFE), /H=42.1 (humidity), /T=22.6 (temp), /Q=956.9 (QNH)
+    weather_fields = {
+        "temp1": r"/T=([\d.]+)",
+        "hum": r"/H=([\d.]+)",
+        "qfe": r"/P=([\d.]+)",
+        "qnh": r"/Q=([\d.]+)",
+    }
+    for field, pattern in weather_fields.items():
+        m = re.search(pattern, message)
+        if m:
+            try:
+                result[field] = float(m.group(1))
+            except ValueError:
+                pass
+
     return result
 
 
@@ -522,50 +538,6 @@ def transform_mh(input_dict):
     }
 
 
-def transform_sn(input_dict):
-    """Transform SN (sensor) config messages to telemetry format.
-
-    Preserves all original fields (including TYP) so the frontend can
-    populate the SN register tab, while adding DB-friendly telemetry
-    fields for store_telemetry().
-    """
-    logger.debug("SN payload: %s", input_dict)
-    timestamp = safe_timestamp_from_dict(input_dict) or int(time.time() * 1000)
-
-    # Map MeshCom uppercase sensor fields to DB column names
-    field_map = {
-        "temp1": ("TEMP", "T1"),
-        "temp2": ("TEMP2", "T2"),
-        "hum": ("HUM", "H"),
-        "qfe": ("QFE", "P"),
-        "qnh": ("QNH",),
-        "gas": ("GAS",),
-        "co2": ("CO2",),
-    }
-    int_fields = {"gas", "co2"}
-
-    mapped = {}
-    for db_col, keys in field_map.items():
-        for key in keys:
-            raw = input_dict.get(key)
-            if raw is not None:
-                try:
-                    mapped[db_col] = int(float(raw)) if db_col in int_fields else float(raw)
-                except (ValueError, TypeError):
-                    pass
-                break
-
-    return {
-        **input_dict,
-        "transformer": "sn",
-        "src_type": "ble",
-        "type": "tele",
-        "src": input_dict.get("CALL", ""),
-        "timestamp": timestamp,
-        **mapped,
-    }
-
-
 def transform_ble(input_dict):
     return{
         "transformer": "generic_ble",
@@ -580,9 +552,7 @@ def dispatcher(input_dict, own_callsign=""):
     if "TYP" in input_dict:
         if input_dict["TYP"] == "MH":
             return transform_mh(input_dict)
-        elif input_dict["TYP"] == "SN":
-            return transform_sn(input_dict)
-        elif input_dict["TYP"] in ["I", "G", "SA", "W", "IO", "TM", "AN", "SE", "SW"]:
+        elif input_dict["TYP"] in ["I", "SN", "G", "SA", "W", "IO", "TM", "AN", "SE", "SW"]:
             if has_console:
                 print(f"Type {input_dict['TYP']}")
             return transform_ble(input_dict)

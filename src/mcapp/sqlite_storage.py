@@ -909,6 +909,10 @@ class SQLiteStorage:
             if lat and lon and lat != 0 and lon != 0:
                 await self._upsert_station_position(callsign, pos_data, "position")
 
+            # Weather station beacons carry telemetry in APRS extensions
+            if any(pos_data.get(f) for f in ("temp1", "hum", "qfe", "qnh")):
+                await self.store_telemetry(callsign, pos_data)
+
         # --- LEGACY: Write to messages table (dual-write) ---
         # MHeard throttle: BLE MHeard entries have no msg_id and arrive very
         # frequently (~98/hr per station).  Instead of inserting a new row every
