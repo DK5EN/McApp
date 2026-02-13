@@ -237,6 +237,12 @@ class SQLiteStorage:
                     self._migrate_v4_to_v5(conn)
                     _set_schema_version(conn, 5)
 
+                # Idempotent column additions (safe to run on every startup)
+                try:
+                    conn.execute("ALTER TABLE telemetry ADD COLUMN alt REAL")
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+
         await asyncio.to_thread(_init_db)
 
         # Initialize bucket accumulators from existing signal_log
@@ -470,12 +476,6 @@ class SQLiteStorage:
             CREATE INDEX IF NOT EXISTS idx_telemetry_cs_ts
                 ON telemetry(callsign, timestamp DESC);
         """)
-
-        # Add alt column (added after initial schema)
-        try:
-            conn.execute("ALTER TABLE telemetry ADD COLUMN alt REAL")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
 
         # --- 4. New indexes ---
         conn.executescript("""
