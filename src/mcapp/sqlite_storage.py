@@ -818,6 +818,7 @@ class SQLiteStorage:
 
         # --- Early exit: Telemetry → dedicated table ---
         if msg_type == "tele":
+            logger.debug("Telemetry raw message: %s", message)
             await self.store_telemetry(callsign, message)
             return
 

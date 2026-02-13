@@ -665,6 +665,19 @@ async def notification_handler(clean_msg, message_router=None):
       message = decode_binary_message(clean_msg)
 
       own_call = getattr(message_router, 'my_callsign', '') if message_router else ''
+      if isinstance(message, dict):
+          logger.info(
+              "BLE binary: :%s %s %03d %d/%d LH:%02X %s%s %s",
+              format(message.get("msg_id", 0), "08X"),
+              message.get("mesh_info", ""),
+              message.get("payload_type", 0),
+              message.get("max_hop", 0),
+              message.get("max_hop", 0),
+              message.get("last_hw_id", 0),
+              message.get("path", ""),
+              message.get("dest", ""),
+              message.get("message", ""),
+          )
       output = dispatcher(message, own_call)
       if message_router:
             await message_router.publish('ble', 'ble_notification', output)

@@ -163,6 +163,7 @@ class UDPHandler:
 
         if "msg" not in message:
             if message.get("type") == "tele":
+                logger.info("UDP telemetry: %s", message)
                 message["timestamp"] = int(time.time() * 1000)
                 if self.message_router:
                     await self.message_router.publish('udp', 'mesh_message', message)
