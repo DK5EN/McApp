@@ -187,6 +187,14 @@ class SQLiteStorage:
         if self._initialized:
             return
 
+        def _set_schema_version(conn: sqlite3.Connection, version: int) -> None:
+            """Persist schema version immediately so crashes don't re-run completed steps."""
+            conn.execute("DELETE FROM schema_version")
+            conn.execute(
+                "INSERT INTO schema_version (version) VALUES (?)", (version,)
+            )
+            conn.commit()
+
         def _init_db() -> None:
             with sqlite3.connect(self.db_path) as conn:
                 # Enable WAL mode for better concurrent read/write performance
@@ -203,6 +211,7 @@ class SQLiteStorage:
                     logger.info("Migrating schema v%d → v2", current_version)
                     conn.executescript(CREATE_SCHEMA_V2_SQL)
                     self._backfill_new_tables(conn)
+                    _set_schema_version(conn, 2)
 
                 if current_version < 3:
                     logger.info(
@@ -210,6 +219,7 @@ class SQLiteStorage:
                         current_version,
                     )
                     self._migrate_v2_to_v3(conn)
+                    _set_schema_version(conn, 3)
 
                 if current_version < 4:
                     logger.info(
@@ -217,6 +227,7 @@ class SQLiteStorage:
                         current_version,
                     )
                     self._migrate_v3_to_v4(conn)
+                    _set_schema_version(conn, 4)
 
                 if current_version < 5:
                     logger.info(
@@ -224,19 +235,7 @@ class SQLiteStorage:
                         current_version,
                     )
                     self._migrate_v4_to_v5(conn)
-
-                if row is None:
-                    conn.execute(
-                        "INSERT INTO schema_version (version) VALUES (?)",
-                        (SCHEMA_VERSION,),
-                    )
-                elif current_version < SCHEMA_VERSION:
-                    conn.execute(
-                        "UPDATE schema_version SET version = ?",
-                        (SCHEMA_VERSION,),
-                    )
-
-                conn.commit()
+                    _set_schema_version(conn, 5)
 
         await asyncio.to_thread(_init_db)
 
@@ -388,7 +387,11 @@ class SQLiteStorage:
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
 
-            INSERT INTO messages_new SELECT * FROM messages;
+            INSERT INTO messages_new (id, msg_id, src, dst, msg, type,
+                timestamp, rssi, snr, src_type, raw_json, created_at)
+            SELECT id, msg_id, src, dst, msg, type,
+                timestamp, rssi, snr, src_type, raw_json, created_at
+            FROM messages;
 
             DROP TABLE messages;
 
