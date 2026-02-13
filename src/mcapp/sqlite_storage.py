@@ -471,6 +471,12 @@ class SQLiteStorage:
                 ON telemetry(callsign, timestamp DESC);
         """)
 
+        # Add alt column (added after initial schema)
+        try:
+            conn.execute("ALTER TABLE telemetry ADD COLUMN alt REAL")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
         # --- 4. New indexes ---
         conn.executescript("""
             CREATE INDEX IF NOT EXISTS idx_messages_echo_id
@@ -1016,22 +1022,32 @@ class SQLiteStorage:
         qnh = data.get("qnh")
         gas = data.get("gas")
         co2 = data.get("co2")
+        alt = data.get("alt")
+
+        # For T# telemetry packets (no altitude), look up from station_positions
+        if alt is None:
+            rows = await self._execute(
+                "SELECT alt FROM station_positions WHERE callsign = ?",
+                (callsign,),
+            )
+            if rows:
+                alt = rows[0].get("alt")
 
         # Skip all-zero readings (own node without sensors)
-        values = (temp1, temp2, hum, qfe, qnh, gas, co2)
+        values = (temp1, temp2, hum, qfe, qnh, gas, co2, alt)
         if all(v is None or v == 0 for v in values):
             return
 
         logger.info(
-            "Telemetry from %s: temp1=%s hum=%s qfe=%s qnh=%s",
-            callsign, temp1, hum, qfe, qnh,
+            "Telemetry from %s: temp1=%s hum=%s qfe=%s qnh=%s alt=%s",
+            callsign, temp1, hum, qfe, qnh, alt,
         )
 
         await self._execute(
             "INSERT INTO telemetry"
-            " (callsign, timestamp, temp1, temp2, hum, qfe, qnh, gas, co2)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (callsign, timestamp, temp1, temp2, hum, qfe, qnh, gas, co2),
+            " (callsign, timestamp, temp1, temp2, hum, qfe, qnh, gas, co2, alt)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (callsign, timestamp, temp1, temp2, hum, qfe, qnh, gas, co2, alt),
             fetch=False,
         )
 
@@ -1957,7 +1973,7 @@ class SQLiteStorage:
     async def get_telemetry_chart_data(self) -> list[dict[str, Any]]:
         """Return telemetry data for chart display."""
         return await self._execute(
-            "SELECT callsign, timestamp, temp1, temp2, hum, qfe, qnh"
+            "SELECT callsign, timestamp, temp1, temp2, hum, qfe, qnh, alt"
             " FROM telemetry ORDER BY callsign, timestamp",
         )
 
