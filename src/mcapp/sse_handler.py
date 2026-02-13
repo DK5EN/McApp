@@ -394,6 +394,19 @@ class SSEManager:
                 "timezone": time.tzname[time.daylight and time.localtime().tm_isdst],
             }
 
+        # Telemetry data endpoint (for WX charts)
+        @app.get("/api/telemetry")
+        async def get_telemetry():
+            """Get telemetry data for weather charts."""
+            storage = (
+                self.message_router.storage_handler if self.message_router else None
+            )
+            if not storage or not hasattr(storage, "get_telemetry_chart_data"):
+                raise HTTPException(
+                    status_code=503, detail="Telemetry not available"
+                )
+            return await storage.get_telemetry_chart_data()
+
         return app
 
     @staticmethod

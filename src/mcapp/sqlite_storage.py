@@ -1936,6 +1936,13 @@ class SQLiteStorage:
         logger.info("Saved %d messages to %s", len(data), filename)
         return len(data)
 
+    async def get_telemetry_chart_data(self) -> list[dict[str, Any]]:
+        """Return telemetry data for chart display."""
+        return await self._execute(
+            "SELECT callsign, timestamp, temp1, temp2, hum, qfe, qnh"
+            " FROM telemetry ORDER BY callsign, timestamp",
+        )
+
     async def close(self) -> None:
         """Close the database connection (no-op for connection-per-query model)."""
         pass
