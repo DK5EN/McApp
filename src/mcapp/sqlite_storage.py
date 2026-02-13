@@ -929,6 +929,13 @@ class SQLiteStorage:
                     if val is not None:
                         pos_data[field] = val
 
+            # Extract altitude from APRS text if not already present
+            # (UDP messages don't pre-parse /A= from the APRS position string)
+            if not pos_data.get("alt"):
+                alt_match = re.search(r"/A=(\d{6})", pos_data.get("msg", ""))
+                if alt_match:
+                    pos_data["alt"] = round(int(alt_match.group(1)) * 0.3048)
+
             # Only upsert if we have coordinates
             lat = pos_data.get("lat")
             lon = pos_data.get("lon")
@@ -1029,7 +1036,7 @@ class SQLiteStorage:
         temp2 = data.get("temp2")
         hum = data.get("hum")
         qfe = data.get("qfe")
-        qnh = data.get("qnh")
+        qnh = None  # Node QNH is unreliable; frontend calculates from QFE + alt
         gas = data.get("gas")
         co2 = data.get("co2")
         alt = data.get("alt")
