@@ -2,6 +2,8 @@
 
 import time
 
+from mcapp import __version__
+
 
 class DataCommandsMixin:
     """Mixin providing data query command handlers."""
@@ -134,7 +136,8 @@ class DataCommandsMixin:
         response += f"Messages: {msg_count}, "
         response += f"Positions: {pos_count}, "
         response += f"Total: {total} ({avg_per_hour}/h), "
-        response += f"Active stations: {len(users)}"
+        response += f"Active stations: {len(users)}, "
+        response += f"McApp v{__version__}"
 
         return response
 
