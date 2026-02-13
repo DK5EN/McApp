@@ -981,6 +981,11 @@ class SQLiteStorage:
         gas = data.get("gas")
         co2 = data.get("co2")
 
+        logger.info(
+            "Telemetry from %s: temp1=%s hum=%s qfe=%s qnh=%s",
+            callsign, temp1, hum, qfe, qnh,
+        )
+
         await self._execute(
             "INSERT INTO telemetry"
             " (callsign, timestamp, temp1, temp2, hum, qfe, qnh, gas, co2)"
