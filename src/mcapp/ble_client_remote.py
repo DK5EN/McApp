@@ -460,7 +460,12 @@ class BLEClientRemote(BLEClientBase):
         if notification.get('format') == 'json' and 'parsed' in notification:
             # JSON notification - run through dispatcher like local mode
             parsed = notification['parsed']
-            logger.info("BLE JSON TYP=%s: %s", parsed.get("TYP", "?"), parsed)
+            typ = parsed.get("TYP", "?")
+            _routine_typs = {"MH", "G", "I", "SA", "SN", "W", "IO", "TM", "AN", "SE", "SW"}
+            if typ in _routine_typs:
+                logger.debug("BLE JSON TYP=%s: %s", typ, parsed)
+            else:
+                logger.info("BLE JSON TYP=%s: %s", typ, parsed)
             output = dispatcher(parsed, own_call)
             if output:
                 output['timestamp'] = notification.get('timestamp', int(time.time() * 1000))
@@ -481,17 +486,24 @@ class BLEClientRemote(BLEClientBase):
                     if raw_bytes.startswith(b'@'):
                         decoded = decode_binary_message(raw_bytes)
                         if isinstance(decoded, dict):
-                            logger.info(
+                            pt = decoded.get("payload_type", 0)
+                            msg = decoded.get("message", "")
+                            is_routine = (
+                                pt == 33
+                                or (pt == 58 and msg[:5] in ("{CET}", "{UTC}"))
+                            )
+                            _log = logger.debug if is_routine else logger.info
+                            _log(
                                 "BLE binary: :%s %s %03d %d/%d LH:%02X %s%s %s",
                                 format(decoded.get("msg_id", 0), "08X"),
                                 decoded.get("mesh_info", ""),
-                                decoded.get("payload_type", 0),
+                                pt,
                                 decoded.get("max_hop", 0),
                                 decoded.get("max_hop", 0),
                                 decoded.get("last_hw_id", 0),
                                 decoded.get("path", ""),
                                 decoded.get("dest", ""),
-                                decoded.get("message", ""),
+                                msg,
                             )
                         output = dispatcher(decoded, own_call)
                         if output:

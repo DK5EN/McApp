@@ -553,8 +553,7 @@ def dispatcher(input_dict, own_callsign=""):
         if input_dict["TYP"] == "MH":
             return transform_mh(input_dict)
         elif input_dict["TYP"] in ["I", "SN", "G", "SA", "W", "IO", "TM", "AN", "SE", "SW"]:
-            if has_console:
-                print(f"Type {input_dict['TYP']}")
+            logger.debug("BLE JSON TYP=%s", input_dict["TYP"])
             return transform_ble(input_dict)
         else:
             if has_console:
@@ -642,17 +641,21 @@ async def notification_handler(clean_msg, message_router=None):
 
       own_call = getattr(message_router, 'my_callsign', '') if message_router else ''
       if isinstance(message, dict):
-          logger.info(
+          pt = message.get("payload_type", 0)
+          msg = message.get("message", "")
+          is_routine = pt == 33 or (pt == 58 and msg[:5] in ("{CET}", "{UTC}"))
+          _log = logger.debug if is_routine else logger.info
+          _log(
               "BLE binary: :%s %s %03d %d/%d LH:%02X %s%s %s",
               format(message.get("msg_id", 0), "08X"),
               message.get("mesh_info", ""),
-              message.get("payload_type", 0),
+              pt,
               message.get("max_hop", 0),
               message.get("max_hop", 0),
               message.get("last_hw_id", 0),
               message.get("path", ""),
               message.get("dest", ""),
-              message.get("message", ""),
+              msg,
           )
       output = dispatcher(message, own_call)
       if message_router:
