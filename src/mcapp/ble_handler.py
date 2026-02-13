@@ -523,17 +523,14 @@ def transform_mh(input_dict):
 
 
 def transform_sn(input_dict):
-    """Transform SN (sensor) config messages to telemetry format."""
+    """Transform SN (sensor) config messages to telemetry format.
+
+    Preserves all original fields (including TYP) so the frontend can
+    populate the SN register tab, while adding DB-friendly telemetry
+    fields for store_telemetry().
+    """
     logger.debug("SN payload: %s", input_dict)
     timestamp = safe_timestamp_from_dict(input_dict) or int(time.time() * 1000)
-
-    result = {
-        "transformer": "sn",
-        "src_type": "ble",
-        "type": "tele",
-        "src": input_dict.get("CALL", ""),
-        "timestamp": timestamp,
-    }
 
     # Map MeshCom uppercase sensor fields to DB column names
     field_map = {
@@ -547,17 +544,26 @@ def transform_sn(input_dict):
     }
     int_fields = {"gas", "co2"}
 
+    mapped = {}
     for db_col, keys in field_map.items():
         for key in keys:
             raw = input_dict.get(key)
             if raw is not None:
                 try:
-                    result[db_col] = int(float(raw)) if db_col in int_fields else float(raw)
+                    mapped[db_col] = int(float(raw)) if db_col in int_fields else float(raw)
                 except (ValueError, TypeError):
                     pass
                 break
 
-    return result
+    return {
+        **input_dict,
+        "transformer": "sn",
+        "src_type": "ble",
+        "type": "tele",
+        "src": input_dict.get("CALL", ""),
+        "timestamp": timestamp,
+        **mapped,
+    }
 
 
 def transform_ble(input_dict):

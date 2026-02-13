@@ -460,6 +460,7 @@ class BLEClientRemote(BLEClientBase):
         if notification.get('format') == 'json' and 'parsed' in notification:
             # JSON notification - run through dispatcher like local mode
             parsed = notification['parsed']
+            logger.info("BLE JSON TYP=%s: %s", parsed.get("TYP", "?"), parsed)
             output = dispatcher(parsed, own_call)
             if output:
                 output['timestamp'] = notification.get('timestamp', int(time.time() * 1000))
@@ -479,6 +480,19 @@ class BLEClientRemote(BLEClientBase):
                     raw_bytes = base64.b64decode(raw_b64)
                     if raw_bytes.startswith(b'@'):
                         decoded = decode_binary_message(raw_bytes)
+                        if isinstance(decoded, dict):
+                            logger.info(
+                                "BLE binary: :%s %s %03d %d/%d LH:%02X %s%s %s",
+                                format(decoded.get("msg_id", 0), "08X"),
+                                decoded.get("mesh_info", ""),
+                                decoded.get("payload_type", 0),
+                                decoded.get("max_hop", 0),
+                                decoded.get("max_hop", 0),
+                                decoded.get("last_hw_id", 0),
+                                decoded.get("path", ""),
+                                decoded.get("dest", ""),
+                                decoded.get("message", ""),
+                            )
                         output = dispatcher(decoded, own_call)
                         if output:
                             if output.get('transformer') not in ('generic_ble', 'mh'):
