@@ -213,10 +213,6 @@ get_config_value() {
 collect_config() {
   local state="$1"
 
-  echo ""
-  log_info "McApp Configuration"
-  echo "──────────────────────────────────────────────────────────"
-
   # Get current values (empty if fresh/template)
   local current_callsign
   local current_node
@@ -231,45 +227,72 @@ collect_config() {
   current_station=$(get_config_value "STAT_NAME")
   current_user_info=$(get_config_value "USER_INFO_TEXT")
 
-  # Collect values interactively
-  local callsign
-  local node_address
-  local latitude
-  local longitude
-  local station_name
-  local user_info_text
+  # Loop until user confirms configuration
+  while true; do
+    echo ""
+    log_info "McApp Configuration"
+    echo "──────────────────────────────────────────────────────────"
 
-  callsign=$(prompt_callsign "$current_callsign")
-  node_address="${callsign}.local"
-  latitude=$(prompt_latitude "$current_lat")
-  longitude=$(prompt_longitude "$current_lon")
-  station_name=$(prompt_station_name "$current_station")
-  user_info_text=$(prompt_with_default "Enter user info text (returned by !userinfo)" "${current_user_info:-${callsign} Node}")
+    # Collect values interactively
+    local callsign
+    local node_address
+    local latitude
+    local longitude
+    local station_name
+    local user_info_text
 
-  # Resolve node address to IP
-  local node_ip
-  node_ip=$(getent hosts "$node_address" 2>/dev/null | awk '{print $1}')
+    callsign=$(prompt_callsign "$current_callsign")
+    node_address="${callsign}.local"
+    latitude=$(prompt_latitude "$current_lat")
+    longitude=$(prompt_longitude "$current_lon")
+    station_name=$(prompt_station_name "$current_station")
+    user_info_text=$(prompt_with_default "Enter user info text (returned by !userinfo)" "${current_user_info:-${callsign} Node}")
 
-  echo ""
-  echo "Configuration summary:"
-  echo "  Callsign:       $callsign"
-  echo "  MeshCom Node:   $node_address"
-  if [[ -n "$node_ip" ]]; then
-  echo "  MeshCom Node IP: $node_ip"
-  else
-  echo "  MeshCom Node IP: (could not resolve)"
-  fi
-  echo "  Latitude:       $latitude"
-  echo "  Longitude:      $longitude"
-  echo "  City:           $station_name"
-  echo "  User info:      $user_info_text"
-  echo ""
+    # Resolve node address to IP (|| true prevents set -e from killing the script)
+    local node_ip
+    node_ip=$(getent hosts "$node_address" 2>/dev/null | awk '{print $1}' || true)
 
-  read -rp "[?] Save this configuration? (Y/n): " confirm </dev/tty
-  if [[ "${confirm,,}" == "n" ]]; then
-    log_warn "Configuration cancelled"
-    exit 1
-  fi
+    echo ""
+    echo "Configuration summary:"
+    echo "  Callsign:       $callsign"
+    echo "  MeshCom Node:   $node_address"
+    if [[ -n "$node_ip" ]]; then
+      echo "  MeshCom Node IP: $node_ip"
+    else
+      echo "  MeshCom Node IP: (could not resolve)"
+    fi
+    echo "  Latitude:       $latitude"
+    echo "  Longitude:      $longitude"
+    echo "  City:           $station_name"
+    echo "  User info:      $user_info_text"
+    echo ""
+
+    # Warn and offer retry if node cannot be resolved
+    if [[ -z "$node_ip" ]]; then
+      log_warn "Could not resolve '${node_address}' — the MeshCom node was not found on the network."
+      log_warn "McApp needs a reachable MeshCom node for UDP communication."
+      echo ""
+      read -rp "[?] Re-enter configuration to fix a typo? (Y/n): " retry </dev/tty
+      if [[ "${retry,,}" != "n" ]]; then
+        # Pre-fill current values for the retry loop
+        current_callsign="$callsign"
+        current_lat="$latitude"
+        current_lon="$longitude"
+        current_station="$station_name"
+        current_user_info="$user_info_text"
+        continue
+      fi
+      log_info "Continuing with unresolved node address — you can fix this later in ${CONFIG_FILE}"
+    fi
+
+    read -rp "[?] Save this configuration? (Y/n): " confirm </dev/tty
+    if [[ "${confirm,,}" == "n" ]]; then
+      log_warn "Configuration cancelled"
+      exit 1
+    fi
+
+    break
+  done
 
   # Write config file
   write_config "$callsign" "$node_address" "$latitude" "$longitude" "$station_name" "$user_info_text"
