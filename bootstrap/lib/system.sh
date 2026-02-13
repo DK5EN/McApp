@@ -10,6 +10,7 @@
 setup_system() {
   configure_locale
   disable_unused_services
+  remove_bloat_packages
   configure_tmpfs
   configure_journald
   configure_logrotate
@@ -119,6 +120,39 @@ disable_unused_services() {
   # - wpa_supplicant (WiFi connectivity)
 
   log_ok "  Unused services disabled"
+}
+
+#──────────────────────────────────────────────────────────────────
+# REMOVE BLOAT PACKAGES
+#──────────────────────────────────────────────────────────────────
+
+remove_bloat_packages() {
+  log_info "Removing unused packages..."
+
+  # Camera stack — not needed on headless Pi, pulls in TensorFlow/Mesa/Wayland bloat
+  local -a purge_packages=(
+    "rpicam-apps-core"
+    "librpicam-app1"
+    "libcamera-ipa"
+    "libcamera0.6"
+    "libcamera0.7"
+  )
+
+  local removed=0
+  for pkg in "${purge_packages[@]}"; do
+    if dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
+      log_info "  Removing: $pkg"
+      DEBIAN_FRONTEND=noninteractive apt-get purge -y -qq "$pkg" 2>/dev/null || true
+      ((removed++))
+    fi
+  done
+
+  if [[ $removed -gt 0 ]]; then
+    DEBIAN_FRONTEND=noninteractive apt-get autoremove --purge -y -qq 2>/dev/null || true
+    log_ok "  Removed $removed bloat package(s) and orphaned dependencies"
+  else
+    log_ok "  No bloat packages found"
+  fi
 }
 
 #──────────────────────────────────────────────────────────────────
