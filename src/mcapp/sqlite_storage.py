@@ -571,9 +571,14 @@ class SQLiteStorage:
     @staticmethod
     def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
         """Schema v4 → v5: rename long→lon, long_dir→lon_dir in station_positions."""
-        conn.execute("ALTER TABLE station_positions RENAME COLUMN long TO lon")
-        conn.execute("ALTER TABLE station_positions RENAME COLUMN long_dir TO lon_dir")
-        logger.info("Schema v5 migration complete: long→lon, long_dir→lon_dir")
+        # Check if rename is needed (fresh installs already have 'lon' from CREATE_SCHEMA_V2_SQL)
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(station_positions)")}
+        if "long" in cols:
+            conn.execute("ALTER TABLE station_positions RENAME COLUMN long TO lon")
+            conn.execute("ALTER TABLE station_positions RENAME COLUMN long_dir TO lon_dir")
+            logger.info("Schema v5 migration complete: long→lon, long_dir→lon_dir")
+        else:
+            logger.info("Schema v5 migration skipped: columns already named lon/lon_dir")
 
     async def _init_bucket_accumulators(self) -> None:
         """Load current partial buckets from signal_log into memory."""
