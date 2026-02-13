@@ -929,9 +929,13 @@ class SQLiteStorage:
                     if val is not None:
                         pos_data[field] = val
 
-            # Extract altitude from APRS text if not already present
-            # (UDP messages don't pre-parse /A= from the APRS position string)
-            if not pos_data.get("alt"):
+            # Convert altitude from APRS feet to meters
+            alt = pos_data.get("alt")
+            if alt:
+                # alt arrived pre-parsed but still in feet (APRS standard)
+                pos_data["alt"] = round(alt * 0.3048)
+            else:
+                # Fallback: extract from APRS position string
                 alt_match = re.search(r"/A=(\d{6})", pos_data.get("msg", ""))
                 if alt_match:
                     pos_data["alt"] = round(int(alt_match.group(1)) * 0.3048)
