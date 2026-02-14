@@ -618,6 +618,8 @@ class MessageRouter:
             ('--wifiset', BLE_QUERY_DELAY_MULTIPART),   # TYP: SW + S2 (multi-part)
             ('--weather', BLE_QUERY_DELAY_STANDARD),    # TYP: W (sensor readings)
             ('--analogset', BLE_QUERY_DELAY_STANDARD),  # TYP: AN (analog config)
+            ('--io', BLE_QUERY_DELAY_STANDARD),         # TYP: IO (GPIO status)
+            ('--tel', BLE_QUERY_DELAY_STANDARD),        # TYP: TM (telemetry config)
         ]
 
         logger.debug("Querying extended registers (adds ~4s)")
