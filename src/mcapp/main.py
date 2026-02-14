@@ -486,7 +486,7 @@ class MessageRouter:
         """Get the BLE client from registered protocols"""
         return self.get_protocol('ble_client')
 
-    async def _query_ble_registers(self, wait_for_hello: bool = True):
+    async def _query_ble_registers(self, wait_for_hello: bool = True, sync_time: bool = True):
         """
         Query BLE device config registers.
 
@@ -507,6 +507,8 @@ class MessageRouter:
             wait_for_hello: If True, wait 1s before querying to ensure hello
                           handshake is complete. Set False if querying an
                           already-established connection.
+            sync_time: If True, automatically sync device time on new connections.
+                      Important for nodes without GPS or RTC battery.
         """
         client = self._get_ble_client()
         if not client:
@@ -519,6 +521,17 @@ class MessageRouter:
         if wait_for_hello:
             logger.debug("Waiting 1s for hello handshake to complete")
             await asyncio.sleep(1.0)
+
+            # Automatically sync device time after hello handshake completes.
+            # Per firmware spec (page 898): "Send 0x20 with UNIX timestamp to
+            # synchronize device clock (especially important for devices without
+            # GPS or RTC battery)."
+            if sync_time:
+                try:
+                    await client.set_command("--settime")
+                    logger.info("Device time synchronized after connection")
+                except Exception as e:
+                    logger.warning("Time sync failed (non-critical): %s", e)
 
         # Commands to query (order: critical info first)
         # IMPORTANT: --pos returns TYP: G, not "--pos info" which is invalid
