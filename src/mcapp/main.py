@@ -707,7 +707,8 @@ class MessageRouter:
             # Query registers: wait for hello if just connected, skip wait if already connected
             await self._query_ble_registers(wait_for_hello=not already_connected)
             # Send connection info (device_name, device_address) to frontend
-            await self._handle_ble_info_command(websocket)
+            # Don't query registers again - we just did it above
+            await self._handle_ble_info_command(websocket, query_registers=False)
 
     async def _handle_ble_disconnect_command(self):
         """Handle BLE disconnect command"""
@@ -717,8 +718,16 @@ class MessageRouter:
         else:
             logger.warning("BLE client not available for disconnect")
 
-    async def _handle_ble_info_command(self, websocket):
-        """Handle BLE info command - send current BLE status to requesting client"""
+    async def _handle_ble_info_command(self, websocket, query_registers: bool = True):
+        """
+        Handle BLE info command - send current BLE status to requesting client.
+
+        Args:
+            websocket: WebSocket to send response to (None = broadcast via SSE)
+            query_registers: Whether to query device registers (default True).
+                            Set to False when called after connection to avoid
+                            duplicate queries (connect handler already queries).
+        """
         client = self._get_ble_client()
         if not client:
             logger.warning("BLE client not available for info")
@@ -761,8 +770,8 @@ class MessageRouter:
             await self.publish('ble', 'ble_status', ble_info)
 
         # Request register dump from device so frontend gets config data
-        # Connection is already established, no need to wait for hello
-        if is_connected:
+        # Only if requested (avoid duplicate queries when called after connection)
+        if is_connected and query_registers:
             await self._query_ble_registers(wait_for_hello=False)
 
     async def _handle_resolve_ip_command(self, hostname):
