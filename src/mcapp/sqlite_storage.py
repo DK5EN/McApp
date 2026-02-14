@@ -1619,7 +1619,7 @@ class SQLiteStorage:
 
         if bucket_rows:
             # Use pre-aggregated data — much faster
-            logger.info("Using %d pre-aggregated signal_buckets", len(bucket_rows))
+            logger.debug("Using %d pre-aggregated signal_buckets", len(bucket_rows))
 
             if progress_callback:
                 await progress_callback("bucketing", f"Processing {len(bucket_rows)} buckets...")
