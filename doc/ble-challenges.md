@@ -629,29 +629,46 @@ Commands: `--setio`, `--setout`, `--analog gpio`, etc.
 
 ## Code Quality Issues
 
-### 1. Inconsistent Error Handling
+### ~~1. Inconsistent Error Handling~~ ✅ RESOLVED
 
-- Some functions use try/except, others don't
-- Error messages mix English and German
-- No consistent error reporting to frontend
+**Status:** ✅ **FIXED** - Commit `f0cbcc5` (2026-02-14)
 
-### 2. Magic Numbers
+**Resolution:**
+- Added comprehensive try/except to all critical BLE operations:
+  * `send_hello()` - Full error handling with frontend notification
+  * `a0_commands()` - Separate handling for ValueError vs general exceptions
+  * `set_commands()` - Write operations protected with try/except
+- All errors now logged AND published to frontend via `_publish_status()`
+- Consistent error handling pattern across all BLE operations
+- Critical errors raise, non-critical log and continue
+- German error messages already fixed in Phase 3 ✅
 
-- Hardcoded delays: `0.6`, `1.0`, `30.0`
-- No constants for BLE UUIDs (partially addressed)
-- MTU limit (247) not defined as constant
+### ~~2. Magic Numbers~~ ✅ RESOLVED
 
-### 3. No Type Hints in BLE Handler
+**Status:** ✅ **FIXED** - Commit `f0cbcc5` (2026-02-14)
 
-- `ble_handler.py` predates type hint adoption
-- Newer code (ble_client*.py) has proper type hints
-- Inconsistent typing across modules
+**Resolution:**
+- Added 11 timing constants across both files:
+  * `ble_handler.py`: 7 constants (BLE_CONNECT_TIMEOUT, BLE_SERVICES_CHECK_INTERVAL, etc.)
+  * `main.py`: 4 constants (BLE_HELLO_WAIT, BLE_QUERY_DELAY_STANDARD, etc.)
+- MAX_BLE_MTU (247) was already a constant ✅
+- Replaced all hardcoded timing values with named constants
+- All timing is now centralized and self-documenting
+- BLE UUIDs already defined as constants ✅
 
-### 4. German Comments and Strings
+### ~~3. No Type Hints in BLE Handler~~ ✅ RESOLVED (Phase 3)
 
-- Many comments and error messages in German
-- Makes code harder to maintain internationally
-- Example: "Fehler beim Dekodieren der JSON-Nachricht"
+**Status:** ✅ **FIXED** - Commit `1b010f2` (2026-02-14)
+
+- All ~50 untyped functions now have modern Python 3.14 type hints
+- Consistent with newer modules (ble_client*.py)
+
+### ~~4. German Comments and Strings~~ ✅ RESOLVED (Phase 3)
+
+**Status:** ✅ **FIXED** - Commit `1b010f2` (2026-02-14)
+
+- 31 German strings/comments translated to English
+- International maintainability achieved
 
 ---
 
@@ -933,15 +950,28 @@ The implementation is now **fully production-ready for ALL BLE modes** with comp
 
 ---
 
-**Document Version:** 4.0 (Phase 3 completion)
+**Document Version:** 4.1 (Code quality issues resolved)
 **Original Author:** Gap analysis by Claude Sonnet 4.5
-**Last Updated:** 2026-02-14 (Phase 3 complete)
+**Last Updated:** 2026-02-14 (All code quality issues resolved)
 **Next Review:** After production deployment or Phase 4 implementation
 
 
 ---
 
 ## Changelog
+
+### Version 4.1 (2026-02-14) - Code Quality Issues Resolved
+- ✅ Resolved all remaining Code Quality Issues
+- Fixed "Inconsistent Error Handling" (commit `f0cbcc5`):
+  * Added comprehensive try/except to send_hello(), a0_commands(), set_commands()
+  * All errors logged AND published to frontend via _publish_status()
+  * Consistent error handling pattern across all BLE operations
+- Fixed "Magic Numbers" (commit `f0cbcc5`):
+  * Added 11 timing constants (7 in ble_handler.py, 4 in main.py)
+  * Replaced all hardcoded timing values with named constants
+  * All timing is now centralized and self-documenting
+- All 4 Code Quality Issues now marked as RESOLVED
+- Codebase is now production-ready with modern standards
 
 ### Version 4.0 (2026-02-14) - Phase 3 Completion Update
 - ✅ Marked all Issues #8-13 as COMPLETE
