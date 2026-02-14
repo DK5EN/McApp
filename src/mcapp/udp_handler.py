@@ -169,9 +169,44 @@ class UDPHandler:
 
         if "msg" not in message:
             if message.get("type") == "tele":
-                logger.info("UDP telemetry: %s", message)
                 message["timestamp"] = int(time.time() * 1000)
                 _normalize_altitude_to_meters(message)
+
+                # Generate pseudo-callsign from sender IP if src is missing
+                if not message.get("src"):
+                    try:
+                        # Extract last octet from IPv4 address (e.g., 192.168.68.88 → 88)
+                        ip_str = addr[0]
+                        if "." in ip_str:  # IPv4 only
+                            last_octet = int(ip_str.split(".")[-1])
+                            if 0 <= last_octet <= 255:  # Validate range
+                                message["src"] = f"NODE-{last_octet}"
+                                logger.debug(
+                                    "Generated pseudo-callsign %s from IP %s",
+                                    message["src"], ip_str
+                                )
+                            else:
+                                logger.warning(
+                                    "Invalid IP octet %d from %s, skipping telemetry",
+                                    last_octet, ip_str
+                                )
+                                return
+                        else:
+                            # IPv6 or malformed IP - skip telemetry
+                            logger.warning(
+                                "Non-IPv4 address %s for telemetry, skipping", ip_str
+                            )
+                            return
+                    except (ValueError, IndexError, AttributeError) as e:
+                        logger.error(
+                            "Failed to parse IP %s for telemetry: %s",
+                            addr[0] if addr else "None", e
+                        )
+                        return
+
+                # Log final message with src field
+                logger.info("UDP telemetry (src=%s): %s", message.get("src", "UNKNOWN"), message)
+
                 if self.message_router:
                     await self.message_router.publish('udp', 'mesh_message', message)
                 return
