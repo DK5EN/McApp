@@ -41,6 +41,12 @@ from .sqlite_storage import create_sqlite_storage
 
 VERSION = f"v{__version__}"
 
+# BLE Register Query Timing Constants (seconds)
+BLE_HELLO_WAIT = 1.0                    # Wait after hello handshake before queries
+BLE_QUERY_DELAY_STANDARD = 0.8         # Delay between standard register queries
+BLE_QUERY_DELAY_MULTIPART = 1.2        # Delay for multi-part responses (SE+S1, SW+S2)
+BLE_RETRY_BASE_DELAY = 0.5             # Base delay for exponential backoff retries
+
 # Module logger
 logger = get_logger(__name__)
 
@@ -491,7 +497,7 @@ class MessageRouter:
         client,
         cmd: str,
         max_retries: int = 3,
-        base_delay: float = 0.5
+        base_delay: float = BLE_RETRY_BASE_DELAY
     ) -> bool:
         """
         Send BLE command with exponential backoff retry.
@@ -504,13 +510,13 @@ class MessageRouter:
             client: BLE client instance
             cmd: Command to send (e.g., "--info", "--pos")
             max_retries: Maximum number of retry attempts (default: 3)
-            base_delay: Base delay in seconds for exponential backoff (default: 0.5s)
+            base_delay: Base delay in seconds for exponential backoff
 
         Returns:
             True if command sent successfully (on any attempt)
             False if all attempts failed
 
-        Retry delays: 0.5s, 1.0s, 2.0s (exponential backoff)
+        Retry timing uses exponential backoff (base_delay * 2^attempt)
         """
         for attempt in range(max_retries):
             try:
@@ -574,8 +580,8 @@ class MessageRouter:
         # Per firmware docs: "The phone app must send 0x10 hello message
         # before other commands will be processed."
         if wait_for_hello:
-            logger.debug("Waiting 1s for hello handshake to complete")
-            await asyncio.sleep(1.0)
+            logger.debug("Waiting for hello handshake to complete")
+            await asyncio.sleep(BLE_HELLO_WAIT)
 
             # Automatically sync device time after hello handshake completes.
             # Per firmware spec (page 898): "Send 0x20 with UNIX timestamp to
@@ -591,10 +597,10 @@ class MessageRouter:
         # Commands to query (order: critical info first)
         # IMPORTANT: --pos returns TYP: G, not "--pos info" which is invalid
         commands = [
-            ('--info', 0.8),      # Device info (firmware, callsign, battery)
-            ('--nodeset', 0.8),   # Node settings (LoRa, gateway, mesh)
-            ('--pos', 0.8),       # GPS/position data (FIXED: was "--pos info")
-            ('--aprsset', 0.8),   # APRS settings (comment, symbols)
+            ('--info', BLE_QUERY_DELAY_STANDARD),      # Device info
+            ('--nodeset', BLE_QUERY_DELAY_STANDARD),   # Node settings
+            ('--pos', BLE_QUERY_DELAY_STANDARD),       # GPS/position data
+            ('--aprsset', BLE_QUERY_DELAY_STANDARD),   # APRS settings
         ]
 
         # Send commands with retry logic for improved reliability
@@ -606,12 +612,12 @@ class MessageRouter:
             await asyncio.sleep(delay)
 
         # Extended queries (sensor, WiFi, weather, analog config)
-        # TIMING: Multi-part responses (SE+S1, SW+S2) need 1.2s delay
+        # TIMING: Multi-part responses (SE+S1, SW+S2) need longer delay
         extended_queries = [
-            ('--seset', 1.2),     # TYP: SE + S1 (sensor settings, multi-part)
-            ('--wifiset', 1.2),   # TYP: SW + S2 (WiFi settings, multi-part)
-            ('--weather', 0.8),   # TYP: W (sensor readings)
-            ('--analogset', 0.8), # TYP: AN (analog input config)
+            ('--seset', BLE_QUERY_DELAY_MULTIPART),     # TYP: SE + S1 (multi-part)
+            ('--wifiset', BLE_QUERY_DELAY_MULTIPART),   # TYP: SW + S2 (multi-part)
+            ('--weather', BLE_QUERY_DELAY_STANDARD),    # TYP: W (sensor readings)
+            ('--analogset', BLE_QUERY_DELAY_STANDARD),  # TYP: AN (analog config)
         ]
 
         logger.debug("Querying extended registers (adds ~4s)")

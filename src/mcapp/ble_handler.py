@@ -74,6 +74,15 @@ AGENT_PATH = "/com/example/agent"
 # BLE Protocol Constants
 MAX_BLE_MTU = 247  # Maximum BLE packet size in bytes (per MeshCom spec)
 
+# Timing Constants (seconds)
+BLE_CONNECT_TIMEOUT = 10.0          # Device connection timeout
+BLE_SERVICES_CHECK_INTERVAL = 0.5   # Service resolution polling interval
+BLE_KEEPALIVE_INTERVAL = 30.0       # Keep-alive message interval
+BLE_HELLO_DELAY = 1.0                # Delay after hello handshake
+BLE_COMMAND_RETRY_BACKOFF = 0.5     # Base delay for retry backoff
+BLE_DISCONNECT_DELAY = 2.0          # Delay before disconnect operations
+BLE_RECONNECT_DELAY = 3.0           # Delay before reconnection attempts
+
 # Global client instance (managed by this module)
 client = None
 
@@ -930,7 +939,9 @@ class BLEClient:
         if not connected:
             try:
                 # Add timeout to prevent hanging
-                await asyncio.wait_for(self.dev_iface.call_connect(), timeout=10.0)
+                await asyncio.wait_for(
+                    self.dev_iface.call_connect(), timeout=BLE_CONNECT_TIMEOUT
+                )
                 if has_console:
                     print(f"✅ connected to {self.mac}")
             except asyncio.TimeoutError:
@@ -944,7 +955,9 @@ class BLEClient:
         if has_console:
             print("🔍 Waiting for service discovery...")
 
-        services_resolved = await self._wait_for_services_resolved(timeout=10.0)
+        services_resolved = await self._wait_for_services_resolved(
+            timeout=BLE_CONNECT_TIMEOUT
+        )
         if not services_resolved:
             raise ConnectionError("Services not resolved within 10 seconds")
 
@@ -991,7 +1004,9 @@ class BLEClient:
         if not self._keepalive_task or self._keepalive_task.done():
             self._keepalive_task = asyncio.create_task(self._send_keepalive())
 
-    async def _wait_for_services_resolved(self, timeout: float = 10.0) -> bool:
+    async def _wait_for_services_resolved(
+        self, timeout: float = BLE_CONNECT_TIMEOUT
+    ) -> bool:
         """Wait for BLE services to be discovered and resolved"""
         start_time = time.time()
 
@@ -1005,13 +1020,13 @@ class BLEClient:
                         print(f"🔍 Services resolved after {time.time() - start_time:.1f}s")
                     return True
 
-                # Still waiting - check every 500ms
-                await asyncio.sleep(0.5)
+                # Still waiting - check periodically
+                await asyncio.sleep(BLE_SERVICES_CHECK_INTERVAL)
 
             except DBusError as e:
                 if has_console:
                     print(f"⚠️ Error checking ServicesResolved: {e}")
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(BLE_SERVICES_CHECK_INTERVAL)
 
         return False
 
@@ -1198,27 +1213,34 @@ class BLEClient:
                 raise
 
     async def send_hello(self) -> None:
+        """Send hello handshake message to device"""
         if not self.bus:
            logger.debug("BLE not connected, skipping send")
            return
 
-        connected = (await self.props_iface.call_get(DEVICE_INTERFACE, "Connected")).value
-        if not connected:
-           print("🛑 connection lost, can't send ..")
-           await self._publish_status('send hello','error', "❌ connection lost")
+        try:
+            connected = (
+                await self.props_iface.call_get(DEVICE_INTERFACE, "Connected")
+            ).value
+            if not connected:
+                logger.warning("Connection lost, cannot send hello")
+                await self._publish_status('send hello', 'error', "❌ Connection lost")
+                await self.disconnect()
+                await self.close()
+                return
 
-           await self.disconnect()
-           await self.close()
-           return
+            if self.write_char_iface:
+                await self.write_char_iface.call_write_value(self.hello_bytes, {})
+                await self._publish_status('conf load', 'info', ".. waking up device ..")
+                if has_console:
+                    print("📨 Hello sent ..")
+            else:
+                logger.debug("No write characteristic available")
 
-        if self.write_char_iface:
-            await self.write_char_iface.call_write_value(self.hello_bytes, {})
-            await self._publish_status('conf load','info', ".. waking up device ..")
-            if has_console:
-               print("📨 Hello sent ..")
-
-        else:
-            logger.debug("No write characteristic available")
+        except Exception as e:
+            logger.error("Failed to send hello: %s", e)
+            await self._publish_status('send hello', 'error', f"❌ Send failed: {e}")
+            raise
 
     async def send_message(self, msg: str, grp: str) -> None:
         if not self.bus:
@@ -1266,35 +1288,44 @@ class BLEClient:
             logger.debug("No write characteristic available")
 
     async def a0_commands(self, cmd: str) -> None:
+        """Send A0 (text) command to device"""
         if not self.bus:
            logger.debug("BLE not connected, skipping send")
            return
 
-        await self._check_conn()
+        try:
+            await self._check_conn()
 
-        byte_array = bytearray(cmd.encode('utf-8'))
+            byte_array = bytearray(cmd.encode('utf-8'))
+            laenge = len(byte_array) + 2
 
-        laenge = len(byte_array) + 2
+            # Validate MTU limit before sending
+            if laenge > MAX_BLE_MTU:
+                error_msg = (
+                    f"Command too long: {laenge} bytes (max {MAX_BLE_MTU}). "
+                    f"Command will be truncated or lost."
+                )
+                logger.error(error_msg)
+                await self._publish_status('send command', 'error', f"❌ {error_msg}")
+                raise ValueError(error_msg)
 
-        # Validate MTU limit before sending
-        if laenge > MAX_BLE_MTU:
-            error_msg = (
-                f"Command too long: {laenge} bytes (max {MAX_BLE_MTU}). "
-                f"Command will be truncated or lost."
-            )
-            logger.error(error_msg)
-            await self._publish_status('send command', 'error', f"❌ {error_msg}")
-            raise ValueError(error_msg)
+            byte_array = laenge.to_bytes(1, 'big') +  bytes ([0xA0]) + byte_array
 
-        byte_array = laenge.to_bytes(1, 'big') +  bytes ([0xA0]) + byte_array
+            if self.write_char_iface:
+                await self.write_char_iface.call_write_value(byte_array, {})
+                if has_console:
+                    print(f"📨 Command sent: {cmd}")
+                logger.debug("A0 command sent: %s", cmd)
+            else:
+                logger.warning("No write characteristic available")
 
-        if self.write_char_iface:
-            await self.write_char_iface.call_write_value(byte_array, {})
-            if has_console:
-               print(f"📨 Message sent .. {byte_array}")
-
-        else:
-            logger.debug("No write characteristic available")
+        except ValueError:
+            # MTU validation error - already logged and published
+            raise
+        except Exception as e:
+            logger.error("Failed to send A0 command '%s': %s", cmd, e)
+            await self._publish_status('send command', 'error', f"❌ Send failed: {e}")
+            raise
 
     async def set_commands(self, cmd: str) -> None:
        """
@@ -1491,15 +1522,22 @@ class BLEClient:
            await self._publish_status('set command', 'error', f"❌ {error_msg}")
            raise ValueError(error_msg)
 
-       if self.write_char_iface and byte_array:
-            await self.write_char_iface.call_write_value(byte_array, {})
-            if has_console:
-               print(f"📨 Message sent: {' '.join(f'{b:02X}' for b in byte_array)}")
-            await self._publish_status(
-                'set command', 'ok', f"✅ Command {cmd} sent successfully"
-            )
-       else:
-            logger.debug("No write characteristic available")
+       try:
+           if self.write_char_iface and byte_array:
+               await self.write_char_iface.call_write_value(byte_array, {})
+               if has_console:
+                   print(f"📨 Message sent: {' '.join(f'{b:02X}' for b in byte_array)}")
+               await self._publish_status(
+                   'set command', 'ok', f"✅ Command {cmd} sent successfully"
+               )
+               logger.debug("Set command sent: %s", cmd)
+           else:
+               logger.warning("No write characteristic available for command: %s", cmd)
+
+       except Exception as e:
+           logger.error("Failed to send set command '%s': %s", cmd, e)
+           await self._publish_status('set command', 'error', f"❌ Send failed: {e}")
+           raise
 
     async def save_settings(self) -> None:
         """
