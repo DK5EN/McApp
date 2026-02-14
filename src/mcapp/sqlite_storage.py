@@ -23,7 +23,7 @@ VERSION = "v0.50.0"
 logger = get_logger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 7
 
 # Constants matching message_storage.py
 BUCKET_SECONDS = 5 * 60
@@ -247,6 +247,20 @@ class SQLiteStorage:
                     )
                     self._migrate_v5_to_v6(conn)
                     _set_schema_version(conn, 6)
+
+                if current_version < 7:
+                    logger.info(
+                        "Migrating schema v%d → v7: add read_counts table",
+                        current_version,
+                    )
+                    conn.executescript("""
+                        CREATE TABLE IF NOT EXISTS read_counts (
+                            dst TEXT PRIMARY KEY,
+                            count INTEGER NOT NULL DEFAULT 0,
+                            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                        );
+                    """)
+                    _set_schema_version(conn, 7)
 
         await asyncio.to_thread(_init_db)
 
@@ -2046,6 +2060,23 @@ class SQLiteStorage:
         return await self._execute(
             "SELECT callsign, timestamp, temp1, temp2, hum, qfe, qnh, alt"
             " FROM telemetry ORDER BY callsign, timestamp",
+        )
+
+    async def get_read_counts(self) -> dict[str, int]:
+        """Get all read counts for frontend unread badge sync."""
+        rows = await self._execute("SELECT dst, count FROM read_counts")
+        return {row["dst"]: row["count"] for row in rows}
+
+    async def set_read_count(self, dst: str, count: int) -> None:
+        """Upsert a read count for a destination."""
+        await self._execute(
+            "INSERT INTO read_counts (dst, count, updated_at)"
+            " VALUES (?, ?, CURRENT_TIMESTAMP)"
+            " ON CONFLICT(dst) DO UPDATE SET"
+            "   count = excluded.count,"
+            "   updated_at = excluded.updated_at",
+            (dst, count),
+            fetch=False,
         )
 
     async def close(self) -> None:

@@ -190,6 +190,15 @@ class SSEManager:
                                 "msg": "summary",
                                 "data": summary,
                             })
+                            # Send persisted read counts for unread badge sync
+                            if hasattr(storage, 'get_read_counts'):
+                                read_counts = await storage.get_read_counts()
+                                if read_counts:
+                                    yield self._format_sse_event({
+                                        "type": "response",
+                                        "msg": "read_counts",
+                                        "data": read_counts,
+                                    })
                         else:
                             logger.warning(
                                 "SSE client %s: no storage handler available",
@@ -358,6 +367,33 @@ class SSEManager:
                 "clients": client_count,
                 "uptime_seconds": int(time.time() - getattr(self, "_start_time", time.time())),
             }
+
+        # Read counts endpoints (unread badge persistence)
+        @app.get("/api/read_counts")
+        async def get_read_counts():
+            """Get persisted read counts for unread badge sync."""
+            storage = (
+                self.message_router.storage_handler if self.message_router else None
+            )
+            if not storage or not hasattr(storage, "get_read_counts"):
+                raise HTTPException(status_code=503, detail="Storage not available")
+            return await storage.get_read_counts()
+
+        @app.post("/api/read_counts")
+        async def set_read_count(request: Request):
+            """Persist a read count for a destination."""
+            storage = (
+                self.message_router.storage_handler if self.message_router else None
+            )
+            if not storage or not hasattr(storage, "set_read_count"):
+                raise HTTPException(status_code=503, detail="Storage not available")
+            body = await request.json()
+            dst = body.get("dst")
+            count = body.get("count")
+            if not dst or count is None:
+                raise HTTPException(status_code=400, detail="Missing dst or count")
+            await storage.set_read_count(str(dst), int(count))
+            return {"status": "ok"}
 
         # Health check endpoint
         @app.get("/health")

@@ -372,6 +372,23 @@ class MessageRouter:
         else:
             await self.publish('router', 'websocket_message', summary_payload)
 
+        # Send persisted read counts for unread badge sync
+        if hasattr(self.storage_handler, 'get_read_counts'):
+            read_counts = await self.storage_handler.get_read_counts()
+            if read_counts:
+                rc_payload = {
+                    "type": "response",
+                    "msg": "read_counts",
+                    "data": read_counts,
+                }
+                if websocket:
+                    await self.publish(
+                        'router', 'websocket_direct',
+                        {'websocket': websocket, 'data': rc_payload},
+                    )
+                else:
+                    await self.publish('router', 'websocket_message', rc_payload)
+
     async def _handle_summary_command(self, websocket):
         """Handle summary command - sends message counts per destination."""
         summary = await self.storage_handler.get_summary()
