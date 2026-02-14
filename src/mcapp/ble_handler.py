@@ -31,6 +31,9 @@ PROPERTIES_INTERFACE = "org.freedesktop.DBus.Properties"
 OBJECT_MANAGER_INTERFACE = "org.freedesktop.DBus.ObjectManager"
 AGENT_PATH = "/com/example/agent"
 
+# BLE Protocol Constants
+MAX_BLE_MTU = 247  # Maximum BLE packet size in bytes (per MeshCom spec)
+
 # Global client instance (managed by this module)
 client = None
 
@@ -1120,6 +1123,16 @@ class BLEClient:
 
         laenge = len(byte_array) + 2
 
+        # Validate MTU limit before sending
+        if laenge > MAX_BLE_MTU:
+            error_msg = (
+                f"Message too long: {laenge} bytes (max {MAX_BLE_MTU}). "
+                f"Message will be truncated or lost."
+            )
+            logger.error(error_msg)
+            await self._publish_status('send message', 'error', f"❌ {error_msg}")
+            raise ValueError(error_msg)
+
         byte_array = laenge.to_bytes(1, 'big') +  bytes ([0xA0]) + byte_array
 
         if self.write_char_iface:
@@ -1146,6 +1159,16 @@ class BLEClient:
         byte_array = bytearray(cmd.encode('utf-8'))
 
         laenge = len(byte_array) + 2
+
+        # Validate MTU limit before sending
+        if laenge > MAX_BLE_MTU:
+            error_msg = (
+                f"Command too long: {laenge} bytes (max {MAX_BLE_MTU}). "
+                f"Command will be truncated or lost."
+            )
+            logger.error(error_msg)
+            await self._publish_status('send command', 'error', f"❌ {error_msg}")
+            raise ValueError(error_msg)
 
         byte_array = laenge.to_bytes(1, 'big') +  bytes ([0xA0]) + byte_array
 
@@ -1216,6 +1239,16 @@ class BLEClient:
           logger.warning("Command %s not implemented in set_commands", cmd)
           print(f"❌ {cmd} not yet implemented")
           return  # Early return if command not recognized
+
+       # Validate MTU limit before sending (for binary messages)
+       if byte_array and len(byte_array) > MAX_BLE_MTU:
+           error_msg = (
+               f"Set command too long: {len(byte_array)} bytes (max {MAX_BLE_MTU}). "
+               f"Message will be truncated or lost."
+           )
+           logger.error(error_msg)
+           await self._publish_status('set command', 'error', f"❌ {error_msg}")
+           raise ValueError(error_msg)
 
        if self.write_char_iface and byte_array:
             await self.write_char_iface.call_write_value(byte_array, {})
