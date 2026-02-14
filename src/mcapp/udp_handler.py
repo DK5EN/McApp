@@ -12,6 +12,12 @@ logger = get_logger(__name__)
 VERSION = "v0.48.0"
 
 
+def _normalize_altitude_to_meters(message: dict) -> None:
+    """Convert APRS altitude from feet to meters in-place."""
+    if message.get("alt"):
+        message["alt"] = round(message["alt"] * 0.3048)
+
+
 def is_allowed_char(ch: str) -> bool:
     """Check if character is allowed in our charset"""
     codepoint = ord(ch)
@@ -165,6 +171,7 @@ class UDPHandler:
             if message.get("type") == "tele":
                 logger.info("UDP telemetry: %s", message)
                 message["timestamp"] = int(time.time() * 1000)
+                _normalize_altitude_to_meters(message)
                 if self.message_router:
                     await self.message_router.publish('udp', 'mesh_message', message)
                 return
@@ -172,6 +179,7 @@ class UDPHandler:
             return
 
         message["timestamp"] = int(time.time() * 1000)
+        _normalize_altitude_to_meters(message)
         #dt = datetime.fromtimestamp(message['timestamp']/1000)
         #readable = dt.strftime("%d %b %Y %H:%M:%S")
         #message["from"] = addr[0]
