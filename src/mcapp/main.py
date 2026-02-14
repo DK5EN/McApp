@@ -486,6 +486,59 @@ class MessageRouter:
         """Get the BLE client from registered protocols"""
         return self.get_protocol('ble_client')
 
+    async def _send_ble_command_with_retry(
+        self,
+        client,
+        cmd: str,
+        max_retries: int = 3,
+        base_delay: float = 0.5
+    ) -> bool:
+        """
+        Send BLE command with exponential backoff retry.
+
+        BLE is inherently unreliable (interference, distance, packet loss).
+        This helper retries failed commands with exponential backoff to
+        improve reliability.
+
+        Args:
+            client: BLE client instance
+            cmd: Command to send (e.g., "--info", "--pos")
+            max_retries: Maximum number of retry attempts (default: 3)
+            base_delay: Base delay in seconds for exponential backoff (default: 0.5s)
+
+        Returns:
+            True if command sent successfully (on any attempt)
+            False if all attempts failed
+
+        Retry delays: 0.5s, 1.0s, 2.0s (exponential backoff)
+        """
+        for attempt in range(max_retries):
+            try:
+                await client.send_command(cmd)
+                if attempt > 0:
+                    logger.info("Command %s succeeded on attempt %d/%d",
+                              cmd, attempt + 1, max_retries)
+                return True
+
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    # Calculate exponential backoff delay
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(
+                        "Command %s failed (attempt %d/%d), retrying in %.1fs: %s",
+                        cmd, attempt + 1, max_retries, delay, e
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    # Final attempt failed
+                    logger.error(
+                        "Command %s failed after %d attempts: %s",
+                        cmd, max_retries, e
+                    )
+                    return False
+
+        return False  # All attempts exhausted
+
     async def _query_ble_registers(self, wait_for_hello: bool = True, sync_time: bool = True):
         """
         Query BLE device config registers.
@@ -542,12 +595,13 @@ class MessageRouter:
             ('--aprsset', 0.8),   # APRS settings (comment, symbols)
         ]
 
+        # Send commands with retry logic for improved reliability
         for cmd, delay in commands:
-            try:
-                await client.send_command(cmd)
-                await asyncio.sleep(delay)
-            except Exception as e:
-                logger.warning("Register query %s failed: %s", cmd, e)
+            success = await self._send_ble_command_with_retry(client, cmd)
+            if not success:
+                logger.error("Critical register query %s failed after all retries", cmd)
+            # Wait between commands to allow device processing time
+            await asyncio.sleep(delay)
 
     async def _handle_ble_scan_command(self):
         """Handle BLE scan command"""
