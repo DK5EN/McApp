@@ -543,25 +543,27 @@ class MessageRouter:
         """
         Query BLE device config registers.
 
-        Queries basic device configuration after BLE connection is established.
-        Commands must be sent AFTER the hello handshake is complete.
-
-        Register queries:
+        Critical register queries (always run):
         - --info: TYP: I (device info, firmware, callsign, battery)
         - --nodeset: TYP: SN (node settings, LoRa params, gateway mode)
         - --pos: TYP: G (GPS/position data, coordinates, satellites)
         - --aprsset: TYP: SA (APRS settings, comment, symbols)
 
-        Note: Some commands trigger multi-part responses:
-        - --seset: TYP: SE + S1 (sensor settings)
-        - --wifiset: TYP: SW + S2 (WiFi settings)
+        Extended register queries (Phase 3):
+        - --seset: TYP: SE + S1 (sensor settings, MULTI-PART response)
+        - --wifiset: TYP: SW + S2 (WiFi settings, MULTI-PART response)
+        - --weather: TYP: W (sensor readings: temp, humidity, pressure)
+        - --analogset: TYP: AN (analog input config)
+
+        IMPORTANT - Multi-Part Responses:
+        - --seset sends TWO JSON messages: SE followed by S1
+        - --wifiset sends TWO JSON messages: SW followed by S2
+        - These arrive as separate BLE notifications ~200ms apart
+        - Frontend receives them as distinct SSE events
 
         Args:
-            wait_for_hello: If True, wait 1s before querying to ensure hello
-                          handshake is complete. Set False if querying an
-                          already-established connection.
-            sync_time: If True, automatically sync device time on new connections.
-                      Important for nodes without GPS or RTC battery.
+            wait_for_hello: If True, wait 1s before querying (ensure hello complete)
+            sync_time: If True, sync device time on new connections
         """
         client = self._get_ble_client()
         if not client:
@@ -602,6 +604,25 @@ class MessageRouter:
                 logger.error("Critical register query %s failed after all retries", cmd)
             # Wait between commands to allow device processing time
             await asyncio.sleep(delay)
+
+        # Extended queries (sensor, WiFi, weather, analog config)
+        # TIMING: Multi-part responses (SE+S1, SW+S2) need 1.2s delay
+        extended_queries = [
+            ('--seset', 1.2),     # TYP: SE + S1 (sensor settings, multi-part)
+            ('--wifiset', 1.2),   # TYP: SW + S2 (WiFi settings, multi-part)
+            ('--weather', 0.8),   # TYP: W (sensor readings)
+            ('--analogset', 0.8), # TYP: AN (analog input config)
+        ]
+
+        logger.debug("Querying extended registers (adds ~4s)")
+        for cmd, delay in extended_queries:
+            success = await self._send_ble_command_with_retry(client, cmd)
+            if not success:
+                logger.warning("Extended query %s failed (non-critical)", cmd)
+                # Continue anyway - these are optional
+            await asyncio.sleep(delay)
+
+        logger.info("Register queries complete (critical + extended)")
 
     async def _handle_ble_scan_command(self):
         """Handle BLE scan command"""
