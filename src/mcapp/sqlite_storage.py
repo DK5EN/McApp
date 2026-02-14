@@ -1426,64 +1426,63 @@ class SQLiteStorage:
         build_pos = self._build_position_dict
 
         def _run() -> tuple[dict, dict]:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA query_only=ON")
             try:
-                conn = self._ensure_read_conn()
-            except sqlite3.Error:
-                self._read_conn = None
-                conn = self._ensure_read_conn()
+                # 1. Messages: window function, partition by conversation_key
+                msg_rows = conn.execute(
+                    f"SELECT {_MSG_SELECT} FROM ("
+                    f"  SELECT *, ROW_NUMBER() OVER ("
+                    f"    PARTITION BY COALESCE(conversation_key, dst)"
+                    f"    ORDER BY timestamp DESC"
+                    f"  ) AS rn FROM messages"
+                    f"  WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
+                    f") ranked WHERE rn <= ?"
+                    f" ORDER BY timestamp ASC",
+                    (limit_per_dst,),
+                ).fetchall()
+                messages = [
+                    json.dumps(build_msg(dict(row)), ensure_ascii=False)
+                    for row in msg_rows
+                ]
 
-            conn.rollback()  # Refresh WAL snapshot — end stale implicit transaction
+                # 2. Positions: station_positions table
+                pos_rows = conn.execute(
+                    "SELECT * FROM station_positions",
+                ).fetchall()
+                positions = [
+                    json.dumps(build_pos(dict(row)), ensure_ascii=False)
+                    for row in pos_rows
+                ]
 
-            # 1. Messages: window function, partition by conversation_key
-            msg_rows = conn.execute(
-                f"SELECT {_MSG_SELECT} FROM ("
-                f"  SELECT *, ROW_NUMBER() OVER ("
-                f"    PARTITION BY COALESCE(conversation_key, dst)"
-                f"    ORDER BY timestamp DESC"
-                f"  ) AS rn FROM messages"
-                f"  WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
-                f") ranked WHERE rn <= ?"
-                f" ORDER BY timestamp ASC",
-                (limit_per_dst,),
-            ).fetchall()
-            messages = [
-                json.dumps(build_msg(dict(row)), ensure_ascii=False)
-                for row in msg_rows
-            ]
+                # 3. ACK messages
+                ack_rows = conn.execute(
+                    f"SELECT {_MSG_SELECT} FROM messages"
+                    " WHERE type = 'msg' AND msg LIKE '%:ack%'"
+                    " ORDER BY timestamp DESC LIMIT 200",
+                ).fetchall()
+                acks = [
+                    json.dumps(build_msg(dict(row)), ensure_ascii=False)
+                    for row in ack_rows
+                ]
 
-            # 2. Positions: station_positions table
-            pos_rows = conn.execute(
-                "SELECT * FROM station_positions",
-            ).fetchall()
-            positions = [
-                json.dumps(build_pos(dict(row)), ensure_ascii=False)
-                for row in pos_rows
-            ]
+                # 4. Summary counts
+                summary_rows = conn.execute(
+                    "SELECT COALESCE(conversation_key, dst) AS key, COUNT(*) as cnt"
+                    " FROM messages"
+                    " WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
+                    " GROUP BY key",
+                ).fetchall()
+                summary = {
+                    row["key"]: row["cnt"] for row in summary_rows if row["key"]
+                }
 
-            # 3. ACK messages
-            ack_rows = conn.execute(
-                f"SELECT {_MSG_SELECT} FROM messages"
-                " WHERE type = 'msg' AND msg LIKE '%:ack%'"
-                " ORDER BY timestamp DESC LIMIT 200",
-            ).fetchall()
-            acks = [
-                json.dumps(build_msg(dict(row)), ensure_ascii=False)
-                for row in ack_rows
-            ]
-
-            # 4. Summary counts
-            summary_rows = conn.execute(
-                "SELECT COALESCE(conversation_key, dst) AS key, COUNT(*) as cnt"
-                " FROM messages"
-                " WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
-                " GROUP BY key",
-            ).fetchall()
-            summary = {
-                row["key"]: row["cnt"] for row in summary_rows if row["key"]
-            }
-
-            initial = {"messages": messages, "positions": positions, "acks": acks}
-            return initial, summary
+                initial = {"messages": messages, "positions": positions, "acks": acks}
+                return initial, summary
+            finally:
+                conn.close()
 
         initial, summary = await asyncio.to_thread(_run)
         logger.info(
