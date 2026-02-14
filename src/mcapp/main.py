@@ -892,7 +892,7 @@ class MessageRouter:
         msg = normalized_data.get('msg')
         dst = normalized_data.get('dst')
 
-        self._logger.info(
+        self._logger.debug(
             "BLE Handler: msg='%s' src='%s' dst='%s'",
             msg, normalized_data.get('src'), dst
         )
@@ -902,7 +902,7 @@ class MessageRouter:
                   f" from {normalized_data.get('src')} to '{dst}'")
 
         suppress = self._should_suppress_outbound(normalized_data)
-        self._logger.info("BLE Handler: suppress=%s", suppress)
+        self._logger.debug("BLE Handler: suppress=%s", suppress)
 
         if suppress:
             reason = self.validator.get_suppression_reason(normalized_data)
