@@ -23,7 +23,7 @@ VERSION = "v0.50.0"
 logger = get_logger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # Constants matching message_storage.py
 BUCKET_SECONDS = 5 * 60
@@ -261,6 +261,17 @@ class SQLiteStorage:
                         );
                     """)
                     _set_schema_version(conn, 7)
+
+                if current_version < 8:
+                    deleted = conn.execute(
+                        "DELETE FROM messages"
+                        " WHERE type = 'msg' AND src = '' AND msg = ''"
+                    ).rowcount
+                    logger.info(
+                        "Migration v%d → v8: purged %d empty BLE config messages",
+                        current_version, deleted,
+                    )
+                    _set_schema_version(conn, 8)
 
         await asyncio.to_thread(_init_db)
 
