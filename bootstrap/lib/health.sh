@@ -32,6 +32,9 @@ health_check() {
   # Check venv
   if ! check_venv; then all_passed=false; fi
 
+  # Check versions
+  check_versions
+
   echo "──────────────────────────────────────────────────────────"
 
   [[ "$all_passed" == "true" ]]
@@ -169,6 +172,17 @@ check_venv() {
   local python_version
   python_version=$("${venv_path}/bin/python" --version 2>&1 | cut -d' ' -f2)
   printf "  %-20s ${GREEN}[OK]${NC} Python ${python_version}\n" "python venv:"
+  return 0
+}
+
+#──────────────────────────────────────────────────────────────────
+# VERSION CHECK
+#──────────────────────────────────────────────────────────────────
+
+check_versions() {
+  local webapp_version
+  webapp_version=$(cat "${INSTALL_DIR}/webapp/version.html" 2>/dev/null || echo "unknown")
+  printf "  %-20s ${GREEN}[OK]${NC} %s\n" "webapp version:" "$webapp_version"
   return 0
 }
 

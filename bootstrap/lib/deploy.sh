@@ -59,11 +59,13 @@ get_latest_release_version() {
 }
 
 # Query GitHub Releases API for the latest pre-release tag
+# Sorts by version number (sort -V) instead of relying on API ordering
 get_latest_prerelease_version() {
   local tag
   tag=$(curl -fsSL --connect-timeout 5 \
-    "${GITHUB_API_BASE}/releases" 2>/dev/null \
-    | jq -r '[.[] | select(.prerelease)][0].tag_name // empty' 2>/dev/null)
+    "${GITHUB_API_BASE}/releases?per_page=100" 2>/dev/null \
+    | jq -r '.[] | select(.prerelease) | .tag_name' 2>/dev/null \
+    | sort -V | tail -1)
 
   if [[ -n "$tag" ]]; then
     echo "$tag"
