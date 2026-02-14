@@ -11,7 +11,8 @@
 |-------|--------|--------|------|-------|
 | **Phase 1: Critical Fixes** | ✅ **COMPLETE** | `803fb5d` | 2026-02-14 | Issues #1, #2, #3 |
 | **Phase 2: High Priority** | ✅ **COMPLETE** | `cbb3eeb..eaf038e` | 2026-02-14 | Issues #4-7 |
-| **Phase 3: Medium Priority** | ⏳ Pending | - | - | Issues #8-13 |
+| **Phase 3: Code Quality** | ⏳ Pending | - | - | Issues #8-13 (protocol features + code quality) |
+| **Phase 4: Advanced** | ⏳ Pending | - | - | Issues #14-17 (optional enhancements) |
 
 **Documentation:**
 - Phase 1: `doc/phase1-fixes-summary.md`
@@ -756,19 +757,47 @@ Commands: `--setio`, `--setout`, `--analog gpio`, etc.
 
 ---
 
-### Medium Priority 🟡 (Phase 3 - Optional)
+### Medium Priority 🟡 (Phase 3 - Code Quality & Features)
 
+**Protocol Features:**
 8. Implement missing message types (0x50, 0x55, 0x70, 0x80, 0x90, 0x95)
-9. Add FCS validation for binary messages
-10. Extend register queries to include SE/S1, SW/S2, W, AN
-11. Add unit tests for protocol encoding/decoding
+   - 0x50: Set Callsign (1B length + callsign string)
+   - 0x55: WiFi Settings (SSID + password with length prefixes)
+   - 0x70: Set Latitude (4B float + 1B save_flag)
+   - 0x80: Set Longitude (4B float + 1B save_flag)
+   - 0x90: Set Altitude (4B int + 1B save_flag)
+   - 0x95: APRS Symbols (1B primary + 1B secondary)
 
-### Low Priority ⚪
+9. Add FCS validation for binary messages
+   - Currently calculates checksum but doesn't validate
+   - Should reject corrupted messages
+
+10. Extend register queries to include SE/S1, SW/S2, W, AN
+    - --seset: TYP: SE + S1 (sensor settings, multi-part)
+    - --wifiset: TYP: SW + S2 (WiFi settings, multi-part)
+    - --weather: TYP: W (sensor readings)
+    - --analogset: TYP: AN (analog config)
+
+**Code Quality:**
+11. Document multi-part response handling
+    - Add explicit comments about SE+S1 and SW+S2 behavior
+    - Document timing requirements between parts
 
 12. Translate German comments to English
+    - Error messages: "Fehler beim Dekodieren"
+    - Status messages: "Aktuelle Zeit"
+    - Improve international maintainability
+
 13. Add type hints to ble_handler.py
-14. Implement spectrum analysis commands
-15. Create BLE state machine diagram
+    - Modernize legacy code with type annotations
+    - Use Python 3.11+ syntax (str | None, list[str])
+
+### Low Priority ⚪ (Phase 4 - Advanced Features)
+
+14. Add unit tests for protocol encoding/decoding
+15. Implement spectrum analysis commands
+16. Create BLE state machine diagram
+17. Add telemetry configuration support
 
 ---
 
@@ -834,27 +863,42 @@ The implementation is now **production-ready** with excellent reliability, persi
   * Retry logic for failed commands
   * BLE MTU size validation
 
-**⏳ Phase 3: Testing & Validation** - **Recommended Next**
+**⏳ Phase 3: Code Quality & Features** - **Optional** (Issues #8-13)
+- Implement missing message types (0x50, 0x55, 0x70, 0x80, 0x90, 0x95)
+- Add FCS validation for binary messages
+- Extend register queries (SE/S1, SW/S2, W, AN)
+- Document multi-part response handling
+- Translate German comments to English
+- Add type hints to ble_handler.py
+- Estimated: **2-3 days**
+
+**⏳ Phase 4: Testing & Advanced Features** - **As Needed** (Issues #14-17)
 - Device testing with real hardware
 - Integration tests for multi-part responses
-- Command success rate metrics
-- Estimated: **2 days**
-
-**⏳ Phase 4: Medium-Priority Items** - **Ongoing** (Issues #8-13)
-- Address as needed based on user feedback
+- Unit tests for protocol encoding/decoding
+- Spectrum analysis, telemetry, etc.
 - Estimated: **Ongoing**
 
 ---
 
-**Document Version:** 3.0 (Updated after Phase 2 completion)
+**Document Version:** 3.1 (Phase 3 reorganization)
 **Original Author:** Gap analysis by Claude Sonnet 4.5
-**Last Updated:** 2026-02-14 (Phase 2 implementation)
+**Last Updated:** 2026-02-14 (Phase 3 planning)
 **Next Review:** After Phase 3 implementation or production deployment
 
 
 ---
 
 ## Changelog
+
+### Version 3.1 (2026-02-14) - Phase 3 Reorganization
+- Reorganized Phase 3 items with detailed specifications
+- Split into Protocol Features and Code Quality categories
+- Added Phase 4 for advanced features
+- Detailed each missing message type (0x50-0x95)
+- Clarified multi-part response documentation needs
+- Updated Implementation Status table (4 phases)
+- Updated Recommended Action Plan with refined estimates
 
 ### Version 3.0 (2026-02-14) - Phase 2 Completion Update
 - ✅ Marked Issues #4, #5, #6, #7 as COMPLETE
