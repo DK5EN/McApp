@@ -23,7 +23,7 @@ VERSION = "v0.50.0"
 logger = get_logger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 # Constants matching message_storage.py
 BUCKET_SECONDS = 5 * 60
@@ -283,6 +283,19 @@ class SQLiteStorage:
                         current_version, updated,
                     )
                     _set_schema_version(conn, 9)
+
+                if current_version < 10:
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS hidden_destinations (
+                            dst TEXT PRIMARY KEY,
+                            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                        );
+                    """)
+                    logger.info(
+                        "Migration v%d → v10: created hidden_destinations table",
+                        current_version,
+                    )
+                    _set_schema_version(conn, 10)
 
         await asyncio.to_thread(_init_db)
 
@@ -2097,6 +2110,40 @@ class SQLiteStorage:
             (dst, count),
             fetch=False,
         )
+
+    async def get_hidden_destinations(self) -> list[str]:
+        """Get all hidden destination identifiers."""
+        rows = await self._execute("SELECT dst FROM hidden_destinations")
+        return [row["dst"] for row in rows]
+
+    async def set_hidden_destinations(self, destinations: list[str]) -> None:
+        """Bulk replace all hidden destinations."""
+        def _run() -> None:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute("DELETE FROM hidden_destinations")
+                if destinations:
+                    conn.executemany(
+                        "INSERT INTO hidden_destinations (dst) VALUES (?)",
+                        [(d,) for d in destinations],
+                    )
+                conn.commit()
+
+        await asyncio.to_thread(_run)
+
+    async def update_hidden_destination(self, dst: str, hidden: bool) -> None:
+        """Show or hide a single destination."""
+        if hidden:
+            await self._execute(
+                "INSERT OR IGNORE INTO hidden_destinations (dst) VALUES (?)",
+                (dst,),
+                fetch=False,
+            )
+        else:
+            await self._execute(
+                "DELETE FROM hidden_destinations WHERE dst = ?",
+                (dst,),
+                fetch=False,
+            )
 
     async def close(self) -> None:
         """Close the persistent read connection."""

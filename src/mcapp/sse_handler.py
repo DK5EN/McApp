@@ -199,6 +199,14 @@ class SSEManager:
                                         "msg": "read_counts",
                                         "data": read_counts,
                                     })
+                            if hasattr(storage, 'get_hidden_destinations'):
+                                hidden_dsts = await storage.get_hidden_destinations()
+                                if hidden_dsts:
+                                    yield self._format_sse_event({
+                                        "type": "response",
+                                        "msg": "hidden_destinations",
+                                        "data": hidden_dsts,
+                                    })
                         else:
                             logger.warning(
                                 "SSE client %s: no storage handler available",
@@ -393,6 +401,38 @@ class SSEManager:
             if not dst or count is None:
                 raise HTTPException(status_code=400, detail="Missing dst or count")
             await storage.set_read_count(str(dst), int(count))
+            return {"status": "ok"}
+
+        # Hidden destinations endpoints (persist hidden groups)
+        @app.get("/api/hidden_destinations")
+        async def get_hidden_destinations():
+            """Get list of hidden destination identifiers."""
+            storage = (
+                self.message_router.storage_handler if self.message_router else None
+            )
+            if not storage or not hasattr(storage, "get_hidden_destinations"):
+                raise HTTPException(status_code=503, detail="Storage not available")
+            return await storage.get_hidden_destinations()
+
+        @app.post("/api/hidden_destinations")
+        async def set_hidden_destinations(request: Request):
+            """Show/hide destinations. Single: {dst, hidden}. Bulk: {destinations: [...]}."""
+            storage = (
+                self.message_router.storage_handler if self.message_router else None
+            )
+            if not storage or not hasattr(storage, "update_hidden_destination"):
+                raise HTTPException(status_code=503, detail="Storage not available")
+            body = await request.json()
+            if "destinations" in body:
+                await storage.set_hidden_destinations(
+                    [str(d) for d in body["destinations"]]
+                )
+            else:
+                dst = body.get("dst")
+                hidden = body.get("hidden", True)
+                if not dst:
+                    raise HTTPException(status_code=400, detail="Missing dst")
+                await storage.update_hidden_destination(str(dst), bool(hidden))
             return {"status": "ok"}
 
         # Health check endpoint

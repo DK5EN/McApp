@@ -389,6 +389,23 @@ class MessageRouter:
                 else:
                     await self.publish('router', 'websocket_message', rc_payload)
 
+        # Send persisted hidden destinations for group visibility sync
+        if hasattr(self.storage_handler, 'get_hidden_destinations'):
+            hidden_dsts = await self.storage_handler.get_hidden_destinations()
+            if hidden_dsts:
+                hd_payload = {
+                    "type": "response",
+                    "msg": "hidden_destinations",
+                    "data": hidden_dsts,
+                }
+                if websocket:
+                    await self.publish(
+                        'router', 'websocket_direct',
+                        {'websocket': websocket, 'data': hd_payload},
+                    )
+                else:
+                    await self.publish('router', 'websocket_message', hd_payload)
+
     async def _handle_summary_command(self, websocket):
         """Handle summary command - sends message counts per destination."""
         summary = await self.storage_handler.get_summary()
