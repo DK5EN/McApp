@@ -831,7 +831,16 @@ Commands: `--setio`, `--setout`, `--analog gpio`, etc.
 
 14. Add unit tests for protocol encoding/decoding
 15. Implement spectrum analysis commands
-16. Create BLE state machine diagram
+16. ✅ **Create BLE state machine diagram** - DONE (commit `b2f641c`)
+    - 7 comprehensive Mermaid diagrams in `doc/ble-state-machine.md`
+    - Connection state machine (14 states)
+    - Connection sequence diagram
+    - Register query flow
+    - Multi-part response flow
+    - Message send flow
+    - Error handling flow
+    - Disconnect flow
+    - 584 lines of production-ready documentation
 17. Add telemetry configuration support
 
 ---
@@ -950,15 +959,29 @@ The implementation is now **fully production-ready for ALL BLE modes** with comp
 
 ---
 
-**Document Version:** 4.1 (Code quality issues resolved)
+**Document Version:** 4.2 (Phase 4 Task #16 complete)
 **Original Author:** Gap analysis by Claude Sonnet 4.5
-**Last Updated:** 2026-02-14 (All code quality issues resolved)
-**Next Review:** After production deployment or Phase 4 implementation
+**Last Updated:** 2026-02-14 (BLE state machine diagrams added)
+**Next Review:** After production deployment or remaining Phase 4 implementation
 
 
 ---
 
 ## Changelog
+
+### Version 4.2 (2026-02-14) - Phase 4 Task #16 Complete
+- ✅ Completed Phase 4 Task #16: "Create BLE state machine diagram"
+- Added comprehensive documentation: `doc/ble-state-machine.md` (584 lines)
+- Created 7 Mermaid diagrams:
+  * Connection State Machine (14 states with transitions)
+  * Connection Sequence Diagram (user to device flow)
+  * Register Query Flow (critical + extended)
+  * Multi-Part Response Flow (SE+S1, SW+S2)
+  * Message Send Flow (all message types)
+  * Error Handling Flow (try/catch pattern)
+  * Disconnect Flow (graceful cleanup)
+- Includes timing constants reference, troubleshooting guide, future enhancements
+- Production-ready visual documentation of entire BLE subsystem
 
 ### Version 4.1 (2026-02-14) - Code Quality Issues Resolved
 - ✅ Resolved all remaining Code Quality Issues
