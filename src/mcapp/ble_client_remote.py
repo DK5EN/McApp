@@ -434,6 +434,20 @@ class BLEClientRemote(BLEClientBase):
         try:
             notification = json.loads(data)
 
+            # CONFFIN is a status message, not a mesh message
+            if notification.get('format') == 'json' and 'parsed' in notification:
+                typ = notification['parsed'].get('TYP')
+                if typ == 'CONFFIN' and self.message_router:
+                    await self.message_router.publish('ble', 'ble_status', {
+                        'src_type': 'BLE',
+                        'TYP': 'blueZ',
+                        'command': 'conffin',
+                        'result': 'ok',
+                        'msg': '✅ finished sending config',
+                        'timestamp': int(time.time() * 1000),
+                    })
+                    return
+
             # Publish through message router if available
             if self.message_router:
                 # Transform to match expected format
@@ -461,7 +475,10 @@ class BLEClientRemote(BLEClientBase):
             # JSON notification - run through dispatcher like local mode
             parsed = notification['parsed']
             typ = parsed.get("TYP", "?")
-            _routine_typs = {"MH", "G", "I", "SA", "SN", "W", "IO", "TM", "AN", "SE", "SW"}
+            _routine_typs = {
+                "MH", "G", "I", "SA", "SN", "W", "IO", "TM", "AN",
+                "SE", "SW", "S1", "S2", "CONFFIN",
+            }
             if typ in _routine_typs:
                 logger.debug("BLE JSON TYP=%s: %s", typ, parsed)
             else:
@@ -472,10 +489,7 @@ class BLEClientRemote(BLEClientBase):
                 if output.get('transformer') not in ('generic_ble', 'mh'):
                     output['src_type'] = 'ble_remote'
                 return output
-            # Fallback: return parsed directly if dispatcher returns None
-            parsed['timestamp'] = notification.get('timestamp', int(time.time() * 1000))
-            parsed['src_type'] = 'ble_remote'
-            return parsed
+            return None  # Unknown TYP — don't publish
 
         elif notification.get('format') == 'binary':
             # Decode binary the same way local BLE handler does

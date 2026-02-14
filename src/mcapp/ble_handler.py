@@ -552,7 +552,9 @@ def dispatcher(input_dict, own_callsign=""):
     if "TYP" in input_dict:
         if input_dict["TYP"] == "MH":
             return transform_mh(input_dict)
-        elif input_dict["TYP"] in ["I", "SN", "G", "SA", "W", "IO", "TM", "AN", "SE", "SW"]:
+        elif input_dict["TYP"] in [
+            "I", "SN", "G", "SA", "W", "IO", "TM", "AN", "SE", "SW", "S1", "S2",
+        ]:
             logger.debug("BLE JSON TYP=%s", input_dict["TYP"])
             return transform_ble(input_dict)
         else:
@@ -612,7 +614,8 @@ async def notification_handler(clean_msg, message_router=None):
              if message_router:
                    await message_router.publish('ble', 'ble_notification', output)
 
-           elif typ in ["SN", "SE", "SW", "I", "IO", "TM", "AN"]:  # System Settings etc.
+           elif typ in ["SN", "SE", "SW", "I", "IO", "TM", "AN",
+                       "S1", "S2"]:
                 output = dispatcher(var)
                 if message_router:
                     await message_router.publish('ble', 'ble_notification', output)
