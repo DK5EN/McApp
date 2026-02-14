@@ -1432,6 +1432,8 @@ class SQLiteStorage:
                 self._read_conn = None
                 conn = self._ensure_read_conn()
 
+            conn.rollback()  # Refresh WAL snapshot — end stale implicit transaction
+
             # 1. Messages: window function, partition by conversation_key
             msg_rows = conn.execute(
                 f"SELECT {_MSG_SELECT} FROM ("
