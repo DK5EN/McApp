@@ -3,6 +3,35 @@ BLE Adapter - D-Bus/BlueZ interface for BLE device communication.
 
 This module provides a clean async interface to BlueZ via D-Bus,
 handling device discovery, connection, GATT operations, and notifications.
+
+Multi-Part Responses:
+    Some MeshCom commands send MULTIPLE JSON notifications in sequence:
+    - --seset sends TYP:SE followed by TYP:S1 (sensor settings, ~200ms apart)
+    - --wifiset sends TYP:SW followed by TYP:S2 (WiFi settings, ~200ms apart)
+
+    These are separate BLE notifications, not a single message. The
+    notification callback will be invoked twice for each command.
+
+Supported Message Types:
+    0x10: Hello/Wakeup (send_hello)
+    0x20: Time Sync (set_time)
+    0x50: Set Callsign (set_callsign)
+    0x55: WiFi Settings (set_wifi)
+    0x70: Set Latitude (set_latitude)
+    0x80: Set Longitude (set_longitude)
+    0x90: Set Altitude (set_altitude)
+    0x95: APRS Symbols (set_aprs_symbols)
+    0xA0: Text Commands (send_command, send_message)
+    0xF0: Save & Reboot (save_and_reboot)
+
+Extended Register Queries:
+    The query_extended_registers() method automatically queries:
+    - --seset: Sensor settings (SE + S1, multi-part)
+    - --wifiset: WiFi settings (SW + S2, multi-part)
+    - --weather: Current sensor readings (W)
+    - --analogset: Analog input configuration (AN)
+
+    This is called automatically on connection to populate the device state.
 """
 
 import asyncio
@@ -654,7 +683,7 @@ class BLEAdapter:
         Send an A0 command to device.
 
         Args:
-            cmd: Command string (e.g., "--pos info", "--reboot")
+            cmd: Command string (e.g., "--pos", "--info", "--reboot")
 
         Returns:
             True if send successful
@@ -671,6 +700,209 @@ class BLEAdapter:
         data = 6 .to_bytes(1, 'big') + bytes([0x20]) + now.to_bytes(4, byteorder='little')
         return await self.write(data)
 
+    async def set_callsign(self, callsign: str) -> bool:
+        """
+        Set device callsign (0x50 message).
+
+        Args:
+            callsign: New callsign (e.g., "DL4GLE-10")
+
+        Returns:
+            True if successful
+        """
+        if not self.is_connected:
+            raise RuntimeError("Not connected")
+
+        # Validate callsign format
+        if not callsign or len(callsign) > 15:
+            raise ValueError("Callsign must be 1-15 characters")
+
+        callsign_bytes = callsign.encode('utf-8')
+        length = len(callsign_bytes) + 2
+
+        if length > 247:  # MTU limit
+            raise ValueError(f"Callsign too long: {length} bytes (max 247)")
+
+        byte_array = length.to_bytes(1, 'big') + bytes([0x50]) + callsign_bytes
+        return await self.write(bytes(byte_array))
+
+    async def set_wifi(self, ssid: str, password: str) -> bool:
+        """
+        Set WiFi credentials (0x55 message).
+
+        Args:
+            ssid: WiFi network name
+            password: WiFi password
+
+        Returns:
+            True if successful
+        """
+        if not self.is_connected:
+            raise RuntimeError("Not connected")
+
+        # Validate lengths
+        if not ssid or len(ssid) > 32:
+            raise ValueError("SSID must be 1-32 characters")
+        if len(password) > 63:
+            raise ValueError("Password must be 0-63 characters")
+
+        ssid_bytes = ssid.encode('utf-8')
+        pwd_bytes = password.encode('utf-8')
+
+        # Format: [SSID_len][SSID][PWD_len][PWD]
+        byte_array = (
+            bytes([len(ssid_bytes)]) + ssid_bytes +
+            bytes([len(pwd_bytes)]) + pwd_bytes
+        )
+        length = len(byte_array) + 2
+
+        if length > 247:  # MTU limit
+            raise ValueError(f"WiFi config too long: {length} bytes (max 247)")
+
+        byte_array = length.to_bytes(1, 'big') + bytes([0x55]) + byte_array
+        return await self.write(bytes(byte_array))
+
+    async def set_latitude(self, lat: float, save: bool = False) -> bool:
+        """
+        Set device latitude (0x70 message).
+
+        Args:
+            lat: Latitude in decimal degrees (-90.0 to 90.0)
+            save: If True, persist to flash (requires --save or 0xF0 after)
+
+        Returns:
+            True if successful
+        """
+        if not self.is_connected:
+            raise RuntimeError("Not connected")
+
+        if not -90.0 <= lat <= 90.0:
+            raise ValueError("Latitude must be between -90.0 and 90.0")
+
+        import struct
+        save_flag = 0x0A if save else 0x0B
+        byte_array = struct.pack('<f', lat) + bytes([save_flag])
+        length = len(byte_array) + 2
+
+        byte_array = length.to_bytes(1, 'big') + bytes([0x70]) + byte_array
+        return await self.write(bytes(byte_array))
+
+    async def set_longitude(self, lon: float, save: bool = False) -> bool:
+        """
+        Set device longitude (0x80 message).
+
+        Args:
+            lon: Longitude in decimal degrees (-180.0 to 180.0)
+            save: If True, persist to flash (requires --save or 0xF0 after)
+
+        Returns:
+            True if successful
+        """
+        if not self.is_connected:
+            raise RuntimeError("Not connected")
+
+        if not -180.0 <= lon <= 180.0:
+            raise ValueError("Longitude must be between -180.0 and 180.0")
+
+        import struct
+        save_flag = 0x0A if save else 0x0B
+        byte_array = struct.pack('<f', lon) + bytes([save_flag])
+        length = len(byte_array) + 2
+
+        byte_array = length.to_bytes(1, 'big') + bytes([0x80]) + byte_array
+        return await self.write(bytes(byte_array))
+
+    async def set_altitude(self, alt: int, save: bool = False) -> bool:
+        """
+        Set device altitude (0x90 message).
+
+        Args:
+            alt: Altitude in meters (-1000 to 10000)
+            save: If True, persist to flash (requires --save or 0xF0 after)
+
+        Returns:
+            True if successful
+        """
+        if not self.is_connected:
+            raise RuntimeError("Not connected")
+
+        if not -1000 <= alt <= 10000:
+            raise ValueError("Altitude must be between -1000 and 10000 meters")
+
+        save_flag = 0x0A if save else 0x0B
+        byte_array = alt.to_bytes(4, byteorder='little', signed=True) + bytes([save_flag])
+        length = len(byte_array) + 2
+
+        byte_array = length.to_bytes(1, 'big') + bytes([0x90]) + byte_array
+        return await self.write(bytes(byte_array))
+
+    async def set_aprs_symbols(self, primary: str, secondary: str) -> bool:
+        """
+        Set APRS symbol table and code (0x95 message).
+
+        Args:
+            primary: Primary symbol table (e.g., "/")
+            secondary: Symbol code (e.g., "O" for balloon)
+
+        Returns:
+            True if successful
+        """
+        if not self.is_connected:
+            raise RuntimeError("Not connected")
+
+        if len(primary) != 1 or len(secondary) != 1:
+            raise ValueError("Symbols must be single characters")
+
+        primary_byte = ord(primary)
+        secondary_byte = ord(secondary)
+
+        byte_array = bytes([primary_byte, secondary_byte])
+        length = len(byte_array) + 2
+
+        byte_array = length.to_bytes(1, 'big') + bytes([0x95]) + byte_array
+        return await self.write(bytes(byte_array))
+
+    async def save_and_reboot(self) -> bool:
+        """
+        Save settings to flash and reboot device (0xF0 message).
+
+        IMPORTANT: This command will reboot the device immediately.
+        All configuration changes will be lost unless this is called.
+
+        Returns:
+            True if command sent successfully
+        """
+        if not self.is_connected:
+            raise RuntimeError("Not connected")
+
+        byte_array = bytes([0x02, 0xF0])  # Length=2, ID=0xF0, no data
+        return await self.write(byte_array)
+
+    async def query_extended_registers(self):
+        """
+        Query extended device registers on connection.
+
+        Sends: --seset, --wifiset, --weather, --analogset
+        Note: --seset and --wifiset send multi-part responses (SE+S1, SW+S2)
+        """
+        if not self.is_connected:
+            logger.warning("Cannot query registers: not connected")
+            return
+
+        commands = [
+            ("--seset", 1.2),     # TYP: SE + S1 (multi-part)
+            ("--wifiset", 1.2),   # TYP: SW + S2 (multi-part)
+            ("--weather", 0.8),   # TYP: W
+            ("--analogset", 0.8), # TYP: AN
+        ]
+
+        for cmd, delay in commands:
+            try:
+                await self.send_command(cmd)
+                await asyncio.sleep(delay)
+            except Exception as e:
+                logger.warning("Extended query %s failed: %s", cmd, e)
+
     def _start_keepalive(self):
         """Start keepalive task"""
         if self._keepalive_task and not self._keepalive_task.done():
@@ -684,7 +916,7 @@ class BLEAdapter:
                 await asyncio.sleep(300)  # 5 minutes
                 if self.is_connected:
                     logger.debug("Sending keepalive")
-                    await self.send_command("--pos info")
+                    await self.send_command("--pos")
         except asyncio.CancelledError:
             pass
 

@@ -41,6 +41,12 @@ from .sqlite_storage import create_sqlite_storage
 
 VERSION = f"v{__version__}"
 
+# BLE Register Query Timing Constants (seconds)
+BLE_HELLO_WAIT = 1.0                    # Wait after hello handshake before queries
+BLE_QUERY_DELAY_STANDARD = 0.8         # Delay between standard register queries
+BLE_QUERY_DELAY_MULTIPART = 1.2        # Delay for multi-part responses (SE+S1, SW+S2)
+BLE_RETRY_BASE_DELAY = 0.5             # Base delay for exponential backoff retries
+
 # Module logger
 logger = get_logger(__name__)
 
@@ -486,17 +492,143 @@ class MessageRouter:
         """Get the BLE client from registered protocols"""
         return self.get_protocol('ble_client')
 
-    async def _query_ble_registers(self):
-        """Query BLE device config registers (I, SN, G, SA)."""
+    async def _send_ble_command_with_retry(
+        self,
+        client,
+        cmd: str,
+        max_retries: int = 3,
+        base_delay: float = BLE_RETRY_BASE_DELAY
+    ) -> bool:
+        """
+        Send BLE command with exponential backoff retry.
+
+        BLE is inherently unreliable (interference, distance, packet loss).
+        This helper retries failed commands with exponential backoff to
+        improve reliability.
+
+        Args:
+            client: BLE client instance
+            cmd: Command to send (e.g., "--info", "--pos")
+            max_retries: Maximum number of retry attempts (default: 3)
+            base_delay: Base delay in seconds for exponential backoff
+
+        Returns:
+            True if command sent successfully (on any attempt)
+            False if all attempts failed
+
+        Retry timing uses exponential backoff (base_delay * 2^attempt)
+        """
+        for attempt in range(max_retries):
+            try:
+                await client.send_command(cmd)
+                if attempt > 0:
+                    logger.info("Command %s succeeded on attempt %d/%d",
+                              cmd, attempt + 1, max_retries)
+                return True
+
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    # Calculate exponential backoff delay
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(
+                        "Command %s failed (attempt %d/%d), retrying in %.1fs: %s",
+                        cmd, attempt + 1, max_retries, delay, e
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    # Final attempt failed
+                    logger.error(
+                        "Command %s failed after %d attempts: %s",
+                        cmd, max_retries, e
+                    )
+                    return False
+
+        return False  # All attempts exhausted
+
+    async def _query_ble_registers(self, wait_for_hello: bool = True, sync_time: bool = True):
+        """
+        Query BLE device config registers.
+
+        Critical register queries (always run):
+        - --info: TYP: I (device info, firmware, callsign, battery)
+        - --nodeset: TYP: SN (node settings, LoRa params, gateway mode)
+        - --pos: TYP: G (GPS/position data, coordinates, satellites)
+        - --aprsset: TYP: SA (APRS settings, comment, symbols)
+
+        Extended register queries (Phase 3):
+        - --seset: TYP: SE + S1 (sensor settings, MULTI-PART response)
+        - --wifiset: TYP: SW + S2 (WiFi settings, MULTI-PART response)
+        - --weather: TYP: W (sensor readings: temp, humidity, pressure)
+        - --analogset: TYP: AN (analog input config)
+
+        IMPORTANT - Multi-Part Responses:
+        - --seset sends TWO JSON messages: SE followed by S1
+        - --wifiset sends TWO JSON messages: SW followed by S2
+        - These arrive as separate BLE notifications ~200ms apart
+        - Frontend receives them as distinct SSE events
+
+        Args:
+            wait_for_hello: If True, wait 1s before querying (ensure hello complete)
+            sync_time: If True, sync device time on new connections
+        """
         client = self._get_ble_client()
         if not client:
             return
-        for cmd in ('--nodeset', '--pos info', '--aprsset', '--info'):
-            try:
-                await client.send_command(cmd)
-                await asyncio.sleep(0.6)
-            except Exception as e:
-                logger.warning("Register query %s failed: %s", cmd, e)
+
+        # CRITICAL: MeshCom firmware requires 0x10 hello message before
+        # processing A0 commands. Wait for device to process hello handshake.
+        # Per firmware docs: "The phone app must send 0x10 hello message
+        # before other commands will be processed."
+        if wait_for_hello:
+            logger.debug("Waiting for hello handshake to complete")
+            await asyncio.sleep(BLE_HELLO_WAIT)
+
+            # Automatically sync device time after hello handshake completes.
+            # Per firmware spec (page 898): "Send 0x20 with UNIX timestamp to
+            # synchronize device clock (especially important for devices without
+            # GPS or RTC battery)."
+            if sync_time:
+                try:
+                    await client.set_command("--settime")
+                    logger.info("Device time synchronized after connection")
+                except Exception as e:
+                    logger.warning("Time sync failed (non-critical): %s", e)
+
+        # Commands to query (order: critical info first)
+        # IMPORTANT: --pos returns TYP: G, not "--pos info" which is invalid
+        commands = [
+            ('--info', BLE_QUERY_DELAY_STANDARD),      # Device info
+            ('--nodeset', BLE_QUERY_DELAY_STANDARD),   # Node settings
+            ('--pos', BLE_QUERY_DELAY_STANDARD),       # GPS/position data
+            ('--aprsset', BLE_QUERY_DELAY_STANDARD),   # APRS settings
+        ]
+
+        # Send commands with retry logic for improved reliability
+        for cmd, delay in commands:
+            success = await self._send_ble_command_with_retry(client, cmd)
+            if not success:
+                logger.error("Critical register query %s failed after all retries", cmd)
+            # Wait between commands to allow device processing time
+            await asyncio.sleep(delay)
+
+        # Extended queries (sensor, WiFi, weather, analog config)
+        # TIMING: Multi-part responses (SE+S1, SW+S2) need longer delay
+        extended_queries = [
+            ('--seset', BLE_QUERY_DELAY_MULTIPART),     # TYP: SE + S1 (multi-part)
+            ('--wifiset', BLE_QUERY_DELAY_MULTIPART),   # TYP: SW + S2 (multi-part)
+            ('--weather', BLE_QUERY_DELAY_STANDARD),    # TYP: W (sensor readings)
+            ('--analogset', BLE_QUERY_DELAY_STANDARD),  # TYP: AN (analog config)
+        ]
+
+        logger.debug("Querying extended registers (adds ~4s)")
+        for cmd, delay in extended_queries:
+            success = await self._send_ble_command_with_retry(client, cmd)
+            if not success:
+                logger.warning("Extended query %s failed (non-critical)", cmd)
+                # Continue anyway - these are optional
+            await asyncio.sleep(delay)
+
+        logger.info("Register queries complete (critical + extended)")
 
     async def _handle_ble_scan_command(self):
         """Handle BLE scan command"""
@@ -563,7 +695,8 @@ class MessageRouter:
 
         if not already_connected:
             await client.connect(MAC)
-            await asyncio.sleep(1.0)
+            # Note: hello handshake is sent during connect()
+            # _query_ble_registers will wait for it to complete
             # Re-check status after connect
             if hasattr(client, 'refresh_status'):
                 status = await client.refresh_status()
@@ -571,9 +704,11 @@ class MessageRouter:
                 status = client.status
 
         if status.state == ConnectionState.CONNECTED:
-            await self._query_ble_registers()
+            # Query registers: wait for hello if just connected, skip wait if already connected
+            await self._query_ble_registers(wait_for_hello=not already_connected)
             # Send connection info (device_name, device_address) to frontend
-            await self._handle_ble_info_command(websocket)
+            # Don't query registers again - we just did it above
+            await self._handle_ble_info_command(websocket, query_registers=False)
 
     async def _handle_ble_disconnect_command(self):
         """Handle BLE disconnect command"""
@@ -583,8 +718,16 @@ class MessageRouter:
         else:
             logger.warning("BLE client not available for disconnect")
 
-    async def _handle_ble_info_command(self, websocket):
-        """Handle BLE info command - send current BLE status to requesting client"""
+    async def _handle_ble_info_command(self, websocket, query_registers: bool = True):
+        """
+        Handle BLE info command - send current BLE status to requesting client.
+
+        Args:
+            websocket: WebSocket to send response to (None = broadcast via SSE)
+            query_registers: Whether to query device registers (default True).
+                            Set to False when called after connection to avoid
+                            duplicate queries (connect handler already queries).
+        """
         client = self._get_ble_client()
         if not client:
             logger.warning("BLE client not available for info")
@@ -627,8 +770,9 @@ class MessageRouter:
             await self.publish('ble', 'ble_status', ble_info)
 
         # Request register dump from device so frontend gets config data
-        if is_connected:
-            await self._query_ble_registers()
+        # Only if requested (avoid duplicate queries when called after connection)
+        if is_connected and query_registers:
+            await self._query_ble_registers(wait_for_hello=False)
 
     async def _handle_resolve_ip_command(self, hostname):
         """Handle resolve IP command"""

@@ -254,9 +254,12 @@ class SSEManager:
                             # If BLE is connected, query device registers in background.
                             # Responses arrive as ble_notification events via pub/sub
                             # and flow to this client through the SSE event queue.
+                            # BLE is already connected, skip hello handshake wait.
                             if is_connected:
                                 asyncio.create_task(
-                                    self.message_router._query_ble_registers()
+                                    self.message_router._query_ble_registers(
+                                        wait_for_hello=False
+                                    )
                                 )
 
                         logger.info("SSE client %s: initial data sent", client_id)
@@ -457,7 +460,7 @@ class SSEManager:
                     # Query BLE device for GPS (one-shot)
                     ble = self.message_router.get_protocol('ble_client')
                     if ble and hasattr(ble, 'is_connected') and ble.is_connected:
-                        await ble.send_command("--pos info")
+                        await ble.send_command("--pos")
                     return {
                         "error": "Warte auf GPS vom Gerät...",
                         "timestamp": int(time.time() * 1000),

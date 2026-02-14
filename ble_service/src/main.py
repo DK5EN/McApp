@@ -42,6 +42,20 @@ _user_disconnected: bool = False
 _last_connected_mac: str | None = None
 
 
+def crc16_ccitt(data: bytes) -> int:
+    """Calculate CRC16-CCITT checksum (polynomial 0x1021)"""
+    crc = 0xFFFF
+    for byte in data:
+        crc ^= byte << 8
+        for _ in range(8):
+            if crc & 0x8000:
+                crc = (crc << 1) ^ 0x1021
+            else:
+                crc = crc << 1
+            crc &= 0xFFFF
+    return crc
+
+
 def notification_callback(data: bytes):
     """Called when BLE notification received"""
     timestamp = int(time.time() * 1000)
@@ -64,6 +78,20 @@ def notification_callback(data: bytes):
             # Binary mesh message
             notification["format"] = "binary"
             notification["prefix"] = data[:2].decode('ascii', errors='replace')
+
+            # FCS validation (permissive mode - log warnings but continue processing)
+            if len(data) >= 4:
+                payload = data[:-2]
+                fcs = int.from_bytes(data[-2:], byteorder='little')
+                calced_fcs = crc16_ccitt(payload)
+                fcs_ok = (calced_fcs == fcs)
+
+                notification["fcs_ok"] = fcs_ok
+                if not fcs_ok:
+                    logger.debug(
+                        "FCS mismatch: calculated=0x%04X, received=0x%04X",
+                        calced_fcs, fcs
+                    )
         else:
             notification["format"] = "unknown"
     except Exception as e:
@@ -318,6 +346,13 @@ async def connect(request: ConnectRequest, _: bool = Depends(verify_api_key)):
             # Start notifications and send hello
             await ble_adapter.start_notify()
             await ble_adapter.send_hello()
+
+            # Wait for hello handshake to complete
+            await asyncio.sleep(1.0)
+
+            # Query extended registers
+            await ble_adapter.query_extended_registers()
+
             return ResultResponse(success=True, message=f"Connected to {mac}")
         else:
             return ResultResponse(success=False, message="Connection failed")
@@ -459,6 +494,120 @@ async def set_device_time(_: bool = Depends(verify_api_key)):
         )
     except Exception as e:
         logger.error("Set time error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ble/config/callsign", response_model=ResultResponse)
+async def set_callsign(callsign: str, _: bool = Depends(verify_api_key)):
+    """Set device callsign (0x50 message)"""
+    if not ble_adapter.is_connected:
+        raise HTTPException(status_code=409, detail="Not connected")
+
+    try:
+        success = await ble_adapter.set_callsign(callsign)
+        return ResultResponse(
+            success=success,
+            message=f"Callsign set to {callsign}" if success else "Failed to set callsign"
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Set callsign error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ble/config/wifi", response_model=ResultResponse)
+async def set_wifi(ssid: str, password: str, _: bool = Depends(verify_api_key)):
+    """Configure WiFi credentials (0x55 message)"""
+    if not ble_adapter.is_connected:
+        raise HTTPException(status_code=409, detail="Not connected")
+
+    try:
+        success = await ble_adapter.set_wifi(ssid, password)
+        return ResultResponse(
+            success=success,
+            message=f"WiFi configured: {ssid}" if success else "Failed to configure WiFi"
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Set WiFi error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ble/config/position", response_model=ResultResponse)
+async def set_position(
+    lat: float,
+    lon: float,
+    alt: int,
+    save: bool = False,
+    _: bool = Depends(verify_api_key)
+):
+    """Set GPS position (0x70/0x80/0x90 messages)"""
+    if not ble_adapter.is_connected:
+        raise HTTPException(status_code=409, detail="Not connected")
+
+    try:
+        # Send all three position messages
+        success_lat = await ble_adapter.set_latitude(lat, save)
+        await asyncio.sleep(0.2)
+        success_lon = await ble_adapter.set_longitude(lon, save)
+        await asyncio.sleep(0.2)
+        success_alt = await ble_adapter.set_altitude(alt, save)
+
+        success = success_lat and success_lon and success_alt
+        return ResultResponse(
+            success=success,
+            message=f"Position set: ({lat}, {lon}, {alt}m)" if success else "Failed"
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Set position error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ble/config/aprs", response_model=ResultResponse)
+async def set_aprs_symbols(
+    primary: str,
+    secondary: str,
+    _: bool = Depends(verify_api_key)
+):
+    """Set APRS symbol (0x95 message)"""
+    if not ble_adapter.is_connected:
+        raise HTTPException(status_code=409, detail="Not connected")
+
+    try:
+        success = await ble_adapter.set_aprs_symbols(primary, secondary)
+        return ResultResponse(
+            success=success,
+            message=f"APRS symbol set: {primary}{secondary}" if success else "Failed"
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Set APRS symbols error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ble/config/save", response_model=ResultResponse)
+async def save_config(_: bool = Depends(verify_api_key)):
+    """
+    Save configuration and reboot device (0xF0 message).
+
+    WARNING: This will immediately reboot the device and disconnect BLE.
+    """
+    if not ble_adapter.is_connected:
+        raise HTTPException(status_code=409, detail="Not connected")
+
+    try:
+        success = await ble_adapter.save_and_reboot()
+        return ResultResponse(
+            success=success,
+            message="Device rebooting (settings saved)" if success else "Failed to save"
+        )
+    except Exception as e:
+        logger.error("Save & reboot error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 

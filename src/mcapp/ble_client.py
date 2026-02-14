@@ -180,7 +180,7 @@ class BLEClientBase(ABC):
         Send an A0 command to device.
 
         Args:
-            cmd: Command string (e.g., "--pos info")
+            cmd: Command string (e.g., "--pos", "--info")
 
         Returns:
             True if send successful
@@ -197,6 +197,47 @@ class BLEClientBase(ABC):
 
         Returns:
             True if send successful
+        """
+        pass
+
+    @abstractmethod
+    async def save_settings(self) -> bool:
+        """
+        Save current device settings to flash memory.
+
+        Uses --save A0 command. Settings persist across reboots.
+        Does NOT reboot the device.
+
+        Returns:
+            True if save command sent successfully
+        """
+        pass
+
+    @abstractmethod
+    async def reboot_device(self) -> bool:
+        """
+        Reboot the device without saving settings.
+
+        Uses --reboot A0 command. Unsaved settings will be lost.
+
+        Returns:
+            True if reboot command sent successfully
+        """
+        pass
+
+    @abstractmethod
+    async def save_and_reboot(self) -> bool:
+        """
+        Save settings to flash and reboot device in one atomic operation.
+
+        Uses 0xF0 binary message. This is the recommended way to persist
+        configuration changes.
+
+        Per firmware spec: Most configuration commands require --save or
+        0xF0 message to persist to flash, otherwise settings are lost on reboot.
+
+        Returns:
+            True if save & reboot command sent successfully
         """
         pass
 

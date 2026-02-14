@@ -101,6 +101,21 @@ class BLEClientDisabled(BLEClientBase):
         logger.debug("BLE disabled - set command not sent: %s", cmd)
         return False
 
+    async def save_settings(self) -> bool:
+        """No-op save settings - always returns False"""
+        logger.debug("BLE disabled - save settings not sent")
+        return False
+
+    async def reboot_device(self) -> bool:
+        """No-op reboot - always returns False"""
+        logger.debug("BLE disabled - reboot command not sent")
+        return False
+
+    async def save_and_reboot(self) -> bool:
+        """No-op save & reboot - always returns False"""
+        logger.debug("BLE disabled - save & reboot command not sent")
+        return False
+
     async def start(self) -> None:
         """Start the disabled client (no-op)"""
         logger.info("BLE client disabled - no Bluetooth operations will be performed")
