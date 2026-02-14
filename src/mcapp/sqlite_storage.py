@@ -23,7 +23,7 @@ VERSION = "v0.50.0"
 logger = get_logger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # Constants matching message_storage.py
 BUCKET_SECONDS = 5 * 60
@@ -272,6 +272,17 @@ class SQLiteStorage:
                         current_version, deleted,
                     )
                     _set_schema_version(conn, 8)
+
+                if current_version < 9:
+                    updated = conn.execute(
+                        "UPDATE station_positions SET alt = NULL WHERE alt IS NOT NULL"
+                    ).rowcount
+                    logger.info(
+                        "Migration v%d → v9: reset %d station altitudes "
+                        "(fix double ft→m conversion)",
+                        current_version, updated,
+                    )
+                    _set_schema_version(conn, 9)
 
         await asyncio.to_thread(_init_db)
 

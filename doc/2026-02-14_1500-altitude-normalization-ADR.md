@@ -85,3 +85,34 @@ The `sqlite_storage.py` fallback conversion (parsing `/A=` from APRS text) is re
 | DO1PIT-99 | 1903m | ~580m |
 
 Stations that had no recent real-time update (e.g., DL2JA-2 at 539m) were unaffected — they already showed the correct DB value.
+
+---
+
+## 6. Follow-up: Double Conversion Cleanup (Schema v9)
+
+**Date:** 2026-02-14
+
+### Problem
+
+Between commit `9f85f42` (09:22, added `_normalize_altitude_to_meters()` in `udp_handler.py`) and commit `417dc52` (10:11, removed duplicate conversion in `sqlite_storage.py`), altitude values were converted **twice** (feet→meters→meters×0.3048). This left stale double-converted values in `station_positions`:
+
+| Station | Stored alt | Expected alt | Ratio |
+|---------|-----------|-------------|-------|
+| DK5EN-99 | 146m | ~480m | 0.304 |
+| DK5EN-12 | 152m | ~500m | 0.304 |
+| DL2JA-1 | 152m | ~500m | 0.304 |
+
+Stations updated after the service restart at 10:12 were correct (e.g., DL7OSX-1 at 516m, DB0ED-99 at 526m).
+
+### Fix
+
+Schema v9 migration resets all altitude values to NULL:
+
+```python
+if current_version < 9:
+    updated = conn.execute(
+        "UPDATE station_positions SET alt = NULL WHERE alt IS NOT NULL"
+    ).rowcount
+```
+
+Altitudes self-correct within ~30 minutes as new position beacons arrive from all three ingestion paths (UDP, BLE local, BLE remote), all of which now deliver meters correctly.
