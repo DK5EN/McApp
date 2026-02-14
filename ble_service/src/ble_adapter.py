@@ -654,7 +654,7 @@ class BLEAdapter:
         Send an A0 command to device.
 
         Args:
-            cmd: Command string (e.g., "--pos info", "--reboot")
+            cmd: Command string (e.g., "--pos", "--info", "--reboot")
 
         Returns:
             True if send successful
@@ -684,7 +684,7 @@ class BLEAdapter:
                 await asyncio.sleep(300)  # 5 minutes
                 if self.is_connected:
                     logger.debug("Sending keepalive")
-                    await self.send_command("--pos info")
+                    await self.send_command("--pos")
         except asyncio.CancelledError:
             pass
 

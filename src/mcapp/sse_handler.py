@@ -460,7 +460,7 @@ class SSEManager:
                     # Query BLE device for GPS (one-shot)
                     ble = self.message_router.get_protocol('ble_client')
                     if ble and hasattr(ble, 'is_connected') and ble.is_connected:
-                        await ble.send_command("--pos info")
+                        await ble.send_command("--pos")
                     return {
                         "error": "Warte auf GPS vom Gerät...",
                         "timestamp": int(time.time() * 1000),

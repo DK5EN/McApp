@@ -1324,7 +1324,7 @@ class BLEClient:
                        if consecutive_failures == 1:
                            logger.warning("BLE device unreachable, will retry with backoff")
                     else:
-                      await self.a0_commands("--pos info")
+                      await self.a0_commands("--pos")
                       consecutive_failures = 0
                       backoff = 300
 

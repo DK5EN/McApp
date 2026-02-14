@@ -180,7 +180,7 @@ class BLEClientBase(ABC):
         Send an A0 command to device.
 
         Args:
-            cmd: Command string (e.g., "--pos info")
+            cmd: Command string (e.g., "--pos", "--info")
 
         Returns:
             True if send successful
