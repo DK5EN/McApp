@@ -254,9 +254,12 @@ class SSEManager:
                             # If BLE is connected, query device registers in background.
                             # Responses arrive as ble_notification events via pub/sub
                             # and flow to this client through the SSE event queue.
+                            # BLE is already connected, skip hello handshake wait.
                             if is_connected:
                                 asyncio.create_task(
-                                    self.message_router._query_ble_registers()
+                                    self.message_router._query_ble_registers(
+                                        wait_for_hello=False
+                                    )
                                 )
 
                         logger.info("SSE client %s: initial data sent", client_id)

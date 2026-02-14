@@ -486,15 +486,53 @@ class MessageRouter:
         """Get the BLE client from registered protocols"""
         return self.get_protocol('ble_client')
 
-    async def _query_ble_registers(self):
-        """Query BLE device config registers (I, SN, G, SA)."""
+    async def _query_ble_registers(self, wait_for_hello: bool = True):
+        """
+        Query BLE device config registers.
+
+        Queries basic device configuration after BLE connection is established.
+        Commands must be sent AFTER the hello handshake is complete.
+
+        Register queries:
+        - --info: TYP: I (device info, firmware, callsign, battery)
+        - --nodeset: TYP: SN (node settings, LoRa params, gateway mode)
+        - --pos: TYP: G (GPS/position data, coordinates, satellites)
+        - --aprsset: TYP: SA (APRS settings, comment, symbols)
+
+        Note: Some commands trigger multi-part responses:
+        - --seset: TYP: SE + S1 (sensor settings)
+        - --wifiset: TYP: SW + S2 (WiFi settings)
+
+        Args:
+            wait_for_hello: If True, wait 1s before querying to ensure hello
+                          handshake is complete. Set False if querying an
+                          already-established connection.
+        """
         client = self._get_ble_client()
         if not client:
             return
-        for cmd in ('--nodeset', '--pos info', '--aprsset', '--info'):
+
+        # CRITICAL: MeshCom firmware requires 0x10 hello message before
+        # processing A0 commands. Wait for device to process hello handshake.
+        # Per firmware docs: "The phone app must send 0x10 hello message
+        # before other commands will be processed."
+        if wait_for_hello:
+            logger.debug("Waiting 1s for hello handshake to complete")
+            await asyncio.sleep(1.0)
+
+        # Commands to query (order: critical info first)
+        # IMPORTANT: --pos returns TYP: G, not "--pos info" which is invalid
+        commands = [
+            ('--info', 0.8),      # Device info (firmware, callsign, battery)
+            ('--nodeset', 0.8),   # Node settings (LoRa, gateway, mesh)
+            ('--pos', 0.8),       # GPS/position data (FIXED: was "--pos info")
+            ('--aprsset', 0.8),   # APRS settings (comment, symbols)
+        ]
+
+        for cmd, delay in commands:
             try:
                 await client.send_command(cmd)
-                await asyncio.sleep(0.6)
+                await asyncio.sleep(delay)
             except Exception as e:
                 logger.warning("Register query %s failed: %s", cmd, e)
 
@@ -563,7 +601,8 @@ class MessageRouter:
 
         if not already_connected:
             await client.connect(MAC)
-            await asyncio.sleep(1.0)
+            # Note: hello handshake is sent during connect()
+            # _query_ble_registers will wait for it to complete
             # Re-check status after connect
             if hasattr(client, 'refresh_status'):
                 status = await client.refresh_status()
@@ -571,7 +610,8 @@ class MessageRouter:
                 status = client.status
 
         if status.state == ConnectionState.CONNECTED:
-            await self._query_ble_registers()
+            # Query registers: wait for hello if just connected, skip wait if already connected
+            await self._query_ble_registers(wait_for_hello=not already_connected)
             # Send connection info (device_name, device_address) to frontend
             await self._handle_ble_info_command(websocket)
 
@@ -627,8 +667,9 @@ class MessageRouter:
             await self.publish('ble', 'ble_status', ble_info)
 
         # Request register dump from device so frontend gets config data
+        # Connection is already established, no need to wait for hello
         if is_connected:
-            await self._query_ble_registers()
+            await self._query_ble_registers(wait_for_hello=False)
 
     async def _handle_resolve_ip_command(self, hostname):
         """Handle resolve IP command"""

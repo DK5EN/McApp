@@ -722,6 +722,21 @@ class TimeSyncTask:
 
 class BLEClient:
     def __init__(self, mac, read_uuid, write_uuid, hello_bytes=None, message_router=None):
+        """
+        Initialize BLE client.
+
+        Args:
+            mac: Device MAC address
+            read_uuid: GATT characteristic UUID for reading (RX)
+            write_uuid: GATT characteristic UUID for writing (TX)
+            hello_bytes: Initial handshake message sent after connection.
+                        Default for MeshCom: b'\x04\x10\x20\x30'
+                        Format: [Length][MsgID][Data...]
+                        - 0x04: Total length (1 + 1 + 2 = 4 bytes)
+                        - 0x10: Message ID (Hello)
+                        - 0x20 0x30: Data payload (2 bytes)
+            message_router: Router for publishing messages
+        """
         self.mac = mac
         self.read_uuid = read_uuid
         self.write_uuid = write_uuid
@@ -1608,11 +1623,17 @@ async def ble_connect(MAC, message_router=None):
     global client
 
     if client is None:
+        # MeshCom BLE UART service UUIDs (Nordic UART Service)
+        # Hello handshake: [0x04][0x10][0x20][0x30]
+        # - 0x04 = length (4 bytes total: 1 length + 1 msg_id + 2 data)
+        # - 0x10 = message ID (Hello)
+        # - 0x20 0x30 = data payload
+        # Required before device will process A0 commands (per firmware spec)
         client = BLEClient(
             mac=MAC,
-            read_uuid="6e400003-b5a3-f393-e0a9-e50e24dcca9e",
-            write_uuid="6e400002-b5a3-f393-e0a9-e50e24dcca9e",
-            hello_bytes=b'\x04\x10\x20\x30',
+            read_uuid="6e400003-b5a3-f393-e0a9-e50e24dcca9e",  # RX (notifications)
+            write_uuid="6e400002-b5a3-f393-e0a9-e50e24dcca9e",  # TX (write)
+            hello_bytes=b'\x04\x10\x20\x30',  # CORRECT: length includes itself
             message_router=message_router
         )
 
