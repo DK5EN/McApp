@@ -5,7 +5,8 @@ import logging
 import sys
 import time
 from datetime import datetime
-from struct import unpack
+from struct import pack, unpack
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from dbus_next import Variant
@@ -14,6 +15,45 @@ from dbus_next.constants import BusType
 from dbus_next.errors import DBusError, InterfaceNotFoundError
 from dbus_next.service import ServiceInterface, method
 from timezonefinder import TimezoneFinder
+
+"""
+BLE Handler - D-Bus/BlueZ Bluetooth Low Energy Interface
+
+This module provides direct Bluetooth Low Energy connectivity using the
+BlueZ D-Bus API. It handles:
+
+- BLE device discovery, pairing, and connection management
+- GATT characteristic read/write operations
+- Binary and JSON message encoding/decoding for MeshCom protocol
+- APRS position and telemetry parsing
+- Multi-part configuration responses (SE+S1, SW+S2)
+
+Multi-Part Configuration Responses:
+
+Some BLE configuration queries return data split across TWO separate
+notifications, sent sequentially with ~200ms delay between parts:
+
+- SE (sensor settings) → followed by S1 (extended sensor data)
+- SW (WiFi settings) → followed by S2 (extended WiFi data)
+
+These pairs are NOT correlated in the backend. Each notification is
+processed independently via `dispatcher()` and published to the frontend
+as separate SSE events. The frontend is responsible for merging related
+pairs if needed.
+
+This behavior occurs when querying device configuration via:
+- `--seset` command (triggers SE + S1 sequence)
+- `--wifiset` command (triggers SW + S2 sequence)
+
+See `_query_ble_registers()` in main.py for query implementation.
+See `dispatcher()` for SE/S1/SW/S2 message routing.
+
+Architecture:
+- BLEClient class: Connection lifecycle, GATT I/O, keep-alive
+- Decoders: Binary/JSON message parsing
+- Transformers: Convert raw BLE data to standardized message dicts
+- Dispatcher: Route messages by type to appropriate transformer
+"""
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +81,7 @@ client = None
 has_console = sys.stdout.isatty()
 
 
-def calc_fcs(msg):
+def calc_fcs(msg: bytes) -> int:
     """Calculate frame checksum"""
     fcs = 0
     for x in range(0, len(msg)):
@@ -53,55 +93,55 @@ def calc_fcs(msg):
     return fcs
 
 
-def hex_msg_id(msg_id):
+def hex_msg_id(msg_id: int) -> str:
     """Convert message ID to hex string"""
     return f"{msg_id:08X}"
 
 
-def ascii_char(val):
+def ascii_char(val: int) -> str:
     """Convert value to ASCII character"""
     return chr(val)
 
 
-def strip_prefix(msg, prefix=":"):
+def strip_prefix(msg: str, prefix: str = ":") -> str:
     """Strip prefix from message if present"""
     return msg[1:] if msg.startswith(prefix) else msg
 
 
-def decode_json_message(byte_msg):
+def decode_json_message(byte_msg: bytes) -> dict[str, Any] | None:
     try:
         json_str = byte_msg.rstrip(b'\x00').decode("utf-8")[1:]
         return json.loads(json_str)
 
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        print(f"Fehler beim Dekodieren der JSON-Nachricht: {e}")
+        print(f"Error decoding JSON message: {e}")
         return None
 
 
-def decode_binary_message(byte_msg):
+def decode_binary_message(byte_msg: bytes) -> dict[str, Any] | str:
     # little-endian unpack
     raw_header = byte_msg[1:7]
     [payload_type, msg_id, max_hop_raw] = unpack('<BIB', raw_header)
 
-    #Bits schieben
+    # Bit shift operations
     max_hop = max_hop_raw & 0x0F
     mesh_info = max_hop_raw >> 4
 
-    #Frame checksum berechnen
+    # Calculate frame checksum
     calced_fcs = calc_fcs(byte_msg[1:-11])
 
-    remaining_msg = byte_msg[7:].rstrip(b'\x00')  # Alles nach Hop
+    remaining_msg = byte_msg[7:].rstrip(b'\x00')  # Extract data after hop count byte
 
-    if byte_msg[:2] == b'@A':  # Prüfen, ob es sich um ACK Frames handelt
+    if byte_msg[:2] == b'@A':  # Check if this is an ACK frame
         # ACK Message Format: [0x41] [MSG_ID-4] [FLAGS] [ACK_MSG_ID-4] [ACK_TYPE] [0x00]
 
-        # FLAGS byte (max_hop_raw) dekodieren
+        # Decode FLAGS byte
         server_flag = bool(max_hop_raw & 0x80)  # Bit 7: Server Flag
         hop_count = max_hop_raw & 0x7F  # Bits 0-6: Hop Count
 
-        # ACK spezifische Felder extrahieren
+        # Extract ACK-specific fields
         if len(byte_msg) >= 12:
-            # ACK_MSG_ID (die Original Message ID die bestätigt wird)
+            # ACK_MSG_ID (original message ID being acknowledged)
             [ack_id] = unpack('<I', byte_msg[6:10])
 
             # ACK_TYPE
@@ -113,7 +153,7 @@ def decode_binary_message(byte_msg):
             else:
                 ack_type_text = f"Unknown ({ack_type})"
 
-            # Gateway ID und ACK ID aus der msg_id extrahieren (wenn es ein Gateway ACK ist)
+            # Extract Gateway ID and ACK ID from msg_id
             if ack_type == 0x01:
                 gateway_id = (msg_id >> 10) & 0x3FFFFF  # Bits 31-10: Gateway ID (22 Bits)
                 ack_id_part = msg_id & 0x3FF  # Bits 9-0: ACK ID (10 Bits)
@@ -121,7 +161,7 @@ def decode_binary_message(byte_msg):
                 gateway_id = None
                 ack_id_part = None
         else:
-            # Fallback für alte Implementierung
+            # Fallback for legacy implementation
             [ack_id] = unpack('<I', byte_msg[-5:-1])
             ack_type = None
             ack_type_text = None
@@ -130,7 +170,7 @@ def decode_binary_message(byte_msg):
             gateway_id = None
             ack_id_part = None
 
-        # Message als Hex darstellen
+        # Display message as hex
         [message] = unpack(f'<{len(remaining_msg)}s', remaining_msg)
         message = message.hex().upper()
 
@@ -149,7 +189,7 @@ def decode_binary_message(byte_msg):
             "ack_id_part": ack_id_part
         }
 
-        # Entferne None-Werte für sauberere JSON
+        # Remove None values for cleaner JSON
         json_obj = {k: v for k, v in json_obj.items() if v is not None}
 
         return json_obj
@@ -158,7 +198,7 @@ def decode_binary_message(byte_msg):
 
       split_idx = remaining_msg.find(b'>')
       if split_idx == -1:
-        return "Kein gültiges Routing-Format"
+        return "Invalid routing format"
 
       path = remaining_msg[:split_idx+1].decode("utf-8", errors="ignore")
       remaining_msg = remaining_msg[split_idx + 1:]
@@ -179,18 +219,27 @@ def decode_binary_message(byte_msg):
       raw = remaining_msg[split_idx:remaining_msg.find(b'\00')]
       message = raw.decode("utf-8", errors="ignore").strip()
 
-      #Etwas bit banging, weil die Binaerdaten am Ende immer gleich aussehen
+      # Extract binary footer (fixed structure at end of message)
       [zero, hardware_id, lora_mod, fcs, fw, lasthw, fw_sub, ending, time_ms] = unpack(
           '<BBBHBBBBI', byte_msg[-14:-1]
       )
 
 
-      # lasthw aufteilen
+      # Split lasthw byte into hardware ID and last sending flag
       last_hw_id = lasthw & 0x7F        # Bits 0-6: Hardware-Typ (0-127)
       last_sending = bool(lasthw & 0x80) # Bit 7: Last Sending Flag (True/False)
 
-      #Frame checksum checken
+      # Verify frame checksum
       fcs_ok = (calced_fcs == fcs)
+
+      # FCS validation (permissive mode - log warnings but continue processing)
+      if not fcs_ok:
+          logger.warning(
+              "Frame checksum mismatch: calculated=0x%04X, received=0x%04X, msg_id=%s",
+              calced_fcs, fcs, format(msg_id, '08X')
+          )
+          # Permissive mode: log warning but continue processing
+          # TODO: Add config flag ENFORCE_FCS_VALIDATION for strict mode
 
       #if message.startswith(":{CET}"):
       #  dest_type = "Datum & Zeit Broadcast an alle"
@@ -249,10 +298,10 @@ def decode_binary_message(byte_msg):
       return json_obj
 
     else:
-       return "Kein gueltiges Mesh-Format"
+       return "Invalid mesh format"
 
 
-def get_timezone_info(lat, lon):
+def get_timezone_info(lat: float, lon: float) -> dict[str, Any] | None:
     """Get timezone information for coordinates"""
     tf = TimezoneFinder()
     tz_name = tf.timezone_at(lat=lat, lng=lon)
@@ -271,7 +320,7 @@ def get_timezone_info(lat, lon):
     }
 
 
-def timestamp_from_date_time(date, time_str):
+def timestamp_from_date_time(date: str, time_str: str) -> int:
     """Convert date and time strings to timestamp"""
     dt_str = f"{date} {time_str}"
     try:
@@ -282,7 +331,7 @@ def timestamp_from_date_time(date, time_str):
     return int(dt.timestamp() * 1000)
 
 
-def safe_timestamp_from_dict(input_dict):
+def safe_timestamp_from_dict(input_dict: dict[str, Any]) -> int | None:
     """Safely extract timestamp from dict with various formats"""
     date_str = input_dict.get("DATE")
     time_str = input_dict.get("TIME")
@@ -309,7 +358,7 @@ def safe_timestamp_from_dict(input_dict):
         return None
 
 
-def node_time_checker(node_timestamp, typ=""):
+def node_time_checker(node_timestamp: int, typ: str = "") -> float:
     """Check time difference between node and current time"""
     current_time = int(time.time() * 1000)  # current time in ms
 
@@ -328,7 +377,7 @@ def node_time_checker(node_timestamp, typ=""):
     return time_delta_s
 
 
-def parse_aprs_position(message):
+def parse_aprs_position(message: str) -> dict[str, Any] | None:
     """Parse APRS position format"""
     import re
     # Extended APRS position format with optional symbol and symbol group
@@ -397,7 +446,7 @@ def parse_aprs_position(message):
     return result
 
 
-def parse_aprs_telemetry(message):
+def parse_aprs_telemetry(message: str) -> dict[str, Any] | None:
     """Parse APRS T# telemetry format.
 
     Format: T#seq,v1,v2,v3,v4,v5,bits
@@ -428,7 +477,7 @@ def parse_aprs_telemetry(message):
     return result
 
 
-def transform_tele(input_dict, own_callsign=""):
+def transform_tele(input_dict: dict[str, Any], own_callsign: str = "") -> dict[str, Any]:
     """Transform a BLE telemetry message (APRS T# format)."""
     tele = parse_aprs_telemetry(input_dict.get("message", "")) or {}
     src, _ = split_path(input_dict["path"], own_callsign)
@@ -462,7 +511,7 @@ def split_path(path: str, own_callsign: str = "") -> tuple[str, str]:
     return src, via
 
 
-def transform_common_fields(input_dict, own_callsign=""):
+def transform_common_fields(input_dict: dict[str, Any], own_callsign: str = "") -> dict[str, Any]:
     _, via = split_path(input_dict.get("path", ""), own_callsign)
     return {
         "transformer1": "common_fields",
@@ -481,7 +530,7 @@ def transform_common_fields(input_dict, own_callsign=""):
     }
 
 
-def transform_msg(input_dict, own_callsign=""):
+def transform_msg(input_dict: dict[str, Any], own_callsign: str = "") -> dict[str, Any]:
     src, _ = split_path(input_dict["path"], own_callsign)
     return {
         "transformer": "msg",
@@ -497,7 +546,7 @@ def transform_msg(input_dict, own_callsign=""):
     }
 
 
-def transform_ack(input_dict):
+def transform_ack(input_dict: dict[str, Any]) -> dict[str, Any]:
     return {
        "transformer": "ack",
        "src_type": "ble",
@@ -509,7 +558,7 @@ def transform_ack(input_dict):
     }
 
 
-def transform_pos(input_dict, own_callsign=""):
+def transform_pos(input_dict: dict[str, Any], own_callsign: str = "") -> dict[str, Any]:
     aprs = parse_aprs_position(input_dict["message"]) or {}
     src, _ = split_path(input_dict["path"], own_callsign)
     return {
@@ -524,7 +573,7 @@ def transform_pos(input_dict, own_callsign=""):
     }
 
 
-def transform_mh(input_dict):
+def transform_mh(input_dict: dict[str, Any]) -> dict[str, Any]:
     node_timestamp = timestamp_from_date_time(input_dict["DATE"], input_dict["TIME"])
     return {
         "transformer": "mh",
@@ -541,7 +590,7 @@ def transform_mh(input_dict):
     }
 
 
-def transform_ble(input_dict):
+def transform_ble(input_dict: dict[str, Any]) -> dict[str, Any]:
     return{
         "transformer": "generic_ble",
         "src_type": "BLE",
@@ -550,8 +599,24 @@ def transform_ble(input_dict):
      }
 
 
-def dispatcher(input_dict, own_callsign=""):
-    """Dispatch messages to appropriate transformer based on type"""
+def dispatcher(input_dict: dict[str, Any], own_callsign: str = "") -> dict[str, Any] | None:
+    """
+    Route BLE messages to appropriate transformer based on type.
+
+    Multi-Part Configuration Responses:
+    - SE + S1: Sensor settings (arrive ~200ms apart)
+    - SW + S2: WiFi settings (arrive ~200ms apart)
+
+    Each notification is processed independently and published via separate SSE events.
+    Frontend must merge if combined display is needed.
+
+    Args:
+        input_dict: Decoded BLE message
+        own_callsign: Station callsign for filtering relay paths
+
+    Returns:
+        Transformed message dict, or None if type not recognized
+    """
     if "TYP" in input_dict:
         if input_dict["TYP"] == "MH":
             return transform_mh(input_dict)
@@ -562,7 +627,7 @@ def dispatcher(input_dict, own_callsign=""):
             return transform_ble(input_dict)
         else:
             if has_console:
-                print("Type nicht gefunden!", input_dict)
+                print("Type not found!", input_dict)
 
     elif input_dict.get("payload_type") == 58:
         return transform_msg(input_dict, own_callsign)
@@ -581,12 +646,50 @@ def dispatcher(input_dict, own_callsign=""):
         #return transformed
 
     else:
-        print(f"Unbekannter payload_type oder TYP: {input_dict}")
+        print(f"Unknown payload_type or TYP: {input_dict}")
 
 
-async def notification_handler(clean_msg, message_router=None):
-    """Handle BLE notifications"""
-    # JSON-Nachrichten beginnen mit 'D{'
+async def notification_handler(clean_msg: bytes, message_router: Any | None = None) -> None:
+    """
+    Process incoming BLE GATT characteristic notifications.
+
+    Decodes raw bytes into structured message dicts and publishes to the
+    message router for storage and broadcast to connected clients.
+
+    Message Format Detection:
+        - Prefix 'D{': JSON config/status message → decode_json_message()
+        - Prefix '@A': Binary ACK → decode_binary_message()
+        - Prefix '@:' or '@!': Binary mesh message → decode_binary_message()
+
+    Multi-Part Configuration Responses:
+    ------------------------------------
+    Configuration queries (--seset, --wifiset) trigger TWO sequential notifications:
+
+    Example: `--seset` query flow:
+    1. Device sends TYP="SE" (sensor config: temp sensor type, pressure offset)
+       → notification_handler() → dispatcher() → transform_ble() → publish
+    2. ~200ms delay
+    3. Device sends TYP="S1" (extended: altitude, calibration data)
+       → notification_handler() → dispatcher() → transform_ble() → publish
+
+    Each notification is independent (no correlation ID). Frontend receives both
+    via SSE and must merge if needed.
+
+    Timing Behavior:
+    - Delay between parts: ~200ms (firmware-dependent, not guaranteed)
+    - Order is guaranteed: SE before S1, SW before S2
+    - No timeout handling needed (if S1/S2 missing, first part is still valid data)
+
+    Args:
+        clean_msg: Raw bytes from GATT notification
+        message_router: Optional MessageRouter for publishing decoded messages
+
+    Side Effects:
+        - Publishes messages via message_router.publish()
+        - Updates GPS cache (for TYP="G")
+        - Logs routine messages at DEBUG, non-routine at INFO
+    """
+    # JSON messages start with 'D{'
     if clean_msg.startswith(b'D{'):
 
          var = decode_json_message(clean_msg)
@@ -617,13 +720,15 @@ async def notification_handler(clean_msg, message_router=None):
              if message_router:
                    await message_router.publish('ble', 'ble_notification', output)
 
+           # Multi-part config responses: SE+S1 (sensor), SW+S2 (WiFi)
+           # These arrive as separate notifications ~200ms apart, processed independently
            elif typ in ["SN", "SE", "SW", "I", "IO", "TM", "AN",
                        "S1", "S2"]:
                 output = dispatcher(var)
                 if message_router:
                     await message_router.publish('ble', 'ble_notification', output)
 
-           elif typ == "CONFFIN": # Habe Fertig! Mehr gibt es nicht
+           elif typ == "CONFFIN": # Configuration finished, no more data available
              if message_router:
                     await message_router.publish('ble', 'ble_status', {
                         'src_type': 'BLE',
@@ -636,12 +741,12 @@ async def notification_handler(clean_msg, message_router=None):
 
            else:
              if has_console:
-                print("type unknown",var)
+                print("Type unknown",var)
 
          except KeyError:
              print("error", var)
 
-    # Binärnachrichten beginnen mit '@'
+    # Binary messages start with '@'
     elif clean_msg.startswith(b'@'):
       message = decode_binary_message(clean_msg)
 
@@ -668,11 +773,11 @@ async def notification_handler(clean_msg, message_router=None):
             await message_router.publish('ble', 'ble_notification', output)
 
     else:
-        print("Unbekannter Nachrichtentyp.")
+        print("Unknown message type.")
 
 
 class TimeSyncTask:
-    def __init__(self, coro_fn):
+    def __init__(self, coro_fn: Callable[[float, float], Any]) -> None:
         self._coro_fn = coro_fn
         self._event = asyncio.Event()
         self._running = False
@@ -681,16 +786,16 @@ class TimeSyncTask:
         self.lat = None
         self.lon = None
 
-    def trigger(self, lat, lon):
+    def trigger(self, lat: float, lon: float) -> None:
         loop = asyncio.get_running_loop()
         loop.call_soon_threadsafe(self._set_data, lat, lon)
 
-    def _set_data(self, lat, lon):
+    def _set_data(self, lat: float, lon: float) -> None:
         self.lat = lat
         self.lon = lon
         self._event.set()
 
-    async def runner(self):
+    async def runner(self) -> None:
         self._running = True
         while self._running:
             await self._event.wait()
@@ -709,10 +814,10 @@ class TimeSyncTask:
             except Exception as e:
                 print(f"Error during async task: {e}")
 
-    def start(self):
+    def start(self) -> None:
         self._task = asyncio.create_task(self.runner())
 
-    async def stop(self):
+    async def stop(self) -> None:
         self._running = False
         if self._task and not self._task.done():
             self._task.cancel()
@@ -724,7 +829,14 @@ class TimeSyncTask:
 
 
 class BLEClient:
-    def __init__(self, mac, read_uuid, write_uuid, hello_bytes=None, message_router=None):
+    def __init__(
+        self,
+        mac: str,
+        read_uuid: str,
+        write_uuid: str,
+        hello_bytes: bytes | None = None,
+        message_router: Any | None = None
+    ) -> None:
         """
         Initialize BLE client.
 
@@ -759,17 +871,17 @@ class BLEClient:
         self._keepalive_task = None
         self._time_sync = None
 
-    def _mac_to_dbus_path(self, mac):
+    def _mac_to_dbus_path(self, mac: str) -> str:
         """Convert MAC address to D-Bus device path"""
         return f"/org/bluez/hci0/dev_{mac.replace(':', '_')}"
 
 
-    async def connect(self, max_retries=3):
+    async def connect(self, max_retries: int = 3) -> None:
         """Connect to BLE device with retry logic and proper error handling"""
         async with self._connect_lock:
             if self._connected:
                 if has_console:
-                    print(f"🔁 Verbindung zu {self.mac} besteht bereits")
+                    print(f"🔁 Connection to {self.mac} already established")
                 return
 
             last_error = None
@@ -795,7 +907,7 @@ class BLEClient:
             self._connected = False
 
 
-    async def _attempt_connection(self):
+    async def _attempt_connection(self) -> None:
         """Single connection attempt - extracted from current connect() method"""
         if self.bus is None:
             self.bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
@@ -820,14 +932,14 @@ class BLEClient:
                 # Add timeout to prevent hanging
                 await asyncio.wait_for(self.dev_iface.call_connect(), timeout=10.0)
                 if has_console:
-                    print(f"✅ verbunden mit {self.mac}")
+                    print(f"✅ connected to {self.mac}")
             except asyncio.TimeoutError:
                 raise ConnectionError("Connection timeout after 10 seconds")
             except DBusError as e:
                 raise ConnectionError(f"Connect failed: {e}")
         else:
             if has_console:
-                print(f"🔁 Verbindung zu {self.mac} besteht bereits")
+                print(f"🔁 Connection to {self.mac} already established")
 
         if has_console:
             print("🔍 Waiting for service discovery...")
@@ -879,7 +991,7 @@ class BLEClient:
         if not self._keepalive_task or self._keepalive_task.done():
             self._keepalive_task = asyncio.create_task(self._send_keepalive())
 
-    async def _wait_for_services_resolved(self, timeout=10.0):
+    async def _wait_for_services_resolved(self, timeout: float = 10.0) -> bool:
         """Wait for BLE services to be discovered and resolved"""
         start_time = time.time()
 
@@ -904,7 +1016,7 @@ class BLEClient:
         return False
 
 
-    async def _cleanup_failed_connection(self):
+    async def _cleanup_failed_connection(self) -> None:
         """Clean up after a failed connection attempt"""
         try:
             if self.dev_iface:
@@ -944,7 +1056,7 @@ class BLEClient:
                 print(f"⚠️ Error during cleanup: {e}")
 
 
-    async def _publish_status(self, command, result, msg):
+    async def _publish_status(self, command: str, result: str, msg: str) -> None:
         """Helper method to publish BLE status messages through router"""
         if self.message_router:
             status_message = {
@@ -960,20 +1072,22 @@ class BLEClient:
             # Fallback to console if no router
             print(f"BLE {command}: {result} - {msg}")
 
-    async def _send_to_websocket(self, message):
+    async def _send_to_websocket(self, message: dict[str, Any]) -> None:
         """Helper method to send messages to websocket through router"""
         if self.message_router:
             await self.message_router.publish('ble', 'websocket_message', message)
         else:
             print(f"BLE message (no router): {message}")
 
-    async def _find_characteristics(self):
+    async def _find_characteristics(self) -> None:
         self.read_char_obj, self.read_char_iface = await self._find_gatt_characteristic(
             self.bus, self.path, self.read_uuid)
         self.write_char_obj, self.write_char_iface = await self._find_gatt_characteristic(
             self.bus, self.path, self.write_uuid)
 
-    async def _find_gatt_characteristic(self, bus, path, target_uuid):
+    async def _find_gatt_characteristic(
+        self, bus: Any, path: str, target_uuid: str
+    ) -> tuple[Any, Any]:
         """Find GATT characteristic by UUID in the device tree"""
         try:
             introspect = await bus.introspect(BLUEZ_SERVICE_NAME, path)
@@ -1004,7 +1118,7 @@ class BLEClient:
 
         return None, None
 
-    async def start_notify(self, on_change=None):
+    async def start_notify(self, on_change: Callable[[bytes], None] | None = None) -> None:
         if not self._connected:
            return
 
@@ -1013,7 +1127,7 @@ class BLEClient:
         ).value
         if is_notifying:
            if has_console:
-              print("wir haben schon ein notify, also nix wie weg hier")
+              print("Notify already active, skipping duplicate registration")
            return
 
         if not self.bus:
@@ -1038,9 +1152,11 @@ class BLEClient:
             if has_console:
                print(f"📡 Notify: {is_notifying}")
         except DBusError as e:
-            print(f"⚠️ StartNotify fehlgeschlagen: {e}")
+            print(f"⚠️ StartNotify failed: {e}")
 
-    async def _on_props_changed(self, iface, changed, invalidated):
+    async def _on_props_changed(
+        self, iface: str, changed: dict[str, Any], invalidated: list[str]
+    ) -> None:
       if iface != GATT_CHARACTERISTIC_INTERFACE:
         return
 
@@ -1052,7 +1168,7 @@ class BLEClient:
         if self._on_value_change_cb:
             self._on_value_change_cb(new_value)
 
-    async def stop_notify(self):
+    async def stop_notify(self) -> None:
         if not self.bus:
            return
 
@@ -1071,17 +1187,17 @@ class BLEClient:
 
            await self.read_char_iface.call_stop_notify()
 
-           print("🛑 Notify gestoppt")
+           print("🛑 Notify stopped")
            await self._publish_status('disconnect','info', "unsubscribe from messages ..")
 
         except DBusError as e:
             if "No notify session started" in str(e):
                 if has_console:
-                   print("ℹ️ Keine Notify-Session – ignoriert")
+                   print("ℹ️ No active notify session – ignored")
             else:
                 raise
 
-    async def send_hello(self):
+    async def send_hello(self) -> None:
         if not self.bus:
            logger.debug("BLE not connected, skipping send")
            return
@@ -1104,7 +1220,7 @@ class BLEClient:
         else:
             logger.debug("No write characteristic available")
 
-    async def send_message(self, msg, grp):
+    async def send_message(self, msg: str, grp: str) -> None:
         if not self.bus:
            logger.debug("BLE not connected, skipping send")
            return
@@ -1144,12 +1260,12 @@ class BLEClient:
               print("🕓 Timeout beim Schreiben an BLE-Device")
               await self._publish_status('send message','error', "❌ Timeout on write")
             except Exception as e:
-              print(f"💥 Fehler beim Schreiben an BLE: {e}")
+              print(f"💥 Error writing to BLE: {e}")
               await self._publish_status('send message','error', f"❌ BLE write error {e}")
         else:
             logger.debug("No write characteristic available")
 
-    async def a0_commands(self, cmd):
+    async def a0_commands(self, cmd: str) -> None:
         if not self.bus:
            logger.debug("BLE not connected, skipping send")
            return
@@ -1180,7 +1296,7 @@ class BLEClient:
         else:
             logger.debug("No write characteristic available")
 
-    async def set_commands(self, cmd):
+    async def set_commands(self, cmd: str) -> None:
        """
        Send configuration commands using binary message types.
 
@@ -1215,7 +1331,7 @@ class BLEClient:
          byte_array = laenge.to_bytes(1, 'big') +  cmd_byte + byte_array
 
          if has_console:
-            print(f"Aktuelle Zeit {now}")
+            print(f"Current time {now}")
             print("to hex:", ' '.join(f"{b:02X}" for b in byte_array))
 
        # ID = 0xF0 Save & Reboot [no data]
@@ -1234,6 +1350,131 @@ class BLEClient:
          # These use A0 message type (text command)
          await self.a0_commands(cmd)
          return  # Early return, a0_commands handles sending
+
+       # 0x50 - Set Callsign
+       elif cmd.startswith("--setcall "):
+         callsign = cmd.split(maxsplit=1)[1].strip()
+         callsign_bytes = callsign.encode('utf-8')
+
+         if len(callsign_bytes) > 20:
+            logger.error("Callsign too long: %d bytes (max 20)", len(callsign_bytes))
+            await self._publish_status('set command', 'error', "❌ Callsign too long")
+            return
+
+         call_len = len(callsign_bytes)
+         byte_array = bytes([call_len]) + callsign_bytes
+         laenge = len(byte_array) + 2
+         byte_array = laenge.to_bytes(1, 'big') + bytes([0x50]) + byte_array
+
+       # 0x55 - WiFi Settings
+       elif "--setssid" in cmd and "--setpwd" in cmd:
+         parts = cmd.split()
+         try:
+            ssid_idx = parts.index("--setssid") + 1
+            pwd_idx = parts.index("--setpwd") + 1
+            ssid = parts[ssid_idx]
+            pwd = parts[pwd_idx]
+         except (ValueError, IndexError) as e:
+            logger.error("Invalid WiFi command format: %s", e)
+            await self._publish_status('set command', 'error', "❌ Invalid format")
+            return
+
+         ssid_bytes = ssid.encode('utf-8')
+         pwd_bytes = pwd.encode('utf-8')
+
+         if len(ssid_bytes) > 32 or len(pwd_bytes) > 63:
+            logger.error("SSID or password too long")
+            await self._publish_status('set command', 'error', "❌ SSID/pwd too long")
+            return
+
+         byte_array = (bytes([len(ssid_bytes)]) + ssid_bytes +
+                       bytes([len(pwd_bytes)]) + pwd_bytes)
+         laenge = len(byte_array) + 2
+         byte_array = laenge.to_bytes(1, 'big') + bytes([0x55]) + byte_array
+
+       # 0x70 - Set Latitude
+       elif cmd.startswith("--setlat "):
+         parts = cmd.split()
+         try:
+            lat = float(parts[1])
+         except (ValueError, IndexError) as e:
+            logger.error("Invalid latitude format: %s", e)
+            await self._publish_status('set command', 'error', "❌ Invalid latitude")
+            return
+
+         if not (-90.0 <= lat <= 90.0):
+            logger.error("Latitude out of range: %f", lat)
+            await self._publish_status('set command', 'error', "❌ Lat out of range")
+            return
+
+         save_flag = 0x0A if "--save" in cmd else 0x0B
+
+         byte_array = pack('<f', lat) + bytes([save_flag])
+         laenge = len(byte_array) + 2
+         byte_array = laenge.to_bytes(1, 'big') + bytes([0x70]) + byte_array
+
+       # 0x80 - Set Longitude
+       elif cmd.startswith("--setlon "):
+         parts = cmd.split()
+         try:
+            lon = float(parts[1])
+         except (ValueError, IndexError) as e:
+            logger.error("Invalid longitude format: %s", e)
+            await self._publish_status('set command', 'error', "❌ Invalid longitude")
+            return
+
+         if not (-180.0 <= lon <= 180.0):
+            logger.error("Longitude out of range: %f", lon)
+            await self._publish_status('set command', 'error', "❌ Lon out of range")
+            return
+
+         save_flag = 0x0A if "--save" in cmd else 0x0B
+
+         byte_array = pack('<f', lon) + bytes([save_flag])
+         laenge = len(byte_array) + 2
+         byte_array = laenge.to_bytes(1, 'big') + bytes([0x80]) + byte_array
+
+       # 0x90 - Set Altitude
+       elif cmd.startswith("--setalt "):
+         parts = cmd.split()
+         try:
+            alt = int(parts[1])
+         except (ValueError, IndexError) as e:
+            logger.error("Invalid altitude format: %s", e)
+            await self._publish_status('set command', 'error', "❌ Invalid altitude")
+            return
+
+         if not (-500 <= alt <= 9000):
+            logger.error("Altitude out of range: %d", alt)
+            await self._publish_status('set command', 'error', "❌ Alt out of range")
+            return
+
+         save_flag = 0x0A if "--save" in cmd else 0x0B
+
+         byte_array = alt.to_bytes(4, byteorder='little', signed=True) + bytes([save_flag])
+         laenge = len(byte_array) + 2
+         byte_array = laenge.to_bytes(1, 'big') + bytes([0x90]) + byte_array
+
+       # 0x95 - APRS Symbols
+       elif cmd.startswith("--setsym "):
+         parts = cmd.split()
+         if len(parts) < 2 or len(parts[1]) != 2:
+            logger.error("Invalid symbol format: must be 2 characters")
+            await self._publish_status('set command', 'error', "❌ Invalid symbol")
+            return
+
+         symbols = parts[1]
+         primary = ord(symbols[0])
+         secondary = ord(symbols[1])
+
+         if primary not in (ord('/'), ord('\\')):
+            logger.error("Invalid APRS symbol table: must be / or \\")
+            await self._publish_status('set command', 'error', "❌ Invalid symbol table")
+            return
+
+         byte_array = bytes([primary, secondary])
+         laenge = len(byte_array) + 2
+         byte_array = laenge.to_bytes(1, 'big') + bytes([0x95]) + byte_array
 
        else:
           logger.warning("Command %s not implemented in set_commands", cmd)
@@ -1260,7 +1501,7 @@ class BLEClient:
        else:
             logger.debug("No write characteristic available")
 
-    async def save_settings(self):
+    async def save_settings(self) -> None:
         """
         Save current device settings to flash memory.
 
@@ -1270,7 +1511,7 @@ class BLEClient:
         await self.set_commands("--save")
         logger.info("Device settings saved to flash")
 
-    async def reboot_device(self):
+    async def reboot_device(self) -> None:
         """
         Reboot the device without saving settings.
 
@@ -1279,7 +1520,7 @@ class BLEClient:
         await self.set_commands("--reboot")
         logger.info("Device reboot command sent")
 
-    async def save_and_reboot(self):
+    async def save_and_reboot(self) -> None:
         """
         Save settings to flash and reboot device in one operation.
 
@@ -1292,7 +1533,7 @@ class BLEClient:
         await self.set_commands("--savereboot")
         logger.info("Device save & reboot command sent (0xF0)")
 
-    async def _check_conn(self):
+    async def _check_conn(self) -> None:
         if not self.props_iface:
             return
         connected = (await self.props_iface.call_get(DEVICE_INTERFACE, "Connected")).value
@@ -1306,7 +1547,7 @@ class BLEClient:
            await self.close()
            self._connected = False
 
-    async def _send_keepalive(self):
+    async def _send_keepalive(self) -> None:
         backoff = 300  # start at 5 minutes
         max_backoff = 1800  # max 30 minutes
         consecutive_failures = 0
@@ -1336,7 +1577,7 @@ class BLEClient:
         except asyncio.CancelledError:
             pass
 
-    async def disconnect(self):
+    async def disconnect(self) -> None:
         if not self.dev_iface:
             if has_console:
                print("⬇️  not connected - can't disconnect ..")
@@ -1364,16 +1605,16 @@ class BLEClient:
                 pass
 
             await self._publish_status('disconnect','ok', "✅ disconnected")
-            print(f"🧹 Disconnected von {self.mac}")
+            print(f"🧹 Disconnected from {self.mac}")
 
 
         except DBusError as e:
             await self._publish_status('disconnect','error', f"❌ disconnect error {e}")
             if has_console:
-               print(f"⚠️ Disconnect fehlgeschlagen: {e}")
+               print(f"⚠️ Disconnect failed: {e}")
 
 
-    async def close(self):
+    async def close(self) -> None:
         if self._time_sync is not None:
             await self._time_sync.stop()
             self._time_sync = None
@@ -1394,7 +1635,7 @@ class BLEClient:
 
 
 
-    async def _handle_timesync(self, lat, lon):
+    async def _handle_timesync(self, lat: float, lon: float) -> None:
         """Time sync handler that uses BLE client methods instead of global functions"""
         if has_console:
             print("adjusting time on node ..", lat, lon)
@@ -1423,7 +1664,7 @@ class BLEClient:
         await asyncio.sleep(2)
         await self.set_commands("--settime")
 
-    def _should_trigger_time_sync(self, message_dict):
+    def _should_trigger_time_sync(self, message_dict: dict[str, Any]) -> bool:
         """Check if this GPS message should trigger time sync"""
         if message_dict.get("TYP") != "G":
             return False
@@ -1443,7 +1684,7 @@ class BLEClient:
         time_delta = node_time_checker(node_timestamp, "G")
         return abs(time_delta) > 60  # Same threshold as before
 
-    async def process_gps_message(self, message_dict):
+    async def process_gps_message(self, message_dict: dict[str, Any]) -> None:
         """Process GPS message and trigger time sync if needed - called from notification_handler"""
         if self._should_trigger_time_sync(message_dict):
             lat = message_dict.get("LAT")
@@ -1454,7 +1695,7 @@ class BLEClient:
             else:
                 print("Warning: time_sync not initialized")
 
-    def _normalize_variant(self,value):
+    def _normalize_variant(self, value: Any) -> Any:
       if isinstance(value, Variant):
         return self._normalize_variant(value.value)
       elif isinstance(value, dict):
@@ -1466,7 +1707,7 @@ class BLEClient:
       else:
         return value
 
-    async def scan_ble_devices(self, timeout=5.0):
+    async def scan_ble_devices(self, timeout: float = 5.0) -> None:
       #Helper function
       async def _interfaces_added(path, interfaces):
         if DEVICE_INTERFACE in interfaces:
@@ -1569,11 +1810,11 @@ class BLEClient:
 
 
 class NoInputNoOutputAgent(ServiceInterface):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__('org.bluez.Agent1')
 
     @method()
-    def Release(self):
+    def Release(self) -> None:
         if has_console:
            print("Agent released")
 
@@ -1602,13 +1843,13 @@ class NoInputNoOutputAgent(ServiceInterface):
         return
 
     @method()
-    def Cancel(self):
+    def Cancel(self) -> None:
         print("Request cancelled")
 
 
 # Module-level functions
 
-async def ble_pair(mac, BLE_Pin, message_router=None):
+async def ble_pair(mac: str, BLE_Pin: str | None, message_router: Any | None = None) -> None:
     path = f"/org/bluez/hci0/dev_{mac.replace(':', '_')}"
     bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
 
@@ -1682,7 +1923,7 @@ async def ble_pair(mac, BLE_Pin, message_router=None):
             })
 
 
-async def ble_unpair(mac, message_router=None):
+async def ble_unpair(mac: str, message_router: Any | None = None) -> None:
     if has_console:
        print(f"🧹 Unpairing {mac} using blueZ ...")
 
@@ -1717,7 +1958,7 @@ async def ble_unpair(mac, message_router=None):
         })
 
 
-async def ble_connect(MAC, message_router=None):
+async def ble_connect(MAC: str, message_router: Any | None = None) -> None:
     global client
 
     if client is None:
@@ -1757,7 +1998,7 @@ async def ble_connect(MAC, message_router=None):
          print("can't connect, already connected")
 
 
-async def ble_disconnect(message_router=None):
+async def ble_disconnect(message_router: Any | None = None) -> None:
     global client
     if client is None:
       return
@@ -1778,7 +2019,7 @@ async def ble_disconnect(message_router=None):
          print("❌ can't disconnect, already disconnected")
 
 
-async def scan_ble_devices(message_router=None):
+async def scan_ble_devices(message_router: Any | None = None) -> None:
     scanclient = BLEClient(
         mac ="",
         read_uuid = "6e400003-b5a3-f393-e0a9-e50e24dcca9e",
@@ -1789,7 +2030,7 @@ async def scan_ble_devices(message_router=None):
     await scanclient.scan_ble_devices()
 
 
-async def backend_resolve_ip(hostname, message_router=None):
+async def backend_resolve_ip(hostname: str, message_router: Any | None = None) -> None:
     import socket
     loop = asyncio.get_event_loop()
 
@@ -1816,11 +2057,11 @@ async def backend_resolve_ip(hostname, message_router=None):
 
 
 # Functions to access the global client
-def get_ble_client():
+def get_ble_client() -> BLEClient | None:
     """Get the current BLE client instance"""
     return client
 
-async def handle_ble_message(msg, grp):
+async def handle_ble_message(msg: str, grp: str) -> None:
     """Handle messages through global client"""
     global client
     if client is not None:
@@ -1829,7 +2070,7 @@ async def handle_ble_message(msg, grp):
         print("BLE client not connected")
 
 
-async def handle_a0_command(command):
+async def handle_a0_command(command: str) -> None:
     """Handle A0 commands through global client"""
     global client
     if client is not None:
@@ -1838,7 +2079,7 @@ async def handle_a0_command(command):
         print("BLE client not connected")
 
 
-async def handle_set_command(command):
+async def handle_set_command(command: str) -> None:
     """Handle set commands through global client"""
     global client
     if client is not None:
