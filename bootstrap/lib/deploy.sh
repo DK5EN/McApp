@@ -74,15 +74,21 @@ get_latest_prerelease_version() {
   fi
 }
 
-# Read installed version from pyproject.toml in INSTALL_DIR
+# Read installed version from version.html (contains full tag like v1.01.1-dev.14)
 get_installed_mcapp_version() {
-  local pyproject="${INSTALL_DIR}/pyproject.toml"
-
-  if [[ -f "$pyproject" ]]; then
-    grep -oP '^version\s*=\s*"\K[^"]+' "$pyproject" 2>/dev/null || echo "not_installed"
-  else
-    echo "not_installed"
+  # Primary: version.html from deployed webapp
+  if [[ -f "${WEBAPP_DIR}/version.html" ]]; then
+    cat "${WEBAPP_DIR}/version.html" 2>/dev/null || echo "not_installed"
+    return
   fi
+
+  # Fallback: version.html bundled in install dir
+  if [[ -f "${INSTALL_DIR}/webapp/version.html" ]]; then
+    cat "${INSTALL_DIR}/webapp/version.html" 2>/dev/null || echo "not_installed"
+    return
+  fi
+
+  echo "not_installed"
 }
 
 deploy_release() {
