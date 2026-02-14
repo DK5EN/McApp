@@ -88,7 +88,7 @@ def notification_callback(data: bytes):
 
                 notification["fcs_ok"] = fcs_ok
                 if not fcs_ok:
-                    logger.warning(
+                    logger.debug(
                         "FCS mismatch: calculated=0x%04X, received=0x%04X",
                         calced_fcs, fcs
                     )

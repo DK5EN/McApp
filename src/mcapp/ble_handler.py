@@ -241,13 +241,13 @@ def decode_binary_message(byte_msg: bytes) -> dict[str, Any] | str:
       # Verify frame checksum
       fcs_ok = (calced_fcs == fcs)
 
-      # FCS validation (permissive mode - log warnings but continue processing)
+      # FCS validation (permissive mode - log at debug level, continue processing)
       if not fcs_ok:
-          logger.warning(
+          logger.debug(
               "Frame checksum mismatch: calculated=0x%04X, received=0x%04X, msg_id=%s",
               calced_fcs, fcs, format(msg_id, '08X')
           )
-          # Permissive mode: log warning but continue processing
+          # Permissive mode: log at debug level but continue processing
           # TODO: Add config flag ENFORCE_FCS_VALIDATION for strict mode
 
       #if message.startswith(":{CET}"):
