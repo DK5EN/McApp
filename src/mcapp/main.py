@@ -329,7 +329,13 @@ class MessageRouter:
 
     async def _handle_smart_initial_command(self, websocket):
         """Handle smart initial payload - sends only last N messages per dst + summary."""
-        initial_data = await self.storage_handler.get_smart_initial()
+        if hasattr(self.storage_handler, 'get_smart_initial_with_summary'):
+            initial_data, summary = (
+                await self.storage_handler.get_smart_initial_with_summary()
+            )
+        else:
+            initial_data = await self.storage_handler.get_smart_initial()
+            summary = await self.storage_handler.get_summary()
         acks_list = initial_data.get("acks", [])
 
         if has_console:
@@ -353,7 +359,18 @@ class MessageRouter:
         await self.publish(
             'router', 'websocket_direct', {'websocket': websocket, 'data': payload}
         )
-        await self._handle_summary_command(websocket)
+        summary_payload = {
+            "type": "response",
+            "msg": "summary",
+            "data": summary,
+        }
+        if websocket:
+            await self.publish(
+                'router', 'websocket_direct',
+                {'websocket': websocket, 'data': summary_payload},
+            )
+        else:
+            await self.publish('router', 'websocket_message', summary_payload)
 
     async def _handle_summary_command(self, websocket):
         """Handle summary command - sends message counts per destination."""

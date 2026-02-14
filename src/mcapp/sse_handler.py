@@ -165,7 +165,13 @@ class SSEManager:
                             if self.message_router else None
                         )
                         if storage:
-                            initial_data = await storage.get_smart_initial()
+                            if hasattr(storage, 'get_smart_initial_with_summary'):
+                                initial_data, summary = (
+                                    await storage.get_smart_initial_with_summary()
+                                )
+                            else:
+                                initial_data = await storage.get_smart_initial()
+                                summary = await storage.get_summary()
                             logger.info(
                                 "SSE client %s: sending smart_initial"
                                 " (%d msgs, %d pos, %d acks)",
@@ -179,7 +185,6 @@ class SSEManager:
                                 "msg": "smart_initial",
                                 "data": initial_data,
                             })
-                            summary = await storage.get_summary()
                             yield self._format_sse_event({
                                 "type": "response",
                                 "msg": "summary",

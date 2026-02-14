@@ -177,6 +177,9 @@ class SQLiteStorage:
         # In-memory bucket accumulators: {(callsign, bucket_start_ms): {"rssi": [], "snr": []}}
         self._bucket_accumulators: dict[tuple[str, int], dict[str, list]] = {}
 
+        # Persistent read-only connection (opened in initialize())
+        self._read_conn: sqlite3.Connection | None = None
+
         # Ensure parent directory exists
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -246,6 +249,16 @@ class SQLiteStorage:
                     _set_schema_version(conn, 6)
 
         await asyncio.to_thread(_init_db)
+
+        # Open persistent read-only connection for query methods
+        def _open_read_conn() -> sqlite3.Connection:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA query_only=ON")
+            return conn
+
+        self._read_conn = await asyncio.to_thread(_open_read_conn)
 
         # Initialize bucket accumulators from existing signal_log
         await self._init_bucket_accumulators()
@@ -799,6 +812,16 @@ class SQLiteStorage:
 
         await asyncio.to_thread(_run)
 
+    def _ensure_read_conn(self) -> sqlite3.Connection:
+        """Return the persistent read connection, reopening if necessary."""
+        if self._read_conn is None:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA query_only=ON")
+            self._read_conn = conn
+        return self._read_conn
+
     async def store_message(self, message: dict[str, Any], raw: str) -> None:
         """Store a message with automatic filtering.
 
@@ -1319,123 +1342,150 @@ class SQLiteStorage:
 
         return msg_msgs + pos_msgs
 
-    async def get_smart_initial(self, limit_per_dst: int = 20) -> dict:
-        """Get smart initial payload: last N messages per dst + latest pos per src + ACKs.
+    @staticmethod
+    def _build_position_dict(row: dict[str, Any]) -> dict[str, Any]:
+        """Build a position dict from station_positions row."""
+        pos_data: dict[str, Any] = {
+            "type": "pos",
+            "src": row["callsign"],
+            "src_type": "lora" if row["source"] == "local" else "www",
+            "dst": "",
+            "via": row["via_shortest"] or "",
+            "timestamp": row["last_seen"] or 0,
+        }
+        # Location fields
+        if row["lat"] is not None:
+            pos_data["lat"] = row["lat"]
+        if row["lon"] is not None:
+            pos_data["lon"] = row["lon"]
+        if row["alt"] is not None:
+            pos_data["alt"] = row["alt"]
+        if row["lat_dir"]:
+            pos_data["lat_dir"] = row["lat_dir"]
+        if row["lon_dir"]:
+            pos_data["lon_dir"] = row["lon_dir"]
+        # Hardware/firmware
+        if row["hw_id"] is not None:
+            pos_data["hw_id"] = row["hw_id"]
+        if row["firmware"]:
+            pos_data["firmware"] = row["firmware"]
+        if row["fw_sub"]:
+            pos_data["fw_sub"] = row["fw_sub"]
+        if row["aprs_symbol"]:
+            pos_data["aprs_symbol"] = row["aprs_symbol"]
+        if row["aprs_symbol_group"]:
+            pos_data["aprs_symbol_group"] = row["aprs_symbol_group"]
+        if row["batt"] is not None:
+            pos_data["batt"] = row["batt"]
+        if row["gw"] is not None:
+            pos_data["gw"] = row["gw"]
+        # Signal quality (from MHeard beacons)
+        if row["rssi"] is not None:
+            pos_data["rssi"] = row["rssi"]
+        if row["snr"] is not None:
+            pos_data["snr"] = row["snr"]
+        # MHeard-specific fields
+        if row["lora_mod"] is not None:
+            pos_data["lora_mod"] = row["lora_mod"]
+        if row["mesh"] is not None:
+            pos_data["mesh"] = row["mesh"]
+        # Via paths for relay line drawing
+        if row["via_paths"] and row["via_paths"] != "[]":
+            pos_data["via_paths"] = row["via_paths"]
+        # Telemetry fields
+        for tf in ("temp1", "temp2", "hum", "qfe", "qnh", "gas", "co2"):
+            if row.get(tf) is not None:
+                pos_data[tf] = row[tf]
+        return pos_data
 
-        Positions now come from station_positions table (one pre-merged row per
-        station) instead of scanning/merging from the messages table.
+    async def get_smart_initial_with_summary(
+        self, limit_per_dst: int = 20,
+    ) -> tuple[dict, dict]:
+        """Get smart initial payload + summary in a single thread call.
+
+        Uses a ROW_NUMBER() window function partitioned by conversation_key
+        to fetch the last N messages per conversation in one query, instead
+        of N+1 queries (one per destination).  All queries share the
+        persistent read connection — zero connect/close overhead.
         """
-        # Get all active destinations
-        dst_rows = await self._execute(
-            "SELECT DISTINCT dst FROM messages"
-            " WHERE type = 'msg' AND msg NOT LIKE '%:ack%'",
-        )
+        build_msg = self._build_message_dict
+        build_pos = self._build_position_dict
 
-        # Per-destination queries — each uses idx_messages_type_dst_timestamp
-        messages = []
-        for dst_row in dst_rows:
-            dst = dst_row["dst"]
-            if not dst:
-                continue
-            rows = await self._execute(
+        def _run() -> tuple[dict, dict]:
+            try:
+                conn = self._ensure_read_conn()
+            except sqlite3.Error:
+                self._read_conn = None
+                conn = self._ensure_read_conn()
+
+            # 1. Messages: window function, partition by conversation_key
+            msg_rows = conn.execute(
+                f"SELECT {_MSG_SELECT} FROM ("
+                f"  SELECT *, ROW_NUMBER() OVER ("
+                f"    PARTITION BY COALESCE(conversation_key, dst)"
+                f"    ORDER BY timestamp DESC"
+                f"  ) AS rn FROM messages"
+                f"  WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
+                f") ranked WHERE rn <= ?"
+                f" ORDER BY timestamp ASC",
+                (limit_per_dst,),
+            ).fetchall()
+            messages = [
+                json.dumps(build_msg(dict(row)), ensure_ascii=False)
+                for row in msg_rows
+            ]
+
+            # 2. Positions: station_positions table
+            pos_rows = conn.execute(
+                "SELECT * FROM station_positions",
+            ).fetchall()
+            positions = [
+                json.dumps(build_pos(dict(row)), ensure_ascii=False)
+                for row in pos_rows
+            ]
+
+            # 3. ACK messages
+            ack_rows = conn.execute(
                 f"SELECT {_MSG_SELECT} FROM messages"
-                " WHERE type = 'msg' AND msg NOT LIKE '%:ack%' AND dst = ?"
-                " ORDER BY timestamp DESC LIMIT ?",
-                (dst, limit_per_dst),
-            )
-            messages.extend(
-                json.dumps(self._build_message_dict(row), ensure_ascii=False)
-                for row in reversed(rows)
-            )
+                " WHERE type = 'msg' AND msg LIKE '%:ack%'"
+                " ORDER BY timestamp DESC LIMIT 200",
+            ).fetchall()
+            acks = [
+                json.dumps(build_msg(dict(row)), ensure_ascii=False)
+                for row in ack_rows
+            ]
 
-        # Positions: read from station_positions table (pre-merged, one row per station)
-        pos_rows = await self._execute(
-            "SELECT * FROM station_positions",
-        )
-
-        positions = []
-        for row in pos_rows:
-            # Build a position dict matching the format the frontend expects
-            pos_data: dict[str, Any] = {
-                "type": "pos",
-                "src": row["callsign"],
-                "src_type": "lora" if row["source"] == "local" else "www",
-                "dst": "",
-                "via": row["via_shortest"] or "",
-                "timestamp": row["last_seen"] or 0,
+            # 4. Summary counts
+            summary_rows = conn.execute(
+                "SELECT COALESCE(conversation_key, dst) AS key, COUNT(*) as cnt"
+                " FROM messages"
+                " WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
+                " GROUP BY key",
+            ).fetchall()
+            summary = {
+                row["key"]: row["cnt"] for row in summary_rows if row["key"]
             }
-            # Location fields
-            if row["lat"] is not None:
-                pos_data["lat"] = row["lat"]
-            if row["lon"] is not None:
-                pos_data["lon"] = row["lon"]
-            if row["alt"] is not None:
-                pos_data["alt"] = row["alt"]
-            if row["lat_dir"]:
-                pos_data["lat_dir"] = row["lat_dir"]
-            if row["lon_dir"]:
-                pos_data["lon_dir"] = row["lon_dir"]
-            # Hardware/firmware
-            if row["hw_id"] is not None:
-                pos_data["hw_id"] = row["hw_id"]
-            if row["firmware"]:
-                pos_data["firmware"] = row["firmware"]
-            if row["fw_sub"]:
-                pos_data["fw_sub"] = row["fw_sub"]
-            if row["aprs_symbol"]:
-                pos_data["aprs_symbol"] = row["aprs_symbol"]
-            if row["aprs_symbol_group"]:
-                pos_data["aprs_symbol_group"] = row["aprs_symbol_group"]
-            if row["batt"] is not None:
-                pos_data["batt"] = row["batt"]
-            if row["gw"] is not None:
-                pos_data["gw"] = row["gw"]
-            # Signal quality (from MHeard beacons)
-            if row["rssi"] is not None:
-                pos_data["rssi"] = row["rssi"]
-            if row["snr"] is not None:
-                pos_data["snr"] = row["snr"]
-            # MHeard-specific fields
-            if row["lora_mod"] is not None:
-                pos_data["lora_mod"] = row["lora_mod"]
-            if row["mesh"] is not None:
-                pos_data["mesh"] = row["mesh"]
-            # Via paths for relay line drawing
-            if row["via_paths"] and row["via_paths"] != "[]":
-                pos_data["via_paths"] = row["via_paths"]
-            # Telemetry fields
-            for tf in ("temp1", "temp2", "hum", "qfe", "qnh", "gas", "co2"):
-                if row.get(tf) is not None:
-                    pos_data[tf] = row[tf]
 
-            positions.append(json.dumps(pos_data, ensure_ascii=False))
+            initial = {"messages": messages, "positions": positions, "acks": acks}
+            return initial, summary
 
-        # Inline ACK messages (binary ACK rows no longer exist after v4 migration)
-        ack_rows = await self._execute(
-            f"SELECT {_MSG_SELECT} FROM messages"
-            " WHERE type = 'msg' AND msg LIKE '%:ack%'"
-            " ORDER BY timestamp DESC LIMIT 200",
-        )
-        acks = [
-            json.dumps(self._build_message_dict(row), ensure_ascii=False)
-            for row in ack_rows
-        ]
-
+        initial, summary = await asyncio.to_thread(_run)
         logger.info(
             "smart_initial: %d msgs, %d pos, %d acks",
-            len(messages), len(positions), len(acks),
+            len(initial["messages"]), len(initial["positions"]),
+            len(initial["acks"]),
         )
-        return {"messages": messages, "positions": positions, "acks": acks}
+        return initial, summary
+
+    async def get_smart_initial(self, limit_per_dst: int = 20) -> dict:
+        """Get smart initial payload (wrapper around get_smart_initial_with_summary)."""
+        initial, _ = await self.get_smart_initial_with_summary(limit_per_dst)
+        return initial
 
     async def get_summary(self) -> dict:
-        """Get message count per destination (uses conversation_key where available)."""
-        rows = await self._execute(
-            "SELECT COALESCE(conversation_key, dst) AS key, COUNT(*) as cnt"
-            " FROM messages"
-            " WHERE type = 'msg' AND msg NOT LIKE '%:ack%'"
-            " GROUP BY key",
-        )
-        return {row["key"]: row["cnt"] for row in rows if row["key"]}
+        """Get message count per destination (wrapper around combined method)."""
+        _, summary = await self.get_smart_initial_with_summary()
+        return summary
 
     async def get_messages_page(
         self, dst: str, before_timestamp: int | None = None, limit: int = 20,
@@ -1999,8 +2049,13 @@ class SQLiteStorage:
         )
 
     async def close(self) -> None:
-        """Close the database connection (no-op for connection-per-query model)."""
-        pass
+        """Close the persistent read connection."""
+        def _close():
+            if self._read_conn is not None:
+                self._read_conn.close()
+                self._read_conn = None
+
+        await asyncio.to_thread(_close)
 
 
 async def create_sqlite_storage(
