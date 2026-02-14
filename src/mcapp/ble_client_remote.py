@@ -516,7 +516,7 @@ class BLEClientRemote(BLEClientBase):
                             msg = decoded.get("message", "")
                             is_routine = (
                                 pt == 33
-                                or (pt == 58 and msg[:5] in ("{CET}", "{UTC}"))
+                                or (pt == 58 and msg[:6] in (":{CET}", ":{UTC}"))
                             )
                             _log = logger.debug if is_routine else logger.info
                             _log(

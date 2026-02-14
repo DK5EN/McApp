@@ -763,7 +763,7 @@ async def notification_handler(clean_msg: bytes, message_router: Any | None = No
       if isinstance(message, dict):
           pt = message.get("payload_type", 0)
           msg = message.get("message", "")
-          is_routine = pt == 33 or (pt == 58 and msg[:5] in ("{CET}", "{UTC}"))
+          is_routine = pt == 33 or (pt == 58 and msg[:6] in (":{CET}", ":{UTC}"))
           _log = logger.debug if is_routine else logger.info
           _log(
               "BLE binary: :%s %s %03d %d/%d LH:%02X %s%s %s",
