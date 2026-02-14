@@ -152,6 +152,42 @@ class BLEClientLocal(BLEClientBase):
             logger.error("Set command error: %s", e)
             return False
 
+    async def save_settings(self) -> bool:
+        """Save device settings to flash"""
+        try:
+            client = get_ble_client()
+            if client:
+                await client.save_settings()
+                return True
+            return False
+        except Exception as e:
+            logger.error("Save settings error: %s", e)
+            return False
+
+    async def reboot_device(self) -> bool:
+        """Reboot device without saving"""
+        try:
+            client = get_ble_client()
+            if client:
+                await client.reboot_device()
+                return True
+            return False
+        except Exception as e:
+            logger.error("Reboot device error: %s", e)
+            return False
+
+    async def save_and_reboot(self) -> bool:
+        """Save settings and reboot device (0xF0 message)"""
+        try:
+            client = get_ble_client()
+            if client:
+                await client.save_and_reboot()
+                return True
+            return False
+        except Exception as e:
+            logger.error("Save and reboot error: %s", e)
+            return False
+
     async def start(self) -> None:
         """Start local BLE client"""
         logger.info("Starting local BLE client")

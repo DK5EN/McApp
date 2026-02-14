@@ -1158,7 +1158,20 @@ class BLEClient:
             logger.debug("No write characteristic available")
 
     async def set_commands(self, cmd):
+       """
+       Send configuration commands using binary message types.
+
+       Supports:
+       - --settime: 0x20 message with UNIX timestamp
+       - --save: 0xA0 text command to save settings
+       - --reboot: 0xA0 text command to reboot device
+       - --savereboot: 0xF0 binary message to save & reboot
+
+       Args:
+           cmd: Command string (e.g., "--settime", "--save", "--savereboot")
+       """
        laenge = 0
+       byte_array = None
 
        if not self.bus:
           return
@@ -1168,7 +1181,7 @@ class BLEClient:
        if has_console:
           print("✅ ready to send")
 
-       #ID = 0x20 Timestamp from phone [4B]
+       # ID = 0x20 Timestamp from phone [4B]
        if cmd == "--settime":
          cmd_byte = bytes([0x20])
 
@@ -1182,17 +1195,69 @@ class BLEClient:
             print(f"Aktuelle Zeit {now}")
             print("to hex:", ' '.join(f"{b:02X}" for b in byte_array))
 
-       else:
-          print(f"❌ {cmd} not yet implemented")
+       # ID = 0xF0 Save & Reboot [no data]
+       elif cmd == "--savereboot":
+         cmd_byte = bytes([0xF0])
+         # No data payload for 0xF0
+         laenge = 2  # length + message ID only
+         byte_array = laenge.to_bytes(1, 'big') + cmd_byte
 
-       if self.write_char_iface:
+         if has_console:
+            print("💾 Saving settings to flash and rebooting device")
+            print("to hex:", ' '.join(f"{b:02X}" for b in byte_array))
+
+       # Send --save or --reboot as A0 text commands
+       elif cmd in ["--save", "--reboot"]:
+         # These use A0 message type (text command)
+         await self.a0_commands(cmd)
+         return  # Early return, a0_commands handles sending
+
+       else:
+          logger.warning("Command %s not implemented in set_commands", cmd)
+          print(f"❌ {cmd} not yet implemented")
+          return  # Early return if command not recognized
+
+       if self.write_char_iface and byte_array:
             await self.write_char_iface.call_write_value(byte_array, {})
             if has_console:
-               print(f"alles zusammen und raus damit {cmd_byte} {laenge}")
-               print(f"📨 Message sent .. {byte_array}")
-
+               print(f"📨 Message sent: {' '.join(f'{b:02X}' for b in byte_array)}")
+            await self._publish_status(
+                'set command', 'ok', f"✅ Command {cmd} sent successfully"
+            )
        else:
             logger.debug("No write characteristic available")
+
+    async def save_settings(self):
+        """
+        Save current device settings to flash memory.
+
+        Uses --save A0 command. Settings are persistent across reboots.
+        Does NOT reboot the device.
+        """
+        await self.set_commands("--save")
+        logger.info("Device settings saved to flash")
+
+    async def reboot_device(self):
+        """
+        Reboot the device without saving settings.
+
+        Uses --reboot A0 command. Unsaved settings will be lost.
+        """
+        await self.set_commands("--reboot")
+        logger.info("Device reboot command sent")
+
+    async def save_and_reboot(self):
+        """
+        Save settings to flash and reboot device in one operation.
+
+        Uses 0xF0 binary message. This is the recommended way to persist
+        configuration changes as it's atomic (saves then reboots).
+
+        Per firmware spec: Most configuration commands require --save or
+        0xF0 message to persist to flash, otherwise settings are lost on reboot.
+        """
+        await self.set_commands("--savereboot")
+        logger.info("Device save & reboot command sent (0xF0)")
 
     async def _check_conn(self):
         if not self.props_iface:

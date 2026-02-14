@@ -339,6 +339,18 @@ class BLEClientRemote(BLEClientBase):
             # For other set commands, send as regular command
             return await self.send_command(cmd)
 
+    async def save_settings(self) -> bool:
+        """Save device settings to flash"""
+        return await self.send_command("--save")
+
+    async def reboot_device(self) -> bool:
+        """Reboot device without saving"""
+        return await self.send_command("--reboot")
+
+    async def save_and_reboot(self) -> bool:
+        """Save settings and reboot device (0xF0 message)"""
+        return await self.set_command("--savereboot")
+
     async def start(self) -> None:
         """Start the remote BLE client and SSE notification stream"""
         logger.info("Starting remote BLE client -> %s", self.remote_url)
