@@ -183,6 +183,7 @@ check_versions() {
   local webapp_version
   webapp_version=$(cat "${INSTALL_DIR}/webapp/version.html" 2>/dev/null || echo "unknown")
   printf "  %-20s ${GREEN}[OK]${NC} %s\n" "webapp version:" "$webapp_version"
+  printf "  %-20s ${GREEN}[OK]${NC} McApp Bootstrap v%s\n" "bootstrap:" "$SCRIPT_VERSION"
   return 0
 }
 
