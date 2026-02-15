@@ -411,8 +411,36 @@ setup_python_env() {
 activate_services() {
   log_info "Activating services..."
 
+  disable_conflicting_services
   configure_systemd_service
   enable_and_start_services
+}
+
+disable_conflicting_services() {
+  # Caddy conflicts with lighttpd on port 80
+  if systemctl is-active --quiet caddy 2>/dev/null; then
+    log_info "  Stopping and disabling caddy (conflicts with lighttpd on port 80)..."
+    systemctl stop caddy
+    systemctl disable caddy
+  fi
+
+  # Old mcapp process may still hold port 1799 (e.g. running from old venv/scripts)
+  # The systemd-managed mcapp will be restarted by enable_and_start_services,
+  # but rogue processes outside systemd need to be killed
+  if ss -ulnp 2>/dev/null | grep -q ':1799\b'; then
+    local pid
+    pid=$(ss -ulnp 2>/dev/null | grep ':1799\b' | grep -oP 'pid=\K\d+' | head -1)
+    if [[ -n "$pid" ]]; then
+      # Check if this is managed by our systemd service
+      local unit
+      unit=$(systemctl status "$pid" 2>/dev/null | head -1 || true)
+      if [[ "$unit" != *"mcapp.service"* ]]; then
+        log_info "  Killing rogue process on UDP port 1799 (PID $pid)..."
+        kill "$pid" 2>/dev/null || true
+        sleep 1
+      fi
+    fi
+  fi
 }
 
 configure_systemd_service() {
