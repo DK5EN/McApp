@@ -4,7 +4,7 @@
 # Fully automatic — just run ./release.sh (no arguments needed).
 # Detects the current branch and handles everything:
 #
-#   main branch       → Production release (bumps version, draft)
+#   main branch       → Production release (bumps version, pushes, publishes)
 #   development branch → Dev pre-release (auto-numbered, published)
 #
 # Produces a single combined tarball with backend + webapp.
@@ -80,6 +80,17 @@ on_failure() {
     if git -C "$PROJECT_DIR" ls-remote --tags origin "refs/tags/${_CLEANUP_TAG}" | grep -q .; then
       git -C "$PROJECT_DIR" push origin --delete "$_CLEANUP_TAG" &>/dev/null 2>&1 || true
       log_warn "  Deleted remote tag ${_CLEANUP_TAG}"
+    fi
+  fi
+
+  # Warn about pushed commits (can't safely force-push main)
+  if [[ -n "$_CLEANUP_TAG" ]]; then
+    local remote_head
+    remote_head=$(git -C "$PROJECT_DIR" rev-parse origin/main 2>/dev/null || true)
+    local local_head
+    local_head=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || true)
+    if [[ -n "$remote_head" && "$remote_head" == "$local_head" ]]; then
+      log_warn "  Commit was already pushed to remote — may need manual revert on main"
     fi
   fi
 
@@ -358,6 +369,17 @@ commit_and_tag_production() {
   log_info "  Committed and tagged ${version}"
 }
 
+push_to_remote() {
+  local version="$1"
+
+  log_info "Pushing commit and tag to remote..."
+
+  git -C "$PROJECT_DIR" push
+  git -C "$PROJECT_DIR" push origin "$version"
+
+  log_info "  Pushed commit and tag ${version}"
+}
+
 tag_dev() {
   local version="$1"
 
@@ -375,21 +397,19 @@ upload_production() {
   local tarball="$2"
   local checksum="$3"
 
-  log_info "Creating GitHub draft release ${version}..."
+  log_info "Creating GitHub release ${version}..."
 
   local -a assets=("${PROJECT_DIR}/${tarball}" "${PROJECT_DIR}/${checksum}")
 
-  # gh release create also pushes the tag to the remote
   gh release create "$version" \
     --repo "$GITHUB_REPO" \
     --title "McApp ${version}" \
-    --notes "McApp release ${version}" \
-    --draft \
+    --notes-file "${PROJECT_DIR}/doc/release-history.md" \
     "${assets[@]}"
 
   _CLEANUP_RELEASE="$version"
 
-  log_info "  Draft release created: ${version}"
+  log_info "  Release published: ${version}"
 }
 
 upload_dev() {
@@ -475,31 +495,28 @@ main() {
     # Step 3: Commit and tag
     commit_and_tag_production "$version"
 
-    # Step 4: Build tarball
+    # Step 4: Push commit and tag to remote
+    push_to_remote "$version"
+
+    # Step 5: Build tarball
     local tarball
     tarball=$(build_tarball "$version")
 
-    # Step 5: Generate checksum
+    # Step 6: Generate checksum
     local checksum
     checksum=$(generate_checksum "$tarball")
 
-    # Step 6: Upload as draft
+    # Step 7: Upload release
     upload_production "$version" "$tarball" "$checksum"
 
-    # Step 7: Cleanup
+    # Step 8: Cleanup
     cleanup_artifacts "$tarball" "$checksum"
 
     _RELEASE_SUCCESS=true
 
     echo ""
-    log_info "Release ${version} created successfully!"
-    echo ""
-    echo "  Next steps:"
-    echo "  1. Review the draft release on GitHub"
-    echo "  2. Edit release notes if needed"
-    echo "  3. Publish the release"
-    echo "  4. Push the tag: git push origin ${version}"
-    echo "  5. Push the commit: git push"
+    log_info "Release ${version} published!"
+    log_info "  https://github.com/${GITHUB_REPO}/releases/tag/${version}"
     echo ""
 
   else
