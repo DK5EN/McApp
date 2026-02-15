@@ -391,13 +391,13 @@ setup_python_env() {
 
   # Run uv sync as the real user (not root)
   if [[ "$run_user" != "root" ]]; then
-    sudo -u "$run_user" bash -c "cd '${INSTALL_DIR}' && '${uv_bin}' sync"
+    sudo -u "$run_user" bash -c "cd '${INSTALL_DIR}' && '${uv_bin}' sync --all-packages"
   else
-    (cd "$INSTALL_DIR" && "$uv_bin" sync)
+    (cd "$INSTALL_DIR" && "$uv_bin" sync --all-packages)
   fi
 
   if [[ $? -eq 0 ]]; then
-    log_ok "  Python environment ready (${INSTALL_DIR}/.venv)"
+    log_ok "  Python environment ready (including workspace members)"
   else
     log_error "  uv sync failed"
     return 1
