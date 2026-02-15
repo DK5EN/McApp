@@ -1,14 +1,14 @@
 #!/bin/bash
-# release.sh - Unified release builder for McApp
+# release.sh - Interactive release builder for McApp
 #
-# Fully automatic — just run ./release.sh (no arguments needed).
-# Detects the current branch and handles everything:
+# Always run from the `development` branch. The script asks what you want:
 #
-#   main branch       → Production release (bumps version, pushes, publishes)
-#   development branch → Dev pre-release (auto-numbered, published)
+#   Dev pre-release  → Tags development, builds tarball, publishes pre-release
+#   Production       → Merges to main, tags, builds, publishes, preps next version
 #
+# Manages BOTH repos (MCProxy + webapp) for tags and branch switching.
 # Produces a single combined tarball with backend + webapp.
-# Includes automatic cleanup on failure (rollback tag, release, artifacts).
+# Includes automatic cleanup on failure (rollback tags, release, artifacts, branches).
 
 set -euo pipefail
 
@@ -21,6 +21,8 @@ readonly GITHUB_REPO="DK5EN/McApp"
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[1;33m'
+readonly CYAN='\033[0;36m'
+readonly BOLD='\033[1m'
 readonly NC='\033[0m'
 
 log_info() { echo -e "${GREEN}==>${NC} $*" >&2; }
@@ -36,6 +38,7 @@ _CLEANUP_RELEASE=""       # GitHub release to delete on failure
 _CLEANUP_TARBALL=""       # tarball file to remove
 _CLEANUP_CHECKSUM=""      # checksum file to remove
 _CLEANUP_TMPDIR=""        # temp staging dir to remove
+_CLEANUP_SWITCHED_MAIN=false  # did we switch repos to main?
 _RELEASE_SUCCESS=false    # set to true at the very end
 
 on_failure() {
@@ -70,28 +73,40 @@ on_failure() {
     fi
   fi
 
-  # Delete local git tag
+  # Delete tags from both repos
   if [[ -n "$_CLEANUP_TAG" ]]; then
-    if git -C "$PROJECT_DIR" tag -l "$_CLEANUP_TAG" | grep -q .; then
-      git -C "$PROJECT_DIR" tag -d "$_CLEANUP_TAG" &>/dev/null
-      log_warn "  Deleted local tag ${_CLEANUP_TAG}"
-    fi
-    # Delete remote tag (may have been pushed by gh release create)
-    if git -C "$PROJECT_DIR" ls-remote --tags origin "refs/tags/${_CLEANUP_TAG}" | grep -q .; then
-      git -C "$PROJECT_DIR" push origin --delete "$_CLEANUP_TAG" &>/dev/null 2>&1 || true
-      log_warn "  Deleted remote tag ${_CLEANUP_TAG}"
-    fi
+    for repo_dir in "$PROJECT_DIR" "$WEBAPP_DIR"; do
+      local repo_name
+      repo_name=$(basename "$repo_dir")
+
+      # Delete local tag
+      if git -C "$repo_dir" tag -l "$_CLEANUP_TAG" | grep -q .; then
+        git -C "$repo_dir" tag -d "$_CLEANUP_TAG" &>/dev/null
+        log_warn "  Deleted local tag ${_CLEANUP_TAG} in ${repo_name}"
+      fi
+      # Delete remote tag
+      if git -C "$repo_dir" ls-remote --tags origin "refs/tags/${_CLEANUP_TAG}" | grep -q .; then
+        git -C "$repo_dir" push origin --delete "$_CLEANUP_TAG" &>/dev/null 2>&1 || true
+        log_warn "  Deleted remote tag ${_CLEANUP_TAG} in ${repo_name}"
+      fi
+    done
   fi
 
-  # Warn about pushed commits (can't safely force-push main)
-  if [[ -n "$_CLEANUP_TAG" ]]; then
-    local remote_head
-    remote_head=$(git -C "$PROJECT_DIR" rev-parse origin/main 2>/dev/null || true)
-    local local_head
-    local_head=$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || true)
-    if [[ -n "$remote_head" && "$remote_head" == "$local_head" ]]; then
-      log_warn "  Commit was already pushed to remote — may need manual revert on main"
-    fi
+  # Restore both repos to development if we switched to main
+  if [[ "$_CLEANUP_SWITCHED_MAIN" == true ]]; then
+    for repo_dir in "$PROJECT_DIR" "$WEBAPP_DIR"; do
+      local repo_name
+      repo_name=$(basename "$repo_dir")
+      local current_branch
+      current_branch=$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+
+      if [[ "$current_branch" == "main" ]]; then
+        # Abort merge if in progress
+        git -C "$repo_dir" merge --abort &>/dev/null 2>&1 || true
+        git -C "$repo_dir" checkout development &>/dev/null 2>&1 || true
+        log_warn "  Restored ${repo_name} to development"
+      fi
+    done
   fi
 
   log_error "Rollback complete."
@@ -122,39 +137,8 @@ cleanup_stale_artifacts() {
 }
 
 #──────────────────────────────────────────────────────────────────
-# BRANCH / MODE DETECTION
-#──────────────────────────────────────────────────────────────────
-
-detect_mode() {
-  local branch
-  branch=$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref HEAD)
-
-  case "$branch" in
-    main|master)
-      echo "production"
-      ;;
-    development)
-      echo "dev"
-      ;;
-    *)
-      log_error "Releases can only be created from 'main' or 'development' branch."
-      log_error "Current branch: ${branch}"
-      exit 1
-      ;;
-  esac
-}
-
-#──────────────────────────────────────────────────────────────────
 # VALIDATION
 #──────────────────────────────────────────────────────────────────
-
-validate_clean_tree() {
-  if [[ -n "$(git -C "$PROJECT_DIR" status --porcelain)" ]]; then
-    log_error "Working tree is not clean. Commit or stash changes first."
-    git -C "$PROJECT_DIR" status --short
-    exit 1
-  fi
-}
 
 validate_tools() {
   local -a required=("git" "gh" "shasum" "tar" "sed" "npm" "jq")
@@ -166,27 +150,89 @@ validate_tools() {
   done
 }
 
+validate_on_development() {
+  for repo_dir in "$PROJECT_DIR" "$WEBAPP_DIR"; do
+    local repo_name
+    repo_name=$(basename "$repo_dir")
+    local branch
+    branch=$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD)
+
+    if [[ "$branch" != "development" ]]; then
+      log_error "${repo_name} is on branch '${branch}' — must be on 'development'"
+      log_error "Switch both repos to development before running this script."
+      exit 1
+    fi
+  done
+}
+
+validate_repos_clean() {
+  for repo_dir in "$PROJECT_DIR" "$WEBAPP_DIR"; do
+    local repo_name
+    repo_name=$(basename "$repo_dir")
+
+    if [[ -n "$(git -C "$repo_dir" status --porcelain)" ]]; then
+      log_error "${repo_name} has uncommitted changes:"
+      git -C "$repo_dir" status --short
+      exit 1
+    fi
+  done
+}
+
+validate_main_mergeable() {
+  # Fetch latest remote state
+  git -C "$PROJECT_DIR" fetch origin main --quiet
+  git -C "$WEBAPP_DIR" fetch origin main --quiet
+
+  for repo_dir in "$PROJECT_DIR" "$WEBAPP_DIR"; do
+    local repo_name
+    repo_name=$(basename "$repo_dir")
+
+    # Check if main has commits that are NOT in development (diverged state)
+    local ahead
+    ahead=$(git -C "$repo_dir" rev-list --count origin/main..development 2>/dev/null || echo "0")
+    local behind
+    behind=$(git -C "$repo_dir" rev-list --count development..origin/main 2>/dev/null || echo "0")
+
+    if (( behind > 0 )); then
+      log_error "${repo_name}: main has ${behind} commit(s) not in development (diverged)"
+      log_error "This is unexpected — main should only receive merges from development."
+      log_error "Resolve this manually before releasing."
+      exit 1
+    fi
+  done
+}
+
+#──────────────────────────────────────────────────────────────────
+# INTERACTIVE PROMPT
+#──────────────────────────────────────────────────────────────────
+
+prompt_release_type() {
+  echo ""
+  echo -e "  ${BOLD}What type of release?${NC}"
+  echo ""
+  echo "    1) Dev pre-release  (tag development, publish pre-release)"
+  echo "    2) Production       (merge to main, tag, publish stable release)"
+  echo ""
+  read -rp "  Choose [1/2]: " choice
+
+  case "$choice" in
+    1) echo "dev" ;;
+    2) echo "production" ;;
+    *)
+      log_error "Invalid choice: ${choice}"
+      exit 1
+      ;;
+  esac
+}
+
 #──────────────────────────────────────────────────────────────────
 # VERSION HELPERS
 #──────────────────────────────────────────────────────────────────
 
-# Read current version from pyproject.toml (e.g., "1.01.0")
+# Read current version from pyproject.toml (e.g., "1.4.1")
 read_pyproject_version() {
   grep -oE '^version = "([^"]+)"' "${PROJECT_DIR}/pyproject.toml" \
     | head -1 | sed 's/version = "//;s/"//'
-}
-
-# Production: auto-bump minor version (1.01.0 → v1.02.0)
-auto_version() {
-  local current
-  current=$(read_pyproject_version)
-
-  local major minor patch
-  IFS='.' read -r major minor patch <<< "$current"
-  minor=$((minor + 1))
-  patch=0
-
-  echo "v${major}.${minor}.${patch}"
 }
 
 # Dev: find the next -dev.N tag for the current version
@@ -209,23 +255,166 @@ get_next_dev_tag() {
   echo "${prefix}.${next}"
 }
 
-#──────────────────────────────────────────────────────────────────
-# VERSION BUMP (production only)
-#──────────────────────────────────────────────────────────────────
+# Find the previous production tag (e.g., v1.4.0)
+find_previous_prod_tag() {
+  git -C "$PROJECT_DIR" tag -l 'v*' --sort=-v:refname \
+    | grep -v '\-dev\.' | head -1
+}
 
-bump_version() {
+# Bump patch version: 1.4.1 → 1.4.2
+bump_patch_version() {
   local version="$1"
-  local bare_version="${version#v}"
+  local major minor patch
+  IFS='.' read -r major minor patch <<< "$version"
+  patch=$((patch + 1))
+  echo "${major}.${minor}.${patch}"
+}
 
-  log_info "Bumping version to ${version}..."
+#──────────────────────────────────────────────────────────────────
+# RELEASE NOTES (production only)
+#──────────────────────────────────────────────────────────────────
 
-  sed -i '' "s/^version = \".*\"/version = \"${bare_version}\"/" \
+generate_release_notes_prompt() {
+  local version="$1"
+  local prev_tag="$2"
+
+  local backend_log
+  backend_log=$(git -C "$PROJECT_DIR" log "${prev_tag}..HEAD" --oneline 2>/dev/null || echo "(no commits)")
+  local frontend_log
+  frontend_log=$(git -C "$WEBAPP_DIR" log "${prev_tag}..HEAD" --oneline 2>/dev/null || echo "(no commits)")
+
+  echo ""
+  echo -e "  ${CYAN}────────────────────────────────────────${NC}"
+  echo -e "  ${BOLD}Copy this prompt and run it with Claude:${NC}"
+  echo ""
+  echo "  Summarize the changes since ${prev_tag} for a GitHub release of v${version}."
+  echo "  Backend commits (MCProxy):"
+  echo "$backend_log" | sed 's/^/    /'
+  echo "  Frontend commits (webapp):"
+  echo "$frontend_log" | sed 's/^/    /'
+  echo "  Write the summary to doc/release-history.md"
+  echo -e "  ${CYAN}────────────────────────────────────────${NC}"
+  echo ""
+}
+
+wait_for_release_notes() {
+  echo -e "  Press ${BOLD}Enter${NC} when doc/release-history.md is ready..."
+  read -r
+
+  if [[ ! -f "${PROJECT_DIR}/doc/release-history.md" ]]; then
+    log_error "doc/release-history.md not found"
+    exit 1
+  fi
+
+  log_info "Found doc/release-history.md"
+}
+
+commit_release_notes() {
+  # Commit release-history.md on development if it was changed
+  if git -C "$PROJECT_DIR" diff --name-only | grep -q 'doc/release-history.md' || \
+     git -C "$PROJECT_DIR" diff --cached --name-only | grep -q 'doc/release-history.md' || \
+     git -C "$PROJECT_DIR" status --porcelain | grep -q 'doc/release-history.md'; then
+    git -C "$PROJECT_DIR" add doc/release-history.md
+    git -C "$PROJECT_DIR" commit -m "[docs] Add release notes for v${1}"
+    log_info "Committed release notes on development"
+  else
+    log_info "release-history.md unchanged (already committed)"
+  fi
+}
+
+#──────────────────────────────────────────────────────────────────
+# BRANCH MANAGEMENT (production only)
+#──────────────────────────────────────────────────────────────────
+
+merge_to_main() {
+  log_info "Merging development → main in both repos..."
+
+  for repo_dir in "$PROJECT_DIR" "$WEBAPP_DIR"; do
+    local repo_name
+    repo_name=$(basename "$repo_dir")
+
+    git -C "$repo_dir" checkout main
+    git -C "$repo_dir" merge development --no-ff -m "Merge development for v${1}"
+
+    log_info "  ${repo_name}: merged development → main"
+  done
+
+  _CLEANUP_SWITCHED_MAIN=true
+}
+
+checkout_development() {
+  for repo_dir in "$PROJECT_DIR" "$WEBAPP_DIR"; do
+    local repo_name
+    repo_name=$(basename "$repo_dir")
+    git -C "$repo_dir" checkout development
+  done
+  log_info "Both repos back on development"
+}
+
+#──────────────────────────────────────────────────────────────────
+# TAGGING (both repos)
+#──────────────────────────────────────────────────────────────────
+
+tag_both_repos() {
+  local version="$1"
+  local annotated="${2:-false}"
+
+  log_info "Tagging ${version} in both repos..."
+
+  for repo_dir in "$PROJECT_DIR" "$WEBAPP_DIR"; do
+    local repo_name
+    repo_name=$(basename "$repo_dir")
+
+    if [[ "$annotated" == true ]]; then
+      git -C "$repo_dir" tag -a "$version" -m "Release ${version}"
+    else
+      git -C "$repo_dir" tag "$version"
+    fi
+
+    log_info "  ${repo_name}: tagged ${version}"
+  done
+
+  _CLEANUP_TAG="$version"
+}
+
+push_main_and_tags() {
+  local version="$1"
+
+  log_info "Pushing main + tags in both repos..."
+
+  for repo_dir in "$PROJECT_DIR" "$WEBAPP_DIR"; do
+    local repo_name
+    repo_name=$(basename "$repo_dir")
+
+    git -C "$repo_dir" push origin main
+    git -C "$repo_dir" push origin "$version"
+
+    log_info "  ${repo_name}: pushed main + ${version}"
+  done
+}
+
+#──────────────────────────────────────────────────────────────────
+# POST-RELEASE PREP (production only)
+#──────────────────────────────────────────────────────────────────
+
+post_release_prep() {
+  local current_version="$1"
+  local next_version
+  next_version=$(bump_patch_version "$current_version")
+
+  log_info "Preparing next dev cycle (${next_version})..."
+
+  # Update pyproject.toml files
+  sed -i '' "s/^version = \".*\"/version = \"${next_version}\"/" \
     "${PROJECT_DIR}/pyproject.toml"
-
-  sed -i '' "s/^version = \".*\"/version = \"${bare_version}\"/" \
+  sed -i '' "s/^version = \".*\"/version = \"${next_version}\"/" \
     "${PROJECT_DIR}/ble_service/pyproject.toml"
 
-  log_info "  Updated pyproject.toml files"
+  git -C "$PROJECT_DIR" add pyproject.toml ble_service/pyproject.toml
+  git -C "$PROJECT_DIR" commit -m "[chore] Prep v${next_version} for next dev cycle"
+  git -C "$PROJECT_DIR" push origin development
+
+  log_info "  pyproject.toml bumped to ${next_version}, pushed development"
 }
 
 #──────────────────────────────────────────────────────────────────
@@ -352,45 +541,8 @@ generate_checksum() {
 }
 
 #──────────────────────────────────────────────────────────────────
-# GIT + GITHUB RELEASE
+# GITHUB RELEASE
 #──────────────────────────────────────────────────────────────────
-
-commit_and_tag_production() {
-  local version="$1"
-
-  log_info "Creating git commit and annotated tag..."
-
-  git -C "$PROJECT_DIR" add pyproject.toml ble_service/pyproject.toml
-  git -C "$PROJECT_DIR" commit -m "[chore] Bump version to ${version}"
-  git -C "$PROJECT_DIR" tag -a "$version" -m "Release ${version}"
-
-  _CLEANUP_TAG="$version"
-
-  log_info "  Committed and tagged ${version}"
-}
-
-push_to_remote() {
-  local version="$1"
-
-  log_info "Pushing commit and tag to remote..."
-
-  git -C "$PROJECT_DIR" push
-  git -C "$PROJECT_DIR" push origin "$version"
-
-  log_info "  Pushed commit and tag ${version}"
-}
-
-tag_dev() {
-  local version="$1"
-
-  log_info "Creating lightweight tag ${version}..."
-
-  git -C "$PROJECT_DIR" tag "$version"
-
-  _CLEANUP_TAG="$version"
-
-  log_info "  Tagged ${version}"
-}
 
 upload_production() {
   local version="$1"
@@ -464,11 +616,18 @@ main() {
   echo ""
 
   validate_tools
+  validate_on_development
+  validate_repos_clean
 
   local mode
-  mode=$(detect_mode)
+  mode=$(prompt_release_type)
 
-  log_info "Mode: ${mode} (detected from branch)"
+  local current
+  current=$(read_pyproject_version)
+
+  echo ""
+  log_info "Mode: ${mode}"
+  log_info "Version in pyproject.toml: ${current}"
   echo ""
 
   # Remove stale artifacts from previous (failed) runs
@@ -476,67 +635,87 @@ main() {
 
   if [[ "$mode" == "production" ]]; then
     #── Production release ────────────────────────────────────────
-    validate_clean_tree
+    local version="v${current}"
+    local prev_tag
+    prev_tag=$(find_previous_prod_tag)
 
-    local version
-    version=$(auto_version)
-    local current
-    current=$(read_pyproject_version)
-
-    log_info "Version: ${current} -> ${version}"
+    log_info "Release: ${prev_tag:-'(none)'} → ${version}"
     echo ""
 
-    # Step 1: Bump version in pyproject.toml files
-    bump_version "$version"
+    # Verify tag doesn't already exist
+    for repo_dir in "$PROJECT_DIR" "$WEBAPP_DIR"; do
+      if git -C "$repo_dir" tag -l "$version" | grep -q .; then
+        log_error "Tag ${version} already exists in $(basename "$repo_dir")"
+        exit 1
+      fi
+    done
 
-    # Step 2: Build webapp
+    # Validate main is mergeable (no diverged state)
+    validate_main_mergeable
+
+    # Step 1: Release notes
+    if [[ -n "$prev_tag" ]]; then
+      generate_release_notes_prompt "$current" "$prev_tag"
+    else
+      log_warn "No previous production tag found — skipping release notes prompt"
+    fi
+    wait_for_release_notes
+
+    # Step 2: Commit release notes on development (if changed)
+    commit_release_notes "$current"
+
+    # Step 3: Merge development → main in both repos
+    merge_to_main "$current"
+
+    # Step 4: Build webapp
     build_webapp "$version"
-
-    # Step 3: Commit and tag
-    commit_and_tag_production "$version"
-
-    # Step 4: Push commit and tag to remote
-    push_to_remote "$version"
 
     # Step 5: Build tarball
     local tarball
     tarball=$(build_tarball "$version")
 
-    # Step 6: Generate checksum
+    # Step 6: Tag both repos (annotated)
+    tag_both_repos "$version" true
+
+    # Step 7: Push main + tags in both repos
+    push_main_and_tags "$version"
+
+    # Step 8: Generate checksum
     local checksum
     checksum=$(generate_checksum "$tarball")
 
-    # Step 7: Upload release
+    # Step 9: Upload GitHub release
     upload_production "$version" "$tarball" "$checksum"
 
-    # Step 8: Cleanup
+    # Step 10: Cleanup artifacts
     cleanup_artifacts "$tarball" "$checksum"
+
+    # Step 11: Back to development, prep next version
+    checkout_development
+    _CLEANUP_SWITCHED_MAIN=false
+    post_release_prep "$current"
 
     _RELEASE_SUCCESS=true
 
     echo ""
     log_info "Release ${version} published!"
     log_info "  https://github.com/${GITHUB_REPO}/releases/tag/${version}"
+    log_info "  Next dev version: $(read_pyproject_version)"
     echo ""
 
   else
     #── Dev pre-release ───────────────────────────────────────────
-    validate_clean_tree
-
     local version
     version=$(get_next_dev_tag)
-    local current
-    current=$(read_pyproject_version)
 
-    log_info "Base version: ${current}"
     log_info "Dev tag: ${version}"
     echo ""
 
     # Step 1: Build webapp
     build_webapp "$version"
 
-    # Step 2: Create lightweight tag (no commit — pyproject.toml unchanged)
-    tag_dev "$version"
+    # Step 2: Tag both repos (lightweight)
+    tag_both_repos "$version" false
 
     # Step 3: Build tarball
     local tarball
@@ -546,10 +725,13 @@ main() {
     local checksum
     checksum=$(generate_checksum "$tarball")
 
-    # Step 5: Upload as pre-release (also pushes the tag to remote)
+    # Step 5: Upload as pre-release (gh release create also pushes tags)
     upload_dev "$version" "$tarball" "$checksum"
 
-    # Step 6: Cleanup
+    # Step 6: Push webapp tag (gh only pushes McApp tag)
+    git -C "$WEBAPP_DIR" push origin "$version"
+
+    # Step 7: Cleanup
     cleanup_artifacts "$tarball" "$checksum"
 
     _RELEASE_SUCCESS=true

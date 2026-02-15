@@ -241,10 +241,7 @@ uv run mcapp
 uvx ruff check
 uvx ruff check --fix   # Auto-fix
 
-# Deploy code to Pi (copies src/, syncs deps, restarts services)
-./scripts/deploy-to-pi.sh
-
-# Create a release (auto-detects branch: main → production, development → pre-release)
+# Create a release (interactive — always run from development branch)
 ./scripts/release.sh
 
 # On Pi: view service logs / restart
@@ -558,9 +555,8 @@ MCProxy/
 ├── pyproject.toml           # Project config (hatchling build, uv workspace)
 ├── uv.lock                  # Locked dependencies
 ├── config.sample.json       # Configuration template
-├── scripts/                 # Deployment and release scripts
-│   ├── deploy-to-pi.sh      # Deploy code to Pi via SSH/SCP
-│   ├── release.sh           # Unified release builder (gh CLI)
+├── scripts/                 # Release and setup scripts
+│   ├── release.sh           # Interactive release builder (gh CLI)
 │   └── ssl-tunnel-setup.sh  # TLS remote access setup (standalone)
 │
 ├── src/mcapp/               # Main Python package
