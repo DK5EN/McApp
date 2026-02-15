@@ -1,9 +1,5 @@
 # McApp
 
-> **Note:** The GitHub repository remains at `github.com/DK5EN/McAdvChat` for
-> compatibility reasons (existing links, bookmarks, bootstrap URLs on deployed devices).
-> The project itself is called **McApp** — only the repo URL keeps the legacy name.
-
 McApp is a single page, client rendered, web application. It should run on every modern browser out there, but you never know. Settings get stored in your browser. If you delete your browser cache, everything is reset.
 
 Rendering on the client, the Raspberry Pi is only a lightweight proxy between a MeshCom device that is connected via BLE and the web browser. It uses SSE and RestAPI for communication.
@@ -21,12 +17,12 @@ Run this single command on a Raspberry Pi for fresh install, update, or repair:
 
 # Install latest stable release
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcapp.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DK5EN/McApp/main/bootstrap/mcapp.sh | sudo bash
 ```
 
 # Install latest development pre-release
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/development/bootstrap/mcapp.sh | sudo bash -s -- --dev
+curl -fsSL https://raw.githubusercontent.com/DK5EN/McApp/development/bootstrap/mcapp.sh | sudo bash -s -- --dev
 ```
 
 The script auto-detects its context and does the right thing:
@@ -155,7 +151,7 @@ Set up a cron job for automatic updates:
 
 ```bash
 # /etc/cron.d/mcapp-update
-0 4 * * * root curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcapp.sh | bash --quiet 2>&1 | logger -t mcapp-update
+0 4 * * * root curl -fsSL https://raw.githubusercontent.com/DK5EN/McApp/main/bootstrap/mcapp.sh | bash --quiet 2>&1 | logger -t mcapp-update
 ```
 
 

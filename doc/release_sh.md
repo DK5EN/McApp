@@ -1,6 +1,6 @@
 # release.sh — McApp Unified Release Workflow
 
-> **Note:** The GitHub repo is `DK5EN/McAdvChat` (legacy name kept for compatibility).
+> **Note:** The GitHub repo is `DK5EN/McApp` (legacy name kept for compatibility).
 > The project is called **McApp**.
 
 Builds a combined tarball (backend + webapp), uploads it to GitHub Releases, and manages version numbers. Runs on Mac (the dev machine), not on the Pi.
@@ -88,7 +88,7 @@ mcapp-v0.52.0/
 ## After a Production Release
 
 ```bash
-# 1. Review the draft at https://github.com/DK5EN/McAdvChat/releases
+# 1. Review the draft at https://github.com/DK5EN/McApp/releases
 # 2. Edit release notes if needed
 # 3. Publish the release on GitHub
 # 4. Push the tag and commit:

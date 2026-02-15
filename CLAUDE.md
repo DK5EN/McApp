@@ -529,9 +529,7 @@ When running Python via `ssh mcapp.local "python3 -c \"...\""`:
 
 ## GitHub Repository
 
-The GitHub repository remains at **`github.com/DK5EN/McAdvChat`** for compatibility reasons
-(existing links, bookmarks, bootstrap URLs on deployed devices). The project itself is called
-**McApp** — only the repo URL keeps the legacy name.
+The GitHub repository is at **`github.com/DK5EN/McApp`**.
 
 ## Deployment
 
@@ -541,7 +539,7 @@ Target: Raspberry Pi Zero 2W running as systemd service (`mcapp.service`)
 
 ```bash
 # Single command for install, update, or repair
-curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcapp.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DK5EN/McApp/main/bootstrap/mcapp.sh | sudo bash
 ```
 
 The bootstrap script:

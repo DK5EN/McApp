@@ -14,7 +14,7 @@ set -euo pipefail
 
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly WEBAPP_DIR="$(cd "${SCRIPT_DIR}/../webapp" && pwd)"
-readonly GITHUB_REPO="DK5EN/McAdvChat"
+readonly GITHUB_REPO="DK5EN/McApp"
 
 # Colors
 readonly RED='\033[0;31m'

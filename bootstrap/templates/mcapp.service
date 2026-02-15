@@ -1,6 +1,6 @@
 [Unit]
 Description=McApp - MeshCom Message Proxy
-Documentation=https://github.com/DK5EN/McAdvChat
+Documentation=https://github.com/DK5EN/McApp
 After=network-online.target bluetooth.target mcapp-ble.service
 Wants=network-online.target
 

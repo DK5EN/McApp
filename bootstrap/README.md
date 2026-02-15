@@ -1,6 +1,6 @@
 # McApp Bootstrap
 
-> **Note:** The GitHub repo is `DK5EN/McAdvChat` (legacy name kept for compatibility).
+> **Note:** The GitHub repo is `DK5EN/McApp` (legacy name kept for compatibility).
 > The project is called **McApp**.
 
 Unified installer and updater for McApp - the MeshCom message proxy for ham radio operators.
@@ -166,5 +166,5 @@ See the main repository for license information.
 
 ## Support
 
-- GitHub Issues: https://github.com/DK5EN/McAdvChat/issues
+- GitHub Issues: https://github.com/DK5EN/McApp/issues
 - MeshCom Community: https://meshcom.org

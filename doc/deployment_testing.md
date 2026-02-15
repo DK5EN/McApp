@@ -1,6 +1,6 @@
 # Deployment Testing: McApp on Fresh Raspberry Pi
 
-> **Note:** The GitHub repository remains at `github.com/DK5EN/McAdvChat` for
+> **Note:** The GitHub repository remains at `github.com/DK5EN/McApp` for
 > compatibility reasons (existing links, bookmarks, bootstrap URLs on deployed devices).
 > The project itself is called **McApp** — only the repo URL keeps the legacy name.
 
@@ -70,9 +70,9 @@ scp -r bootstrap mcapp.local:~
 
 > **Future:** Once the bootstrap is stable on GitHub, install directly via curl:
 >
-> Dev: `curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcapp.sh | sudo bash -s -- --dev`
+> Dev: `curl -fsSL https://raw.githubusercontent.com/DK5EN/McApp/main/bootstrap/mcapp.sh | sudo bash -s -- --dev`
 >
-> Prod: `curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcapp.sh | sudo bash`
+> Prod: `curl -fsSL https://raw.githubusercontent.com/DK5EN/McApp/main/bootstrap/mcapp.sh | sudo bash`
 
 ## Step 3: Run bootstrap
 

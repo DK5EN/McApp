@@ -172,7 +172,7 @@ hdiutil detach /dev/disk4
 After the Pi boots with the fresh image, run the McApp bootstrap to restore everything:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcapp.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DK5EN/McApp/main/bootstrap/mcapp.sh | sudo bash
 ```
 
 ---

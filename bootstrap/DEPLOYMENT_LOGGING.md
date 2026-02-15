@@ -130,7 +130,7 @@ sudo journalctl -u mcapp.service --since "1 minute ago" | grep BOOTSTRAP
 
 ```bash
 # Fresh install
-curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcapp.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DK5EN/McApp/main/bootstrap/mcapp.sh | sudo bash
 
 # Check logs
 sudo journalctl -u mcapp.service | grep BOOTSTRAP

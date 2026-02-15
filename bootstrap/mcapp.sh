@@ -4,7 +4,7 @@
 # One script for: bootstrap, configure, upgrade, repair
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/DK5EN/McAdvChat/main/bootstrap/mcapp.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/DK5EN/McApp/main/bootstrap/mcapp.sh | bash
 #   ./mcapp.sh [OPTIONS]
 #
 # Options:
@@ -34,7 +34,7 @@ else
 fi
 
 readonly GITHUB_REPO_BRANCH_DEFAULT="main"
-GITHUB_RAW_BASE="https://raw.githubusercontent.com/DK5EN/McAdvChat/${GITHUB_REPO_BRANCH_DEFAULT}"
+GITHUB_RAW_BASE="https://raw.githubusercontent.com/DK5EN/McApp/${GITHUB_REPO_BRANCH_DEFAULT}"
 
 # Re-enable nounset now that BASH_SOURCE detection is done
 set -u
@@ -45,7 +45,7 @@ readonly CONFIG_FILE="${CONFIG_DIR}/config.json"
 readonly WEBAPP_DIR="/var/www/html/webapp"
 readonly SCRIPTS_DIR="/usr/local/bin"
 readonly SHARE_DIR="/usr/local/share/mcapp"
-readonly GITHUB_REPO="DK5EN/McAdvChat"
+readonly GITHUB_REPO="DK5EN/McApp"
 readonly GITHUB_API_BASE="https://api.github.com/repos/${GITHUB_REPO}"
 
 # User home directory (handles sudo correctly)
@@ -224,7 +224,7 @@ parse_args() {
         ;;
       --dev)
         DEV_MODE=true
-        GITHUB_RAW_BASE="https://raw.githubusercontent.com/DK5EN/McAdvChat/development"
+        GITHUB_RAW_BASE="https://raw.githubusercontent.com/DK5EN/McApp/development"
         shift
         ;;
       --quiet)
