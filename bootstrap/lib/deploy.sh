@@ -453,9 +453,13 @@ configure_systemd_service() {
       ble_api_key=$(jq -r '.BLE_API_KEY // ""' "$CONFIG_FILE" 2>/dev/null)
     fi
 
+    # Escape special chars: & for sed replacement, % for systemd specifiers
+    local ble_api_key_escaped="${ble_api_key//&/\\&}"
+    ble_api_key_escaped="${ble_api_key_escaped//%/%%}"
+
     sed -e "s|{{USER}}|${run_user}|g" \
         -e "s|{{HOME}}|${run_home}|g" \
-        -e "s|{{BLE_API_KEY}}|${ble_api_key}|g" \
+        -e "s|{{BLE_API_KEY}}|${ble_api_key_escaped}|g" \
         "${template_dir}/mcapp-ble.service" > "$ble_service"
 
     log_info "  mcapp-ble.service configured"
