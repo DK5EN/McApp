@@ -144,7 +144,7 @@ remove_bloat_packages() {
     if dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
       log_info "  Removing: $pkg"
       DEBIAN_FRONTEND=noninteractive apt-get purge -y -qq "$pkg" 2>/dev/null || true
-      ((removed++))
+      removed=$((removed + 1))
     fi
   done
 
