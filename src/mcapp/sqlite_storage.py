@@ -169,9 +169,10 @@ class SQLiteStorage:
     persistent SQLite storage.
     """
 
-    def __init__(self, db_path: str | Path, max_size_mb: int = 50):
+    MAX_DB_SIZE_MB = 1024  # 1 GB hard limit — triggers progressive pruning
+
+    def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
-        self.max_size_mb = max_size_mb
         self._initialized = False
 
         # In-memory bucket accumulators: {(callsign, bucket_start_ms): {"rssi": [], "snr": []}}
@@ -1293,6 +1294,49 @@ class SQLiteStorage:
             fetch=False,
         )
 
+        # --- Size-based pruning: enforce 1 GB hard limit ---
+        # SQLite doesn't shrink the file on DELETE (pages go to freelist), so we
+        # estimate how many rows to delete, remove them, then VACUUM once to reclaim.
+        size_mb = await self.get_storage_size_mb()
+        if size_mb > self.MAX_DB_SIZE_MB:
+            logger.warning(
+                "DB size %.0f MB exceeds %d MB limit — pruning oldest data",
+                size_mb, self.MAX_DB_SIZE_MB,
+            )
+            target_mb = self.MAX_DB_SIZE_MB * 0.9  # aim for 90% to avoid re-trigger
+            excess_bytes = int((size_mb - target_mb) * 1024 * 1024)
+            # ~200 bytes per row is a conservative average across all tables
+            rows_to_free = max(1000, excess_bytes // 200)
+
+            for table, ts_col in [
+                ("signal_log", "timestamp"),
+                ("signal_buckets", "bucket_ts"),
+                ("messages", "timestamp"),
+            ]:
+                result = await self._execute(f"SELECT COUNT(*) as c FROM {table}")
+                table_count = result[0]["c"] if result else 0
+                to_delete = min(table_count, rows_to_free)
+                if to_delete > 0:
+                    await self._execute(
+                        f"DELETE FROM {table} WHERE rowid IN"
+                        f" (SELECT rowid FROM {table} ORDER BY {ts_col} ASC LIMIT ?)",
+                        (to_delete,),
+                        fetch=False,
+                    )
+                    logger.info(
+                        "Size limit: deleted %d oldest rows from %s", to_delete, table
+                    )
+                    rows_to_free -= to_delete
+                if rows_to_free <= 0:
+                    break
+
+            # VACUUM rebuilds the file to reclaim disk space
+            await self._execute("VACUUM", fetch=False)
+            new_size = await self.get_storage_size_mb()
+            logger.info(
+                "Size-based pruning complete: %.0f MB → %.0f MB", size_mb, new_size
+            )
+
         # Update query planner statistics after bulk deletes
         await self._execute("ANALYZE", fetch=False)
 
@@ -2155,11 +2199,8 @@ class SQLiteStorage:
         await asyncio.to_thread(_close)
 
 
-async def create_sqlite_storage(
-    db_path: str | Path,
-    max_size_mb: int = 50,
-) -> SQLiteStorage:
+async def create_sqlite_storage(db_path: str | Path) -> SQLiteStorage:
     """Create and initialize a SQLite storage instance."""
-    storage = SQLiteStorage(db_path, max_size_mb)
+    storage = SQLiteStorage(db_path)
     await storage.initialize()
     return storage

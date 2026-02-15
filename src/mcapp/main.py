@@ -37,7 +37,7 @@ except ImportError:
     SSE_AVAILABLE = False
 
 from . import __version__
-from .sqlite_storage import create_sqlite_storage
+from .sqlite_storage import SQLiteStorage, create_sqlite_storage
 
 VERSION = f"v{__version__}"
 
@@ -1174,10 +1174,7 @@ class MessageValidator:
 async def main():
     # Initialize SQLite storage backend
     logger.info("Using SQLite storage backend: %s", cfg.storage.db_path)
-    storage_handler = await create_sqlite_storage(
-        cfg.storage.db_path,
-        cfg.storage.max_size_mb
-    )
+    storage_handler = await create_sqlite_storage(cfg.storage.db_path)
     # One-time migration: import mcdump.json into SQLite, then rename to prevent re-import
     dump_path = Path("mcdump.json")
     if dump_path.exists():
@@ -1517,9 +1514,8 @@ def run():
         hours_to_dd_hhmm(cfg.storage.prune_hours),
         hours_to_dd_hhmm(cfg.storage.prune_hours_pos),
     )
-    logger.info("Messages store limited to %dMB", cfg.storage.max_size_mb)
-
-    logger.info("SQLite storage: %s", cfg.storage.db_path)
+    logger.info("SQLite storage: %s (max %d MB)", cfg.storage.db_path,
+                SQLiteStorage.MAX_DB_SIZE_MB)
 
     if cfg.sse.enabled:
         logger.info("SSE transport enabled on port %d", cfg.sse.port)
