@@ -3,9 +3,11 @@ BLE Client Abstraction Layer
 
 This module provides a unified interface for BLE operations, supporting
 multiple backends:
-- local: Direct D-Bus/BlueZ (for running on Pi with Bluetooth hardware)
 - remote: HTTP/SSE client (for remote BLE service)
 - disabled: No-op stub (for testing without BLE)
+
+For local Bluetooth hardware access, deploy the standalone BLE service
+(ble_service/) on the Pi and use remote mode.
 
 Usage:
     from ble_client import create_ble_client, BLEMode
@@ -33,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 class BLEMode(Enum):
     """BLE operation modes"""
-    LOCAL = "local"       # Direct D-Bus/BlueZ
+    # LOCAL = "local"  # REMOVED: Use standalone BLE service instead
     REMOTE = "remote"     # HTTP/SSE to remote service
     DISABLED = "disabled" # No-op stub
 
@@ -281,16 +283,7 @@ async def create_ble_client(
     Returns:
         Configured BLE client instance
     """
-    if mode == BLEMode.LOCAL:
-        from .ble_client_local import BLEClientLocal
-        client = BLEClientLocal(
-            notification_callback=notification_callback,
-            message_router=message_router,
-            device_mac=device_mac,
-        )
-        logger.info("Created local BLE client (D-Bus/BlueZ)")
-
-    elif mode == BLEMode.REMOTE:
+    if mode == BLEMode.REMOTE:
         if not remote_url:
             raise ValueError("remote_url required for remote mode")
         from .ble_client_remote import BLEClientRemote
