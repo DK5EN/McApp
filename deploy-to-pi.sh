@@ -34,9 +34,9 @@ set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"
 cd ~/mcapp
 
-# Sync deps from pyproject.toml
-uv sync
-echo ">>> Dependencies synced"
+# Sync deps from pyproject.toml (including workspace members)
+uv sync --all-packages
+echo ">>> Dependencies synced (including workspace members)"
 
 # Restart services
 sudo systemctl restart mcapp mcapp-ble
