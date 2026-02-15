@@ -763,6 +763,94 @@ ssh mcapp.local "sudo journalctl -u mcapp.service --since today --no-pager | gre
 ssh mcapp.local "sudo journalctl -u mcapp.service --since today --no-pager | wc -l"
 ```
 
+## Firewall Configuration
+
+McApp uses host-based firewall to protect the Raspberry Pi. The bootstrap script automatically configures:
+- **nftables** on Debian Trixie (and newer)
+- **iptables** on Debian Bookworm (legacy fallback)
+
+### Allowed Ports
+
+| Port | Protocol | Service | Access |
+|------|----------|---------|--------|
+| 22 | TCP | SSH | Rate limited (6/min external, LAN exempt) |
+| 80 | TCP | lighttpd | All traffic (serves webapp + proxies API) |
+| 1799 | UDP | MeshCom | All traffic (LoRa mesh communication) |
+| 5353 | UDP | mDNS | Multicast only (224.0.0.251) |
+
+**LAN exemption for SSH:** Connections from RFC 1918 private IP ranges (192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12) are NOT rate limited.
+
+### Internal-Only Ports (Not Exposed)
+
+| Port | Protocol | Service | Why Not Exposed |
+|------|----------|---------|-----------------|
+| 2981 | TCP | FastAPI SSE/REST | Proxied via lighttpd on port 80 |
+
+**Note:** Older firewall configurations (before Feb 2026) exposed ports 2980 and 2981 directly. These are now internal-only. The bootstrap script automatically removes them during upgrade.
+
+### Silent Drops (Not Logged)
+
+To prevent log spam, both nftables and iptables silently drop common broadcast/multicast traffic:
+
+- Layer 2 broadcast packets
+- Multicast packets (224.0.0.0/4, 239.0.0.0/8)
+- Global broadcast (255.255.255.255)
+- SSDP/UPnP (port 1900)
+- NetBIOS (ports 137, 138)
+- LLMNR (port 5355)
+- High UDP ports (> 30000)
+- IGMP protocol
+
+### Firewall Logs
+
+**Log format:**
+- nftables: `[nftables DROP] ` prefix
+- iptables: `[iptables DROP] ` prefix
+
+**Rate limiting:** 10 drops per minute are logged (prevents log spam while maintaining visibility)
+
+**View dropped traffic:**
+```bash
+# Watch firewall drops in real-time
+sudo journalctl -kf | grep DROP
+
+# Count drops by source IP (last hour)
+sudo journalctl -k --since "1 hour ago" | grep DROP | awk '{print $NF}' | sort | uniq -c | sort -rn | head -20
+
+# Count drops by destination port (last hour)
+sudo journalctl -k --since "1 hour ago" | grep DROP | grep -oP 'DPT=\K\d+' | sort | uniq -c | sort -rn | head -20
+
+# Show all firewall logs from today
+sudo journalctl -k --since today | grep DROP
+```
+
+### Customizing the Firewall
+
+**To allow additional ports (example: custom service on port 8080):**
+
+For **nftables** (edit `/etc/nftables.conf`):
+```nft
+# Add before the log rule
+tcp dport 8080 accept
+```
+
+For **iptables** (edit `/etc/iptables/rules.v4`):
+```bash
+# Add before the log rule
+iptables -A INPUT -p tcp --dport 8080 -j ACCEPT
+```
+
+**Apply changes:**
+```bash
+# nftables
+sudo systemctl restart nftables
+
+# iptables
+sudo iptables-restore < /etc/iptables/rules.v4
+```
+
+**To customize LAN exemption ranges** (e.g., for non-standard subnets), edit the IP ranges in both configurations and apply changes.
+
 ## Troubleshooting
 
 ### Bluetooth Blocked by rfkill
