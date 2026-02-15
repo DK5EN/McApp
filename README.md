@@ -240,7 +240,12 @@ The MeshCom McApp project consists of three components:
      - Must have a searchable map of nodes
      - Map must support satellite view and dark mode
      - Clicking on a node shows more information
-     - Not planned: fetching dynamic data for temperature, humidity, and air pressure, as well as other sensor data as this data does not propagate over the Internet backbone. Go to aprs.fi to see sensor data
+     - Displays temperature, humidity, and air pressure sensor data from telemetry beacons
+
+  - **MHeard View**
+     - Shows all heard stations with RSSI and SNR signal quality
+     - Displays the relay path for each station
+     - Clicking a station highlights its path on the map
 
   - **FT - File Transfer** 
      - Was implemented, but then removed as the bandwidth is too small
@@ -272,11 +277,6 @@ The MeshCom McApp project consists of three components:
 
     - Optional: connect multiple nodes via UDP
         - Multiple nodes can point to the Raspberry Pi as their target. This ensures that if one node misses something, we get the message from the other node. Two is good, three is better. Best to implement "antenna diversity" by distributing nodes across the space.
-
-**Still missing:**
-- Reading environmental sensors, including a dashboard for displaying statistics
-    - Currently no real use case, as the environmental sensors are needed for implementation
-    - Would first need LoRa packets that contain this information
 
 # Background Information
 
