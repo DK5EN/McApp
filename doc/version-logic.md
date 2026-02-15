@@ -1,6 +1,6 @@
 # McApp Version Logic
 
-Reference document for version numbering, release workflow, and the deficits in the current `release.sh` that need to be fixed.
+Reference document for version numbering and release workflow.
 
 ## 1. Version Format
 
@@ -71,157 +71,7 @@ flowchart TD
 
 The **developer chooses** patch vs minor at step 2, when setting `pyproject.toml` after a release. The automatic post-release prep always bumps patch; for a minor bump, manually edit `pyproject.toml` before the next dev cycle.
 
-## 4. Deficits in Current `release.sh`
-
-### 4.1 `auto_version()` always bumps minor, never allows patch
-
-**Current behavior** (`release.sh:180-190`):
-```bash
-auto_version() {
-  IFS='.' read -r major minor patch <<< "$current"
-  minor=$((minor + 1))
-  patch=0
-  echo "v${major}.${minor}.${patch}"
-}
-```
-
-This **computes** a new version by incrementing minor and resetting patch. There is no way to release a patch version. Result: every production release is a minor bump (v1.2.0 → v1.3.0 → v1.4.0), even for a one-line bug fix.
-
-**Should be**: Read the version from `pyproject.toml` as-is. The version was already set during post-release prep.
-
-**Status**: Fixed. `auto_version()` removed. Production release reads `pyproject.toml` directly.
-
-### 4.2 Production release modifies `pyproject.toml` instead of using it as source of truth
-
-**Current behavior** (`release.sh:216-229`): `bump_version()` writes the computed version into `pyproject.toml` on `main`, commits it, and tags.
-
-This means:
-- `pyproject.toml` on `main` gets a version that was never in `development`
-- The merge from `development` → `main` brings one version, then `release.sh` overwrites it with another
-- The version in `pyproject.toml` is an output of the release process, not an input
-
-**Should be**: `pyproject.toml` is the single source of truth. Production release reads it, tags it, done. No modification needed on `main`.
-
-**Status**: Fixed. `bump_version()` removed. No `pyproject.toml` modification on `main`.
-
-### 4.3 No post-release version prep on development
-
-After a production release, the script does nothing to prepare `development` for the next cycle. The developer must manually:
-1. Switch to `development`
-2. Bump `pyproject.toml` to the next target version
-3. Commit the bump
-
-This is error-prone and was forgotten multiple times, leading to version confusion (e.g., the v1.3.0 bump then revert to v1.2.0 visible in commit history: `d15d457`, `ede24b5`).
-
-**Should be**: After the production release on `main`, the script automatically switches to `development`, bumps to the next patch version, and commits.
-
-**Status**: Fixed. `post_release_prep()` automatically bumps to next patch after production release.
-
-### 4.4 No patch vs minor choice
-
-The developer has no way to influence whether the next release is a patch or minor bump. The script always does minor.
-
-**Should be**: The developer sets the target version in `pyproject.toml` during post-release prep. The script just reads it. For the post-release auto-bump, default to patch (most common case) with the option to manually edit for minor/major.
-
-**Status**: Fixed. Script reads `pyproject.toml` as-is. Auto-prep defaults to patch bump.
-
-### 4.5 No branch safety
-
-The script refuses to run on feature branches (good), but there's no guard against:
-- Running on `main` when `development` has unreleased commits that should be merged first
-- Accidentally developing on `main` and then releasing from there
-
-**Should be**: On `main`, verify that HEAD is a merge from `development` (or at least warn if it's not). On `development`, no special check needed.
-
-**Status**: Fixed. Script now always starts on `development`. For production releases, it validates that `main` has no commits ahead of `development` (diverged state) before merging.
-
-### 4.6 Webapp repo has no tags — release notes can't span both repos
-
-McApp is split across **two Git repositories**:
-
-| Repo | Path | Content |
-|------|------|---------|
-| McApp | `MCProxy/` | Python backend (this repo) |
-| webapp | `../webapp/` | Vue 3 frontend (separate repo) |
-
-**Current behavior**: `release.sh` only tags the McApp repo. The webapp repo has zero version tags. This causes two problems:
-
-1. **No cross-repo release notes**: When preparing a production release (e.g., v1.4.1), you need to summarize all changes since the last release (v1.4.0) across both repos. Without tags in the webapp repo, there's no way to run `git log v1.4.0..HEAD` there — you'd have to manually find the commit that corresponded to the v1.4.0 release by date.
-
-2. **No webapp changelog visibility**: Frontend-only changes (new UI features, bug fixes, styling) are invisible in the release process. They get silently bundled into the tarball without being documented.
-
-**Should be**: `release.sh` creates the **same tag** in both repos at every tagging step:
-- Dev pre-release: lightweight tag `v1.4.1-dev.N` in both `MCProxy/` and `../webapp/`
-- Production release: annotated tag `v1.4.1` in both repos
-- This enables `git log v1.4.0..HEAD` in both repos to generate combined release notes
-
-**Status**: Fixed. `tag_both_repos()` tags both repos. `generate_release_notes_prompt()` shows commits from both repos.
-
-### 4.7 Version history shows chaotic jumps
-
-The actual tag history demonstrates the problem:
-
-| Tag | What happened |
-|-----|---------------|
-| `v0.99` | Early release |
-| `v1.1.0` | Skipped v1.0.0 |
-| `v1.2.0` | Minor bump |
-| `v1.2.0-dev.1` .. `v1.2.0-dev.5` | Dev pre-releases (correct) |
-| `v1.4.0` | Skipped v1.3.0 (auto_version bumped minor from 1.3.0 in pyproject.toml) |
-
-The v1.3.0 → v1.4.0 jump happened because `pyproject.toml` was at `1.3.0` (from a botched manual bump), and `auto_version()` incremented minor to `1.4.0`.
-
-### 4.8 `deploy-to-pi.sh` is deprecated
-
-`scripts/deploy-to-pi.sh` is a legacy deployment script that copies files via SCP and restarts services. It predates the bootstrap system and the release workflow. It should be removed:
-
-- The bootstrap system (`bootstrap/mcapp.sh`) handles all deployment
-- Production deployments use `release.sh` → GitHub release → bootstrap pulls the tarball
-- The script bypasses version tagging entirely — it just copies files to the Pi
-- Keeping it around invites accidental use, which would deploy untagged, unversioned code
-
-**Action**: Delete `scripts/deploy-to-pi.sh`.
-
-**Status**: Done. File deleted.
-
-## 5. Summary: What Actually Needs to Change
-
-The deficits above sound like a lot, but the actual fix is a **net deletion of code**. The two broken functions (`auto_version()` and `bump_version()`) are the root cause of most problems — removing them and reading `pyproject.toml` directly fixes deficits 4.1, 4.2, 4.3, and 4.4 in one stroke.
-
-### What gets deleted
-
-| Item | Lines | Why |
-|------|-------|-----|
-| `auto_version()` | ~10 | Computes wrong version (always minor bump). Replace with: read `pyproject.toml` |
-| `bump_version()` | ~15 | Writes computed version back to `pyproject.toml` on main. Not needed — version is already there from the merge |
-| `detect_mode()` | ~18 | Replaced by interactive prompt (always start on development) |
-| `commit_and_tag_production()` | ~13 | No version bump commit needed on main; tagging now handles both repos |
-| `scripts/deploy-to-pi.sh` | ~51 | Deprecated. Bootstrap handles deployment |
-
-### What stays (most of the script)
-
-- Tarball building (webapp build + Python package)
-- GitHub release creation via `gh`
-- Pre-release tagging logic (dev.N increment)
-- Clean working tree checks
-- Failure cleanup trap
-
-### What gets added
-
-| Feature | Lines (est.) | Fixes |
-|---------|-------------|-------|
-| Interactive prompt (`prompt_release_type()`) | ~18 | Always start on development, choose release type |
-| Dual-repo validation (`validate_on_development()`, `validate_repos_clean()`) | ~25 | 4.5 — both repos must be on development and clean |
-| Main mergeability check (`validate_main_mergeable()`) | ~22 | 4.5 — main must not have diverged from development |
-| Release notes workflow (`generate_release_notes_prompt()`, `wait_for_release_notes()`, `commit_release_notes()`) | ~45 | Release notes authored on development, committed before merge |
-| Branch management (`merge_to_main()`, `checkout_development()`) | ~20 | Script handles checkout/merge/restore automatically |
-| Dual-repo tagging (`tag_both_repos()`, `push_main_and_tags()`) | ~30 | 4.6 — both repos get identical tags |
-| Post-release prep (`post_release_prep()`, `bump_patch_version()`) | ~20 | 4.3 — automatic version bump after production release |
-| Enhanced failure recovery | ~15 | Restore both repos to development, abort merges, clean tags in both repos |
-
-**Net effect**: The broken auto-version logic is gone. The script is longer but the complexity is in straightforward branch/tag operations, not version arithmetic.
-
-## 6. Webapp Version Check Rules
+## 4. Webapp Version Check Bug
 
 ### Current Implementation
 
@@ -256,7 +106,7 @@ const hasUpdate = computed(() => {
 })
 ```
 
-## 7. Release Script Workflow
+## 5. Release Script Workflow
 
 ### Overview
 
