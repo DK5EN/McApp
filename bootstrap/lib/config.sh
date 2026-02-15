@@ -314,6 +314,14 @@ write_config() {
   # Ensure config directory exists
   mkdir -p "$CONFIG_DIR"
 
+  # Generate random BLE API key (16 chars: upper, lower, digits, specials)
+  local ble_api_key
+  ble_api_key=$(python3 -c "
+import secrets, string
+alphabet = string.ascii_letters + string.digits + '!@#%^&*_+-='
+print(''.join(secrets.choice(alphabet) for _ in range(16)))
+")
+
   # Generate config from template or create new
   local tmp_config
   tmp_config=$(mktemp)
@@ -334,7 +342,7 @@ write_config() {
   "PRUNE_HOURS_POS": 192,
   "PRUNE_HOURS_ACK": 192,
 
-  "BLE_API_KEY": ""
+  "BLE_API_KEY": "${ble_api_key}"
 }
 EOF
 

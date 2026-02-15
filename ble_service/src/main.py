@@ -30,7 +30,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuration from environment
-API_KEY = os.getenv("BLE_SERVICE_API_KEY", "mcapp-ble-secret")
+API_KEY = os.getenv("BLE_SERVICE_API_KEY", "")
 CORS_ORIGINS = os.getenv("BLE_SERVICE_CORS_ORIGINS", "*").split(",")
 
 # Global state
@@ -167,8 +167,8 @@ async def lifespan(app: FastAPI):
     global ble_adapter
 
     logger.info("Starting BLE Service")
-    if API_KEY == "mcapp-ble-secret":
-        logger.warning("Using default API key — set BLE_SERVICE_API_KEY for production")
+    if not API_KEY:
+        logger.warning("No API key configured — BLE service is unauthenticated")
     ble_adapter = BLEAdapter(notification_callback=notification_callback)
     ble_adapter._disconnect_callback = _on_adapter_disconnect
 
