@@ -17,7 +17,7 @@ import aiohttp
 from aiohttp_sse_client import client as sse_client
 
 from .ble_client import BLEClientBase, BLEDevice, BLEMode, BLEStatus, ConnectionState
-from .ble_handler import decode_binary_message, decode_json_message, dispatcher
+from .ble_protocol import decode_binary_message, decode_json_message, dispatcher
 
 logger = logging.getLogger(__name__)
 
