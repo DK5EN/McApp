@@ -23,7 +23,7 @@ flowchart TD
         subgraph MR["MESSAGE ROUTER (src/mcapp/main.py)"]
             UDP["UDP Handler<br/>:1799"]
             BLE["BLE Client<br/>(remote mode)"]
-            MSH["MessageStorageHandler"]
+            MSH["SQLiteStorage"]
         end
 
         LH -- "/webapp/ → static files" --> LH
@@ -61,7 +61,6 @@ flowchart TD
 All source lives in `src/mcapp/`. Entry point: `mcapp.main:run` (invoked via `uv run mcapp`).
 
 - **main.py**: Main entry point. Defines `MessageRouter` (central pub/sub hub) and initializes all protocol handlers
-- **message_storage.py**: In-memory message store with JSON persistence, pruning, and parallel mheard statistics processing
 - **sqlite_storage.py**: SQLite storage backend (WAL mode) with cursor-based pagination, type-based retention, composite indexes, and nightly pruning
 - **udp_handler.py**: UDP listener/sender for MeshCom node communication (port 1799)
 - **sse_handler.py**: SSE/REST API transport (FastAPI-based, port 2981). Proxied through lighttpd on port 80. Import-guarded — only loads if FastAPI is available
@@ -69,7 +68,6 @@ All source lives in `src/mcapp/`. Entry point: `mcapp.main:run` (invoked via `uv
 - **config_loader.py**: Dataclass-based configuration with `MCAPP_*` environment variable overrides
 - **logging_setup.py**: Centralized logging with `EmojiFormatter`, `get_logger()`, `has_console()` detection
 - **meteo.py**: `WeatherService` class — hybrid DWD BrightSky + OpenMeteo weather provider
-- **migrate_storage.py**: Migration utility for deque → SQLite storage backend transition
 
 ### BLE Abstraction Layer
 
@@ -104,7 +102,7 @@ Located in `ble_service/` - a FastAPI service that exposes BLE hardware via HTTP
 
 - `MessageRouter`: Central pub/sub hub connecting all protocols
 - `MessageValidator`: Handles message normalization and outbound suppression logic
-- `MessageStorageHandler`: Deque-based storage with size limits and parallel processing
+- `SQLiteStorage`: Persistent storage with WAL mode, pruning, and parallel signal processing
 - `BLEClient`: D-Bus based BLE connection with keep-alive and auto-reconnect
 - `CommandHandler`: Extensible command system with throttling and abuse protection
 
@@ -244,10 +242,10 @@ uvx ruff check
 uvx ruff check --fix   # Auto-fix
 
 # Deploy code to Pi (copies src/, syncs deps, restarts services)
-./deploy-to-pi.sh
+./scripts/deploy-to-pi.sh
 
 # Create a release (auto-detects branch: main → production, development → pre-release)
-./release.sh
+./scripts/release.sh
 
 # On Pi: view service logs / restart
 sudo journalctl -u mcapp.service -f
@@ -311,11 +309,11 @@ Dev config: `/etc/mcapp/config.dev.json` (auto-selected when `MCAPP_ENV=dev`)
 
 ### SQLite Storage Backend
 
-The SQLite backend (`sqlite_storage.py`) is the default for production deployments. Schema version 6 introduced dedicated tables for positions and signal data (see `doc/2026-02-11_1400-position-signal-architecture-ADR.md` for full architecture).
+The SQLite backend (`sqlite_storage.py`) is the default for production deployments. Schema version 10 includes dedicated tables for positions and signal data (see `doc/2026-02-11_1400-position-signal-architecture-ADR.md` for full architecture).
 
 **Journal mode:** WAL (Write-Ahead Logging) for concurrent reads during writes.
 
-**Tables (Schema V6):**
+**Tables (Schema V10):**
 
 | Table | Purpose |
 |-------|---------|
@@ -428,7 +426,7 @@ conn.close()
 \""
 ```
 
-**Schema version:** 6 (WAL mode enabled)
+**Schema version:** 10 (WAL mode enabled)
 
 ### Tables
 
@@ -440,7 +438,7 @@ conn.close()
 | `signal_buckets` | ~7k | Pre-aggregated 5-min and 1-hour signal buckets |
 | `telemetry` | ~20 | Temperature, humidity, pressure readings |
 | `mheard_cache` | 0 | Unused cache table |
-| `schema_version` | 1 | Current schema version (6) |
+| `schema_version` | 1 | Current schema version (10) |
 
 ### Key columns in `messages`
 
@@ -560,18 +558,17 @@ MCProxy/
 ├── pyproject.toml           # Project config (hatchling build, uv workspace)
 ├── uv.lock                  # Locked dependencies
 ├── config.sample.json       # Configuration template
-├── deploy-to-pi.sh          # Deploy code to Pi via SSH/SCP
-├── release.sh               # Unified release builder (gh CLI)
-├── ssl-tunnel-setup.sh      # TLS remote access setup (standalone, not part of bootstrap)
+├── scripts/                 # Deployment and release scripts
+│   ├── deploy-to-pi.sh      # Deploy code to Pi via SSH/SCP
+│   ├── release.sh           # Unified release builder (gh CLI)
+│   └── ssl-tunnel-setup.sh  # TLS remote access setup (standalone)
 │
 ├── src/mcapp/               # Main Python package
 │   ├── __init__.py          # Version export (__version__)
 │   ├── main.py              # Entry point + MessageRouter
 │   ├── config_loader.py     # Dataclass-based configuration
 │   ├── logging_setup.py     # Centralized logging + EmojiFormatter
-│   ├── message_storage.py   # In-memory deque + JSON persistence
-│   ├── sqlite_storage.py    # SQLite storage backend (optional)
-│   ├── migrate_storage.py   # Deque → SQLite migration utility
+│   ├── sqlite_storage.py    # SQLite storage backend (WAL mode)
 │   ├── udp_handler.py       # UDP protocol handler
 │   ├── sse_handler.py       # SSE/REST API transport (FastAPI, port 2981)
 │   ├── meteo.py             # WeatherService (DWD + OpenMeteo)
@@ -605,14 +602,25 @@ MCProxy/
 │
 ├── bootstrap/               # Installation scripts
 │   ├── mcapp.sh             # Main entry point
+│   ├── DEPLOYMENT_LOGGING.md # Deployment logging guide
+│   ├── README.md            # Installation documentation
 │   ├── lib/                 # Script modules
 │   └── templates/           # Config templates (incl. caddy/, cloudflared/)
 │
 └── doc/                     # Documentation
-    ├── 2026-02-11_1400-position-signal-architecture-ADR.md  # Position/signal table architecture ADR
-    ├── tls-architecture.md  # TLS setup diagrams
-    └── sops/
-        └── tls-maintenance.md  # Standard operating procedures
+    ├── 2026-01-25_1400-bootstrap-rewrite-ADR.md          # Bootstrap redesign ADR
+    ├── 2026-02-10_1200-tls-remote-access-ADR.md          # TLS setup ADR
+    ├── 2026-02-11_1400-position-signal-architecture-ADR.md # Position/signal table architecture ADR
+    ├── 2026-02-14_1500-altitude-normalization-ADR.md     # Altitude normalization ADR
+    ├── tls-architecture.md       # TLS setup diagrams
+    ├── tls-maintenance-SOP.md    # TLS maintenance procedures
+    ├── a0-commands.md            # Command system documentation
+    ├── ble-state-machine.md      # BLE state machine
+    ├── dataflow.md               # Data flow diagrams
+    ├── telemetry.md              # Telemetry documentation
+    ├── MeshCom-ACK.md            # ACK protocol
+    ├── remote-flash.md           # Remote firmware update
+    └── release-history.md        # Version history
 ```
 
 ## Bootstrap Directory Structure
@@ -692,7 +700,7 @@ See `ble_service/README.md` for full API documentation.
 For internet access with TLS encryption, run the standalone setup script:
 
 ```bash
-sudo ./ssl-tunnel-setup.sh
+sudo ./scripts/ssl-tunnel-setup.sh
 ```
 
 This adds Caddy as a TLS reverse proxy with automated Let's Encrypt DNS-01 certificates and DDNS updates. Supports DuckDNS, Cloudflare, deSEC.io, and Cloudflare Tunnel.
@@ -706,7 +714,7 @@ Browser (HTTPS) → Caddy:443 (TLS) → lighttpd:80 → {
 }
 ```
 
-See `doc/tls-architecture.md` for diagrams and `doc/sops/tls-maintenance.md` for maintenance procedures.
+See `doc/tls-architecture.md` for diagrams and `doc/tls-maintenance-SOP.md` for maintenance procedures.
 
 ## Remote Health Check Commands
 

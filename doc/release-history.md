@@ -504,7 +504,7 @@ This document summarizes all changes made to McApp (backend) and webapp (fronten
 - **Altitude Normalization ADR** (referenced in commits)
 - **WX Quality Scoring ADR** (frontend, referenced in commits)
 - **TLS architecture diagrams** (`doc/tls-architecture.md`)
-- **TLS maintenance SOPs** (`doc/sops/tls-maintenance.md`)
+- **TLS maintenance SOPs** (`doc/tls-maintenance-SOP.md`)
 - **Production database querying reference** in CLAUDE.md
 - **Remote health check commands** in CLAUDE.md
 - **Infinite scroll test results** documentation (`infinite-scroll.md`)

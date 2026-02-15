@@ -78,7 +78,7 @@ sudo ls -la /etc/mcapp/caddy.env
 
 ```bash
 # Re-run the setup script (it detects existing installations)
-sudo ./ssl-tunnel-setup.sh
+sudo ./scripts/ssl-tunnel-setup.sh
 
 # The script will:
 # 1. Detect existing setup
@@ -94,7 +94,7 @@ sudo ./ssl-tunnel-setup.sh
 
 ```bash
 # Use the built-in remove command
-sudo ./ssl-tunnel-setup.sh --remove
+sudo ./scripts/ssl-tunnel-setup.sh --remove
 
 # This will:
 # 1. Stop and disable Caddy/cloudflared
@@ -112,7 +112,7 @@ sudo rm -rf /etc/caddy /var/lib/caddy /etc/cloudflared
 
 ```bash
 # Quick status overview
-sudo ./ssl-tunnel-setup.sh --status
+sudo ./scripts/ssl-tunnel-setup.sh --status
 
 # Shows:
 # - Caddy binary version

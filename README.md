@@ -121,7 +121,7 @@ No high ports are exposed to clients. lighttpd reverse-proxies `/events`, `/api/
 To access McApp securely over the internet with HTTPS, run the standalone TLS setup script after confirming your local setup works:
 
 ```bash
-sudo ./ssl-tunnel-setup.sh
+sudo ./scripts/ssl-tunnel-setup.sh
 ```
 
 This installs **Caddy** as a TLS reverse proxy with automated Let's Encrypt certificates (DNS-01 challenge) and built-in DDNS updates. Supported DNS providers:
@@ -136,13 +136,13 @@ This installs **Caddy** as a TLS reverse proxy with automated Let's Encrypt cert
 After setup, your McApp is available at `https://your-hostname/webapp/`.
 
 ```bash
-sudo ./ssl-tunnel-setup.sh --status   # Check TLS status
-sudo ./ssl-tunnel-setup.sh --remove   # Revert to plain HTTP
+sudo ./scripts/ssl-tunnel-setup.sh --status   # Check TLS status
+sudo ./scripts/ssl-tunnel-setup.sh --remove   # Revert to plain HTTP
 ```
 
 For more details see:
 - `doc/tls-architecture.md` — architecture diagrams
-- `doc/sops/tls-maintenance.md` — maintenance procedures
+- `doc/tls-maintenance-SOP.md` — maintenance procedures
 - `doc/2026-02-10_1200-tls-remote-access-ADR.md` — design rationale
 
 #### Automatic Updates
