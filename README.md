@@ -197,9 +197,11 @@ graph TD
     McApp -- "UDP :1799<br/>⇄ bidirectional" --> MeshComNode
 ```
 
-| Chat | Map | MHeard |
-|------|-----|--------|
-| ![Chat](doc/chat.png) | ![Map](doc/map.png) | ![MHeard](doc/mheard.png) |
+| Chat | Map |
+|------|-----|
+| ![Chat](doc/chat.png) | ![Map](doc/map.png) |
+| **MHeard** | **Weather** |
+| ![MHeard](doc/mheard.png) | ![Weather](doc/wx.png) |
 
 # McApp Specification
 
