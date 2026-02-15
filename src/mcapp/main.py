@@ -630,7 +630,7 @@ class MessageRouter:
                 # Continue anyway - these are optional
             await asyncio.sleep(delay)
 
-        logger.info("Register queries complete (critical + extended)")
+        logger.debug("Register queries complete (critical + extended)")
 
     async def _handle_ble_scan_command(self):
         """Handle BLE scan command"""
