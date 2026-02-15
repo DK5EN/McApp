@@ -1,18 +1,18 @@
 # McApp
 
-McApp is a single page, client rendered, web application. It should run on every modern browser out there, but you never know. Settings get stored in your browser. If you delete your browser cache, everything is reset.
+McApp is a single page, client rendered, web application. It should run on every modern browser out there, but you never know. Settings get persisted in a sqlite database.
 
 Rendering on the client, the Raspberry Pi is only a lightweight proxy between a MeshCom device that is connected via BLE and the web browser. It uses SSE and RestAPI for communication.
 
-- No PHP, as this requires page reloads, which are slow and not elegant — just a static web page is retrieved once
-- On initial page load, a dump from the McApp backend gets sent to your browser. So every time you refresh your browser, you get a fresh reload.
+- Modern streaming to the browser, TypeScript code in the browser, Python in the backend
+- On initial page load, latest messages get to your browser
 - Infinite scrolling is enabled, so go back to 1972 if you're so inclined
-- Try to install the app on your mobile phone by storing it as an icon on your home screen
+- Try to install the app on your mobile phone homescreen by storing it as an icon on your home screen (works best on iPhone, Android phones have SSL requirement for this)
 - Installs with an icon on your mobile phone
 
 ### Installation
 
-Run this single command on a Raspberry Pi for fresh install, update, or repair:
+Run this single command on a Raspberry Pi Zero 2 W for fresh install, update, or repair:
 
 # Install latest stable release
 ```bash
@@ -32,10 +32,11 @@ The script auto-detects its context and does the right thing:
 - Debian Bookworm (12) or Trixie (13) Light (Desktop OS not supported on Pi Zero)
 - Python 3.11+ (provided by the OS — no manual install needed)
 - 512MB RAM
-- SD card (8GB+ recommended)
-- Network connectivity
-- MeshCom Node in Bluetooth range
+- SD card (8GB+)
+- Internet Network connectivity
+- MeshCom Node in Bluetooth range, but also support UDP communication
 - Supports mDNS name resultion
+- Looks for Fritz!Box DNS server in your environment
 
 | Debian | Python | Firewall | Status |
 |--------|--------|----------|--------|
