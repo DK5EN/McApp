@@ -292,6 +292,7 @@ build_tarball() {
   # ble_service/
   mkdir -p "${staging}/ble_service/src"
   cp "${SCRIPT_DIR}/ble_service/pyproject.toml" "${staging}/ble_service/"
+  cp "${SCRIPT_DIR}/ble_service/README.md" "${staging}/ble_service/"
   find "${SCRIPT_DIR}/ble_service/src" -name '*.py' -not -path '*/__pycache__/*' | while read -r f; do
     local rel="${f#${SCRIPT_DIR}/}"
     mkdir -p "${staging}/$(dirname "$rel")"
