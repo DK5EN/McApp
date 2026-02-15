@@ -11,68 +11,202 @@ This service enables the McApp "brain" to run on hardware without Bluetooth supp
 ### On Raspberry Pi (with Bluetooth)
 
 ```bash
-# Install dependencies
 cd ~/mcapp/ble_service
-pip install -e .
+uv sync
 
-# Set environment variables
 export BLE_SERVICE_API_KEY=your-secret-key
-export BLE_SERVICE_PORT=8081
-
-# Run service
-uvicorn src.main:app --host 0.0.0.0 --port 8081
+uv run uvicorn ble_service.src.main:app --host 0.0.0.0 --port 8081
 ```
 
 ### As systemd service
+
+The service file runs as non-root user, binds to `127.0.0.1:8081`, and automatically unblocks Bluetooth radio and powers on the adapter before starting.
 
 ```bash
 # Copy service file
 sudo cp mcapp-ble.service /etc/systemd/system/
 
-# Edit API key
+# Set API key
 sudo systemctl edit mcapp-ble
 # Add: Environment=BLE_SERVICE_API_KEY=your-secret-key
 
 # Enable and start
 sudo systemctl daemon-reload
-sudo systemctl enable mcapp-ble
-sudo systemctl start mcapp-ble
+sudo systemctl enable --now mcapp-ble
+```
+
+## Authentication
+
+API key is passed via the `X-API-Key` header. Behavior depends on the `BLE_SERVICE_API_KEY` environment variable:
+
+| Value | Behavior |
+|-------|----------|
+| `"your-secret-key"` | All API endpoints require matching `X-API-Key` header |
+| `""` (empty/unset) | Unauthenticated mode (startup warning logged) |
+| `"disabled"` | Explicitly disable authentication (no warning) |
+
+The `/health` endpoint never requires authentication.
+
+```bash
+curl -H "X-API-Key: your-secret-key" http://pi.local:8081/api/ble/status
 ```
 
 ## API Endpoints
+
+### Health Check
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/health` | No | Health check |
+
+Response:
+```json
+{"status": "healthy", "ble_connected": false, "timestamp": 1706100000000}
+```
 
 ### Status & Discovery
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/ble/status` | Get connection status |
+| GET | `/api/ble/status` | Connection status, state, device info, last activity |
 | GET | `/api/ble/devices` | Scan for BLE devices |
-| GET | `/health` | Health check |
+
+**`GET /api/ble/devices`** query parameters:
+
+| Param | Default | Description |
+|-------|---------|-------------|
+| `timeout` | 5.0 | Scan duration in seconds (1.0-30.0) |
+| `prefix` | `MC-` | Device name prefix filter |
+
+Cannot scan while connected (returns 409).
 
 ### Connection Management
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/ble/connect` | Connect to device |
-| POST | `/api/ble/disconnect` | Disconnect |
-| POST | `/api/ble/pair` | Pair with device |
+| POST | `/api/ble/disconnect` | Disconnect (also resets ERROR state) |
+| POST | `/api/ble/pair` | Pair with device (must be disconnected) |
 | POST | `/api/ble/unpair` | Remove pairing |
+
+**`POST /api/ble/connect`** accepts JSON body with either `device_address` (MAC) or `device_name`. If only `device_name` is given, the service scans for 5 seconds to resolve the MAC address (returns 404 if not found).
+
+On successful connect, the service automatically: starts notifications, sends hello, waits 1s, then queries extended registers (`--io`, `--tel`).
+
+**`POST /api/ble/disconnect`** cancels any pending auto-reconnect attempt.
+
+**`POST /api/ble/pair`** and **`POST /api/ble/unpair`** require `device_address` in the JSON body.
 
 ### Communication
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/ble/send` | Send data to device |
-| POST | `/api/ble/settime` | Set device time |
+| POST | `/api/ble/settime` | Sync device clock to current time |
 | GET | `/api/ble/notifications` | SSE notification stream |
 
-## Authentication
+**`POST /api/ble/send`** supports four mutually-exclusive input modes (priority order):
 
-All endpoints require the `X-API-Key` header:
+| Field(s) | Purpose | Example |
+|----------|---------|---------|
+| `command` | Device command (0xA0) | `{"command": "--pos"}` |
+| `message` + `group` | Mesh message to group | `{"message": "Hello!", "group": "20"}` |
+| `data_base64` | Raw bytes (base64) | `{"data_base64": "BBAQMA=="}` |
+| `data_hex` | Raw bytes (hex) | `{"data_hex": "04102030"}` |
+
+**`POST /api/ble/settime`** sends the current Unix timestamp to the device. No request body needed.
+
+### Device Configuration
+
+All config endpoints require an active BLE connection (409 if not connected). Changes are **not persisted** until `config/save` is called.
+
+| Method | Endpoint | Params | Description |
+|--------|----------|--------|-------------|
+| POST | `/api/ble/config/callsign` | `callsign` (1-15 chars) | Set node callsign |
+| POST | `/api/ble/config/wifi` | `ssid` (1-32 chars), `password` (0-63 chars) | Set WiFi credentials |
+| POST | `/api/ble/config/position` | `lat` (-90..90), `lon` (-180..180), `alt` (-1000..10000), `save` (bool, default false) | Set GPS position |
+| POST | `/api/ble/config/aprs` | `primary` (1 char), `secondary` (1 char) | Set APRS symbol |
+| POST | `/api/ble/config/save` | none | Save to flash and **reboot device** |
+
+Parameters are passed as query parameters.
+
+**Warning:** `config/save` reboots the device immediately and disconnects BLE. `config/position` sends three separate BLE writes (lat, lon, alt) with 200ms delays between them.
 
 ```bash
-curl -H "X-API-Key: your-secret-key" http://pi.local:8081/api/ble/status
+# Set callsign
+curl -X POST -H "X-API-Key: secret" \
+  "http://pi.local:8081/api/ble/config/callsign?callsign=DL4GLE-10"
+
+# Set position
+curl -X POST -H "X-API-Key: secret" \
+  "http://pi.local:8081/api/ble/config/position?lat=48.1234&lon=11.5678&alt=520"
+
+# Save and reboot
+curl -X POST -H "X-API-Key: secret" \
+  http://pi.local:8081/api/ble/config/save
 ```
+
+### SSE Notification Stream
+
+Connect to `GET /api/ble/notifications` for real-time BLE data.
+
+**Event types:**
+
+| Event | When | Data |
+|-------|------|------|
+| `status` | On initial SSE connection | `{"connected": bool, "state": "...", "timestamp": ms}` |
+| `notification` | BLE data received | See formats below |
+| `ping` | Every 30s if idle | `{"timestamp": ms}` |
+
+**Notification formats:**
+
+All notifications include `timestamp`, `raw_base64`, and `raw_hex`. The `format` field indicates how the data was decoded:
+
+- **`json`** — Data starting with `D{`. The `parsed` field contains the decoded JSON (e.g., `{"TYP": "MH", "CALL": "OE5HWN-12"}`).
+- **`binary`** — Data starting with `@`. Includes `prefix` (first 2 bytes as ASCII) and `fcs_ok` (CRC16-CCITT validation result). Bad checksums are logged but the notification is still delivered.
+- **`unknown`** / **`raw`** — Anything else, or if decoding fails.
+
+```bash
+curl -N -H "X-API-Key: secret" \
+  http://pi.local:8081/api/ble/notifications
+```
+
+## Connection Behavior
+
+### Auto-Reconnect
+
+On unexpected disconnect (detected during a failed write), the service automatically attempts to reconnect with exponential backoff: 5s, 10s, 20s, 60s (4 attempts). Auto-reconnect is cancelled if the user explicitly calls `/api/ble/disconnect`.
+
+### Keepalive
+
+While connected, the service sends a `--pos` command every 5 minutes to prevent the device from entering sleep mode.
+
+### Extended Register Queries
+
+After connecting, the service automatically queries `--io` (GPIO status) and `--tel` (telemetry config). The device auto-sends all other registers on BLE connect: I, SN, G, SA, SE+S1, SW+S2, W, AN.
+
+### Connection States
+
+The `state` field in status responses reflects the current connection lifecycle:
+
+| State | Description |
+|-------|-------------|
+| `disconnected` | No active connection |
+| `connecting` | Connection attempt in progress |
+| `connected` | Active connection to device |
+| `disconnecting` | Disconnect in progress |
+| `error` | Connection failed (cleared by calling disconnect) |
+
+## Error Codes
+
+| Code | Meaning | Example |
+|------|---------|---------|
+| 200 | Success | Request completed |
+| 400 | Bad Request | Callsign too long, missing parameters |
+| 401 | Unauthorized | Invalid or missing API key |
+| 404 | Not Found | Device name not found during connect scan |
+| 409 | Conflict | Not connected, already connected, scan while connected, operation in progress |
+| 500 | Internal Error | BLE adapter or D-Bus failure |
 
 ## Examples
 
@@ -86,9 +220,16 @@ curl -H "X-API-Key: secret" \
 ### Connect to device
 
 ```bash
+# By MAC address
 curl -X POST -H "X-API-Key: secret" \
   -H "Content-Type: application/json" \
   -d '{"device_address": "AA:BB:CC:DD:EE:FF"}' \
+  http://pi.local:8081/api/ble/connect
+
+# By name (auto-scans to resolve MAC)
+curl -X POST -H "X-API-Key: secret" \
+  -H "Content-Type: application/json" \
+  -d '{"device_name": "MC-ABCDEF"}' \
   http://pi.local:8081/api/ble/connect
 ```
 
@@ -101,39 +242,27 @@ curl -X POST -H "X-API-Key: secret" \
   http://pi.local:8081/api/ble/send
 ```
 
-### Stream notifications (SSE)
+### Send device command
 
 ```bash
-curl -N -H "X-API-Key: secret" \
-  http://pi.local:8081/api/ble/notifications
+curl -X POST -H "X-API-Key: secret" \
+  -H "Content-Type: application/json" \
+  -d '{"command": "--pos"}' \
+  http://pi.local:8081/api/ble/send
 ```
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BLE_SERVICE_PORT` | 8081 | HTTP server port |
-| `BLE_SERVICE_API_KEY` | mcapp-ble-secret | API authentication key |
-| `BLE_SERVICE_CORS_ORIGINS` | * | Allowed CORS origins |
-
-## Notification Format (SSE)
-
-```json
-{
-  "timestamp": 1706100000000,
-  "raw_base64": "RHsiVFlQIjoiTUgiLCJDQUxMIjoiT0U1SFdOLTEyIn0=",
-  "raw_hex": "447b22545950223a224d48222c2243414c4c223a224f45354857..",
-  "format": "json",
-  "parsed": {
-    "TYP": "MH",
-    "CALL": "OE5HWN-12"
-  }
-}
-```
+| `BLE_SERVICE_API_KEY` | `""` (empty) | API key. Empty = unauthenticated. `"disabled"` = explicitly no auth |
+| `BLE_SERVICE_PORT` | `8081` | Server port (only when running via `__main__`) |
+| `BLE_SERVICE_CORS_ORIGINS` | `*` | Comma-separated allowed CORS origins |
 
 ## Security Notes
 
 - Always use a strong, unique API key in production
-- Consider using HTTPS via a reverse proxy
+- The systemd service binds to `127.0.0.1` only — use a reverse proxy for remote access
+- Consider using HTTPS via Caddy or similar reverse proxy
 - Limit CORS origins in production
 - The service requires D-Bus access to BlueZ
