@@ -34,10 +34,22 @@ deploy_app() {
   local force="${1:-false}"
   local dev_mode="${2:-false}"
 
+  # Capture old version before deployment
+  local old_version
+  old_version=$(get_installed_mcapp_version)
+
   deploy_release "$force" "$dev_mode"
   deploy_webapp "$force"
   setup_python_env
   migrate_config
+
+  # Capture new version after deployment
+  local new_version
+  new_version=$(get_installed_mcapp_version)
+
+  # Store versions for service restart logging
+  export MCAPP_OLD_VERSION="$old_version"
+  export MCAPP_NEW_VERSION="$new_version"
 }
 
 #──────────────────────────────────────────────────────────────────
@@ -457,6 +469,8 @@ enable_and_start_services() {
 
   local -a services=("lighttpd" "mcapp" "mcapp-ble")
   local failed=false
+  local old_version="${MCAPP_OLD_VERSION:-unknown}"
+  local new_version="${MCAPP_NEW_VERSION:-unknown}"
 
   for svc in "${services[@]}"; do
     # Enable service
@@ -468,14 +482,29 @@ enable_and_start_services() {
 
     # Restart service (or start if not running)
     if systemctl is-active --quiet "$svc"; then
+      # Log maintenance stop for mcapp service
+      if [[ "$svc" == "mcapp" ]]; then
+        log_deployment_event "MAINTENANCE_START" "$old_version" "$new_version"
+      fi
+
       if ! systemctl restart "$svc" 2>/dev/null; then
         log_warn "  Failed to restart ${svc}"
         failed=true
+      else
+        # Log successful deployment for mcapp service
+        if [[ "$svc" == "mcapp" ]]; then
+          log_deployment_event "DEPLOYMENT_COMPLETE" "$old_version" "$new_version"
+        fi
       fi
     else
       if ! systemctl start "$svc" 2>/dev/null; then
         log_warn "  Failed to start ${svc}"
         failed=true
+      else
+        # Log initial installation for mcapp service
+        if [[ "$svc" == "mcapp" ]]; then
+          log_deployment_event "INITIAL_INSTALL" "$old_version" "$new_version"
+        fi
       fi
     fi
   done
@@ -485,4 +514,35 @@ enable_and_start_services() {
   else
     log_ok "  All services enabled and started"
   fi
+}
+
+# Log deployment events to systemd journal for the mcapp service
+# These messages will appear in 'sudo journalctl -u mcapp.service'
+log_deployment_event() {
+  local event_type="$1"
+  local old_version="$2"
+  local new_version="$3"
+
+  case "$event_type" in
+    MAINTENANCE_START)
+      systemd-cat -t mcapp -p info <<< "[BOOTSTRAP] Stopping service for maintenance and deployment"
+      if [[ "$old_version" != "unknown" && "$old_version" != "not_installed" ]]; then
+        systemd-cat -t mcapp -p info <<< "[BOOTSTRAP] Current version: ${old_version}"
+      fi
+      ;;
+    DEPLOYMENT_COMPLETE)
+      if [[ "$new_version" != "unknown" && "$new_version" != "not_installed" ]]; then
+        systemd-cat -t mcapp -p info <<< "[BOOTSTRAP] Deployment complete - new version: ${new_version}"
+      fi
+      if [[ "$old_version" != "$new_version" && "$old_version" != "not_installed" && "$old_version" != "unknown" ]]; then
+        systemd-cat -t mcapp -p info <<< "[BOOTSTRAP] Upgraded from ${old_version} to ${new_version}"
+      fi
+      ;;
+    INITIAL_INSTALL)
+      systemd-cat -t mcapp -p info <<< "[BOOTSTRAP] Initial installation complete"
+      if [[ "$new_version" != "unknown" && "$new_version" != "not_installed" ]]; then
+        systemd-cat -t mcapp -p info <<< "[BOOTSTRAP] Installed version: ${new_version}"
+      fi
+      ;;
+  esac
 }

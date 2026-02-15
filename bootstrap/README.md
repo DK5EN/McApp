@@ -108,6 +108,31 @@ rfkill list bluetooth
 bluetoothctl show
 ```
 
+### View deployment history
+
+The bootstrap script logs deployment events to the systemd journal:
+
+```bash
+# View all deployment events
+sudo journalctl -u mcapp.service | grep BOOTSTRAP
+
+# View recent deployments with version info
+sudo journalctl -u mcapp.service --since "7 days ago" | grep BOOTSTRAP
+
+# Check last deployment
+sudo journalctl -u mcapp.service | grep BOOTSTRAP | tail -5
+```
+
+Example output:
+```
+Feb 15 09:30:14 mcapp mcapp[38295]: [BOOTSTRAP] Stopping service for maintenance and deployment
+Feb 15 09:30:14 mcapp mcapp[38295]: [BOOTSTRAP] Current version: v1.01.0
+Feb 15 09:30:18 mcapp mcapp[38295]: [BOOTSTRAP] Deployment complete - new version: v1.01.1
+Feb 15 09:30:18 mcapp mcapp[38295]: [BOOTSTRAP] Upgraded from v1.01.0 to v1.01.1
+```
+
+See [DEPLOYMENT_LOGGING.md](DEPLOYMENT_LOGGING.md) for details.
+
 ## File Locations
 
 | Path | Purpose |
