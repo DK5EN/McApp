@@ -195,6 +195,9 @@ d /var/log/journal   0755 root     root     -
 d /var/log/apt       0755 root     root     -
 d /var/log/private   0700 root     root     -
 d /var/log/unattended-upgrades 0755 root root -
+f /var/log/lastlog             0644 root root -
+f /var/log/wtmp                0664 root utmp -
+f /var/log/btmp                0600 root utmp -
 EOF
 
   # Try to mount /var/log now if not already tmpfs
