@@ -565,14 +565,28 @@ class BLEClientRemote(BLEClientBase):
         """Handle SSE status update"""
         try:
             status = json.loads(data)
-            logger.debug("Remote status update: %s", status.get('state'))
+            old_state = self._status.state
 
             # Update local status
             state_str = status.get('state', 'disconnected')
             try:
-                self._status.state = ConnectionState(state_str)
+                new_state = ConnectionState(state_str)
             except ValueError:
-                self._status.state = ConnectionState.DISCONNECTED
+                new_state = ConnectionState.DISCONNECTED
+
+            self._status.state = new_state
+
+            if old_state != new_state:
+                if (old_state == ConnectionState.DISCONNECTED
+                        and new_state == ConnectionState.CONNECTED):
+                    logger.info("BLE auto-reconnected (remote service restored connection)")
+                elif new_state == ConnectionState.DISCONNECTED:
+                    logger.info("BLE remote connection lost (was %s)", old_state.value)
+                else:
+                    logger.info("BLE remote state changed: %s -> %s",
+                                old_state.value, new_state.value)
+            else:
+                logger.debug("Remote status update: %s (unchanged)", state_str)
 
         except Exception as e:
             logger.warning("Status update error: %s", e)
