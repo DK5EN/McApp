@@ -4,7 +4,6 @@ McApp is a single page, client rendered, web application. It should run on every
 
 Rendering on the client, the Raspberry Pi is only a lightweight proxy between a MeshCom device that is connected via BLE and the web browser. It uses SSE and RestAPI for communication.
 
-- Either in-memory database or SQLite (now standard) — the SD card does not handle constant writes well
 - No PHP, as this requires page reloads, which are slow and not elegant — just a static web page is retrieved once
 - On initial page load, a dump from the McApp backend gets sent to your browser. So every time you refresh your browser, you get a fresh reload.
 - Infinite scrolling is enabled, so go back to 1972 if you're so inclined
