@@ -173,7 +173,22 @@ configure_lighttpd() {
   if [[ -f "$main_conf" ]] && grep -q "webapp" "$main_conf" 2>/dev/null; then
     local backup="${main_conf}.bak.$(date +%s)"
     cp "$main_conf" "$backup"
-    cp "${SCRIPT_DIR}/templates/lighttpd.conf" "$main_conf"
+
+    # Find template: installed copy, local script dir, or download from GitHub
+    local tmpl=""
+    if [[ -f "${INSTALL_DIR:-}/bootstrap/templates/lighttpd.conf" ]]; then
+      tmpl="${INSTALL_DIR}/bootstrap/templates/lighttpd.conf"
+    elif [[ -n "${SCRIPT_DIR:-}" && -f "${SCRIPT_DIR}/templates/lighttpd.conf" ]]; then
+      tmpl="${SCRIPT_DIR}/templates/lighttpd.conf"
+    fi
+
+    if [[ -n "$tmpl" ]]; then
+      cp "$tmpl" "$main_conf"
+    else
+      # Piped mode: download from GitHub
+      curl -fsSL "${GITHUB_RAW_BASE}/bootstrap/templates/lighttpd.conf" -o "$main_conf"
+    fi
+
     log_info "  Replaced customized lighttpd.conf (backup: $backup)"
   fi
 
