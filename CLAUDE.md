@@ -292,11 +292,13 @@ Dev config: `/etc/mcapp/config.dev.json` (auto-selected when `MCAPP_ENV=dev`)
 {
   "BLE_MODE": "local",           // "local" | "remote" | "disabled"
   "BLE_REMOTE_URL": "",          // URL for remote BLE service (remote mode only)
-  "BLE_API_KEY": "",             // API key for remote service authentication
+  "BLE_API_KEY": "auto-generated",  // API key for remote service authentication
   "BLE_DEVICE_NAME": "",         // Auto-connect device name (e.g., "MC-XXXXXX")
   "BLE_DEVICE_ADDRESS": ""       // Auto-connect device MAC address
 }
 ```
+
+**BLE API Key:** The bootstrap generates a random 16-char key (using `secrets` module) at install time. Both sides use it: McApp sends it as `X-API-Key` header, the BLE service validates it via `BLE_SERVICE_API_KEY` env var. The BLE service has no hardcoded fallback — if no key is set, it runs unauthenticated (with a startup warning).
 
 **Environment variable overrides** (useful for testing):
 - `MCAPP_BLE_MODE` - Override BLE mode without editing config
