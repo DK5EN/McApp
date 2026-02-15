@@ -1,26 +1,34 @@
 # McApp Data Flow
 
-> **Migration Note (2026-02-15):** This document describes the legacy local BLE architecture. As of v1.01.1, local mode was removed. BLE access is now provided by the standalone BLE service (`ble_service/`) accessed via remote mode. See CLAUDE.md for current architecture.
+## Standard Deployment (Pi with Bluetooth)
 
-## Standard Deployment (Pi with local Bluetooth)
+All components run on the same Raspberry Pi. McApp uses remote mode to communicate with the BLE service via HTTP/SSE on localhost.
 
 ```mermaid
 flowchart TD
     WC["Web Clients<br/>(Vue.js SPA Frontend)"]
-    SSE["SSE :2981<br/>(GET /events + POST /api/send<br/>via lighttpd reverse proxy)"]
 
-    WC --> SSE
-    SSE --> MR
+    WC -- "HTTP :80" --> LH
 
-    subgraph MR["MESSAGE ROUTER (Central Hub - C2-mc-ws.py)"]
-        UDP["UDP Handler<br/>Port :1799"]
-        BLE["BLE Client (local mode)<br/>D-Bus/BlueZ"]
-        SSEH["SSE Handler (FastAPI)<br/>Port :2981"]
-        MSH["MessageStorageHandler<br/>(In-memory deque + JSON/SQLite persistence)"]
+    subgraph Pi["Raspberry Pi Zero 2W"]
+        LH["lighttpd :80<br/>(static files + proxy)"]
+        FA["FastAPI :2981<br/>(SSE + REST API)"]
+        BLES["BLE Service :8081<br/>(D-Bus/BlueZ interface)"]
+
+        subgraph MR["MESSAGE ROUTER (src/mcapp/main.py)"]
+            UDP["UDP Handler<br/>:1799"]
+            BLE["BLE Client (remote mode)"]
+            MSH["MessageStorageHandler<br/>(SQLite or in-memory deque)"]
+        end
+
+        LH -- "/webapp/ → static files" --> LH
+        LH -- "/events, /api/ → proxy" --> FA
+        FA --> MR
+        BLE -- "HTTP/SSE :8081" --> BLES
     end
 
     subgraph MCN["MeshCom Node (192.168.68.xxx)"]
-        LR1["LoRa Mesh Radio<br/>APRS Decoder<br/>Message Router"]
+        LR1["LoRa Mesh Radio<br/>APRS Decoder"]
     end
 
     subgraph ESP["ESP32 LoRa Node (MC-xxxxxx)"]
@@ -28,8 +36,8 @@ flowchart TD
     end
 
     UDP -- "UDP:1799" --> MCN
-    BLE -- "Bluetooth GATT<br/>(BLE characteristics)" --> ESP
-    MCN <-. "433MHz LoRa Mesh<br/>(Ham Radio Frequencies)" .-> ESP
+    BLES -- "Bluetooth GATT" --> ESP
+    MCN <-. "433MHz LoRa Mesh" .-> ESP
 ```
 
 ## Distributed Deployment (Remote BLE Service)
@@ -43,11 +51,11 @@ flowchart TD
 
     WC2 -- "SSE :2981<br/>(via lighttpd)" --> Brain
 
-    subgraph Brain["McApp Brain (Mac, OrbStack, or any server)"]
+    subgraph Brain["McApp Brain (Mac, OrbStack, or any server - src/mcapp/main.py)"]
         UDP2["UDP Handler<br/>:1799"]
         BLE2["BLE Client<br/>(remote mode)"]
         SSEH2["SSE Handler (FastAPI)<br/>:2981"]
-        MSH2["MessageStorageHandler<br/>(In-memory deque + JSON/SQLite)"]
+        MSH2["MessageStorageHandler<br/>(SQLite or in-memory deque)"]
     end
 
     subgraph BLES["BLE Service (Raspberry Pi)"]
@@ -73,8 +81,9 @@ flowchart TD
 
 | Mode | BLE Client | Description |
 |------|------------|-------------|
-| `local` | `ble_client_local.py` | Direct D-Bus/BlueZ on the same Pi |
-| `remote` | `ble_client_remote.py` | HTTP/SSE to BLE service on another Pi |
-| `disabled` | `ble_client_disabled.py` | No-op stub (for testing without BLE) |
+| `remote` | `ble_client_remote.py` | HTTP/SSE to BLE service (default for production) |
+| `disabled` | `ble_client_disabled.py` | No-op stub (for testing without BLE hardware) |
+
+**Note:** Local mode (`ble_client_local.py`) was removed in v1.01.1. For local BLE hardware access, deploy the standalone BLE service (`ble_service/`) and use `remote` mode pointing to `http://localhost:8081`.
 
 Configured via `BLE_MODE` in config or `MCAPP_BLE_MODE` environment variable.
