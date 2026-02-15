@@ -265,7 +265,7 @@ def parse_aprs_position(message: str) -> dict[str, Any] | None:
     # Weather fields from weather stations (e.g. DK5EN-12)
     # /P=940.3 (QFE), /H=42.1 (humidity), /T=22.6 (temp), /Q=956.9 (QNH)
     weather_fields = {
-        "temp1": r"/T=([\d.]+)",
+        "temp1": r"/T=(-?[\d.]+)",
         "hum": r"/H=([\d.]+)",
         "qfe": r"/P=([\d.]+)",
         "qnh": r"/Q=([\d.]+)",
@@ -289,7 +289,7 @@ def parse_aprs_telemetry(message: str) -> dict[str, Any] | None:
     """
     import re
     match = re.match(
-        r'T#(\d+),([\d.]+),([\d.]+),([\d.]+),([\d.]+),([\d.]+),(\d+)',
+        r'T#(\d+),([\d.]+),(-?[\d.]+),([\d.]+),([\d.]+),([\d.]+),(\d+)',
         message,
     )
     if not match:
