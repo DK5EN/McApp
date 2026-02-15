@@ -221,7 +221,9 @@ collect_config() {
   local current_station
 
   current_callsign=$(get_config_value "CALL_SIGN")
-  current_node=$(get_config_value "UDP_TARGET")
+  current_node=$(get_config_value "MESHCOM_IOT_TARGET")
+  # Backward compat: try legacy key if new key is empty
+  [[ -z "$current_node" ]] && current_node=$(get_config_value "UDP_TARGET")
   current_lat=$(get_config_value "LAT")
   current_lon=$(get_config_value "LONG")
   current_station=$(get_config_value "STAT_NAME")
@@ -312,10 +314,6 @@ write_config() {
   # Ensure config directory exists
   mkdir -p "$CONFIG_DIR"
 
-  # Get hostname for TLS certificate
-  local hostname
-  hostname=$(hostname -s)
-
   # Generate config from template or create new
   local tmp_config
   tmp_config=$(mktemp)
@@ -325,35 +323,18 @@ write_config() {
   "CALL_SIGN": "${callsign}",
   "USER_INFO_TEXT": "${user_info_text}",
 
-  "UDP_TARGET": "${node_address}",
-  "UDP_PORT_send": 1799,
-  "UDP_PORT_list": 1799,
-
-  "SSE_ENABLED": true,
-  "SSE_HOST": "0.0.0.0",
-  "SSE_PORT": 2981,
+  "MESHCOM_IOT_TARGET": "${node_address}",
 
   "LAT": ${latitude},
   "LONG": ${longitude},
   "STAT_NAME": "${station_name}",
-  "HOSTNAME": "${hostname}",
 
-  "STORAGE_BACKEND": "sqlite",
   "DB_PATH": "/var/lib/mcapp/messages.db",
-  "MAX_STORAGE_SIZE_MB": 100,
-  "PRUNE_HOURS": 168,
-  "STORE_FILE_NAME": "mcdump.json",
+  "PRUNE_HOURS": 720,
+  "PRUNE_HOURS_POS": 192,
+  "PRUNE_HOURS_ACK": 192,
 
-  "WEATHER_SERVICE": "dwd",
-
-  "BLE_MODE": "remote",
-  "BLE_REMOTE_URL": "http://127.0.0.1:8081",
-  "BLE_API_KEY": "test-dev-key",
-  "BLE_DEVICE_NAME": "",
-  "BLE_DEVICE_ADDRESS": "",
-  "BLE_READ_UUID": "6e400003-b5a3-f393-e0a9-e50e24dcca9e",
-  "BLE_WRITE_UUID": "6e400002-b5a3-f393-e0a9-e50e24dcca9e",
-  "BLE_HELLO_BYTES": "04102030"
+  "BLE_API_KEY": ""
 }
 EOF
 
@@ -404,10 +385,9 @@ migrate_config() {
 
   # Add missing fields with defaults
   local -A defaults=(
-    ["PRUNE_HOURS"]=168
-    ["MAX_STORAGE_SIZE_MB"]=50
-    ["WEATHER_SERVICE"]="open-meteo"
-    ["BLE_DEVICE_NAME"]=""
+    ["PRUNE_HOURS"]=720
+    ["PRUNE_HOURS_POS"]=192
+    ["PRUNE_HOURS_ACK"]=192
   )
 
   for key in "${!defaults[@]}"; do

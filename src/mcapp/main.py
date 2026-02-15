@@ -13,7 +13,14 @@ from pathlib import Path
 
 # BLE client abstraction - supports local, remote, and disabled modes
 from .ble_client import BLEMode, ConnectionState, create_ble_client
-from .config_loader import Config, hours_to_dd_hhmm
+from .config_loader import (
+    BLE_SERVICE_URL,
+    MESHCOM_UDP_PORT,
+    SSE_HOST,
+    SSE_PORT,
+    Config,
+    hours_to_dd_hhmm,
+)
 
 # New modular imports
 from .logging_setup import get_logger, setup_logging
@@ -1173,7 +1180,7 @@ class MessageValidator:
 
 async def main():
     # Initialize SQLite storage backend
-    logger.info("Using SQLite storage backend: %s", cfg.storage.db_path)
+    logger.info("Database: %s", cfg.storage.db_path)
     storage_handler = await create_sqlite_storage(cfg.storage.db_path)
     # One-time migration: import mcdump.json into SQLite, then rename to prevent re-import
     dump_path = Path("mcdump.json")
@@ -1245,9 +1252,9 @@ async def main():
 
     # UDP Handler
     udp_handler = UDPHandler(
-        listen_port=cfg.udp.port_listen,
+        listen_port=MESHCOM_UDP_PORT,
         target_host=cfg.udp.target,
-        target_port=cfg.udp.port_send,
+        target_port=MESHCOM_UDP_PORT,
         message_callback=None,
         message_router=message_router
     )
@@ -1255,15 +1262,15 @@ async def main():
 
     # SSE Manager (REST API + Server-Sent Events)
     sse_manager = None
-    if cfg.sse.enabled and SSE_AVAILABLE:
+    if SSE_AVAILABLE:
         weather_service = getattr(command_handler, 'weather_service', None)
         sse_manager = create_sse_manager(
-            cfg.sse.host, cfg.sse.port, message_router, weather_service
+            SSE_HOST, SSE_PORT, message_router, weather_service
         )
         if sse_manager:
             message_router.register_protocol('sse', sse_manager)
-    elif cfg.sse.enabled and not SSE_AVAILABLE:
-        logger.warning("SSE enabled but FastAPI/Uvicorn not installed")
+    else:
+        logger.warning("FastAPI/Uvicorn not installed — SSE transport unavailable")
 
     # Start UDP early — before BLE init which can block for seconds on Pi,
     # ensuring the health check finds port 1799 listening promptly.
@@ -1281,11 +1288,11 @@ async def main():
 
     if ble_mode != BLEMode.DISABLED:
         try:
+            ble_url = os.getenv("MCAPP_BLE_URL", BLE_SERVICE_URL)
             ble_client = await create_ble_client(
                 mode=ble_mode,
-                remote_url=cfg.ble.remote_url if ble_mode == BLEMode.REMOTE else None,
+                remote_url=ble_url if ble_mode == BLEMode.REMOTE else None,
                 api_key=cfg.ble.api_key if ble_mode == BLEMode.REMOTE else None,
-                device_mac=cfg.ble.device_address or None,
                 message_router=message_router,
             )
             message_router.register_protocol('ble_client', ble_client)
@@ -1364,15 +1371,15 @@ async def main():
         logger.info("Press 'q' + Enter to stop and save")
         loop.run_in_executor(None, stdin_reader)
 
-    logger.info("UDP-Listen %d, Target MeshCom %s", cfg.udp.port_listen, cfg.udp.target)
+    logger.info("UDP-Listen %d, Target MeshCom %s", MESHCOM_UDP_PORT, cfg.udp.target)
     logger.info("MessageRouter: %d message types, %d protocols",
                 len(message_router._subscribers), len(message_router._protocols))
     if sse_manager:
-        logger.info("SSE server available at http://%s:%d/events", cfg.sse.host, cfg.sse.port)
+        logger.info("SSE server available at http://%s:%d/events", SSE_HOST, SSE_PORT)
 
     # Log BLE configuration
     if ble_mode == BLEMode.REMOTE:
-        logger.info("BLE: remote mode -> %s", cfg.ble.remote_url)
+        logger.info("BLE: remote mode -> %s", os.getenv("MCAPP_BLE_URL", BLE_SERVICE_URL))
     elif ble_mode == BLEMode.LOCAL:
         logger.info("BLE: local mode (D-Bus/BlueZ)")
     else:
@@ -1516,9 +1523,6 @@ def run():
     )
     logger.info("SQLite storage: %s (max %d MB)", cfg.storage.db_path,
                 SQLiteStorage.MAX_DB_SIZE_MB)
-
-    if cfg.sse.enabled:
-        logger.info("SSE transport enabled on port %d", cfg.sse.port)
 
     try:
         asyncio.run(main())

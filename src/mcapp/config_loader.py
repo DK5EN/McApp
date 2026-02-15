@@ -17,44 +17,31 @@ VERSION = "v0.50.0"
 
 logger = get_logger(__name__)
 
+# ── Protocol constants (fixed by hardware / architecture) ─────────────
+
+MESHCOM_UDP_PORT = 1799                # MeshCom IoT — not configurable
+SSE_HOST = "127.0.0.1"                 # Behind lighttpd reverse proxy
+SSE_PORT = 2981                        # Tied to lighttpd proxy rule
+
+BLE_SERVICE_URL = "http://127.0.0.1:8081"  # Remote BLE service on same Pi
+BLE_NUS_RX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  # Nordic UART RX
+BLE_NUS_TX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  # Nordic UART TX
+BLE_HELLO_BYTES = b"\x04\x10\x20\x30"  # ESP32 handshake init packet
+
 
 @dataclass
 class UDPConfig:
     """UDP transport configuration."""
 
-    port_listen: int = 1799
-    port_send: int = 1799
-    target: str = "localhost"
-
-
-@dataclass
-class SSEConfig:
-    """Server-Sent Events transport configuration."""
-
-    enabled: bool = False
-    host: str = "0.0.0.0"
-    port: int = 2981
+    target: str = "DX0XXX-99"  # MeshCom IoT node hostname/callsign
 
 
 @dataclass
 class BLEConfig:
     """Bluetooth Low Energy configuration."""
 
-    # Mode: "local" (D-Bus/BlueZ), "remote" (HTTP/SSE), "disabled" (no-op)
-    mode: str = "local"
-
-    # Remote service settings (only used when mode="remote")
-    remote_url: str = ""
-    api_key: str = ""
-
-    # Device settings
-    device_name: str = ""  # Auto-connect device name (e.g., "MC-XXXXXX")
-    device_address: str = ""  # Auto-connect device MAC address
-
-    # GATT UUIDs (Nordic UART Service)
-    read_uuid: str = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
-    write_uuid: str = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
-    hello_bytes: bytes = field(default_factory=lambda: b"\x04\x10\x20\x30")
+    mode: str = "remote"   # "local" | "remote" | "disabled"
+    api_key: str = ""      # per-deployment auth key
 
 
 @dataclass
@@ -90,7 +77,6 @@ class Config:
 
     # Transport configurations
     udp: UDPConfig = field(default_factory=UDPConfig)
-    sse: SSEConfig = field(default_factory=SSEConfig)
     ble: BLEConfig = field(default_factory=BLEConfig)
 
     # Storage configuration
@@ -138,34 +124,22 @@ class Config:
 
     @classmethod
     def _from_dict(cls, data: dict[str, Any]) -> "Config":
-        """Create Config from dictionary (JSON data)."""
-        # Map old config keys to new structure
+        """Create Config from dictionary (JSON data).
+
+        Backward compatible: old config files with legacy keys (UDP_PORT_list,
+        SSE_ENABLED, BLE_DEVICE_NAME, etc.) are silently ignored via data.get().
+        """
         udp = UDPConfig(
-            port_listen=data.get("UDP_PORT_list", 1799),
-            port_send=data.get("UDP_PORT_send", 1799),
-            target=data.get("UDP_TARGET", "localhost"),
+            target=data.get("MESHCOM_IOT_TARGET", data.get("UDP_TARGET", "DX0XXX-99")),
         )
 
-        sse = SSEConfig(
-            enabled=data.get("SSE_ENABLED", False),
-            host=data.get("SSE_HOST", "0.0.0.0"),
-            port=data.get("SSE_PORT", 2981),
-        )
-
-        # BLE mode can also come from environment variable for easy override
-        ble_mode = os.getenv("MCAPP_BLE_MODE", data.get("BLE_MODE", "local"))
-        ble_remote_url = os.getenv("MCAPP_BLE_URL", data.get("BLE_REMOTE_URL", ""))
+        # BLE mode: env var override → config file → default "remote"
+        ble_mode = os.getenv("MCAPP_BLE_MODE", data.get("BLE_MODE", "remote"))
         ble_api_key = os.getenv("MCAPP_BLE_API_KEY", data.get("BLE_API_KEY", ""))
 
         ble = BLEConfig(
             mode=ble_mode,
-            remote_url=ble_remote_url,
             api_key=ble_api_key,
-            device_name=data.get("BLE_DEVICE_NAME", ""),
-            device_address=data.get("BLE_DEVICE_ADDRESS", ""),
-            read_uuid=data.get("BLE_READ_UUID", "6e400003-b5a3-f393-e0a9-e50e24dcca9e"),
-            write_uuid=data.get("BLE_WRITE_UUID", "6e400002-b5a3-f393-e0a9-e50e24dcca9e"),
-            hello_bytes=bytes.fromhex(data.get("BLE_HELLO_BYTES", "04102030")),
         )
 
         storage = StorageConfig(
@@ -185,7 +159,6 @@ class Config:
             call_sign=data.get("CALL_SIGN", ""),
             user_info_text=data.get("USER_INFO_TEXT", ""),
             udp=udp,
-            sse=sse,
             ble=ble,
             storage=storage,
             location=location,
@@ -193,31 +166,19 @@ class Config:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """Export config to dictionary for saving."""
+        """Export config to dictionary for saving (minimal keys only)."""
         return {
             "CALL_SIGN": self.call_sign,
             "USER_INFO_TEXT": self.user_info_text,
-            "UDP_PORT_list": self.udp.port_listen,
-            "UDP_PORT_send": self.udp.port_send,
-            "UDP_TARGET": self.udp.target,
-            "SSE_ENABLED": self.sse.enabled,
-            "SSE_HOST": self.sse.host,
-            "SSE_PORT": self.sse.port,
-            "BLE_MODE": self.ble.mode,
-            "BLE_REMOTE_URL": self.ble.remote_url,
-            "BLE_API_KEY": self.ble.api_key,
-            "BLE_DEVICE_NAME": self.ble.device_name,
-            "BLE_DEVICE_ADDRESS": self.ble.device_address,
-            "BLE_READ_UUID": self.ble.read_uuid,
-            "BLE_WRITE_UUID": self.ble.write_uuid,
-            "BLE_HELLO_BYTES": self.ble.hello_bytes.hex(),
+            "MESHCOM_IOT_TARGET": self.udp.target,
+            "LAT": self.location.latitude,
+            "LONG": self.location.longitude,
+            "STAT_NAME": self.location.station_name,
             "DB_PATH": self.storage.db_path,
             "PRUNE_HOURS": self.storage.prune_hours,
             "PRUNE_HOURS_POS": self.storage.prune_hours_pos,
             "PRUNE_HOURS_ACK": self.storage.prune_hours_ack,
-            "LAT": self.location.latitude,
-            "LONG": self.location.longitude,
-            "STAT_NAME": self.location.station_name,
+            "BLE_API_KEY": self.ble.api_key,
         }
 
     def save(self, path: str | Path) -> None:

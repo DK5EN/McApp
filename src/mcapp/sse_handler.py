@@ -602,7 +602,7 @@ class SSEManager:
 
 # Convenience function for backward compatibility
 def create_sse_manager(
-    host: str = "0.0.0.0",
+    host: str = "127.0.0.1",
     port: int = 2981,
     message_router: Any = None,
     weather_service: Any = None,
