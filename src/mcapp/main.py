@@ -13,6 +13,7 @@ from pathlib import Path
 
 # BLE client abstraction - supports local, remote, and disabled modes
 from .ble_client import BLEMode, ConnectionState, create_ble_client
+from .commands import create_command_handler
 from .config_loader import (
     BLE_SERVICE_URL,
     MESHCOM_UDP_PORT,
@@ -26,15 +27,6 @@ from .config_loader import (
 from .logging_setup import get_logger, setup_logging
 from .logging_setup import has_console as check_console
 from .udp_handler import UDPHandler
-
-# Legacy imports - only backend_resolve_ip still needed (no ble_client equivalent yet)
-try:
-    from .ble_handler import backend_resolve_ip
-    BLE_HANDLER_AVAILABLE = True
-except ImportError:
-    BLE_HANDLER_AVAILABLE = False
-    async def backend_resolve_ip(*args, **kwargs): pass
-from .commands import create_command_handler
 
 # Optional imports for new features
 try:
@@ -749,10 +741,38 @@ class MessageRouter:
         if is_connected and query_registers:
             await self._query_ble_registers(wait_for_hello=False)
 
+    async def _backend_resolve_ip(self, hostname: str) -> None:
+        """Resolve hostname to IP address and publish result."""
+        import socket
+        loop = asyncio.get_running_loop()
+
+        try:
+            infos = await loop.run_in_executor(None, socket.getaddrinfo, hostname, None)
+            ip = infos[0][4][0]
+            logger.info("Resolved %s to %s", hostname, ip)
+
+            await self.publish('ble', 'ble_status', {
+                'src_type': 'BLE',
+                'TYP': 'blueZ',
+                'command': "resolve-ip",
+                'result': "ok",
+                'msg': ip,
+                'timestamp': int(time.time() * 1000)
+            })
+        except Exception as e:
+            logger.error("Failed to resolve %s: %s", hostname, e)
+            await self.publish('ble', 'ble_status', {
+                'src_type': 'BLE',
+                'TYP': 'blueZ',
+                'command': "resolve-ip",
+                'result': "error",
+                'msg': str(e),
+                'timestamp': int(time.time() * 1000)
+            })
+
     async def _handle_resolve_ip_command(self, hostname):
         """Handle resolve IP command"""
-        if BLE_HANDLER_AVAILABLE:
-            await backend_resolve_ip(hostname, message_router=self)
+        await self._backend_resolve_ip(hostname)
 
     # Device command handlers - route through ble_client abstraction
     async def _handle_device_a0_command(self, command):
