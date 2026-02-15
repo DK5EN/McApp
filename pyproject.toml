@@ -3,7 +3,7 @@ name = "mcapp"
 version = "1.01.1"
 requires-python = ">=3.11"
 dependencies = [
-    "dbus-next>=0.2.3",
+    # "dbus-next>=0.2.3",  # REMOVED: Only needed by ble_service
     "timezonefinder>=6.5.0",
     "aiohttp>=3.9.0",
     "aiohttp-sse-client>=0.2.1",

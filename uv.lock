@@ -631,7 +631,6 @@ source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
     { name = "aiohttp-sse-client" },
-    { name = "dbus-next" },
     { name = "fastapi" },
     { name = "pydantic" },
     { name = "requests" },
@@ -644,7 +643,6 @@ dependencies = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.9.0" },
     { name = "aiohttp-sse-client", specifier = ">=0.2.1" },
-    { name = "dbus-next", specifier = ">=0.2.3" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "requests", specifier = ">=2.31.0" },
