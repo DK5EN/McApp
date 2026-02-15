@@ -20,11 +20,6 @@ Run this single command on a Raspberry Pi for fresh install, update, or repair:
 curl -fsSL https://raw.githubusercontent.com/DK5EN/McApp/main/bootstrap/mcapp.sh | sudo bash
 ```
 
-# Install latest development pre-release
-```bash
-curl -fsSL https://raw.githubusercontent.com/DK5EN/McApp/development/bootstrap/mcapp.sh | sudo bash -s -- --dev
-```
-
 The script auto-detects its context and does the right thing:
 - **Fresh install**: Prompts for configuration, installs everything
 - **Update**: Checks versions, updates if newer available
@@ -35,7 +30,7 @@ The script auto-detects its context and does the right thing:
 #### Requirements
 
 - Raspberry Pi Zero 2W (or any Pi with ARM Cortex-A53)
-- Debian Bookworm (12) or Trixie (13)
+- Debian Bookworm (12) or Trixie (13) Light (Desktop OS not supported on Pi Zero)
 - Python 3.11+ (provided by the OS — no manual install needed)
 - 512MB RAM
 - SD card (8GB+ recommended)
@@ -45,10 +40,32 @@ The script auto-detects its context and does the right thing:
 
 | Debian | Python | Firewall | Status |
 |--------|--------|----------|--------|
-| Trixie (13) | 3.13 | nftables | Primary target |
-| Bookworm (12) | 3.11 | iptables | Supported |
+| Trixie (13) Light | 3.13 | nftables | Primary target |
+| Bookworm (12) Light | 3.11 | iptables | Supported |
 
 The bootstrap script auto-detects the Debian version and uses the appropriate Python and firewall packages.
+
+#### Flashing the SD Card
+
+Use [Raspberry Pi Imager](https://www.raspberrypi.com/software/) to flash the SD card:
+
+1. Select **Raspberry Pi Zero 2 W** as device model
+
+   ![Select Pi Zero 2W](doc/1_Flash-PiZero2W.png)
+
+2. Under **Raspberry Pi OS (other)**...
+
+   ![Select Other OS](doc/2_OtherOS.png)
+
+3. ...choose **Raspberry Pi OS Lite (64-bit)** — Debian Trixie, no desktop environment
+
+   ![Select Lite OS](doc/3_LightOS.png)
+
+4. Select your SD card and flash
+
+   ![Select SD Card](doc/4_SelectCard.png)
+
+> **Note:** After selecting the SD card, the Imager prompts you to configure hostname, user, WiFi, and SSH. Set these before writing — this avoids manual setup after first boot.
 
 #### Configuration
 
@@ -154,6 +171,13 @@ Set up a cron job for automatic updates:
 0 4 * * * root curl -fsSL https://raw.githubusercontent.com/DK5EN/McApp/main/bootstrap/mcapp.sh | bash --quiet 2>&1 | logger -t mcapp-update
 ```
 
+#### Non-stable Development Release
+
+Install latest development pre-release
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DK5EN/McApp/development/bootstrap/mcapp.sh | sudo bash -s -- --dev
+```
 
 # Architecture
 
