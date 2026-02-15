@@ -166,6 +166,16 @@ configure_lighttpd() {
   log_info "  Configuring lighttpd..."
 
   local conf_file="/etc/lighttpd/conf-available/99-mcapp.conf"
+  local main_conf="/etc/lighttpd/lighttpd.conf"
+
+  # Migrate old installations: if lighttpd.conf has McApp directives baked in,
+  # replace it with the clean template to avoid duplicate module conflicts
+  if [[ -f "$main_conf" ]] && grep -q "webapp" "$main_conf" 2>/dev/null; then
+    local backup="${main_conf}.bak.$(date +%s)"
+    cp "$main_conf" "$backup"
+    cp "${SCRIPT_DIR}/templates/lighttpd.conf" "$main_conf"
+    log_info "  Replaced customized lighttpd.conf (backup: $backup)"
+  fi
 
   # Check if already configured (must include mod_proxy for API/SSE reverse proxy)
   if [[ -f "$conf_file" ]] && grep -q "mod_proxy" "$conf_file" 2>/dev/null; then
@@ -178,7 +188,7 @@ configure_lighttpd() {
 # McApp SPA rewrite + redirect + API proxy configuration
 # Enables Vue.js SPA routing, root redirect, and reverse proxy to FastAPI
 
-server.modules += ("mod_rewrite", "mod_redirect", "mod_proxy")
+server.modules += ("mod_rewrite", "mod_redirect", "mod_proxy", "mod_setenv")
 
 # Enable streaming for SSE (Server-Sent Events) — prevents buffering
 server.stream-response-body = 2
@@ -218,6 +228,6 @@ EOF
   if lighttpd -t -f /etc/lighttpd/lighttpd.conf 2>/dev/null; then
     systemctl reload lighttpd 2>/dev/null || systemctl restart lighttpd
   else
-    log_warn "  lighttpd config test failed"
+    log_warn "  lighttpd config test failed — check $main_conf and $conf_file for conflicts"
   fi
 }
