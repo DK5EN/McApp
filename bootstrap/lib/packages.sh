@@ -77,12 +77,12 @@ install_apt_deps() {
     # Python runtime (uv manages venvs and packages)
     "python3"
 
-    # BlueZ for BLE support
+    # BlueZ for BLE support (only if running BLE service locally)
     "bluez"
     "bluetooth"
 
-    # For D-Bus (required by dbus_next)
-    "libdbus-1-dev"
+    # For D-Bus (no longer needed - dbus-next removed from main package)
+    # "libdbus-1-dev"  # Only needed by standalone BLE service
 
     # For SSL certificates
     "ca-certificates"

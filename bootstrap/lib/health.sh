@@ -164,7 +164,7 @@ check_venv() {
   fi
 
   # Check if key packages are importable
-  if ! "${venv_path}/bin/python" -c "import websockets, dbus_next" 2>/dev/null; then
+  if ! "${venv_path}/bin/python" -c "import websockets" 2>/dev/null; then
     printf "  %-20s ${YELLOW}[WARN]${NC} missing packages\n" "python venv:"
     return 1
   fi
@@ -367,7 +367,7 @@ print_diagnostic_info() {
     echo "  Venv:       $(${venv_path}/bin/python --version 2>&1)"
     echo "  Install:    ${INSTALL_DIR}"
     echo "  Packages:"
-    "${venv_path}/bin/pip" list 2>/dev/null | grep -E "websockets|dbus-next|timezonefinder|httpx|zstandard" | sed 's/^/    /'
+    "${venv_path}/bin/pip" list 2>/dev/null | grep -E "websockets|timezonefinder|httpx|zstandard" | sed 's/^/    /'
   fi
   echo ""
 

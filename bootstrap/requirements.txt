@@ -6,7 +6,7 @@ websockets>=14.0          # WebSocket server for client connections
 httpx>=0.28.0             # Modern async HTTP client (replaces requests)
 
 # Bluetooth Low Energy
-dbus-next>=0.2.3          # D-Bus interface for BlueZ BLE
+# dbus-next>=0.2.3        # REMOVED: Only needed by ble_service (standalone component)
 
 # Utilities
 timezonefinder>=6.5.0     # Timezone detection for node time sync
