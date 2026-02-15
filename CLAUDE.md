@@ -18,20 +18,22 @@ flowchart TD
     subgraph Pi["Raspberry Pi Zero 2W"]
         LH["lighttpd :80<br/>(static files + proxy)"]
         FA["FastAPI :2981<br/>(SSE + REST API)"]
+        BLES["BLE Service<br/>:8081<br/>(D-Bus/BlueZ)"]
 
         subgraph MR["MESSAGE ROUTER (src/mcapp/main.py)"]
             UDP["UDP Handler<br/>:1799"]
-            BLE["BLE Client<br/>(local mode)"]
+            BLE["BLE Client<br/>(remote mode)"]
             MSH["MessageStorageHandler"]
         end
 
         LH -- "/webapp/ → static files" --> LH
         LH -- "/events, /api/ → proxy" --> FA
         FA --> MR
+        BLE -- "HTTP/SSE" --> BLES
     end
 
     UDP -- "UDP:1799" --> MCN["MeshCom Node<br/>(192.168.68.xxx)"]
-    BLE -- "Bluetooth GATT" --> ESP["ESP32 LoRa Node<br/>(MC-xxxxxx)"]
+    BLES -- "Bluetooth GATT" --> ESP["ESP32 LoRa Node<br/>(MC-xxxxxx)"]
 ```
 
 ### Distributed Deployment (Remote BLE Service)
@@ -71,16 +73,17 @@ All source lives in `src/mcapp/`. Entry point: `mcapp.main:run` (invoked via `uv
 
 ### BLE Abstraction Layer
 
-The BLE subsystem supports three modes via a unified client interface:
+The BLE subsystem supports two modes via a unified client interface:
 
 | Mode | File | Description |
 |------|------|-------------|
-| `local` | `ble_client_local.py` | Direct D-Bus/BlueZ (wraps `ble_handler.py`) |
 | `remote` | `ble_client_remote.py` | HTTP/SSE client to remote BLE service |
 | `disabled` | `ble_client_disabled.py` | No-op stub for testing |
 
+For local BLE hardware access, deploy the standalone BLE service (ble_service/) on the Pi.
+
 - **ble_client.py**: Abstract interface + `create_ble_client()` factory function
-- **ble_handler.py**: Legacy BlueZ D-Bus implementation (used by local mode)
+- **ble_protocol.py**: Shared protocol decoders/transformers (used by remote client and BLE service)
 
 ### BLE Service (Standalone)
 
@@ -256,8 +259,7 @@ sudo systemctl restart mcapp.service
 | Scenario | BLE Mode | Setup |
 |----------|----------|-------|
 | Non-BLE features | `disabled` | `export MCAPP_BLE_MODE=disabled` |
-| Real BLE via Pi | `remote` | Run BLE service on Pi, point URL to it |
-| Production on Pi | `local` | Default, uses D-Bus/BlueZ directly |
+| Production / Testing with BLE | `remote` | Deploy BLE service on Pi, point URL to it |
 
 Remote BLE testing:
 ```bash
@@ -290,13 +292,15 @@ Dev config: `/etc/mcapp/config.dev.json` (auto-selected when `MCAPP_ENV=dev`)
 
 ```json
 {
-  "BLE_MODE": "local",           // "local" | "remote" | "disabled"
-  "BLE_REMOTE_URL": "",          // URL for remote BLE service (remote mode only)
+  "BLE_MODE": "remote",          // "remote" | "disabled" (local mode removed, use BLE service)
+  "BLE_REMOTE_URL": "",          // URL for remote BLE service (e.g., http://pi.local:8081)
   "BLE_API_KEY": "auto-generated",  // API key for remote service authentication
   "BLE_DEVICE_NAME": "",         // Auto-connect device name (e.g., "MC-XXXXXX")
   "BLE_DEVICE_ADDRESS": ""       // Auto-connect device MAC address
 }
 ```
+
+**Migration note:** Local mode (`BLE_MODE="local"`) was removed in v1.01.1. For local BLE hardware access, deploy the standalone BLE service (`ble_service/`) and use `BLE_MODE="remote"` pointing to the service URL.
 
 **BLE API Key:** The bootstrap generates a random 16-char key (using `secrets` module) at install time. Both sides use it: McApp sends it as `X-API-Key` header, the BLE service validates it via `BLE_SERVICE_API_KEY` env var. The BLE service has no hardcoded fallback — if no key is set, it runs unauthenticated (with a startup warning).
 
@@ -352,7 +356,7 @@ The SQLite backend (`sqlite_storage.py`) is the default for production deploymen
 ## Dependencies
 
 Python packages (managed via `uv`, see `pyproject.toml`):
-- `dbus-next>=0.2.3`: BlueZ D-Bus interface for BLE (local mode)
+- `dbus-next>=0.2.3`: BlueZ D-Bus interface for BLE (only in ble_service, removed from main package)
 - `timezonefinder>=6.5.0`: Timezone detection for node time sync
 - `requests>=2.31.0`: HTTP client for weather API (DWD BrightSky + OpenMeteo)
 - `aiohttp>=3.9.0`: Async HTTP client for remote BLE
@@ -364,7 +368,7 @@ Python packages (managed via `uv`, see `pyproject.toml`):
 
 System packages (installed via apt):
 - `lighttpd`: Static file server for Vue.js SPA
-- `bluez`: Bluetooth stack for BLE (local mode only)
+- `bluez`: Bluetooth stack for BLE (only on Pi running BLE service)
 - `jq`: JSON processing in shell scripts
 
 ## Protocol Details
@@ -574,10 +578,9 @@ MCProxy/
 │   ├── sse_handler.py       # SSE/REST API transport (FastAPI, port 2981)
 │   ├── meteo.py             # WeatherService (DWD + OpenMeteo)
 │   ├── ble_client.py        # BLE abstraction interface + factory
-│   ├── ble_client_local.py  # Local BLE (wraps ble_handler)
 │   ├── ble_client_remote.py # Remote BLE (HTTP/SSE)
 │   ├── ble_client_disabled.py # No-op stub
-│   ├── ble_handler.py       # Legacy D-Bus/BlueZ implementation
+│   ├── ble_protocol.py      # Shared BLE protocol decoders/transformers
 │   └── commands/            # Modular command system (mixin-based)
 │       ├── __init__.py
 │       ├── handler.py       # CommandHandler + COMMANDS registry

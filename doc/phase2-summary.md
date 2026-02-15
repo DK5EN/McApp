@@ -1,5 +1,7 @@
 # Phase 2 Implementation Summary - High Priority Features
 
+> **Migration Note (2026-02-15):** Local BLE mode was removed in v1.01.1. The features described here are now implemented in the standalone BLE service (`ble_service/`) and accessed via remote mode. See CLAUDE.md for current architecture.
+
 **Date:** 2026-02-14
 **Branch:** `feature/ble-enhancements`
 **Commits:** `cbb3eeb`, `7b9d9be`, `38477a5`, `eaf038e`

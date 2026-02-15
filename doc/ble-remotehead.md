@@ -1,3 +1,7 @@
+# Remote BLE Implementation Notes
+
+> **Migration Note (2026-02-15):** As of v1.01.1, remote mode is now the only way to access BLE hardware. The legacy local mode described in this document has been removed. All BLE access now goes through the standalone BLE service.
+
 ⏺ Implementation complete. Here's a summary of what was created:                
                                                                                 
   Created Files                                                                 

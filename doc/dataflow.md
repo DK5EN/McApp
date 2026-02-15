@@ -1,5 +1,7 @@
 # McApp Data Flow
 
+> **Migration Note (2026-02-15):** This document describes the legacy local BLE architecture. As of v1.01.1, local mode was removed. BLE access is now provided by the standalone BLE service (`ble_service/`) accessed via remote mode. See CLAUDE.md for current architecture.
+
 ## Standard Deployment (Pi with local Bluetooth)
 
 ```mermaid
