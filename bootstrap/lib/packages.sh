@@ -65,6 +65,9 @@ install_apt_deps() {
   DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
   log_ok "  System packages upgraded"
 
+  # Configure locale AFTER upgrade (glibc/locales upgrade invalidates generated locales)
+  configure_locale
+
   # Core dependencies (no python3-venv or python3-pip — uv handles everything)
   local -a packages=(
     # Essential tools

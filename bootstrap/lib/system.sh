@@ -8,7 +8,7 @@
 #──────────────────────────────────────────────────────────────────
 
 setup_system() {
-  configure_locale
+  # configure_locale moved to install_apt_deps() — runs after apt upgrade
   disable_unused_services
   remove_bloat_packages
   configure_tmpfs
