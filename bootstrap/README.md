@@ -55,6 +55,8 @@ The following ports are opened:
 | 1799 | UDP | MeshCom |
 | 5353 | UDP | mDNS (.local) |
 
+**IPv6 is disabled** to eliminate connection timeouts caused by the Happy Eyeballs algorithm when the IPv6 firewall is closed. This fixes mDNS advertisements and improves connection reliability.
+
 ## Debian Version Support
 
 | Debian | Python | Firewall | Status |

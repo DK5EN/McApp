@@ -544,7 +544,8 @@ The bootstrap script:
 3. Creates Python venv in `~/mcapp-venv` using uv
 4. Configures SD card protection (tmpfs, volatile journal)
 5. Sets up firewall (nftables on Trixie, iptables on Bookworm)
-6. Enables and starts systemd service
+6. Disables IPv6 (fixes mDNS timeouts caused by Happy Eyeballs algorithm)
+7. Enables and starts systemd service
 
 See `bootstrap/README.md` for full documentation.
 

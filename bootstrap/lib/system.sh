@@ -16,6 +16,7 @@ setup_system() {
   configure_logrotate
   configure_firewall
   configure_bluetooth
+  disable_ipv6
   configure_unattended_upgrades
   configure_fast_ssh_login
   configure_ssh_hardening
@@ -363,11 +364,9 @@ table inet filter {
     # mDNS for .local hostname resolution (avahi)
     # Restrict to multicast destinations per mDNS protocol spec
     ip daddr 224.0.0.251 udp dport 5353 accept
-    ip6 daddr ff02::fb udp dport 5353 accept
 
     # ICMP (ping)
     icmp type echo-request accept
-    icmpv6 type echo-request accept
 
     # Log and drop everything else
     log prefix "[nftables DROP] " flags all counter drop
@@ -499,6 +498,41 @@ EOF
   fi
 
   log_ok "  Bluetooth unblock service installed and enabled"
+}
+
+#──────────────────────────────────────────────────────────────────
+# DISABLE IPv6
+#──────────────────────────────────────────────────────────────────
+
+disable_ipv6() {
+  log_info "Disabling IPv6..."
+
+  local sysctl_conf="/etc/sysctl.d/99-disable-ipv6.conf"
+
+  # Check if already configured
+  if [[ -f "$sysctl_conf" ]]; then
+    if grep -q "net.ipv6.conf.all.disable_ipv6.*=.*1" "$sysctl_conf" 2>/dev/null; then
+      log_info "  IPv6 already disabled"
+      return 0
+    fi
+  fi
+
+  # Create sysctl config to disable IPv6
+  cat > "$sysctl_conf" << 'EOF'
+# McApp: Disable IPv6
+# Fixes mDNS advertisements and eliminates Happy Eyeballs timeout
+# when IPv6 firewall is closed
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+net.ipv6.conf.lo.disable_ipv6 = 1
+EOF
+
+  # Apply immediately
+  if sysctl -p "$sysctl_conf" &>/dev/null; then
+    log_ok "  IPv6 disabled (fixes mDNS timeouts)"
+  else
+    log_warn "  IPv6 config written, will apply on next reboot"
+  fi
 }
 
 #──────────────────────────────────────────────────────────────────
