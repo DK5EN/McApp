@@ -19,7 +19,7 @@ scp pyproject.toml uv.lock "$REMOTE/"
 scp ble_service/src/__init__.py ble_service/src/main.py \
     ble_service/src/ble_adapter.py \
     "$REMOTE/ble_service/src/"
-scp ble_service/pyproject.toml "$REMOTE/ble_service/"
+scp ble_service/pyproject.toml ble_service/README.md "$REMOTE/ble_service/"
 
 # 4. Config lives in /etc/mcapp/config.json (managed by bootstrap).
 #    This script only deploys code, not config.
