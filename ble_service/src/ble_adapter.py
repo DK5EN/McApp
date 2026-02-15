@@ -25,13 +25,13 @@ Supported Message Types:
     0xF0: Save & Reboot (save_and_reboot)
 
 Extended Register Queries:
-    The query_extended_registers() method automatically queries:
-    - --seset: Sensor settings (SE + S1, multi-part)
-    - --wifiset: WiFi settings (SW + S2, multi-part)
-    - --weather: Current sensor readings (W)
-    - --analogset: Analog input configuration (AN)
+    The query_extended_registers() method queries registers NOT auto-sent
+    by the device on connection:
+    - --io: GPIO status (IO)
+    - --tel: Telemetry config (TM)
 
-    This is called automatically on connection to populate the device state.
+    The device auto-sends all other registers (I, SN, G, SA, SE+S1,
+    SW+S2, W, AN) on BLE connect.
 """
 
 import asyncio
@@ -880,20 +880,18 @@ class BLEAdapter:
 
     async def query_extended_registers(self):
         """
-        Query extended device registers on connection.
+        Query device registers NOT auto-sent on connection.
 
-        Sends: --seset, --wifiset, --weather, --analogset
-        Note: --seset and --wifiset send multi-part responses (SE+S1, SW+S2)
+        The device auto-sends: I, SN, G, SA, SE+S1, SW+S2, W, AN
+        This only queries: IO (GPIO status) and TM (telemetry config).
         """
         if not self.is_connected:
             logger.warning("Cannot query registers: not connected")
             return
 
         commands = [
-            ("--seset", 1.2),     # TYP: SE + S1 (multi-part)
-            ("--wifiset", 1.2),   # TYP: SW + S2 (multi-part)
-            ("--weather", 0.8),   # TYP: W
-            ("--analogset", 0.8), # TYP: AN
+            ("--io", 0.8),    # TYP: IO (GPIO status)
+            ("--tel", 0.8),   # TYP: TM (telemetry config)
         ]
 
         for cmd, delay in commands:

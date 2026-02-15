@@ -547,25 +547,14 @@ class MessageRouter:
 
     async def _query_ble_registers(self, wait_for_hello: bool = True, sync_time: bool = True):
         """
-        Query BLE device config registers.
+        Query BLE device registers NOT auto-sent by the device on connect.
 
-        Critical register queries (always run):
-        - --info: TYP: I (device info, firmware, callsign, battery)
-        - --nodeset: TYP: SN (node settings, LoRa params, gateway mode)
-        - --pos: TYP: G (GPS/position data, coordinates, satellites)
-        - --aprsset: TYP: SA (APRS settings, comment, symbols)
+        The device auto-sends 8 registers on BLE connection:
+        I, SN, G, SA, SE+S1, SW+S2, W, AN
 
-        Extended register queries (Phase 3):
-        - --seset: TYP: SE + S1 (sensor settings, MULTI-PART response)
-        - --wifiset: TYP: SW + S2 (WiFi settings, MULTI-PART response)
-        - --weather: TYP: W (sensor readings: temp, humidity, pressure)
-        - --analogset: TYP: AN (analog input config)
-
-        IMPORTANT - Multi-Part Responses:
-        - --seset sends TWO JSON messages: SE followed by S1
-        - --wifiset sends TWO JSON messages: SW followed by S2
-        - These arrive as separate BLE notifications ~200ms apart
-        - Frontend receives them as distinct SSE events
+        This method only queries the remaining registers:
+        - --io: TYP: IO (GPIO status)
+        - --tel: TYP: TM (telemetry config)
 
         Args:
             wait_for_hello: If True, wait 1s before querying (ensure hello complete)
@@ -594,43 +583,20 @@ class MessageRouter:
                 except Exception as e:
                     logger.warning("Time sync failed (non-critical): %s", e)
 
-        # Commands to query (order: critical info first)
-        # IMPORTANT: --pos returns TYP: G, not "--pos info" which is invalid
-        commands = [
-            ('--info', BLE_QUERY_DELAY_STANDARD),      # Device info
-            ('--nodeset', BLE_QUERY_DELAY_STANDARD),   # Node settings
-            ('--pos', BLE_QUERY_DELAY_STANDARD),       # GPS/position data
-            ('--aprsset', BLE_QUERY_DELAY_STANDARD),   # APRS settings
+        # Only query registers NOT auto-sent by device on connect.
+        # Device auto-sends: I, SN, G, SA, SE+S1, SW+S2, W, AN
+        non_auto_registers = [
+            ('--io', BLE_QUERY_DELAY_STANDARD),    # TYP: IO (GPIO status)
+            ('--tel', BLE_QUERY_DELAY_STANDARD),   # TYP: TM (telemetry config)
         ]
 
-        # Send commands with retry logic for improved reliability
-        for cmd, delay in commands:
+        for cmd, delay in non_auto_registers:
             success = await self._send_ble_command_with_retry(client, cmd)
             if not success:
-                logger.error("Critical register query %s failed after all retries", cmd)
-            # Wait between commands to allow device processing time
+                logger.warning("Register query %s failed (non-critical)", cmd)
             await asyncio.sleep(delay)
 
-        # Extended queries (sensor, WiFi, weather, analog config)
-        # TIMING: Multi-part responses (SE+S1, SW+S2) need longer delay
-        extended_queries = [
-            ('--seset', BLE_QUERY_DELAY_MULTIPART),     # TYP: SE + S1 (multi-part)
-            ('--wifiset', BLE_QUERY_DELAY_MULTIPART),   # TYP: SW + S2 (multi-part)
-            ('--weather', BLE_QUERY_DELAY_STANDARD),    # TYP: W (sensor readings)
-            ('--analogset', BLE_QUERY_DELAY_STANDARD),  # TYP: AN (analog config)
-            ('--io', BLE_QUERY_DELAY_STANDARD),         # TYP: IO (GPIO status)
-            ('--tel', BLE_QUERY_DELAY_STANDARD),        # TYP: TM (telemetry config)
-        ]
-
-        logger.debug("Querying extended registers (adds ~4s)")
-        for cmd, delay in extended_queries:
-            success = await self._send_ble_command_with_retry(client, cmd)
-            if not success:
-                logger.warning("Extended query %s failed (non-critical)", cmd)
-                # Continue anyway - these are optional
-            await asyncio.sleep(delay)
-
-        logger.debug("Register queries complete (critical + extended)")
+        logger.debug("Register queries complete (IO + TM)")
 
     async def _handle_ble_scan_command(self):
         """Handle BLE scan command"""
@@ -1228,6 +1194,26 @@ async def main():
     message_router = MessageRouter(storage_handler)
     message_router.set_callsign(cfg.call_sign)
     message_router.cached_gps = None  # {lat, lon} — set when BLE device sends TYP="G"
+    message_router.cached_ble_registers = {}  # {TYP: dict} — cached on ble_notification
+
+    async def _cache_ble_register(routed_message):
+        """Cache BLE register notifications for serving on SSE reconnect."""
+        data = routed_message['data']
+        typ = data.get("TYP")
+        if typ in ("I", "SN", "G", "SA", "SE", "S1", "SW", "S2", "W", "AN", "IO", "TM"):
+            message_router.cached_ble_registers[typ] = data
+
+    message_router.subscribe("ble_notification", _cache_ble_register)
+
+    async def _clear_ble_cache_on_disconnect(routed_message):
+        """Clear BLE register cache when device disconnects."""
+        data = routed_message['data']
+        cmd = data.get("command", "")
+        if "disconnect" in cmd and data.get("result") == "ok":
+            message_router.cached_ble_registers.clear()
+            logger.info("BLE register cache cleared (disconnect)")
+
+    message_router.subscribe("ble_status", _clear_ble_cache_on_disconnect)
 
     async def _cache_gps(routed_message):
         """Cache GPS from BLE device and update weather service."""

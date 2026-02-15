@@ -251,16 +251,21 @@ class SSEManager:
                                 }
                             yield self._format_sse_event(ble_info)
 
-                            # If BLE is connected, query device registers in background.
-                            # Responses arrive as ble_notification events via pub/sub
-                            # and flow to this client through the SSE event queue.
-                            # BLE is already connected, skip hello handshake wait.
+                            # If BLE is connected, serve cached registers instantly
+                            # instead of re-querying the device.
                             if is_connected:
-                                asyncio.create_task(
-                                    self.message_router._query_ble_registers(
-                                        wait_for_hello=False
-                                    )
+                                cached_regs = getattr(
+                                    self.message_router,
+                                    'cached_ble_registers', {},
                                 )
+                                if cached_regs:
+                                    for reg_data in cached_regs.values():
+                                        yield self._format_sse_event(reg_data)
+                                    logger.info(
+                                        "SSE client %s: sent %d cached BLE"
+                                        " registers",
+                                        client_id, len(cached_regs),
+                                    )
 
                         logger.info("SSE client %s: initial data sent", client_id)
                     except Exception as e:
