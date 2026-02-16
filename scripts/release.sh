@@ -207,12 +207,12 @@ validate_main_mergeable() {
 #──────────────────────────────────────────────────────────────────
 
 prompt_release_type() {
-  echo ""
-  echo -e "  ${BOLD}What type of release?${NC}"
-  echo ""
-  echo "    1) Dev pre-release  (tag development, publish pre-release)"
-  echo "    2) Production       (merge to main, tag, publish stable release)"
-  echo ""
+  echo "" >&2
+  echo -e "  ${BOLD}What type of release?${NC}" >&2
+  echo "" >&2
+  echo "    1) Dev pre-release  (tag development, publish pre-release)" >&2
+  echo "    2) Production       (merge to main, tag, publish stable release)" >&2
+  echo "" >&2
   read -rp "  Choose [1/2]: " choice
 
   case "$choice" in
