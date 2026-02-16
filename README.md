@@ -1,8 +1,8 @@
 # McApp
 
-McApp is a single page, client rendered, web application. It should run on every modern browser out there, but you never know. Settings get persisted in a sqlite database.
+McApp is a single page, webbrowser rendered, web application. It should run on every modern browser out there, but you never know. Settings get persisted in a sqlite database.
 
-Rendering on the client, the Raspberry Pi is only a lightweight proxy between a MeshCom device that is connected via BLE and the web browser. It uses SSE and RestAPI for communication.
+Rendering on the client, the Raspberry Pi is only a lightweight proxy database server between a MeshCom ESP32 IoT device that is connected via BLE and the web browser. It uses SSE and RestAPI for communication.
 
 - Modern streaming to the browser, TypeScript code in the browser, Python in the backend
 - On initial page load, latest messages get to your browser

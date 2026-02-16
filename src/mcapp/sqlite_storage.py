@@ -2131,11 +2131,13 @@ class SQLiteStorage:
         logger.info("Saved %d messages to %s", len(data), filename)
         return len(data)
 
-    async def get_telemetry_chart_data(self) -> list[dict[str, Any]]:
-        """Return telemetry data for chart display."""
+    async def get_telemetry_chart_data(self, hours: int = 48) -> list[dict[str, Any]]:
+        """Return telemetry data for chart display, limited to recent data."""
+        cutoff = int((time.time() - hours * 3600) * 1000)
         return await self._execute(
             "SELECT callsign, timestamp, temp1, temp2, hum, qfe, qnh, alt"
-            " FROM telemetry ORDER BY callsign, timestamp",
+            " FROM telemetry WHERE timestamp > ? ORDER BY callsign, timestamp",
+            (cutoff,),
         )
 
     async def get_read_counts(self) -> dict[str, int]:
