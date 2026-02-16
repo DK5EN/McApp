@@ -1,104 +1,40 @@
-# McApp Release History
+# McApp v1.4.1 Release Notes
 
-## Changes since v1.2.0 (ea854e5)
-
-**Date**: February 15, 2026
-**Branch**: development
-**Bootstrap version**: 2.2.2
-
----
-
-### Bug Fixes
-
-#### Parse negative temperatures in APRS weather fields (`b5ae31f`)
-
-Regex patterns in `ble_protocol.py` used `[\d.]+` which silently dropped negative temperature values. Added `-?` to temperature capture groups in both the APRS position parser (`/T=` field) and the APRS telemetry parser. Stations reporting sub-zero temperatures now display correctly.
-
-#### Stop conflicting services before activating (`59e0fe5`)
-
-The bootstrap deploy phase now stops Caddy and any rogue `mcapp` processes before starting the systemd service. Prevents port conflicts and stale processes from blocking the new deployment.
-
-#### Handle piped mode (`curl|bash`) for lighttpd template (`c728c99`)
-
-When running the bootstrap via `curl -fsSL ... | sudo bash`, the lighttpd config template wasn't available because piped mode downloads library files but not templates. Added logic to download `templates/lighttpd.conf` from GitHub when running in piped mode.
-
-#### Handle old installations with customized lighttpd.conf (`d6c9411`)
-
-Existing Pi installations with manually edited lighttpd configurations are now handled gracefully. The bootstrap compares the current config against the template and only updates if proxy rules are missing, preserving user customizations. Added the lighttpd template file (`bootstrap/templates/lighttpd.conf`).
-
-#### Fix `((removed++))` crash in bootstrap under `set -e` (`b56a45e`)
-
-Bash arithmetic `((removed++))` returns exit code 1 when `removed` is 0 (because `0++` evaluates to 0, which is falsy). Under `set -e` this crashed the bootstrap. Fixed by using `removed=$((removed + 1))` instead.
-
-#### Escape special chars in BLE API key for systemd unit (`c5c6747`)
-
-Auto-generated BLE API keys containing characters like `%` or `$` broke systemd environment variable parsing. Added proper escaping when writing the key to the BLE service unit file.
-
-#### Move locale config after apt upgrade in bootstrap (`4751882`)
-
-Locale generation (`en_US.UTF-8`, `de_DE.UTF-8`) was running before `apt-get upgrade`, which could install locale packages that reset the configuration. Moved locale setup to after the upgrade step.
+**Date**: February 16, 2026
 
 ---
 
 ### Features
 
-#### Automate release.sh — push, publish, include release notes (`0005ca8`)
+- **WX station sidebar** — New sidebar on the weather page with drag-and-drop reordering (via vuedraggable) and toggle visibility per station, persisted to IndexedDB. Follows the same grid layout pattern as the positions page.
 
-The release script now pushes the commit and tag to the remote before creating the GitHub release, ensuring the remote tag points to the correct commit. Uses `doc/release-history.md` as release notes body and publishes immediately instead of creating a draft. One command, zero follow-up.
+- **24h/7d time range toggle** — Tab switcher on the WX page so charts, statistics, and station filtering adapt to the selected window. Backend API now accepts an `hours` query param. Also fixed pressure chart tooltip to show both QFE and QNH.
 
----
+- **WX statistics card** — New 4th quadrant card showing min/median/max for all weather metrics, datapoint counts, and estimated real altitude from cross-station QNH consensus.
 
-### Documentation
+- **Add hours query parameter to telemetry API** (`b409b4a`) — The `/api/telemetry` endpoint now accepts an `hours` parameter to control the time window for chart data.
 
-#### README overhaul (`84d6970`, `f880b7f`, `4611e17`, `f212d3e`, `eff41f9`)
+- **Rewrite release.sh as interactive script** (`c204721`) — Complete rewrite of the release script with dual-repo support (MCProxy + webapp), interactive prompts, automatic tarball building, GitHub release publishing, and full rollback on failure.
 
-- Added SD card flashing instructions with 4 Raspberry Pi Imager screenshots
-- Added weather screenshot, arranged all screenshots in a 2x2 grid
-- Added mHeard view description
-- Removed outdated caveats about sensor data, weather, and in-memory database
-- Modernized intro text, requirements section, and installation notes
-- Compressed map screenshot from 4.9 MB to 3.7 MB
+### Bug Fixes
 
-#### Release history reorganization (`b56a45e`)
+- **Extend message dedup window from 5 to 20 minutes** (`8a8d07f`) — The duplicate message detection window was too short, allowing repeated commands to slip through. Increased to 20 minutes for more reliable deduplication on the mesh network.
 
-Renamed `doc/release-history.md` to `doc/release-v1.2.0.md` to archive the v1.2.0 release notes and make room for ongoing release tracking.
+- **Add 48h time filter to telemetry chart query** (`a0186d8`) — The telemetry API endpoint returned all historical data, causing slow chart rendering. Added a 48-hour default filter to keep responses fast.
 
----
+- **Redirect release menu to stderr** (`167debe`) — The interactive release type menu was printed to stdout, making it invisible when stdout was captured. Redirected to stderr so the menu is always visible.
+
+- **Preserve WX sidebar state across navigation** — Lifted stationOrder, hiddenStations, and loaded refs to module-level scope so they survive mount/unmount cycles.
+
+- **Watchdog false "no time sync"** — Reset the watchdog timer on tab resume instead of re-evaluating staleness, preventing false alarms after browsers suspend SSE connections.
+
+- **Qualified stations only in sidebar** — Filter sidebar to stations with >= 6 recent datapoints (matching the chart threshold) so no empty entries appear.
+
+- **Sidebar collapse shrinks grid** — Use auto grid column so the content area expands when the sidebar collapses.
+
+- **Altitude chart stabilization** — Removed barometric input from the Kalman filter (was causing ~20m fluctuations) and switched to GPS-only filtering.
 
 ### Chore
 
-- Bumped bootstrap version to 2.2.2 (`14cd229`)
-- Version bump to 1.3.0 then reverted to 1.2.0 for continued development (`d15d457`, `ede24b5`)
-
----
-
-### Files Changed
-
-| File | Change |
-|------|--------|
-| `src/mcapp/ble_protocol.py` | Fix negative temperature parsing |
-| `bootstrap/lib/deploy.sh` | Stop conflicting services, escape BLE API key |
-| `bootstrap/lib/packages.sh` | Lighttpd template handling (piped + upgrade), locale ordering |
-| `bootstrap/lib/system.sh` | Fix arithmetic crash, locale ordering |
-| `bootstrap/mcapp.sh` | Version bump to 2.2.2, conflicting service stop |
-| `bootstrap/templates/lighttpd.conf` | New template file |
-| `scripts/release.sh` | Automated push, publish, release notes |
-| `README.md` | Major documentation overhaul |
-| `doc/release-v1.2.0.md` | Renamed from release-history.md |
-| `doc/wx.png` | New weather screenshot |
-| `doc/1_Flash-PiZero2W.png` | New SD card flashing screenshot |
-| `doc/2_OtherOS.png` | New SD card flashing screenshot |
-| `doc/3_LightOS.png` | New SD card flashing screenshot |
-| `doc/4_SelectCard.png` | New SD card flashing screenshot |
-| `doc/map.png` | Compressed (4.9→3.7 MB) |
-
----
-
-### Statistics
-
-- **Commits**: 17 (including 1 merge)
-- **Files changed**: 15
-- **Lines inserted**: 173
-- **Lines deleted**: 35
-- **Net change**: +138 lines
-- **Commit types**: 6 fixes, 1 feature, 5 docs, 3 chore, 1 merge
+- Align pyproject.toml versions to 1.4.1 (`f6db6be`)
+- Remove resolved deficits from version-logic.md (`aaa9ea0`)
