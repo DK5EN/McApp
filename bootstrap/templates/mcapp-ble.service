@@ -21,7 +21,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=true
-ReadWritePaths={{HOME}}/mcapp {{HOME}}/.cache/uv
+ReadWritePaths={{HOME}}/mcapp {{HOME}}/.cache/uv /var/lib/mcapp
 
 [Install]
 WantedBy=multi-user.target
