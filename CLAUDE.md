@@ -808,15 +808,17 @@ To prevent log spam, both nftables and iptables silently drop common broadcast/m
 - High UDP ports (> 30000)
 - IGMP protocol
 
+All other unmatched traffic is **rejected** (not dropped) — the catch-all rule uses `reject` to send TCP RST / ICMP port-unreachable so clients fail fast instead of timing out on silent drops.
+
 ### Firewall Logs
 
 **Log format:**
-- nftables: `[nftables DROP] ` prefix
-- iptables: `[iptables DROP] ` prefix
+- nftables: `[nftables DROP] ` prefix (logged before reject)
+- iptables: `[iptables DROP] ` prefix (logged before reject)
 
-**Rate limiting:** 10 drops per minute are logged (prevents log spam while maintaining visibility)
+**Rate limiting:** 10 rejects per minute are logged (prevents log spam while maintaining visibility)
 
-**View dropped traffic:**
+**View rejected traffic:**
 ```bash
 # Watch firewall drops in real-time
 sudo journalctl -kf | grep DROP
