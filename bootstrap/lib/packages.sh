@@ -90,6 +90,9 @@ install_apt_deps() {
     # For SSL certificates
     "ca-certificates"
     "gnupg"
+
+    # SD card health diagnostics (mmc extcsd)
+    "mmc-utils"
   )
 
   # Install all packages
