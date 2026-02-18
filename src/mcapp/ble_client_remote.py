@@ -135,7 +135,7 @@ class BLEClientRemote(BLEClientBase):
         if self.message_router:
             await self.message_router.publish('ble', 'ble_status', {
                 'src_type': 'BLE',
-                'TYP': 'remote',
+                'TYP': 'blueZ',
                 'command': command,
                 'result': result,
                 'msg': msg,
