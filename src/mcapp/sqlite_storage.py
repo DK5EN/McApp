@@ -32,7 +32,7 @@ VALID_SNR_RANGE = (-30, 12)
 DEDUP_WINDOW_MS = 20 * 60 * 1000  # 20-minute dedup window (milliseconds)
 SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
 GAP_THRESHOLD_MULTIPLIER = 6
-MIN_DATAPOINTS_FOR_STATS = 3
+MIN_DATAPOINTS_FOR_STATS = 10
 
 # Columns to SELECT when building message JSON (avoids fetching raw_json)
 _MSG_SELECT = (
@@ -1665,27 +1665,37 @@ class SQLiteStorage:
             # Use pre-aggregated data — much faster
             logger.debug("Using %d pre-aggregated signal_buckets", len(bucket_rows))
 
-            if progress_callback:
-                await progress_callback("bucketing", f"Processing {len(bucket_rows)} buckets...")
-
             # Also flush any in-memory partial buckets before building result
             await self._flush_all_accumulators()
 
             # Build result with gap markers from pre-aggregated buckets
             gap_threshold = GAP_THRESHOLD_MULTIPLIER * BUCKET_SECONDS
 
-            # Group by callsign
+            # Group by callsign and filter to qualified stations
             callsign_data: dict[str, list[dict]] = defaultdict(list)
             for row in bucket_rows:
                 callsign_data[row["callsign"]].append(row)
+            qualified = {
+                cs: entries for cs, entries in callsign_data.items()
+                if len(entries) >= MIN_DATAPOINTS_FOR_STATS
+            }
+
+            if progress_callback:
+                await progress_callback(
+                    "bucketing",
+                    f"Processing {len(bucket_rows)} buckets"
+                    f" for {len(qualified)} stations...",
+                )
 
             final_result = []
-            for callsign, entries in callsign_data.items():
-                if len(entries) < MIN_DATAPOINTS_FOR_STATS:
-                    continue
-
+            for idx, (callsign, entries) in enumerate(sorted(qualified.items()), 1):
                 if progress_callback:
-                    await progress_callback("gaps", f"Analyzing {callsign}...", callsign)
+                    await progress_callback(
+                        "gaps",
+                        f"Building chart for {callsign}"
+                        f" ({idx}/{len(qualified)})...",
+                        callsign,
+                    )
 
                 entries.sort(key=lambda x: x["bucket_ts"])
                 segment_id = 0
@@ -1904,11 +1914,17 @@ class SQLiteStorage:
 
         final_result = []
 
-        for callsign, entries in callsign_data.items():
-            if len(entries) < MIN_DATAPOINTS_FOR_STATS:
-                continue
+        qualified = {
+            cs: entries for cs, entries in callsign_data.items()
+            if len(entries) >= MIN_DATAPOINTS_FOR_STATS
+        }
 
-            await progress_callback("gaps", f"Analyzing {callsign}...", callsign)
+        for idx, (callsign, entries) in enumerate(sorted(qualified.items()), 1):
+            await progress_callback(
+                "gaps",
+                f"Building chart for {callsign} ({idx}/{len(qualified)})...",
+                callsign,
+            )
 
             entries.sort(key=lambda x: x[0])
             segment_id = 0
