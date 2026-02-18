@@ -1278,8 +1278,8 @@ class SQLiteStorage:
         )
 
         # --- Prune new tables ---
-        # telemetry: 31 days (supports "Last Month" WX view)
-        cutoff_telemetry_ms = int((now - timedelta(days=31)).timestamp() * 1000)
+        # telemetry: 365 days (supports "Last Year" WX view)
+        cutoff_telemetry_ms = int((now - timedelta(days=365)).timestamp() * 1000)
         await self._execute(
             "DELETE FROM telemetry WHERE timestamp < ?",
             (cutoff_telemetry_ms,),
@@ -2269,6 +2269,31 @@ class SQLiteStorage:
         return await self._execute(
             "SELECT callsign, timestamp, temp1, temp2, hum, qfe, qnh, alt"
             " FROM telemetry WHERE timestamp > ? ORDER BY callsign, timestamp",
+            (cutoff,),
+        )
+
+    async def get_telemetry_chart_data_bucketed(
+        self, hours: int = 8760
+    ) -> list[dict[str, Any]]:
+        """Return telemetry aggregated into 4-hour buckets with min/max."""
+        cutoff = int((time.time() - hours * 3600) * 1000)
+        bucket_ms = 4 * 3600 * 1000  # 4 hours
+        return await self._execute(
+            f"""
+            SELECT
+                callsign,
+                (timestamp / {bucket_ms}) * {bucket_ms} AS bucket_ts,
+                MIN(temp1) AS temp1_min, MAX(temp1) AS temp1_max,
+                MIN(hum) AS hum_min, MAX(hum) AS hum_max,
+                MIN(qfe) AS qfe_min, MAX(qfe) AS qfe_max,
+                MIN(alt) AS alt_min, MAX(alt) AS alt_max,
+                COUNT(*) AS count
+            FROM telemetry
+            WHERE timestamp > ?
+              AND (temp1 IS NOT NULL OR hum IS NOT NULL OR qfe IS NOT NULL)
+            GROUP BY callsign, bucket_ts
+            ORDER BY callsign, bucket_ts
+            """,
             (cutoff,),
         )
 

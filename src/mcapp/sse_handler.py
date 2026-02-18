@@ -536,6 +536,18 @@ class SSEManager:
                 )
             return await storage.get_telemetry_chart_data(hours=min(hours, 744))
 
+        @app.get("/api/telemetry/yearly")
+        async def get_telemetry_yearly():
+            """Get telemetry data aggregated into 4h buckets for yearly charts."""
+            storage = (
+                self.message_router.storage_handler if self.message_router else None
+            )
+            if not storage or not hasattr(storage, "get_telemetry_chart_data_bucketed"):
+                raise HTTPException(
+                    status_code=503, detail="Telemetry not available"
+                )
+            return await storage.get_telemetry_chart_data_bucketed()
+
         @app.get("/api/timezone")
         async def get_timezone(lat: float, lon: float):
             """Return UTC offset for given coordinates using timezonefinder."""
