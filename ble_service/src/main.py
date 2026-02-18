@@ -265,6 +265,7 @@ async def _startup_auto_connect():
             )
             if success:
                 logger.info("Startup auto-connect successful to %s", mac)
+                _push_status_event("connected", device_address=mac)
                 return
             else:
                 logger.warning("Startup auto-connect attempt %d failed", attempt)
@@ -303,6 +304,11 @@ async def lifespan(app: FastAPI):
         _auto_connect_task.cancel()
     if _reconnect_task and not _reconnect_task.done():
         _reconnect_task.cancel()
+
+    # Notify SSE clients before closing
+    _push_status_event("disconnected", reason="service_shutdown")
+    await asyncio.sleep(0.5)  # allow SSE delivery
+
     if ble_adapter and ble_adapter.is_connected:
         await ble_adapter.disconnect()
 

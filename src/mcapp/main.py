@@ -1233,7 +1233,7 @@ async def main():
         """Clear BLE register cache when device disconnects."""
         data = routed_message['data']
         cmd = data.get("command", "")
-        if "disconnect" in cmd and data.get("result") == "ok":
+        if "disconnect" in cmd and data.get("result") in ("ok", "lost"):
             message_router.cached_ble_registers.clear()
             logger.info("BLE register cache cleared (disconnect)")
 

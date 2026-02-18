@@ -414,6 +414,7 @@ class BLEClientRemote(BLEClientBase):
                 async with sse_client.EventSource(
                     url, headers=headers, timeout=timeout
                 ) as event_source:
+                    self._sse_backoff = 5  # Reset on successful connection
                     async for event in event_source:
                         if not self._running:
                             break
@@ -431,6 +432,7 @@ class BLEClientRemote(BLEClientBase):
                 if self._running:
                     # Notify frontend if we were connected when SSE dropped
                     if self._status.state == ConnectionState.CONNECTED:
+                        logger.info("BLE service SSE dropped while connected — notifying frontend")
                         self._status.state = ConnectionState.DISCONNECTED
                         self._status.device_address = None
                         await self._publish_status(
@@ -585,7 +587,9 @@ class BLEClientRemote(BLEClientBase):
 
             if old_state != new_state:
                 if new_state == ConnectionState.DISCONNECTED:
-                    logger.info("BLE remote connection lost (was %s)", old_state.value)
+                    reason = status.get('reason', 'unknown')
+                    logger.info("BLE remote disconnected (was %s, reason: %s)",
+                                old_state.value, reason)
                     await self._publish_status(
                         'disconnect BLE', 'lost', 'BLE connection lost (device reboot)'
                     )
