@@ -172,9 +172,23 @@ async def _connect_and_initialize(mac: str) -> bool:
 
 # --- Auto-reconnect / auto-connect ---
 
+def _push_status_event(state: str, **kwargs):
+    """Push a BLE status change event into the notification queue for SSE delivery."""
+    event = {
+        "event_type": "status",
+        "state": state,
+        "timestamp": int(time.time() * 1000),
+        **kwargs,
+    }
+    notification_queue.append(event)
+    notification_event.set()
+    logger.info("Status event pushed: %s", state)
+
+
 def _on_adapter_disconnect():
-    """Called by BLEAdapter when an unexpected disconnect is detected during write"""
+    """Called by BLEAdapter when an unexpected disconnect is detected"""
     global _reconnect_task
+    _push_status_event("disconnected")
     if _user_disconnected:
         return
     logger.warning("Unexpected disconnect detected, scheduling auto-reconnect")
@@ -210,6 +224,7 @@ async def _auto_reconnect():
             success = await _connect_and_initialize(mac)
             if success:
                 logger.info("Auto-reconnect successful to %s", mac)
+                _push_status_event("connected", device_address=mac)
                 return
             else:
                 logger.warning("Auto-reconnect attempt %d failed", attempt)
@@ -765,15 +780,22 @@ async def stream_notifications(
                 }
                 continue
 
-            # Send all queued notifications
+            # Send all queued notifications/status events
             while notification_queue:
                 notification = notification_queue.popleft()
                 if notification["timestamp"] > last_sent:
                     last_sent = notification["timestamp"]
-                    yield {
-                        "event": "notification",
-                        "data": json.dumps(notification)
-                    }
+                    # Status events use "status" SSE event type
+                    if notification.get("event_type") == "status":
+                        yield {
+                            "event": "status",
+                            "data": json.dumps(notification)
+                        }
+                    else:
+                        yield {
+                            "event": "notification",
+                            "data": json.dumps(notification)
+                        }
 
     return EventSourceResponse(event_generator())
 

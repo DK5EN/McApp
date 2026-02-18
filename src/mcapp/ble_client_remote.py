@@ -577,11 +577,18 @@ class BLEClientRemote(BLEClientBase):
             self._status.state = new_state
 
             if old_state != new_state:
-                if (old_state == ConnectionState.DISCONNECTED
+                if new_state == ConnectionState.DISCONNECTED:
+                    logger.info("BLE remote connection lost (was %s)", old_state.value)
+                    await self._publish_status(
+                        'disconnect BLE', 'lost', 'BLE connection lost (device reboot)'
+                    )
+                elif (old_state == ConnectionState.DISCONNECTED
                         and new_state == ConnectionState.CONNECTED):
                     logger.info("BLE auto-reconnected (remote service restored connection)")
-                elif new_state == ConnectionState.DISCONNECTED:
-                    logger.info("BLE remote connection lost (was %s)", old_state.value)
+                    self._status.device_address = status.get('device_address')
+                    await self._publish_status(
+                        'connect BLE result', 'ok', 'BLE auto-reconnected'
+                    )
                 else:
                     logger.info("BLE remote state changed: %s -> %s",
                                 old_state.value, new_state.value)

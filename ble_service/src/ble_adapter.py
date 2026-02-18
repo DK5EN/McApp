@@ -172,6 +172,7 @@ class BLEAdapter:
         self._agent_registered: bool = False
         self._cancel_connect: bool = False
         self._disconnect_callback: Callable[[], None] | None = None
+        self._device_props_handler = None
 
     @property
     def status(self) -> BLEStatus:
@@ -325,6 +326,9 @@ class BLEAdapter:
                     self._status.device = BLEDevice(name=name, address=mac)
                     self._status.last_activity = time.time()
 
+                    # Subscribe to D-Bus PropertiesChanged for instant disconnect detection
+                    self._subscribe_device_properties()
+
                     # Start keepalive
                     self._start_keepalive()
 
@@ -407,6 +411,29 @@ class BLEAdapter:
             raise ConnectionError("Required GATT characteristics not found")
 
         self.read_props_iface = self.read_char_obj.get_interface(PROPERTIES_INTERFACE)
+
+    def _subscribe_device_properties(self):
+        """Subscribe to D-Bus PropertiesChanged on device for instant disconnect detection"""
+        if not self.props_iface:
+            return
+
+        async def _on_device_props_changed(iface: str, changed: dict, invalidated: list):
+            if iface == DEVICE_INTERFACE and "Connected" in changed:
+                if not changed["Connected"].value:
+                    logger.warning("D-Bus: device disconnected (PropertiesChanged)")
+                    self._on_disconnect_detected()
+
+        self._device_props_handler = _on_device_props_changed
+        self.props_iface.on_properties_changed(_on_device_props_changed)
+
+    def _unsubscribe_device_properties(self):
+        """Unsubscribe from device PropertiesChanged signal"""
+        if self._device_props_handler and self.props_iface:
+            try:
+                self.props_iface.off_properties_changed(self._device_props_handler)
+            except Exception:
+                pass
+        self._device_props_handler = None
 
     async def _wait_for_services_resolved(self, timeout: float = 10.0) -> bool:
         """Wait for BLE services to be discovered"""
@@ -517,6 +544,9 @@ class BLEAdapter:
             except asyncio.CancelledError:
                 pass
             self._keepalive_task = None
+
+        # Unsubscribe device property listener
+        self._unsubscribe_device_properties()
 
         # Stop notifications
         try:
@@ -630,8 +660,10 @@ class BLEAdapter:
                 return False
 
     def _on_disconnect_detected(self):
-        """Handle unexpected disconnect detected during write failure"""
-        logger.warning("Disconnect detected during write, updating state")
+        """Handle unexpected disconnect (write failure or D-Bus signal)"""
+        if self._status.state == ConnectionState.DISCONNECTED:
+            return  # Already handled
+        logger.warning("Disconnect detected, updating state")
         self._status.state = ConnectionState.DISCONNECTED
         self._status.device = None
         self._status.error = "Connection lost"
@@ -641,6 +673,9 @@ class BLEAdapter:
         if self._keepalive_task and not self._keepalive_task.done():
             self._keepalive_task.cancel()
             self._keepalive_task = None
+
+        # Unsubscribe device property listener
+        self._device_props_handler = None
 
         # Reset GATT interfaces (bus may still be valid for reconnect)
         self.device_obj = None
