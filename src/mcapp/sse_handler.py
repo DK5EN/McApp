@@ -496,6 +496,24 @@ class SSEManager:
                 )
             return await storage.get_telemetry_chart_data(hours=min(hours, 192))
 
+        @app.get("/api/timezone")
+        async def get_timezone(lat: float, lon: float):
+            """Return UTC offset for given coordinates using timezonefinder."""
+            from timezonefinder import TimezoneFinder
+            from datetime import datetime
+            import zoneinfo
+
+            tf = TimezoneFinder()
+            tz_name = tf.timezone_at(lat=lat, lng=lon)
+            if not tz_name:
+                raise HTTPException(
+                    status_code=400, detail="No timezone found for coordinates"
+                )
+            zone = zoneinfo.ZoneInfo(tz_name)
+            offset_seconds = datetime.now(zone).utcoffset().total_seconds()
+            offset_hours = offset_seconds / 3600
+            return {"timezone": tz_name, "utc_offset": offset_hours}
+
         return app
 
     @staticmethod
