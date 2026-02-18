@@ -512,7 +512,7 @@ class SSEManager:
             zone = zoneinfo.ZoneInfo(tz_name)
             offset_seconds = datetime.now(zone).utcoffset().total_seconds()
             offset_hours = offset_seconds / 3600
-            return {"timezone": tz_name, "utc_offset": offset_hours}
+            return {"timezone": tz_name, "abbreviation": datetime.now(zone).strftime("%Z"), "utc_offset": offset_hours}
 
         return app
 
