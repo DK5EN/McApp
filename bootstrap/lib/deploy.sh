@@ -499,7 +499,7 @@ configure_systemd_service() {
 enable_and_start_services() {
   log_info "  Enabling and starting services..."
 
-  local -a services=("lighttpd" "mcapp" "mcapp-ble")
+  local -a services=("lighttpd" "mcapp-ble" "mcapp")
   local failed=false
   local old_version="${MCAPP_OLD_VERSION:-unknown}"
   local new_version="${MCAPP_NEW_VERSION:-unknown}"
