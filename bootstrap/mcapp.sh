@@ -374,6 +374,7 @@ main() {
   # Phase 5: Application deployment
   log_step "Deploying application..."
   deploy_app "$FORCE" "$DEV_MODE"
+  deploy_shell_aliases
 
   # Phase 6: Service activation
   log_step "Activating services..."

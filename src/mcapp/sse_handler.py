@@ -207,6 +207,14 @@ class SSEManager:
                                         "msg": "hidden_destinations",
                                         "data": hidden_dsts,
                                     })
+                            if hasattr(storage, 'get_blocked_texts'):
+                                blocked_texts = await storage.get_blocked_texts()
+                                if blocked_texts:
+                                    yield self._format_sse_event({
+                                        "type": "response",
+                                        "msg": "blocked_texts",
+                                        "data": blocked_texts,
+                                    })
                         else:
                             logger.warning(
                                 "SSE client %s: no storage handler available",
@@ -443,6 +451,38 @@ class SSEManager:
                 await storage.update_hidden_destination(str(dst), bool(hidden))
             return {"status": "ok"}
 
+        # Blocked texts endpoints (persist blocked message patterns)
+        @app.get("/api/blocked_texts")
+        async def get_blocked_texts():
+            """Get list of blocked text patterns."""
+            storage = (
+                self.message_router.storage_handler if self.message_router else None
+            )
+            if not storage or not hasattr(storage, "get_blocked_texts"):
+                raise HTTPException(status_code=503, detail="Storage not available")
+            return await storage.get_blocked_texts()
+
+        @app.post("/api/blocked_texts")
+        async def set_blocked_texts(request: Request):
+            """Add/remove blocked texts. Single: {text, blocked}. Bulk: {texts: [...]}."""
+            storage = (
+                self.message_router.storage_handler if self.message_router else None
+            )
+            if not storage or not hasattr(storage, "update_blocked_text"):
+                raise HTTPException(status_code=503, detail="Storage not available")
+            body = await request.json()
+            if "texts" in body:
+                await storage.set_blocked_texts(
+                    [str(t) for t in body["texts"]]
+                )
+            else:
+                text = body.get("text")
+                blocked = body.get("blocked", True)
+                if not text:
+                    raise HTTPException(status_code=400, detail="Missing text")
+                await storage.update_blocked_text(str(text), bool(blocked))
+            return {"status": "ok"}
+
         # Health check endpoint
         @app.get("/health")
         async def health_check():
@@ -495,6 +535,24 @@ class SSEManager:
                     status_code=503, detail="Telemetry not available"
                 )
             return await storage.get_telemetry_chart_data(hours=min(hours, 192))
+
+        @app.get("/api/timezone")
+        async def get_timezone(lat: float, lon: float):
+            """Return UTC offset for given coordinates using timezonefinder."""
+            from timezonefinder import TimezoneFinder
+            from datetime import datetime
+            import zoneinfo
+
+            tf = TimezoneFinder()
+            tz_name = tf.timezone_at(lat=lat, lng=lon)
+            if not tz_name:
+                raise HTTPException(
+                    status_code=400, detail="No timezone found for coordinates"
+                )
+            zone = zoneinfo.ZoneInfo(tz_name)
+            offset_seconds = datetime.now(zone).utcoffset().total_seconds()
+            offset_hours = offset_seconds / 3600
+            return {"timezone": tz_name, "abbreviation": datetime.now(zone).strftime("%Z"), "utc_offset": offset_hours}
 
         return app
 

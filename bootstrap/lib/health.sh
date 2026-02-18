@@ -340,6 +340,20 @@ print_success_summary() {
     echo ""
   fi
 
+  # Reboot recommendation
+  if [[ -f /var/run/reboot-required ]]; then
+    echo "  ─────────────────────────────────────────────────────────"
+    printf "  ${YELLOW}%s${NC}" "Reboot recommended"
+    if [[ -f /var/run/reboot-required.pkgs ]]; then
+      local pkgs
+      pkgs=$(paste -sd', ' /var/run/reboot-required.pkgs)
+      printf " (updated: %s)" "$pkgs"
+    fi
+    echo ""
+    echo "    Run: sudo reboot"
+    echo ""
+  fi
+
 }
 
 #──────────────────────────────────────────────────────────────────

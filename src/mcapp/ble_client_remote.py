@@ -135,7 +135,7 @@ class BLEClientRemote(BLEClientBase):
         if self.message_router:
             await self.message_router.publish('ble', 'ble_status', {
                 'src_type': 'BLE',
-                'TYP': 'remote',
+                'TYP': 'blueZ',
                 'command': command,
                 'result': result,
                 'msg': msg,
@@ -414,6 +414,7 @@ class BLEClientRemote(BLEClientBase):
                 async with sse_client.EventSource(
                     url, headers=headers, timeout=timeout
                 ) as event_source:
+                    self._sse_backoff = 5  # Reset on successful connection
                     async for event in event_source:
                         if not self._running:
                             break
@@ -429,6 +430,14 @@ class BLEClientRemote(BLEClientBase):
                 break
             except Exception as e:
                 if self._running:
+                    # Notify frontend if we were connected when SSE dropped
+                    if self._status.state == ConnectionState.CONNECTED:
+                        logger.info("BLE service SSE dropped while connected — notifying frontend")
+                        self._status.state = ConnectionState.DISCONNECTED
+                        self._status.device_address = None
+                        await self._publish_status(
+                            'disconnect BLE', 'lost', 'BLE service connection lost'
+                        )
                     if not hasattr(self, '_sse_backoff'):
                         self._sse_backoff = 5
                     logger.warning("SSE connection error: %s, reconnecting in %ds...",
@@ -577,11 +586,20 @@ class BLEClientRemote(BLEClientBase):
             self._status.state = new_state
 
             if old_state != new_state:
-                if (old_state == ConnectionState.DISCONNECTED
+                if new_state == ConnectionState.DISCONNECTED:
+                    reason = status.get('reason', 'unknown')
+                    logger.info("BLE remote disconnected (was %s, reason: %s)",
+                                old_state.value, reason)
+                    await self._publish_status(
+                        'disconnect BLE', 'lost', 'BLE connection lost (device reboot)'
+                    )
+                elif (old_state == ConnectionState.DISCONNECTED
                         and new_state == ConnectionState.CONNECTED):
                     logger.info("BLE auto-reconnected (remote service restored connection)")
-                elif new_state == ConnectionState.DISCONNECTED:
-                    logger.info("BLE remote connection lost (was %s)", old_state.value)
+                    self._status.device_address = status.get('device_address')
+                    await self._publish_status(
+                        'connect BLE result', 'ok', 'BLE auto-reconnected'
+                    )
                 else:
                     logger.info("BLE remote state changed: %s -> %s",
                                 old_state.value, new_state.value)

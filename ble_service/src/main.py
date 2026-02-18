@@ -32,12 +32,16 @@ logger = logging.getLogger(__name__)
 # Configuration from environment
 API_KEY = os.getenv("BLE_SERVICE_API_KEY", "")
 CORS_ORIGINS = os.getenv("BLE_SERVICE_CORS_ORIGINS", "*").split(",")
+BLE_STATE_FILE = os.getenv("BLE_STATE_FILE", "/var/lib/mcapp/ble_state.json")
+BLE_AUTO_CONNECT = os.getenv("BLE_AUTO_CONNECT", "true").lower() != "false"
+AUTO_CONNECT_DELAY = int(os.getenv("BLE_AUTO_CONNECT_DELAY", "8"))
 
 # Global state
 ble_adapter: BLEAdapter | None = None
 notification_queue: deque[dict] = deque(maxlen=1000)
 notification_event = asyncio.Event()
 _reconnect_task: asyncio.Task | None = None
+_auto_connect_task: asyncio.Task | None = None
 _user_disconnected: bool = False
 _last_connected_mac: str | None = None
 
@@ -103,9 +107,88 @@ def notification_callback(data: bytes):
     logger.debug("Notification queued: %s", notification.get("format", "unknown"))
 
 
+# --- State persistence ---
+
+def _save_ble_state(mac: str, name: str | None = None) -> None:
+    """Persist last-connected device to disk for restart recovery."""
+    try:
+        state = {
+            "device_mac": mac,
+            "device_name": name,
+            "connected_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        tmp = BLE_STATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(state, f)
+        os.replace(tmp, BLE_STATE_FILE)
+        logger.info("Saved BLE state: %s (%s)", mac, name or "no name")
+    except Exception as e:
+        logger.warning("Failed to save BLE state: %s", e)
+
+
+def _load_ble_state() -> str | None:
+    """Load last-connected MAC from disk. Returns None if no state."""
+    try:
+        with open(BLE_STATE_FILE) as f:
+            state = json.load(f)
+        mac = state.get("device_mac")
+        if mac:
+            logger.info("Loaded BLE state: %s (%s)",
+                        mac, state.get("device_name", "no name"))
+        return mac
+    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+        return None
+
+
+def _clear_ble_state() -> None:
+    """Remove state file (called on explicit user disconnect)."""
+    try:
+        os.unlink(BLE_STATE_FILE)
+        logger.info("Cleared BLE state file")
+    except FileNotFoundError:
+        pass
+
+
+# --- Connect + initialize helper ---
+
+async def _connect_and_initialize(mac: str) -> bool:
+    """Connect to device and run post-connect initialization. Returns True on success."""
+    # Clean up stale bus before reconnect
+    if ble_adapter.bus:
+        try:
+            ble_adapter.bus.disconnect()
+        except Exception:
+            pass
+        ble_adapter.bus = None
+
+    success = await ble_adapter.connect(mac)
+    if success:
+        await ble_adapter.start_notify()
+        await ble_adapter.send_hello()
+        await asyncio.sleep(1.0)
+        await ble_adapter.query_extended_registers()
+    return success
+
+
+# --- Auto-reconnect / auto-connect ---
+
+def _push_status_event(state: str, **kwargs):
+    """Push a BLE status change event into the notification queue for SSE delivery."""
+    event = {
+        "event_type": "status",
+        "state": state,
+        "timestamp": int(time.time() * 1000),
+        **kwargs,
+    }
+    notification_queue.append(event)
+    notification_event.set()
+    logger.info("Status event pushed: %s", state)
+
+
 def _on_adapter_disconnect():
-    """Called by BLEAdapter when an unexpected disconnect is detected during write"""
+    """Called by BLEAdapter when an unexpected disconnect is detected"""
     global _reconnect_task
+    _push_status_event("disconnected")
     if _user_disconnected:
         return
     logger.warning("Unexpected disconnect detected, scheduling auto-reconnect")
@@ -115,14 +198,13 @@ def _on_adapter_disconnect():
 
 
 async def _auto_reconnect():
-    """Attempt to reconnect with exponential backoff"""
-    global _last_connected_mac
+    """Attempt to reconnect with exponential backoff after unexpected disconnect."""
     mac = _last_connected_mac
     if not mac:
         logger.warning("No previous MAC address for auto-reconnect")
         return
 
-    delays = [5, 10, 20, 60]  # Exponential backoff
+    delays = [5, 10, 20, 60]
     for attempt, delay in enumerate(delays, 1):
         if _user_disconnected:
             logger.info("Auto-reconnect cancelled (user disconnected)")
@@ -139,19 +221,10 @@ async def _auto_reconnect():
             return
 
         try:
-            # Clean up stale bus before reconnect
-            if ble_adapter.bus:
-                try:
-                    ble_adapter.bus.disconnect()
-                except Exception:
-                    pass
-                ble_adapter.bus = None
-
-            success = await ble_adapter.connect(mac)
+            success = await _connect_and_initialize(mac)
             if success:
-                await ble_adapter.start_notify()
-                await ble_adapter.send_hello()
                 logger.info("Auto-reconnect successful to %s", mac)
+                _push_status_event("connected", device_address=mac)
                 return
             else:
                 logger.warning("Auto-reconnect attempt %d failed", attempt)
@@ -161,10 +234,55 @@ async def _auto_reconnect():
     logger.error("Auto-reconnect exhausted all %d attempts for %s", len(delays), mac)
 
 
+async def _startup_auto_connect():
+    """Auto-connect to last-known device after service startup."""
+    global _last_connected_mac, _user_disconnected
+
+    mac = _load_ble_state()
+    if not mac:
+        logger.info("No saved BLE state — skipping auto-connect")
+        return
+
+    _last_connected_mac = mac
+    _user_disconnected = False
+
+    logger.info("Auto-connect: waiting %ds for Bluetooth hardware...", AUTO_CONNECT_DELAY)
+    await asyncio.sleep(AUTO_CONNECT_DELAY)
+
+    delays = [5, 10, 20, 60]
+    for attempt, delay in enumerate(delays, 1):
+        if _user_disconnected:
+            logger.info("Startup auto-connect cancelled (user disconnected)")
+            return
+        if ble_adapter.is_connected:
+            logger.info("Already connected, stopping startup auto-connect")
+            return
+
+        logger.info("Startup auto-connect attempt %d/%d to %s", attempt, len(delays), mac)
+        try:
+            success = await asyncio.wait_for(
+                _connect_and_initialize(mac), timeout=30.0
+            )
+            if success:
+                logger.info("Startup auto-connect successful to %s", mac)
+                _push_status_event("connected", device_address=mac)
+                return
+            else:
+                logger.warning("Startup auto-connect attempt %d failed", attempt)
+        except Exception as e:
+            logger.warning("Startup auto-connect attempt %d error: %s", attempt, e)
+
+        if attempt < len(delays):
+            logger.info("Retrying in %ds...", delay)
+            await asyncio.sleep(delay)
+
+    logger.error("Startup auto-connect exhausted all attempts for %s", mac)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle"""
-    global ble_adapter
+    global ble_adapter, _auto_connect_task
 
     logger.info("Starting BLE Service")
     if not API_KEY:
@@ -172,12 +290,25 @@ async def lifespan(app: FastAPI):
     ble_adapter = BLEAdapter(notification_callback=notification_callback)
     ble_adapter._disconnect_callback = _on_adapter_disconnect
 
+    # Auto-connect to last-known device if enabled
+    if BLE_AUTO_CONNECT:
+        _auto_connect_task = asyncio.create_task(_startup_auto_connect())
+    else:
+        logger.info("Auto-connect disabled (BLE_AUTO_CONNECT=false)")
+
     yield
 
     # Cleanup
     logger.info("Shutting down BLE Service")
+    if _auto_connect_task and not _auto_connect_task.done():
+        _auto_connect_task.cancel()
     if _reconnect_task and not _reconnect_task.done():
         _reconnect_task.cancel()
+
+    # Notify SSE clients before closing
+    _push_status_event("disconnected", reason="service_shutdown")
+    await asyncio.sleep(0.5)  # allow SSE delivery
+
     if ble_adapter and ble_adapter.is_connected:
         await ble_adapter.disconnect()
 
@@ -340,19 +471,10 @@ async def connect(request: ConnectRequest, _: bool = Depends(verify_api_key)):
     try:
         global _user_disconnected, _last_connected_mac
         _user_disconnected = False
-        success = await ble_adapter.connect(mac)
+        success = await _connect_and_initialize(mac)
         if success:
             _last_connected_mac = mac
-            # Start notifications and send hello
-            await ble_adapter.start_notify()
-            await ble_adapter.send_hello()
-
-            # Wait for hello handshake to complete
-            await asyncio.sleep(1.0)
-
-            # Query extended registers
-            await ble_adapter.query_extended_registers()
-
+            _save_ble_state(mac, request.device_name)
             return ResultResponse(success=True, message=f"Connected to {mac}")
         else:
             return ResultResponse(success=False, message="Connection failed")
@@ -364,10 +486,14 @@ async def connect(request: ConnectRequest, _: bool = Depends(verify_api_key)):
 @app.post("/api/ble/disconnect", response_model=ResultResponse)
 async def disconnect(_: bool = Depends(verify_api_key)):
     """Disconnect from current device (also resets ERROR state)"""
-    global _user_disconnected, _reconnect_task
+    global _user_disconnected, _reconnect_task, _auto_connect_task
     _user_disconnected = True
+    _clear_ble_state()
 
-    # Cancel any pending auto-reconnect
+    # Cancel any pending auto-reconnect or auto-connect
+    if _auto_connect_task and not _auto_connect_task.done():
+        _auto_connect_task.cancel()
+        _auto_connect_task = None
     if _reconnect_task and not _reconnect_task.done():
         _reconnect_task.cancel()
         _reconnect_task = None
@@ -660,15 +786,22 @@ async def stream_notifications(
                 }
                 continue
 
-            # Send all queued notifications
+            # Send all queued notifications/status events
             while notification_queue:
                 notification = notification_queue.popleft()
                 if notification["timestamp"] > last_sent:
                     last_sent = notification["timestamp"]
-                    yield {
-                        "event": "notification",
-                        "data": json.dumps(notification)
-                    }
+                    # Status events use "status" SSE event type
+                    if notification.get("event_type") == "status":
+                        yield {
+                            "event": "status",
+                            "data": json.dumps(notification)
+                        }
+                    else:
+                        yield {
+                            "event": "notification",
+                            "data": json.dumps(notification)
+                        }
 
     return EventSourceResponse(event_generator())
 

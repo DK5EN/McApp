@@ -499,7 +499,7 @@ configure_systemd_service() {
 enable_and_start_services() {
   log_info "  Enabling and starting services..."
 
-  local -a services=("lighttpd" "mcapp" "mcapp-ble")
+  local -a services=("lighttpd" "mcapp-ble" "mcapp")
   local failed=false
   local old_version="${MCAPP_OLD_VERSION:-unknown}"
   local new_version="${MCAPP_NEW_VERSION:-unknown}"
@@ -577,4 +577,26 @@ log_deployment_event() {
       fi
       ;;
   esac
+}
+
+#──────────────────────────────────────────────────────────────────
+# SHELL ALIASES
+#──────────────────────────────────────────────────────────────────
+
+deploy_shell_aliases() {
+  local target="/etc/profile.d/mcapp.sh"
+
+  cat > "$target" << 'ALIASES'
+# /etc/profile.d/mcapp.sh - McApp convenience aliases
+# Deployed by McApp bootstrap — do not edit manually
+# Changes will be overwritten on next bootstrap run
+
+alias ll='ls -l'
+alias mcapp-sdcard='sudo "$HOME/mcapp/bootstrap/sd-card.sh"'
+alias mcapp-update='curl -fsSL https://raw.githubusercontent.com/DK5EN/McApp/main/bootstrap/mcapp.sh | sudo bash'
+alias mcapp-dev-update='curl -fsSL https://raw.githubusercontent.com/DK5EN/McApp/development/bootstrap/mcapp.sh | sudo bash -s -- --dev'
+ALIASES
+
+  chmod 644 "$target"
+  log_info "  Shell aliases deployed to ${target}"
 }
