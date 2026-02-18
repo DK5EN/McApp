@@ -132,6 +132,8 @@ deploy_release() {
   elif [[ "$remote_version" == "unknown" ]]; then
     log_warn "  Cannot check remote version, skipping update"
     return 0
+  elif [[ "$dev_mode" == "false" ]] && [[ "$installed_version" == *-dev* ]]; then
+    log_info "  Switching from dev to production: ${installed_version} → ${remote_version}"
   elif version_gte "$installed_version" "${remote_version#v}"; then
     log_info "  McApp is up to date"
     return 0
@@ -251,7 +253,9 @@ deploy_webapp_from_tarball() {
   log_info "  Bundled:   ${tarball_version}"
 
   if [[ "$force" != "true" ]] && [[ "$installed_version" != "not_installed" ]] && \
-     [[ "$tarball_version" != "unknown" ]] && version_gte "$installed_version" "$tarball_version"; then
+     [[ "$tarball_version" != "unknown" ]] && \
+     [[ "$installed_version" != *-dev* || "$tarball_version" == *-dev* ]] && \
+     version_gte "$installed_version" "$tarball_version"; then
     log_info "  Webapp is up to date"
     return 0
   fi
@@ -300,6 +304,8 @@ deploy_webapp_download() {
   elif [[ "$remote_version" == "unknown" ]]; then
     log_warn "  Cannot check remote version, skipping update"
     return 0
+  elif [[ "$installed_version" == *-dev* ]] && [[ "$remote_version" != *-dev* ]]; then
+    log_info "  Switching webapp from dev to production: ${installed_version} → ${remote_version}"
   elif version_gte "$installed_version" "$remote_version"; then
     log_info "  Webapp is up to date"
     return 0
