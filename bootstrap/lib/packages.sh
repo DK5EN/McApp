@@ -49,11 +49,44 @@ remove_apt_swap() {
 }
 
 #──────────────────────────────────────────────────────────────────
+# APT LOCK HANDLING
+#──────────────────────────────────────────────────────────────────
+
+# Stop unattended-upgrades to prevent apt lock contention during bootstrap.
+# Waits up to 60s for any running dpkg process to finish after stopping.
+wait_for_apt_lock() {
+  if systemctl is-active --quiet unattended-upgrades.service 2>/dev/null; then
+    log_info "  Stopping unattended-upgrades to avoid apt lock conflict..."
+    systemctl stop unattended-upgrades.service 2>/dev/null
+    # Wait for any running dpkg process to finish (max 60s)
+    local waited=0
+    while fuser /var/lib/dpkg/lock-frontend &>/dev/null && (( waited < 60 )); do
+      sleep 2
+      waited=$((waited + 2))
+    done
+    if (( waited > 0 )); then
+      log_info "  Waited ${waited}s for dpkg lock to release"
+    fi
+  fi
+}
+
+# Re-enable unattended-upgrades if it was enabled before bootstrap stopped it.
+restore_unattended_upgrades() {
+  if systemctl is-enabled --quiet unattended-upgrades.service 2>/dev/null; then
+    systemctl start unattended-upgrades.service 2>/dev/null
+    log_info "  Re-enabled unattended-upgrades"
+  fi
+}
+
+#──────────────────────────────────────────────────────────────────
 # APT DEPENDENCIES
 #──────────────────────────────────────────────────────────────────
 
 install_apt_deps() {
   log_info "Installing system dependencies..."
+
+  # Prevent lock contention with unattended-upgrades
+  wait_for_apt_lock
 
   # Update package lists and upgrade installed packages
   apt-get update -qq
@@ -100,6 +133,9 @@ install_apt_deps() {
 
   # Clean up temporary swap
   remove_apt_swap
+
+  # Re-enable unattended-upgrades now that apt operations are done
+  restore_unattended_upgrades
 
   log_ok "  System dependencies installed"
 }
