@@ -1278,10 +1278,11 @@ class SQLiteStorage:
         )
 
         # --- Prune new tables ---
-        # telemetry: 8 days (same as signal_log)
+        # telemetry: 31 days (supports "Last Month" WX view)
+        cutoff_telemetry_ms = int((now - timedelta(days=31)).timestamp() * 1000)
         await self._execute(
             "DELETE FROM telemetry WHERE timestamp < ?",
-            (cutoff_pos_ms,),
+            (cutoff_telemetry_ms,),
             fetch=False,
         )
         # signal_log: 8 days

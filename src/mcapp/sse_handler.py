@@ -534,7 +534,7 @@ class SSEManager:
                 raise HTTPException(
                     status_code=503, detail="Telemetry not available"
                 )
-            return await storage.get_telemetry_chart_data(hours=min(hours, 192))
+            return await storage.get_telemetry_chart_data(hours=min(hours, 744))
 
         @app.get("/api/timezone")
         async def get_timezone(lat: float, lon: float):
