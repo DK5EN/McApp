@@ -411,6 +411,23 @@ class MessageRouter:
                 else:
                     await self.publish('router', 'websocket_message', hd_payload)
 
+        # Send persisted blocked texts for message text filtering
+        if hasattr(self.storage_handler, 'get_blocked_texts'):
+            blocked_texts = await self.storage_handler.get_blocked_texts()
+            if blocked_texts:
+                bt_payload = {
+                    "type": "response",
+                    "msg": "blocked_texts",
+                    "data": blocked_texts,
+                }
+                if websocket:
+                    await self.publish(
+                        'router', 'websocket_direct',
+                        {'websocket': websocket, 'data': bt_payload},
+                    )
+                else:
+                    await self.publish('router', 'websocket_message', bt_payload)
+
     async def _handle_summary_command(self, websocket):
         """Handle summary command - sends message counts per destination."""
         summary = await self.storage_handler.get_summary()

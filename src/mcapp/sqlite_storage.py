@@ -23,7 +23,7 @@ VERSION = "v0.50.0"
 logger = get_logger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # Constants matching message_storage.py
 BUCKET_SECONDS = 5 * 60
@@ -297,6 +297,19 @@ class SQLiteStorage:
                         current_version,
                     )
                     _set_schema_version(conn, 10)
+
+                if current_version < 11:
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS blocked_texts (
+                            text TEXT PRIMARY KEY,
+                            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                        );
+                    """)
+                    logger.info(
+                        "Migration v%d → v11: created blocked_texts table",
+                        current_version,
+                    )
+                    _set_schema_version(conn, 11)
 
         await asyncio.to_thread(_init_db)
 
@@ -2204,6 +2217,40 @@ class SQLiteStorage:
             await self._execute(
                 "DELETE FROM hidden_destinations WHERE dst = ?",
                 (dst,),
+                fetch=False,
+            )
+
+    async def get_blocked_texts(self) -> list[str]:
+        """Get all blocked text patterns."""
+        rows = await self._execute("SELECT text FROM blocked_texts")
+        return [row["text"] for row in rows]
+
+    async def set_blocked_texts(self, texts: list[str]) -> None:
+        """Bulk replace all blocked text patterns."""
+        def _run() -> None:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute("DELETE FROM blocked_texts")
+                if texts:
+                    conn.executemany(
+                        "INSERT INTO blocked_texts (text) VALUES (?)",
+                        [(t,) for t in texts],
+                    )
+                conn.commit()
+
+        await asyncio.to_thread(_run)
+
+    async def update_blocked_text(self, text: str, blocked: bool) -> None:
+        """Add or remove a single blocked text pattern."""
+        if blocked:
+            await self._execute(
+                "INSERT OR IGNORE INTO blocked_texts (text) VALUES (?)",
+                (text,),
+                fetch=False,
+            )
+        else:
+            await self._execute(
+                "DELETE FROM blocked_texts WHERE text = ?",
+                (text,),
                 fetch=False,
             )
 
