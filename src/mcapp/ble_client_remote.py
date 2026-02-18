@@ -429,6 +429,13 @@ class BLEClientRemote(BLEClientBase):
                 break
             except Exception as e:
                 if self._running:
+                    # Notify frontend if we were connected when SSE dropped
+                    if self._status.state == ConnectionState.CONNECTED:
+                        self._status.state = ConnectionState.DISCONNECTED
+                        self._status.device_address = None
+                        await self._publish_status(
+                            'disconnect BLE', 'lost', 'BLE service connection lost'
+                        )
                     if not hasattr(self, '_sse_backoff'):
                         self._sse_backoff = 5
                     logger.warning("SSE connection error: %s, reconnecting in %ds...",
