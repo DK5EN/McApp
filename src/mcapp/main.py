@@ -278,6 +278,9 @@ class MessageRouter:
         elif command == "mheard dump":
             await self._handle_mheard_dump_command(websocket)
 
+        elif command == "mheard dump yearly":
+            await self._handle_mheard_dump_yearly_command(websocket)
+
         # BLE commands
         elif command == "scan BLE":
             await self._handle_ble_scan_command()
@@ -501,6 +504,41 @@ class MessageRouter:
             )
         else:
             # SSE client — broadcast to all connected clients
+            await self.publish('router', 'websocket_message', payload)
+
+    async def _handle_mheard_dump_yearly_command(self, websocket):
+        """Handle mheard dump yearly command — queries 1-hour buckets for 365 days."""
+        async def progress_callback(stage, detail, callsign=None):
+            progress_msg = {
+                "type": "progress",
+                "msg": "mheard progress yearly",
+                "stage": stage,
+                "detail": detail,
+            }
+            if callsign:
+                progress_msg["callsign"] = callsign
+            if websocket:
+                await self.publish(
+                    'router', 'websocket_direct',
+                    {'websocket': websocket, 'data': progress_msg}
+                )
+            else:
+                await self.publish('router', 'websocket_message', progress_msg)
+
+        mheard = await self.storage_handler.process_mheard_yearly(
+            progress_callback=progress_callback
+        )
+        payload = {
+            "type": "response",
+            "msg": "mheard stats yearly",
+            "data": mheard
+        }
+        if websocket:
+            await self.publish(
+                'router', 'websocket_direct',
+                {'websocket': websocket, 'data': payload}
+            )
+        else:
             await self.publish('router', 'websocket_message', payload)
 
     # BLE command handlers - route through ble_client abstraction
