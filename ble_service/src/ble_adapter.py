@@ -397,8 +397,11 @@ class BLEAdapter:
         if not await self._wait_for_services_resolved(timeout=10.0):
             raise ConnectionError("Services not resolved within timeout")
 
-        # Find GATT characteristics
-        await self._find_characteristics(path)
+        # Find GATT characteristics (with timeout to prevent hangs)
+        try:
+            await asyncio.wait_for(self._find_characteristics(path), timeout=10.0)
+        except asyncio.TimeoutError:
+            raise ConnectionError("GATT characteristic discovery timeout")
 
         if not self.read_char_iface or not self.write_char_iface:
             raise ConnectionError("Required GATT characteristics not found")

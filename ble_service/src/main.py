@@ -245,7 +245,9 @@ async def _startup_auto_connect():
 
         logger.info("Startup auto-connect attempt %d/%d to %s", attempt, len(delays), mac)
         try:
-            success = await _connect_and_initialize(mac)
+            success = await asyncio.wait_for(
+                _connect_and_initialize(mac), timeout=30.0
+            )
             if success:
                 logger.info("Startup auto-connect successful to %s", mac)
                 return
