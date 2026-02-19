@@ -1830,12 +1830,24 @@ class SQLiteStorage:
         if progress_callback:
             await progress_callback("start", "Querying yearly data...")
 
+        bucket_5min_ms = BUCKET_SECONDS * 1000
         bucket_rows = await self._execute(
             "SELECT callsign, bucket_ts, rssi_avg, rssi_min, rssi_max,"
             "       snr_avg, snr_min, snr_max, count"
             " FROM signal_buckets"
-            " WHERE bucket_size = ? AND bucket_ts >= ?",
-            (HOURLY_BUCKET_MS, cutoff_ms),
+            " WHERE bucket_size = ? AND bucket_ts >= ?"
+            " UNION ALL"
+            " SELECT callsign,"
+            "       (bucket_ts / 3600000) * 3600000 AS bucket_ts,"
+            "       SUM(rssi_avg * count) / SUM(count),"
+            "       MIN(rssi_min), MAX(rssi_max),"
+            "       SUM(snr_avg * count) / SUM(count),"
+            "       MIN(snr_min), MAX(snr_max),"
+            "       SUM(count)"
+            " FROM signal_buckets"
+            " WHERE bucket_size = ? AND bucket_ts >= ?"
+            " GROUP BY callsign, (bucket_ts / 3600000) * 3600000",
+            (HOURLY_BUCKET_MS, cutoff_ms, bucket_5min_ms, cutoff_ms),
         )
 
         if not bucket_rows:
