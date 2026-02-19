@@ -534,14 +534,27 @@ class SSEManager:
                 raise HTTPException(
                     status_code=503, detail="Telemetry not available"
                 )
-            return await storage.get_telemetry_chart_data(hours=min(hours, 192))
+            return await storage.get_telemetry_chart_data(hours=min(hours, 744))
+
+        @app.get("/api/telemetry/yearly")
+        async def get_telemetry_yearly():
+            """Get telemetry data aggregated into 4h buckets for yearly charts."""
+            storage = (
+                self.message_router.storage_handler if self.message_router else None
+            )
+            if not storage or not hasattr(storage, "get_telemetry_chart_data_bucketed"):
+                raise HTTPException(
+                    status_code=503, detail="Telemetry not available"
+                )
+            return await storage.get_telemetry_chart_data_bucketed()
 
         @app.get("/api/timezone")
         async def get_timezone(lat: float, lon: float):
             """Return UTC offset for given coordinates using timezonefinder."""
-            from timezonefinder import TimezoneFinder
-            from datetime import datetime
             import zoneinfo
+            from datetime import datetime
+
+            from timezonefinder import TimezoneFinder
 
             tf = TimezoneFinder()
             tz_name = tf.timezone_at(lat=lat, lng=lon)
@@ -552,7 +565,8 @@ class SSEManager:
             zone = zoneinfo.ZoneInfo(tz_name)
             offset_seconds = datetime.now(zone).utcoffset().total_seconds()
             offset_hours = offset_seconds / 3600
-            return {"timezone": tz_name, "abbreviation": datetime.now(zone).strftime("%Z"), "utc_offset": offset_hours}
+            abbreviation = datetime.now(zone).strftime("%Z")
+            return {"timezone": tz_name, "abbreviation": abbreviation, "utc_offset": offset_hours}
 
         return app
 
