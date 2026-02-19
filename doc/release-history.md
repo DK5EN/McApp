@@ -1,40 +1,39 @@
-# McApp v1.4.1 Release Notes
+# McApp v1.4.3 Release Notes
 
-**Date**: February 16, 2026
+**Date**: February 19, 2026
 
 ---
 
 ### Features
 
-- **WX station sidebar** — New sidebar on the weather page with drag-and-drop reordering (via vuedraggable) and toggle visibility per station, persisted to IndexedDB. Follows the same grid layout pattern as the positions page.
+- **Yearly mHeard report** — New "Last Year" tab in the mHeard view querying pre-aggregated 1-hour signal buckets for long-term station signal trends.
 
-- **24h/7d time range toggle** — Tab switcher on the WX page so charts, statistics, and station filtering adapt to the selected window. Backend API now accepts an `hours` query param. Also fixed pressure chart tooltip to show both QFE and QNH.
+- **Yearly and monthly WX weather tabs** — New "Last Month" and "Last Year" tabs in the weather view using 4-hour bucket aggregation for extended weather history.
 
-- **WX statistics card** — New 4th quadrant card showing min/median/max for all weather metrics, datapoint counts, and estimated real altitude from cross-station QNH consensus.
+- **Bucketed telemetry endpoint** — New API endpoint for pre-aggregated telemetry data with retention extended to 365 days for long-term trend analysis.
 
-- **Add hours query parameter to telemetry API** (`b409b4a`) — The `/api/telemetry` endpoint now accepts an `hours` parameter to control the time window for chart data.
+- **Telemetry retention and API improvements** — Extended telemetry retention to 31 days and raised the API hour cap to 744 (31 days).
 
-- **Rewrite release.sh as interactive script** (`c204721`) — Complete rewrite of the release script with dual-repo support (MCProxy + webapp), interactive prompts, automatic tarball building, GitHub release publishing, and full rollback on failure.
+- **Sensor data in node configuration** — New "Sensors" box in the Node Configuration view showing SE register data from the device.
+
+- **Persist chat input draft** — Chat input text is now preserved across navigation via sessionStorage, so unsent messages aren't lost when switching views.
 
 ### Bug Fixes
 
-- **Extend message dedup window from 5 to 20 minutes** (`8a8d07f`) — The duplicate message detection window was too short, allowing repeated commands to slip through. Increased to 20 minutes for more reliable deduplication on the mesh network.
+- **Include recent 5-min buckets in yearly mHeard query** — Fixed missing recent data in yearly signal reports by including the most recent 5-minute buckets alongside hourly aggregates.
 
-- **Add 48h time filter to telemetry chart query** (`a0186d8`) — The telemetry API endpoint returned all historical data, causing slow chart rendering. Added a 48-hour default filter to keep responses fast.
+- **Bootstrap dev→production switch** — Fixed bootstrap detection of `-dev` versions before `version_gte` comparison, preventing incorrect upgrade paths.
 
-- **Redirect release menu to stderr** (`167debe`) — The interactive release type menu was printed to stdout, making it invisible when stdout was captured. Redirected to stderr so the menu is always visible.
+- **Bluetooth settings layout on iPhone** — Fixed clipping of Bluetooth settings layout on mobile Safari.
 
-- **Preserve WX sidebar state across navigation** — Lifted stationOrder, hiddenStations, and loaded refs to module-level scope so they survive mount/unmount cycles.
+- **Station popup from messages view** — Fixed station popup not opening when navigating to a station from the messages view.
 
-- **Watchdog false "no time sync"** — Reset the watchdog timer on tab resume instead of re-evaluating staleness, preventing false alarms after browsers suspend SSE connections.
+- **Group number validation** — Extended group number validation to allow 5-digit values and group 0 in network settings.
 
-- **Qualified stations only in sidebar** — Filter sidebar to stations with >= 6 recent datapoints (matching the chart threshold) so no empty entries appear.
-
-- **Sidebar collapse shrinks grid** — Use auto grid column so the content area expands when the sidebar collapses.
-
-- **Altitude chart stabilization** — Removed barometric input from the Kalman filter (was causing ~20m fluctuations) and switched to GPS-only filtering.
+- **Filter input UX** — Blur filter input on Enter key press for better mobile usability.
 
 ### Chore
 
-- Align pyproject.toml versions to 1.4.1 (`f6db6be`)
-- Remove resolved deficits from version-logic.md (`aaa9ea0`)
+- Move `ssl-tunnel-setup.sh` from `scripts/` to `bootstrap/` directory
+- Update dependencies and fix lint errors
+- Clean up ESLint config, update frontend dependencies, remove unused imports
