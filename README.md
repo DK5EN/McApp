@@ -159,9 +159,10 @@ sudo ./scripts/ssl-tunnel-setup.sh --remove   # Revert to plain HTTP
 ```
 
 For more details see:
-- `doc/tls-architecture.md` — architecture diagrams
-- `doc/tls-maintenance-SOP.md` — maintenance procedures
-- `doc/2026-02-10_1200-tls-remote-access-ADR.md` — design rationale
+- [`doc/ssl-tunnel.md`](doc/ssl-tunnel.md) — setup guide (German)
+- [`doc/tls-architecture.md`](doc/tls-architecture.md) — architecture diagrams
+- [`doc/tls-maintenance-SOP.md`](doc/tls-maintenance-SOP.md) — maintenance procedures
+- [`doc/2026-02-10_1200-tls-remote-access-ADR.md`](doc/2026-02-10_1200-tls-remote-access-ADR.md) — design rationale
 
 #### Automatic Updates
 
