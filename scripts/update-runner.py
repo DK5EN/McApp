@@ -594,10 +594,28 @@ def main():
     global SLOTS_DIR, META_DIR
 
     parser = argparse.ArgumentParser(description="McApp Update Runner")
-    parser.add_argument("--mode", choices=["update", "rollback"], required=True)
+    parser.add_argument("--mode", choices=["update", "rollback"],
+                        help="Operation mode (required unless --args-file given)")
     parser.add_argument("--dev", action="store_true", help="Use development pre-release")
     parser.add_argument("--home", help="User home directory (for slot paths)")
+    parser.add_argument("--args-file", help="JSON file with mode/dev args (systemd .path trigger)")
     args = parser.parse_args()
+
+    # If --args-file provided, read args from JSON and clean up trigger files
+    if args.args_file:
+        args_path = Path(args.args_file)
+        trigger_path = Path("/var/lib/mcapp/update-trigger")
+        if args_path.exists():
+            file_args = json.loads(args_path.read_text())
+            if not args.mode:
+                args.mode = file_args.get("mode", "update")
+            if not args.dev:
+                args.dev = file_args.get("dev", False)
+            args_path.unlink(missing_ok=True)
+        trigger_path.unlink(missing_ok=True)
+
+    if not args.mode:
+        parser.error("--mode is required (or provide --args-file)")
 
     print(f"[UPDATE-RUNNER] Starting (mode={args.mode}, dev={args.dev})", flush=True)
 

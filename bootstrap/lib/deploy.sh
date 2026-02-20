@@ -649,39 +649,40 @@ configure_systemd_service() {
     log_info "  mcapp-ble.service configured"
   fi
 
-  # --- sudoers for update runner ---
+  # --- mcapp-update.path + mcapp-update.service (file-trigger update) ---
+  if [[ -f "${template_dir}/mcapp-update.service" ]]; then
+    sed -e "s|{{USER}}|${run_user}|g" \
+        -e "s|{{HOME}}|${run_home}|g" \
+        "${template_dir}/mcapp-update.service" > /etc/systemd/system/mcapp-update.service
+    log_info "  mcapp-update.service configured"
+  fi
+  if [[ -f "${template_dir}/mcapp-update.path" ]]; then
+    cp "${template_dir}/mcapp-update.path" /etc/systemd/system/mcapp-update.path
+    log_info "  mcapp-update.path configured"
+  fi
+
+  # Clean up legacy sudoers from previous installs
   configure_update_sudoers "$run_user" "$run_home"
 
   systemctl daemon-reload
 }
 
-# Add sudoers entry for frontend-triggered updates
+# Clean up legacy sudoers from previous installs (no longer needed — using .path trigger)
 configure_update_sudoers() {
   local run_user="$1"
   local run_home="$2"
   local sudoers_file="/etc/sudoers.d/mcapp-update"
 
-  cat > "$sudoers_file" << SUDOEOF
-# Allow McApp to launch the update runner via systemd-run
-# Deployed by McApp bootstrap — do not edit manually
-${run_user} ALL=(root) NOPASSWD: /usr/bin/systemd-run --scope --unit=mcapp-update *
-${run_user} ALL=(root) NOPASSWD: ${run_home}/mcapp-slots/current/scripts/update-runner.py *
-SUDOEOF
-
-  chmod 440 "$sudoers_file"
-  # Validate sudoers syntax
-  if visudo -cf "$sudoers_file" &>/dev/null; then
-    log_info "  Update runner sudoers configured"
-  else
-    log_warn "  Sudoers validation failed, removing file"
+  if [[ -f "$sudoers_file" ]]; then
     rm -f "$sudoers_file"
+    log_info "  Removed legacy sudoers file (replaced by mcapp-update.path trigger)"
   fi
 }
 
 enable_and_start_services() {
   log_info "  Enabling and starting services..."
 
-  local -a services=("lighttpd" "mcapp-ble" "mcapp")
+  local -a services=("lighttpd" "mcapp-ble" "mcapp" "mcapp-update.path")
   local failed=false
   local old_version="${MCAPP_OLD_VERSION:-unknown}"
   local new_version="${MCAPP_NEW_VERSION:-unknown}"

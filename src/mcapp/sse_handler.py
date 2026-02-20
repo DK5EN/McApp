@@ -7,7 +7,6 @@ HTTP-based event streaming. It runs alongside the existing WebSocket server.
 """
 import asyncio
 import json
-import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -716,7 +715,7 @@ class SSEManager:
     async def _launch_update_runner(
         self, mode: str, dev: bool = False,
     ) -> dict[str, Any]:
-        """Launch the standalone update runner via sudo systemd-run."""
+        """Launch the standalone update runner via systemd .path trigger."""
         import pathlib
         import socket
 
@@ -736,52 +735,16 @@ class SSEManager:
         except OSError:
             pass
 
-        # Find the update runner script
-        runner = pathlib.Path.home() / "mcapp-slots" / "current" / "scripts" / "update-runner.py"
-        if not runner.exists():
-            raise HTTPException(
-                status_code=500,
-                detail=f"Update runner not found at {runner}",
-            )
+        # Write args file and trigger file for systemd .path unit
+        args_file = pathlib.Path("/var/lib/mcapp/update-args.json")
+        trigger_file = pathlib.Path("/var/lib/mcapp/update-trigger")
 
-        # Reset any stale systemd scope from a previous run
-        import subprocess
-        subprocess.run(
-            ["sudo", "systemctl", "reset-failed", "mcapp-update.scope"],
-            capture_output=True,
-        )
-        subprocess.run(
-            ["sudo", "systemctl", "stop", "mcapp-update.scope"],
-            capture_output=True,
-        )
+        args_file.write_text(json.dumps({"mode": mode, "dev": dev}))
+        trigger_file.write_text("")
+        logger.info("Update trigger file written")
 
-        # Build command
-        cmd = [
-            "sudo", "systemd-run",
-            "--scope", "--unit=mcapp-update",
-            sys.executable, str(runner),
-            "--mode", mode,
-            "--home", str(pathlib.Path.home()),
-        ]
-        if dev:
-            cmd.append("--dev")
-
-        logger.info("Launching update runner: %s", " ".join(cmd))
-
-        # Capture output to log file for diagnostics
-        log_file = pathlib.Path.home() / "mcapp-slots" / "meta" / "update-runner.log"
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-
-        try:
-            err_fh = open(log_file, "w")  # noqa: SIM115
-            subprocess.Popen(cmd, stdout=err_fh, stderr=err_fh)
-        except Exception as e:
-            logger.error("Failed to launch update runner: %s", e)
-            raise HTTPException(status_code=500, detail=str(e))
-
-        # Wait for runner to bind port 2985 (up to 5 seconds)
-        import asyncio
-        for _ in range(25):
+        # Wait for runner to bind port 2985 (up to 10 seconds)
+        for _ in range(50):
             await asyncio.sleep(0.2)
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -794,12 +757,10 @@ class SSEManager:
             except OSError:
                 pass
         else:
-            err_fh.close()
-            error_output = log_file.read_text()[:500] if log_file.exists() else "no output"
-            logger.error("Update runner failed to start: %s", error_output)
+            logger.error("Update runner failed to start within timeout")
             raise HTTPException(
                 status_code=500,
-                detail=f"Runner failed to start: {error_output}",
+                detail="Runner failed to start (check: journalctl -u mcapp-update)",
             )
 
         # Determine the host from request context
