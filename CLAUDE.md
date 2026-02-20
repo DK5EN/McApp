@@ -14,10 +14,12 @@ flowchart TD
     WC["Web Clients (Vue.js SPA)"]
 
     WC -- "HTTP :80" --> LH
+    WC -- "SSE :2985" --> UR
 
     subgraph Pi["Raspberry Pi Zero 2W"]
         LH["lighttpd :80<br/>(static files + proxy)"]
         FA["FastAPI :2981<br/>(SSE + REST API)"]
+        UR["Update Runner :2985<br/>(OTA deploy + rollback)"]
         BLES["BLE Service<br/>:8081<br/>(D-Bus/BlueZ)"]
 
         subgraph MR["MESSAGE ROUTER (src/mcapp/main.py)"]
@@ -28,6 +30,7 @@ flowchart TD
 
         LH -- "/webapp/ → static files" --> LH
         LH -- "/events, /api/ → proxy" --> FA
+        FA -- "trigger file" --> UR
         FA --> MR
         BLE -- "HTTP/SSE" --> BLES
     end
@@ -557,6 +560,7 @@ MCProxy/
 ├── config.sample.json       # Configuration template
 ├── scripts/                 # Release and setup scripts
 │   ├── release.sh           # Interactive release builder (gh CLI)
+│   ├── update-runner.py     # Standalone OTA update server (port 2985)
 │   └── ssl-tunnel-setup.sh  # TLS remote access setup (standalone)
 │
 ├── src/mcapp/               # Main Python package
@@ -635,7 +639,9 @@ bootstrap/
 │   ├── config.json.tmpl   # Configuration template
 │   ├── mcapp.service      # systemd unit file
 │   ├── mcapp-ble.service  # BLE service systemd unit
-│   ├── nftables.conf      # Firewall rules (ports 22, 80, 1799)
+│   ├── mcapp-update.path   # systemd path trigger for OTA updates
+│   ├── mcapp-update.service # systemd oneshot service for update runner
+│   ├── nftables.conf      # Firewall rules (ports 22, 80, 1799, 2985)
 │   ├── journald.conf      # Volatile journal config
 │   ├── caddy/             # TLS reverse proxy templates
 │   │   ├── Caddyfile.duckdns.tmpl
@@ -783,6 +789,7 @@ McApp uses host-based firewall to protect the Raspberry Pi. The bootstrap script
 | 22 | TCP | SSH | Rate limited (6/min external, LAN exempt) |
 | 80 | TCP | lighttpd | All traffic (serves webapp + proxies API) |
 | 1799 | UDP | MeshCom | All traffic (LoRa mesh communication) |
+| 2985 | TCP | Update Runner | All traffic (OTA update SSE stream) |
 | 5353 | UDP | mDNS | Multicast only (224.0.0.251) |
 
 **LAN exemption for SSH:** Connections from RFC 1918 private IP ranges (192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12) are NOT rate limited.
@@ -794,6 +801,58 @@ McApp uses host-based firewall to protect the Raspberry Pi. The bootstrap script
 | 2981 | TCP | FastAPI SSE/REST | Proxied via lighttpd on port 80 |
 
 **Note:** Older firewall configurations (before Feb 2026) exposed ports 2980 and 2981 directly. These are now internal-only. The bootstrap script automatically removes them during upgrade.
+
+### Update Runner (OTA Deployment)
+
+The update runner (`scripts/update-runner.py`) is a standalone Python HTTP server (stdlib only, no dependencies) that manages OTA deployments and rollbacks from the webapp UI. It runs on **port 2985** and uses a slot-based architecture with 3 independent deployment slots.
+
+**Launch mechanism:** A systemd `.path` trigger watches for `/var/lib/mcapp/update-trigger`. When the frontend calls `POST /api/update/start`, the SSE handler writes an args file and trigger file, systemd detects the trigger and launches `mcapp-update.service`.
+
+**Systemd units** (templates in `bootstrap/templates/`):
+- `mcapp-update.path` — Watches for `/var/lib/mcapp/update-trigger`
+- `mcapp-update.service` — Oneshot service running `update-runner.py` with 15-minute timeout
+
+**Update runner endpoints (port 2985):**
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/stream` | GET | SSE stream — real-time bootstrap output (`phase`, `log`, `health`, `result` events) |
+| `/status` | GET | JSON — mode, result, slot info, active slot, can_rollback flag |
+| `/slots` | GET | JSON — version, deployed_at, active flags for all 3 slots |
+
+**Main API endpoints (port 2981, proxied via port 80):**
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/update/check` | GET | Check GitHub for available releases (5-min cache) |
+| `/api/update/start` | POST | Launch update runner (optional body: `{"dev": true}`) |
+| `/api/update/rollback` | POST | Launch rollback runner |
+| `/api/update/slots` | GET | Get slot metadata and active status |
+
+**Slot architecture on Pi:**
+```
+~/mcapp-slots/
+├── current → symlink to active slot-N
+├── slot-0/              # Independent deployment slot
+│   ├── .venv/           # Python venv for this slot
+│   ├── scripts/         # Includes update-runner.py
+│   ├── src/mcapp/       # Application code
+│   └── webapp/          # Frontend files + version.html
+├── slot-1/
+├── slot-2/
+└── meta/
+    ├── slot-N.json      # {"slot": N, "version": "v1.x.y", "deployed_at": "...", "active": true}
+    ├── slot-N.etc.tar.gz # /etc config snapshot
+    └── slot-N.db        # SQLite database backup
+```
+
+**Update sequence:**
+1. **Prepare** — determine active vs target slot
+2. **Snapshot** — backup `/etc/mcapp/`, systemd units, lighttpd config, and SQLite DB (WAL-safe online backup)
+3. **Bootstrap** — run `bootstrap/mcapp.sh --skip [--dev]` into target slot (15-min timeout)
+4. **Activate** — atomic symlink swap to target slot
+5. **Health check** — 8 retries × 3s: mcapp service, lighttpd, webapp HTTP, SSE health, lighttpd proxy
+6. **Auto-rollback** — on health failure: restore previous slot's symlink, /etc snapshot, and database backup
 
 ### Silent Drops (Not Logged)
 
