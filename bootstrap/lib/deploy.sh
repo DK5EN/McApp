@@ -359,7 +359,9 @@ download_and_install_release() {
   fi
 
   # Clean target slot directory (fresh extraction)
-  rm -rf "${deploy_target:?}"/*
+  # Note: glob * does not match dotfiles, so remove .venv explicitly
+  # to prevent stale shebangs from surviving slot reuse
+  rm -rf "${deploy_target:?}"/* "${deploy_target}/.venv"
   mkdir -p "$deploy_target"
 
   # Extract tarball with --strip-components=1 to remove top-level dir
@@ -554,15 +556,21 @@ setup_python_env() {
   # Scripts like uvicorn have shebangs pointing to the venv's python.
   # If the venv was copied/migrated from another path, shebangs are stale.
   if [[ -d "${deploy_target}/.venv/bin" ]]; then
-    local sample_script
-    sample_script=$(find "${deploy_target}/.venv/bin" -maxdepth 1 -type f -name '*.py' -o -name 'uvicorn' -o -name 'mcapp' 2>/dev/null | head -1)
-    if [[ -n "$sample_script" ]]; then
+    # Check ALL executable scripts — any stale shebang triggers full removal.
+    # Previously only checked the first script found, which could miss stale
+    # third-party scripts (e.g., uvicorn) when project scripts (mcapp) were OK.
+    local stale_found=false
+    while IFS= read -r script; do
       local shebang
-      shebang=$(head -1 "$sample_script" 2>/dev/null || true)
+      shebang=$(head -1 "$script" 2>/dev/null || true)
       if [[ "$shebang" == "#!"* && "$shebang" != *"${deploy_target}"* ]]; then
-        log_info "  Removing stale venv (shebangs point elsewhere)"
-        rm -rf "${deploy_target}/.venv"
+        stale_found=true
+        break
       fi
+    done < <(find "${deploy_target}/.venv/bin" -maxdepth 1 -type f \( -name 'uvicorn' -o -name 'mcapp' -o -name '*.py' \) 2>/dev/null)
+    if [[ "$stale_found" == "true" ]]; then
+      log_info "  Removing stale venv (shebangs point elsewhere)"
+      rm -rf "${deploy_target}/.venv"
     fi
   fi
 
