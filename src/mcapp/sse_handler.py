@@ -781,6 +781,7 @@ class SSEManager:
                 meta = {"slot": i, "version": None, "status": "empty",
                         "deployed_at": None}
             meta["slot"] = i
+            meta["active"] = (i == active_slot)
             if i == active_slot:
                 meta["status"] = "active"
             elif meta.get("version"):
