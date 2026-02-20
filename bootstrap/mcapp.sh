@@ -54,7 +54,7 @@ get_real_home() {
   if [[ -n "${SUDO_USER:-}" ]]; then
     getent passwd "$SUDO_USER" | cut -d: -f6
   else
-    echo "$HOME"
+    echo "${HOME:-$(getent passwd "$(id -un)" | cut -d: -f6)}"
   fi
 }
 
