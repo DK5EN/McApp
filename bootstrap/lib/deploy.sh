@@ -203,6 +203,7 @@ deploy_app() {
   deploy_webapp "$force" "$deploy_target"
   setup_python_env "$deploy_target"
   migrate_config
+  deploy_shell_aliases
 
   # Read new version from deployed slot
   local new_version
@@ -712,6 +713,7 @@ enable_and_start_services() {
 
   for svc in "${services[@]}"; do
     # Enable service
+    log_info "  Enabling ${svc}..."
     if ! systemctl enable "$svc" 2>/dev/null; then
       log_warn "  Failed to enable ${svc}"
       failed=true
@@ -725,20 +727,24 @@ enable_and_start_services() {
         log_deployment_event "MAINTENANCE_START" "$old_version" "$new_version"
       fi
 
+      log_info "  Restarting ${svc}..."
       if ! systemctl restart "$svc" 2>/dev/null; then
         log_warn "  Failed to restart ${svc}"
         failed=true
       else
+        log_ok "  ${svc} restarted"
         # Log successful deployment for mcapp service
         if [[ "$svc" == "mcapp" ]]; then
           log_deployment_event "DEPLOYMENT_COMPLETE" "$old_version" "$new_version"
         fi
       fi
     else
+      log_info "  Starting ${svc}..."
       if ! systemctl start "$svc" 2>/dev/null; then
         log_warn "  Failed to start ${svc}"
         failed=true
       else
+        log_ok "  ${svc} started"
         # Log initial installation for mcapp service
         if [[ "$svc" == "mcapp" ]]; then
           log_deployment_event "INITIAL_INSTALL" "$old_version" "$new_version"

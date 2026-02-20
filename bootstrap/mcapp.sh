@@ -380,7 +380,6 @@ main() {
   # Phase 5: Application deployment
   log_step "Deploying application..."
   deploy_app "$FORCE" "$DEV_MODE"
-  deploy_shell_aliases
 
   # Phase 6: Service activation
   log_step "Activating services..."
@@ -389,7 +388,10 @@ main() {
   # Phase 7: Health check
   log_step "Running health checks..."
   if health_check; then
-    print_success_summary
+    if [[ "$SKIP_TO_DEPLOY" != "true" ]]; then
+      # Only show terminal summary for interactive runs (not update-runner)
+      print_success_summary
+    fi
   else
     log_error "Health checks failed - check logs above"
     exit 1
