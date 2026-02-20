@@ -21,6 +21,8 @@ import json
 import os
 import queue
 import re
+import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -43,6 +45,7 @@ HEALTH_CHECK_INTERVAL_S = 3
 SLOTS_DIR = None  # ~/mcapp-slots
 META_DIR = None  # ~/mcapp-slots/meta
 home = None  # User home directory (inferred from script location)
+DB_PATH = Path("/var/lib/mcapp/messages.db")
 WEBAPP_SLOTS_DIR = Path("/var/www/html/webapp-slots")
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')  # all ANSI escape sequences
 _DECORATIVE_LINE_RE = re.compile(r'^[\s╔╗╚╝═─┌┐└┘│┤├]+$')  # pure box-drawing decoration
@@ -182,6 +185,18 @@ def snapshot_etc(slot_id: int) -> None:
         )
 
 
+def snapshot_database(slot_id: int) -> None:
+    """Snapshot SQLite database into meta/slot-N.db using online backup."""
+    if not DB_PATH.exists():
+        return
+    backup_path = META_DIR / f"slot-{slot_id}.db"
+    src = sqlite3.connect(str(DB_PATH))
+    dst = sqlite3.connect(str(backup_path))
+    src.backup(dst)
+    dst.close()
+    src.close()
+
+
 def restore_etc(slot_id: int) -> bool:
     """Restore /etc config files from meta/slot-N.etc.tar.gz."""
     archive = META_DIR / f"slot-{slot_id}.etc.tar.gz"
@@ -191,6 +206,17 @@ def restore_etc(slot_id: int) -> bool:
         ["tar", "xzf", str(archive), "-C", "/"],
         check=True, capture_output=True,
     )
+    return True
+
+
+def restore_database(slot_id: int) -> bool:
+    """Restore SQLite database from meta/slot-N.db."""
+    backup_path = META_DIR / f"slot-{slot_id}.db"
+    if not backup_path.exists():
+        return False
+    shutil.copy2(str(backup_path), str(DB_PATH))
+    for suffix in ("-shm", "-wal"):
+        Path(str(DB_PATH) + suffix).unlink(missing_ok=True)
     return True
 
 
@@ -291,11 +317,12 @@ def run_update(bus: EventBus, dev_mode: bool = False) -> dict:
         bus.publish("phase", {"phase": "prepare", "progress": 5,
                               "message": msg})
 
-        # Phase 2: Snapshot current /etc files
+        # Phase 2: Snapshot current config and database
         if active_slot is not None:
             bus.publish("phase", {"phase": "snapshot", "progress": 10,
-                                  "message": "Snapshotting config files..."})
+                                  "message": "Snapshotting config and database..."})
             snapshot_etc(active_slot)
+            snapshot_database(active_slot)
 
         # Phase 3: Run bootstrap into target slot
         bus.publish("phase", {"phase": "bootstrap", "progress": 15,
@@ -438,6 +465,7 @@ def run_rollback(bus: EventBus) -> dict:
     # Snapshot current state first
     if active_slot is not None:
         snapshot_etc(active_slot)
+        snapshot_database(active_slot)
 
     _do_rollback(rollback_target, bus)
 
@@ -458,13 +486,19 @@ def run_rollback(bus: EventBus) -> dict:
 
 
 def _do_rollback(target_slot: int, bus: EventBus) -> None:
-    """Swap symlink to target slot, restore etc, restart services."""
+    """Swap symlink to target slot, restore etc + database, restart services."""
+    # Stop mcapp to release database before restore
+    subprocess.run(["systemctl", "stop", "mcapp"], capture_output=True)
+
     bus.publish("log", {"line": f"Swapping to slot-{target_slot}", "phase": "rollback"})
     swap_symlink(target_slot, SLOTS_DIR)
 
     # Restore /etc snapshot if available
     if restore_etc(target_slot):
         bus.publish("log", {"line": "Restored /etc config snapshot", "phase": "rollback"})
+
+    if restore_database(target_slot):
+        bus.publish("log", {"line": "Restored database snapshot", "phase": "rollback"})
 
     # Restart services
     bus.publish("log", {"line": "Restarting services...", "phase": "rollback"})
