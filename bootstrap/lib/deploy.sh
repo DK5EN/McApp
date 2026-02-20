@@ -549,6 +549,22 @@ setup_python_env() {
     fi
   fi
 
+  # Remove stale venv to avoid shebang mismatch from migrated environments.
+  # Scripts like uvicorn have shebangs pointing to the venv's python.
+  # If the venv was copied/migrated from another path, shebangs are stale.
+  if [[ -d "${deploy_target}/.venv/bin" ]]; then
+    local sample_script
+    sample_script=$(find "${deploy_target}/.venv/bin" -maxdepth 1 -type f -name '*.py' -o -name 'uvicorn' -o -name 'mcapp' 2>/dev/null | head -1)
+    if [[ -n "$sample_script" ]]; then
+      local shebang
+      shebang=$(head -1 "$sample_script" 2>/dev/null || true)
+      if [[ "$shebang" == "#!"* && "$shebang" != *"${deploy_target}"* ]]; then
+        log_info "  Removing stale venv (shebangs point elsewhere)"
+        rm -rf "${deploy_target}/.venv"
+      fi
+    fi
+  fi
+
   # Run uv sync as the real user (not root)
   if [[ "$run_user" != "root" ]]; then
     sudo -u "$run_user" bash -c "cd '${deploy_target}' && '${uv_bin}' sync --all-packages"

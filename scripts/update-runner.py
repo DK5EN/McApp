@@ -324,30 +324,42 @@ def run_update(bus: EventBus, dev_mode: bool = False) -> dict:
         success = _run_bootstrap_streaming(cmd, env, bus)
 
         if not success:
-            bus.publish("phase", {"phase": "failed", "progress": 100,
-                                  "message": "Bootstrap failed"})
-            return {
-                "status": "failed",
-                "reason": "bootstrap_error",
-                "duration_s": int(time.time() - start_time),
-            }
+            # Bootstrap may have deployed + activated before crashing (e.g. in summary)
+            # Check if the target slot is now active
+            current_active = get_active_slot()
+            if current_active == target_slot:
+                bus.publish("log", {"line": "Bootstrap exited non-zero but slot was activated",
+                                    "phase": "bootstrap"})
+                print("[UPDATE-RUNNER] Bootstrap failed but slot activated, proceeding to "
+                      "health checks", flush=True)
+            else:
+                bus.publish("phase", {"phase": "failed", "progress": 100,
+                                      "message": "Bootstrap failed"})
+                return {
+                    "status": "failed",
+                    "reason": "bootstrap_error",
+                    "duration_s": int(time.time() - start_time),
+                }
 
-        # Phase 4: Swap symlink
-        bus.publish("phase", {"phase": "activate", "progress": 80,
-                              "message": f"Activating slot-{target_slot}..."})
+        if success:
+            # Phase 4: Swap symlink (bootstrap didn't do it)
+            bus.publish("phase", {"phase": "activate", "progress": 80,
+                                  "message": f"Activating slot-{target_slot}..."})
 
-        # Read version from newly deployed slot
-        version = _read_version(target_slot)
+            # Read version from newly deployed slot
+            version = _read_version(target_slot)
 
-        # Update slot metadata
-        set_slot_meta(target_slot, {
-            "slot": target_slot,
-            "version": version,
-            "status": "active",
-            "deployed_at": datetime.now(timezone.utc).isoformat(),
-        })
+            # Update slot metadata
+            set_slot_meta(target_slot, {
+                "slot": target_slot,
+                "version": version,
+                "status": "active",
+                "deployed_at": datetime.now(timezone.utc).isoformat(),
+            })
 
-        swap_symlink(target_slot, SLOTS_DIR)
+            swap_symlink(target_slot, SLOTS_DIR)
+        else:
+            version = _read_version(target_slot)
 
         # Phase 5: Health checks
         bus.publish("phase", {"phase": "health_check", "progress": 85,
@@ -473,6 +485,9 @@ def _run_bootstrap_streaming(cmd: list[str], env: dict, bus: EventBus) -> bool:
                 return False
 
         process.wait()
+        if process.returncode != 0:
+            print(f"[UPDATE-RUNNER] Bootstrap exited with code {process.returncode}",
+                  flush=True)
         return process.returncode == 0
 
     except Exception as e:
