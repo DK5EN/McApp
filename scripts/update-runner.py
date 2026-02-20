@@ -20,6 +20,7 @@ import http.server
 import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -43,6 +44,7 @@ SLOTS_DIR = None  # ~/mcapp-slots
 META_DIR = None  # ~/mcapp-slots/meta
 home = None  # User home directory (inferred from script location)
 WEBAPP_SLOTS_DIR = Path("/var/www/html/webapp-slots")
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
 
 
 # ──────────────────────────────────────────────────────────────
@@ -448,7 +450,7 @@ def _run_bootstrap_streaming(cmd: list[str], env: dict, bus: EventBus) -> bool:
         deadline = time.time() + BOOTSTRAP_TIMEOUT_S
 
         for line in process.stdout:
-            line = line.rstrip("\n")
+            line = _ANSI_RE.sub('', line.rstrip("\n"))
             bus.publish("log", {"line": line, "phase": "bootstrap"})
 
             if time.time() > deadline:
@@ -631,6 +633,9 @@ def main():
             home = Path.home()
     SLOTS_DIR = home / "mcapp-slots"
     META_DIR = SLOTS_DIR / "meta"
+    print(f"[UPDATE-RUNNER] home={home}", flush=True)
+    print(f"[UPDATE-RUNNER] SLOTS_DIR={SLOTS_DIR}", flush=True)
+    print(f"[UPDATE-RUNNER] __file__={Path(__file__).resolve()}", flush=True)
 
     # Ensure directories exist
     SLOTS_DIR.mkdir(parents=True, exist_ok=True)

@@ -624,7 +624,13 @@ main() {
   validate_repos_clean
 
   local mode
-  mode=$(prompt_release_type)
+  if [[ "${1:-}" == "1" ]]; then
+    mode="dev"
+  elif [[ "${1:-}" == "2" ]]; then
+    mode="production"
+  else
+    mode=$(prompt_release_type)
+  fi
 
   local current
   current=$(read_pyproject_version)
