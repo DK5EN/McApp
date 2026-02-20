@@ -720,6 +720,8 @@ class SSEManager:
         import pathlib
         import socket
 
+        logger.info("Update requested: mode=%s dev=%s", mode, dev)
+
         # Check if runner is already active (port 2985 in use)
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -742,6 +744,17 @@ class SSEManager:
                 detail=f"Update runner not found at {runner}",
             )
 
+        # Reset any stale systemd scope from a previous run
+        import subprocess
+        subprocess.run(
+            ["sudo", "systemctl", "reset-failed", "mcapp-update.scope"],
+            capture_output=True,
+        )
+        subprocess.run(
+            ["sudo", "systemctl", "stop", "mcapp-update.scope"],
+            capture_output=True,
+        )
+
         # Build command
         cmd = [
             "sudo", "systemd-run",
@@ -753,16 +766,41 @@ class SSEManager:
         if dev:
             cmd.append("--dev")
 
+        logger.info("Launching update runner: %s", " ".join(cmd))
+
+        # Capture output to log file for diagnostics
+        log_file = pathlib.Path.home() / "mcapp-slots" / "meta" / "update-runner.log"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+
         try:
-            import subprocess
-            subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            err_fh = open(log_file, "w")  # noqa: SIM115
+            subprocess.Popen(cmd, stdout=err_fh, stderr=err_fh)
         except Exception as e:
             logger.error("Failed to launch update runner: %s", e)
             raise HTTPException(status_code=500, detail=str(e))
+
+        # Wait for runner to bind port 2985 (up to 5 seconds)
+        import asyncio
+        for _ in range(25):
+            await asyncio.sleep(0.2)
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(0.5)
+                if sock.connect_ex(("127.0.0.1", 2985)) == 0:
+                    sock.close()
+                    logger.info("Update runner ready on port 2985")
+                    break
+                sock.close()
+            except OSError:
+                pass
+        else:
+            err_fh.close()
+            error_output = log_file.read_text()[:500] if log_file.exists() else "no output"
+            logger.error("Update runner failed to start: %s", error_output)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Runner failed to start: {error_output}",
+            )
 
         # Determine the host from request context
         host = self.host if self.host != "0.0.0.0" else "localhost"

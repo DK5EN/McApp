@@ -21,6 +21,7 @@ import json
 import os
 import queue
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -598,6 +599,8 @@ def main():
     parser.add_argument("--home", help="User home directory (for slot paths)")
     args = parser.parse_args()
 
+    print(f"[UPDATE-RUNNER] Starting (mode={args.mode}, dev={args.dev})", flush=True)
+
     # Resolve paths
     home = Path(args.home) if args.home else Path.home()
     SLOTS_DIR = home / "mcapp-slots"
@@ -619,6 +622,7 @@ def main():
 
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
+    print(f"[UPDATE-RUNNER] HTTP server listening on port {PORT}", flush=True)
 
     bus.publish("phase", {"phase": "started", "progress": 0,
                           "message": f"Update runner started (mode: {args.mode})"})
@@ -628,6 +632,8 @@ def main():
         result = run_update(bus, dev_mode=args.dev)
     else:
         result = run_rollback(bus)
+
+    print(f"[UPDATE-RUNNER] Finished: {result.get('status')}", flush=True)
 
     # Publish final result
     UpdateHandler.result = result
@@ -639,4 +645,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"[UPDATE-RUNNER] FATAL: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
