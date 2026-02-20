@@ -44,6 +44,13 @@ init_slot_layout() {
     snapshot_etc_files 0
 
     chown -R "$run_user:$run_user" "$SLOTS_DIR"
+
+    # Rebuild venv (shebangs reference old ~/mcapp path)
+    local uv_bin="${run_home}/.local/bin/uv"
+    if [[ -x "$uv_bin" ]]; then
+      sudo -u "$run_user" bash -c "cd '${SLOTS_DIR}/slot-0' && '${uv_bin}' sync --all-packages" || true
+    fi
+
     log_ok "  Legacy installation migrated to slot-0 (${migrated_version})"
   fi
 
