@@ -355,15 +355,14 @@ def run_update(bus: EventBus, dev_mode: bool = False) -> dict:
                     "duration_s": int(time.time() - start_time),
                 }
 
+        # Phase 4: Activate slot
+        bus.publish("phase", {"phase": "activate", "progress": 80,
+                              "message": f"Activating slot-{target_slot}..."})
+
+        version = _read_version(target_slot)
+
         if success:
-            # Phase 4: Swap symlink (bootstrap didn't do it)
-            bus.publish("phase", {"phase": "activate", "progress": 80,
-                                  "message": f"Activating slot-{target_slot}..."})
-
-            # Read version from newly deployed slot
-            version = _read_version(target_slot)
-
-            # Update slot metadata
+            # Bootstrap succeeded — swap symlink ourselves
             set_slot_meta(target_slot, {
                 "slot": target_slot,
                 "version": version,
@@ -372,8 +371,6 @@ def run_update(bus: EventBus, dev_mode: bool = False) -> dict:
             })
 
             swap_symlink(target_slot, SLOTS_DIR)
-        else:
-            version = _read_version(target_slot)
 
         # Phase 5: Health checks
         bus.publish("phase", {"phase": "health_check", "progress": 85,
