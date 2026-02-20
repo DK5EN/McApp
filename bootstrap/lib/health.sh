@@ -277,7 +277,7 @@ detect_network_names() {
   # 6. Reverse DNS of own IP
   if [[ -n "$ip_addr" ]]; then
     local rdns_hosts
-    rdns_hosts=$(getent hosts "$ip_addr" 2>/dev/null | awk '{for(i=2;i<=NF;i++) print $i}')
+    rdns_hosts=$(getent hosts "$ip_addr" 2>/dev/null | awk '{for(i=2;i<=NF;i++) print $i}' || true)
     local rdns_host
     for rdns_host in $rdns_hosts; do
       # Skip bare hostnames (no dot) and localhost entries
