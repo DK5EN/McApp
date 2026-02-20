@@ -7,6 +7,7 @@ HTTP-based event streaming. It runs alongside the existing WebSocket server.
 """
 import asyncio
 import json
+import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -636,7 +637,193 @@ class SSEManager:
             abbreviation = datetime.now(zone).strftime("%Z")
             return {"timezone": tz_name, "abbreviation": abbreviation, "utc_offset": offset_hours}
 
+        # ── Update / Deployment Endpoints ──────────────────────────
+
+        @app.get("/api/update/check")
+        async def check_update():
+            """Check GitHub for available version updates (cached 5 min)."""
+            return await self._check_update_version()
+
+        @app.post("/api/update/start")
+        async def start_update(request: Request):
+            """Launch the update runner process."""
+            body = await request.json() if request.headers.get("content-length") else {}
+            dev = body.get("dev", False)
+            return await self._launch_update_runner("update", dev=dev)
+
+        @app.post("/api/update/rollback")
+        async def start_rollback():
+            """Launch the update runner in rollback mode."""
+            return await self._launch_update_runner("rollback")
+
+        @app.get("/api/update/slots")
+        async def get_slots():
+            """Get slot metadata (versions, active slot, rollback target)."""
+            return await asyncio.to_thread(self._read_slot_info)
+
         return app
+
+    # ── Update / Deployment Helpers ─────────────────────────────
+
+    _update_check_cache: dict[str, Any] = {}
+    _update_check_time: float = 0.0
+
+    async def _check_update_version(self) -> dict[str, Any]:
+        """Check GitHub releases for available version (cached 5 min)."""
+        now = time.time()
+        if now - self._update_check_time < 300 and self._update_check_cache:
+            return self._update_check_cache
+
+        import urllib.error
+        import urllib.request
+
+        installed = self._get_installed_version()
+        available = "unknown"
+
+        try:
+            url = "https://api.github.com/repos/DK5EN/McApp/releases/latest"
+            req = urllib.request.Request(url, headers={"User-Agent": "McApp"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode())
+                available = data.get("tag_name", "unknown")
+        except (urllib.error.URLError, OSError, json.JSONDecodeError):
+            pass
+
+        result = {
+            "installed": installed,
+            "available": available,
+            "update_available": (
+                available != "unknown"
+                and installed != "not_installed"
+                and available.lstrip("v") != installed.lstrip("v")
+            ),
+        }
+        self._update_check_cache = result
+        self._update_check_time = now
+        return result
+
+    def _get_installed_version(self) -> str:
+        """Read installed version from version.html."""
+        import pathlib
+        for path in [
+            pathlib.Path("/var/www/html/webapp/version.html"),
+            pathlib.Path.home() / "mcapp-slots" / "current" / "webapp" / "version.html",
+        ]:
+            if path.exists():
+                return path.read_text().strip()
+        return "not_installed"
+
+    async def _launch_update_runner(
+        self, mode: str, dev: bool = False,
+    ) -> dict[str, Any]:
+        """Launch the standalone update runner via sudo systemd-run."""
+        import pathlib
+        import socket
+
+        # Check if runner is already active (port 2985 in use)
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
+            result = sock.connect_ex(("127.0.0.1", 2985))
+            sock.close()
+            if result == 0:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Update already in progress",
+                )
+        except OSError:
+            pass
+
+        # Find the update runner script
+        runner = pathlib.Path.home() / "mcapp-slots" / "current" / "scripts" / "update-runner.py"
+        if not runner.exists():
+            raise HTTPException(
+                status_code=500,
+                detail=f"Update runner not found at {runner}",
+            )
+
+        # Build command
+        cmd = [
+            "sudo", "systemd-run",
+            "--scope", "--unit=mcapp-update",
+            sys.executable, str(runner),
+            "--mode", mode,
+            "--home", str(pathlib.Path.home()),
+        ]
+        if dev:
+            cmd.append("--dev")
+
+        try:
+            import subprocess
+            subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            logger.error("Failed to launch update runner: %s", e)
+            raise HTTPException(status_code=500, detail=str(e))
+
+        # Determine the host from request context
+        host = self.host if self.host != "0.0.0.0" else "localhost"
+
+        return {
+            "status": "launched",
+            "mode": mode,
+            "stream_url": f"http://{host}:2985/stream",
+            "status_url": f"http://{host}:2985/status",
+        }
+
+    def _read_slot_info(self) -> dict[str, Any]:
+        """Read slot metadata from filesystem."""
+        import pathlib
+        slots_dir = pathlib.Path.home() / "mcapp-slots"
+        meta_dir = slots_dir / "meta"
+
+        if not slots_dir.exists():
+            return {"slots": [], "active_slot": None, "can_rollback": False}
+
+        # Get active slot
+        active_slot = None
+        current = slots_dir / "current"
+        if current.is_symlink():
+            target = current.resolve().name
+            if target.startswith("slot-"):
+                active_slot = int(target.split("-")[1])
+
+        slots = []
+        for i in range(3):
+            meta_file = meta_dir / f"slot-{i}.json"
+            if meta_file.exists():
+                meta = json.loads(meta_file.read_text())
+            else:
+                meta = {"slot": i, "version": None, "status": "empty",
+                        "deployed_at": None}
+            meta["slot"] = i
+            if i == active_slot:
+                meta["status"] = "active"
+            elif meta.get("version"):
+                meta["status"] = "available"
+            else:
+                meta["status"] = "empty"
+            slots.append(meta)
+
+        # Find rollback target
+        rollback_target = None
+        candidates = []
+        for s in slots:
+            if s["slot"] != active_slot and s.get("version"):
+                candidates.append(s)
+        if candidates:
+            candidates.sort(key=lambda x: x.get("deployed_at", ""), reverse=True)
+            rollback_target = candidates[0]["slot"]
+
+        return {
+            "slots": slots,
+            "active_slot": active_slot,
+            "can_rollback": rollback_target is not None,
+            "rollback_target": rollback_target,
+        }
 
     @staticmethod
     def _format_sse_event(data: dict[str, Any], event_type: str | None = None) -> str:

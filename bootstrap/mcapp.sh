@@ -62,11 +62,17 @@ get_real_home() {
 VENV_DIR=""
 OLD_VENV_DIR=""
 INSTALL_DIR=""
+SLOTS_DIR=""
+META_DIR=""
+DEPLOY_SLOT=""
 
 init_paths() {
   local real_home
   real_home=$(get_real_home)
-  INSTALL_DIR="${real_home}/mcapp"
+  SLOTS_DIR="${real_home}/mcapp-slots"
+  META_DIR="${SLOTS_DIR}/meta"
+  # INSTALL_DIR points through the 'current' symlink for service runtime
+  INSTALL_DIR="${SLOTS_DIR}/current"
   VENV_DIR="${real_home}/mcapp-venv"
   OLD_VENV_DIR="${real_home}/venv"
 }

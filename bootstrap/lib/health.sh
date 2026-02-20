@@ -184,6 +184,13 @@ check_versions() {
   webapp_version=$(cat "${INSTALL_DIR}/webapp/version.html" 2>/dev/null || echo "unknown")
   printf "  %-20s ${GREEN}[OK]${NC} %s\n" "webapp version:" "$webapp_version"
   printf "  %-20s ${GREEN}[OK]${NC} McApp Bootstrap v%s\n" "bootstrap:" "$SCRIPT_VERSION"
+
+  # Show active slot info if slot layout exists
+  if [[ -n "${SLOTS_DIR:-}" ]] && [[ -L "${SLOTS_DIR}/current" ]]; then
+    local active_target
+    active_target=$(readlink "${SLOTS_DIR}/current")
+    printf "  %-20s ${GREEN}[OK]${NC} %s\n" "active slot:" "$active_target"
+  fi
   return 0
 }
 

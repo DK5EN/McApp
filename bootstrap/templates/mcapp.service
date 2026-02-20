@@ -8,7 +8,7 @@ Wants=network-online.target
 Type=simple
 User={{USER}}
 Group={{USER}}
-WorkingDirectory={{HOME}}/mcapp
+WorkingDirectory={{HOME}}/mcapp-slots/current
 Environment="PATH={{HOME}}/.local/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="MCAPP_ENV=prod"
 ExecStart={{HOME}}/.local/bin/uv run mcapp
@@ -21,7 +21,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=true
-ReadWritePaths=/var/log/mcapp /etc/mcapp /var/lib/mcapp {{HOME}}/mcapp {{HOME}}/.cache/uv
+ReadWritePaths=/var/log/mcapp /etc/mcapp /var/lib/mcapp {{HOME}}/mcapp-slots {{HOME}}/.cache/uv
 
 [Install]
 WantedBy=multi-user.target
