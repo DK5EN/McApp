@@ -743,25 +743,7 @@ class SSEManager:
         trigger_file.write_text("")
         logger.info("Update trigger file written")
 
-        # Wait for runner to bind port 2985 (up to 10 seconds)
-        for _ in range(50):
-            await asyncio.sleep(0.2)
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(0.5)
-                if sock.connect_ex(("127.0.0.1", 2985)) == 0:
-                    sock.close()
-                    logger.info("Update runner ready on port 2985")
-                    break
-                sock.close()
-            except OSError:
-                pass
-        else:
-            logger.error("Update runner failed to start within timeout")
-            raise HTTPException(
-                status_code=500,
-                detail="Runner failed to start (check: journalctl -u mcapp-update)",
-            )
+        # Frontend will retry stream connection until runner is ready
 
         # Determine the host from request context
         host = self.host if self.host != "0.0.0.0" else "localhost"
