@@ -223,6 +223,14 @@ class SSEManager:
                                         "msg": "mheard_sidebar",
                                         "data": sidebar,
                                     })
+                            if hasattr(storage, 'get_wx_sidebar'):
+                                wx_sidebar = await storage.get_wx_sidebar()
+                                if wx_sidebar:
+                                    yield self._format_sse_event({
+                                        "type": "response",
+                                        "msg": "wx_sidebar",
+                                        "data": wx_sidebar,
+                                    })
                         else:
                             logger.warning(
                                 "SSE client %s: no storage handler available",
@@ -515,6 +523,32 @@ class SSEManager:
             order = [str(s) for s in body.get("order", [])]
             hidden = [str(s) for s in body.get("hidden", [])]
             await storage.set_mheard_sidebar(order, hidden)
+            return {"status": "ok"}
+
+        # WX sidebar endpoints (persist station order + hidden)
+        @app.get("/api/wx/sidebar")
+        async def get_wx_sidebar():
+            """Get WX sidebar state."""
+            storage = (
+                self.message_router.storage_handler if self.message_router else None
+            )
+            if not storage or not hasattr(storage, "get_wx_sidebar"):
+                raise HTTPException(status_code=503, detail="Storage not available")
+            result = await storage.get_wx_sidebar()
+            return result or {"order": [], "hidden": []}
+
+        @app.post("/api/wx/sidebar")
+        async def set_wx_sidebar(request: Request):
+            """Set WX sidebar state."""
+            storage = (
+                self.message_router.storage_handler if self.message_router else None
+            )
+            if not storage or not hasattr(storage, "set_wx_sidebar"):
+                raise HTTPException(status_code=503, detail="Storage not available")
+            body = await request.json()
+            order = [str(s) for s in body.get("order", [])]
+            hidden = [str(s) for s in body.get("hidden", [])]
+            await storage.set_wx_sidebar(order, hidden)
             return {"status": "ok"}
 
         # Health check endpoint
