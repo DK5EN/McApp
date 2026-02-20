@@ -54,7 +54,7 @@ get_real_home() {
   if [[ -n "${SUDO_USER:-}" ]]; then
     getent passwd "$SUDO_USER" | cut -d: -f6
   else
-    echo "$HOME"
+    echo "${HOME:-$(getent passwd "$(id -un)" | cut -d: -f6)}"
   fi
 }
 
@@ -62,11 +62,17 @@ get_real_home() {
 VENV_DIR=""
 OLD_VENV_DIR=""
 INSTALL_DIR=""
+SLOTS_DIR=""
+META_DIR=""
+DEPLOY_SLOT=""
 
 init_paths() {
   local real_home
   real_home=$(get_real_home)
-  INSTALL_DIR="${real_home}/mcapp"
+  SLOTS_DIR="${real_home}/mcapp-slots"
+  META_DIR="${SLOTS_DIR}/meta"
+  # INSTALL_DIR points through the 'current' symlink for service runtime
+  INSTALL_DIR="${SLOTS_DIR}/current"
   VENV_DIR="${real_home}/mcapp-venv"
   OLD_VENV_DIR="${real_home}/venv"
 }
@@ -374,7 +380,6 @@ main() {
   # Phase 5: Application deployment
   log_step "Deploying application..."
   deploy_app "$FORCE" "$DEV_MODE"
-  deploy_shell_aliases
 
   # Phase 6: Service activation
   log_step "Activating services..."
@@ -383,7 +388,10 @@ main() {
   # Phase 7: Health check
   log_step "Running health checks..."
   if health_check; then
-    print_success_summary
+    if [[ "$SKIP_TO_DEPLOY" != "true" ]]; then
+      # Only show terminal summary for interactive runs (not update-runner)
+      print_success_summary
+    fi
   else
     log_error "Health checks failed - check logs above"
     exit 1

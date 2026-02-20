@@ -504,6 +504,10 @@ build_tarball() {
   cp -r "${PROJECT_DIR}/bootstrap" "${staging}/bootstrap"
   find "${staging}/bootstrap" -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
 
+  # scripts/ directory (update-runner)
+  mkdir -p "${staging}/scripts"
+  cp "${PROJECT_DIR}/scripts/update-runner.py" "${staging}/scripts/"
+
   # webapp/ — copy built SPA from ../webapp/dist
   if [[ -d "${WEBAPP_DIR}/dist" ]]; then
     # Use tar to copy, excluding macOS metadata
@@ -620,7 +624,13 @@ main() {
   validate_repos_clean
 
   local mode
-  mode=$(prompt_release_type)
+  if [[ "${1:-}" == "1" ]]; then
+    mode="dev"
+  elif [[ "${1:-}" == "2" ]]; then
+    mode="production"
+  else
+    mode=$(prompt_release_type)
+  fi
 
   local current
   current=$(read_pyproject_version)

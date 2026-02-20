@@ -1,0 +1,10 @@
+[Unit]
+Description=McApp Update Runner
+
+[Service]
+Type=oneshot
+ExecStart={{HOME}}/mcapp-slots/current/.venv/bin/python3 {{HOME}}/mcapp-slots/current/scripts/update-runner.py --args-file /var/lib/mcapp/update-args.json
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mcapp-update
+TimeoutStartSec=900

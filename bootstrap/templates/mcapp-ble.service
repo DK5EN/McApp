@@ -6,7 +6,7 @@ Wants=bluetooth.target
 [Service]
 Type=simple
 User={{USER}}
-WorkingDirectory={{HOME}}/mcapp
+WorkingDirectory={{HOME}}/mcapp-slots/current
 Environment="PATH={{HOME}}/.local/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="BLE_SERVICE_API_KEY={{BLE_API_KEY}}"
 Environment="PYTHONUNBUFFERED=1"
@@ -21,7 +21,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=true
-ReadWritePaths={{HOME}}/mcapp {{HOME}}/.cache/uv /var/lib/mcapp
+ReadWritePaths={{HOME}}/mcapp-slots {{HOME}}/.cache/uv /var/lib/mcapp
 
 [Install]
 WantedBy=multi-user.target

@@ -357,12 +357,25 @@ service_is_enabled() {
   systemctl is-enabled --quiet "$service" 2>/dev/null
 }
 
-# Check if venv exists and is functional (checks new uv-managed .venv in INSTALL_DIR)
+# Check if venv exists and is functional (checks uv-managed .venv in active slot)
 venv_is_valid() {
+  # Resolve through symlink to actual slot directory
   local venv_path="${INSTALL_DIR}/.venv"
   [[ -d "$venv_path" ]] && \
     [[ -f "${venv_path}/bin/python" ]] && \
     "${venv_path}/bin/python" -c "import sys; sys.exit(0)" 2>/dev/null
+}
+
+# Check if slot layout needs migration from legacy ~/mcapp
+needs_slot_migration() {
+  local real_home
+  real_home=$(get_real_home)
+  local legacy_dir="${real_home}/mcapp"
+  local slots_dir="${real_home}/mcapp-slots"
+
+  # Legacy dir exists with code, but no slot layout yet
+  [[ -d "$legacy_dir" ]] && [[ -f "${legacy_dir}/pyproject.toml" ]] && \
+    [[ ! -L "${slots_dir}/current" ]]
 }
 
 #──────────────────────────────────────────────────────────────────

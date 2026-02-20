@@ -184,6 +184,13 @@ check_versions() {
   webapp_version=$(cat "${INSTALL_DIR}/webapp/version.html" 2>/dev/null || echo "unknown")
   printf "  %-20s ${GREEN}[OK]${NC} %s\n" "webapp version:" "$webapp_version"
   printf "  %-20s ${GREEN}[OK]${NC} McApp Bootstrap v%s\n" "bootstrap:" "$SCRIPT_VERSION"
+
+  # Show active slot info if slot layout exists
+  if [[ -n "${SLOTS_DIR:-}" ]] && [[ -L "${SLOTS_DIR}/current" ]]; then
+    local active_target
+    active_target=$(readlink "${SLOTS_DIR}/current")
+    printf "  %-20s ${GREEN}[OK]${NC} %s\n" "active slot:" "$active_target"
+  fi
   return 0
 }
 
@@ -270,7 +277,7 @@ detect_network_names() {
   # 6. Reverse DNS of own IP
   if [[ -n "$ip_addr" ]]; then
     local rdns_hosts
-    rdns_hosts=$(getent hosts "$ip_addr" 2>/dev/null | awk '{for(i=2;i<=NF;i++) print $i}')
+    rdns_hosts=$(getent hosts "$ip_addr" 2>/dev/null | awk '{for(i=2;i<=NF;i++) print $i}' || true)
     local rdns_host
     for rdns_host in $rdns_hosts; do
       # Skip bare hostnames (no dot) and localhost entries

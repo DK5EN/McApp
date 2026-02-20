@@ -1,29 +1,174 @@
 #!/bin/bash
 # deploy.sh - Application deployment for McApp bootstrap
-# Handles: release tarball download, webapp, version management, systemd
+# Handles: slot-based deployment, release tarball, webapp, version management, systemd
 
 #──────────────────────────────────────────────────────────────────
-# BACKUP ROTATION (keep max 3 old copies)
+# SLOT MANAGEMENT (3 slots: slot-0, slot-1, slot-2 + current symlink)
 #──────────────────────────────────────────────────────────────────
 
-prune_old_backups() {
-  local base_path="$1"
-  local keep=3
+# Initialize slot layout — creates directories, handles migration from legacy ~/mcapp
+init_slot_layout() {
+  local run_user="${SUDO_USER:-$(whoami)}"
+  local run_home
+  run_home=$(get_real_home)
 
-  # Find .bak.* directories matching the base path, sorted oldest first
-  local -a backups
-  mapfile -t backups < <(ls -1dt "${base_path}".bak.* 2>/dev/null)
+  # Create slot directories
+  mkdir -p "${SLOTS_DIR}/slot-0" "${SLOTS_DIR}/slot-1" "${SLOTS_DIR}/slot-2" "${META_DIR}"
+  chown -R "$run_user:$run_user" "$SLOTS_DIR"
 
-  if (( ${#backups[@]} <= keep )); then
-    return 0
+  # Migrate legacy ~/mcapp into slot-0 if it exists and slots aren't set up yet
+  local legacy_dir="${run_home}/mcapp"
+  if [[ -d "$legacy_dir" ]] && [[ -f "${legacy_dir}/pyproject.toml" ]] && \
+     [[ ! -L "${SLOTS_DIR}/current" ]]; then
+    log_info "  Migrating legacy ~/mcapp into slot-0..."
+
+    # Move contents into slot-0
+    if [[ -d "${SLOTS_DIR}/slot-0" ]]; then
+      rm -rf "${SLOTS_DIR}/slot-0"
+    fi
+    mv "$legacy_dir" "${SLOTS_DIR}/slot-0"
+
+    # Read version from migrated slot
+    local migrated_version="unknown"
+    if [[ -f "${SLOTS_DIR}/slot-0/webapp/version.html" ]]; then
+      migrated_version=$(cat "${SLOTS_DIR}/slot-0/webapp/version.html" 2>/dev/null)
+    fi
+
+    # Write slot metadata
+    write_slot_meta 0 "$migrated_version" "active"
+
+    # Create current symlink
+    ln -sfn "slot-0" "${SLOTS_DIR}/current"
+
+    # Snapshot /etc files for rollback
+    snapshot_etc_files 0
+
+    chown -R "$run_user:$run_user" "$SLOTS_DIR"
+
+    # Rebuild venv (shebangs reference old ~/mcapp path)
+    local uv_bin="${run_home}/.local/bin/uv"
+    if [[ -x "$uv_bin" ]]; then
+      sudo -u "$run_user" bash -c "cd '${SLOTS_DIR}/slot-0' && '${uv_bin}' sync --all-packages" || true
+    fi
+
+    log_ok "  Legacy installation migrated to slot-0 (${migrated_version})"
   fi
 
-  # Remove excess backups (oldest first, keep newest $keep)
+  # Ensure 'current' symlink exists (first install: point to slot-0)
+  if [[ ! -L "${SLOTS_DIR}/current" ]]; then
+    ln -sfn "slot-0" "${SLOTS_DIR}/current"
+    log_info "  Created initial 'current' symlink → slot-0"
+  fi
+}
+
+# Read slot metadata JSON
+read_slot_meta() {
+  local slot_id="$1"
+  local meta_file="${META_DIR}/slot-${slot_id}.json"
+  if [[ -f "$meta_file" ]]; then
+    cat "$meta_file"
+  else
+    echo '{"slot":'$slot_id',"version":null,"status":"empty","deployed_at":null}'
+  fi
+}
+
+# Write slot metadata JSON
+write_slot_meta() {
+  local slot_id="$1"
+  local version="$2"
+  local status="${3:-active}"
+  local deployed_at
+  deployed_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+  cat > "${META_DIR}/slot-${slot_id}.json" << SLOTEOF
+{
+  "slot": ${slot_id},
+  "version": "${version}",
+  "status": "${status}",
+  "deployed_at": "${deployed_at}"
+}
+SLOTEOF
+}
+
+# Get the slot ID that 'current' symlink points to
+get_active_slot() {
+  local current="${SLOTS_DIR}/current"
+  if [[ -L "$current" ]]; then
+    local target
+    target=$(readlink "$current")
+    echo "${target#slot-}"
+  else
+    echo ""
+  fi
+}
+
+# Find the oldest (or empty) slot for new deployment
+get_target_slot() {
+  local active
+  active=$(get_active_slot)
+
+  # Prefer empty slots
   local i
-  for (( i=keep; i<${#backups[@]}; i++ )); do
-    rm -rf "${backups[$i]}"
-    log_info "  Removed old backup: ${backups[$i]}"
+  for i in 0 1 2; do
+    local meta_file="${META_DIR}/slot-${i}.json"
+    if [[ ! -f "$meta_file" ]] || ! jq -e '.version' "$meta_file" &>/dev/null; then
+      echo "$i"
+      return
+    fi
+    local version
+    version=$(jq -r '.version // ""' "$meta_file" 2>/dev/null)
+    if [[ -z "$version" || "$version" == "null" ]]; then
+      echo "$i"
+      return
+    fi
   done
+
+  # All slots used — pick oldest non-active
+  local oldest_slot=""
+  local oldest_date="9999"
+  for i in 0 1 2; do
+    [[ "$i" == "$active" ]] && continue
+    local date
+    date=$(jq -r '.deployed_at // "0"' "${META_DIR}/slot-${i}.json" 2>/dev/null)
+    if [[ "$date" < "$oldest_date" ]]; then
+      oldest_date="$date"
+      oldest_slot="$i"
+    fi
+  done
+
+  echo "${oldest_slot:-0}"
+}
+
+# Snapshot /etc config files for rollback
+snapshot_etc_files() {
+  local slot_id="$1"
+  local archive="${META_DIR}/slot-${slot_id}.etc.tar.gz"
+  local -a files_to_backup=()
+
+  for path in \
+    /etc/mcapp/config.json \
+    /etc/systemd/system/mcapp.service \
+    /etc/systemd/system/mcapp-ble.service \
+    /etc/lighttpd/conf-available/99-mcapp.conf \
+    /etc/lighttpd/lighttpd.conf
+  do
+    [[ -f "$path" ]] && files_to_backup+=("$path")
+  done
+
+  if (( ${#files_to_backup[@]} > 0 )); then
+    tar czf "$archive" "${files_to_backup[@]}" 2>/dev/null || true
+    log_info "  Snapshotted /etc config files for slot-${slot_id}"
+  fi
+}
+
+# Atomically swap the 'current' symlink to a new slot
+swap_current_symlink() {
+  local slot_id="$1"
+  local tmp_link="${SLOTS_DIR}/.current.tmp"
+  rm -f "$tmp_link"
+  ln -s "slot-${slot_id}" "$tmp_link"
+  mv -Tf "$tmp_link" "${SLOTS_DIR}/current"
+  log_info "  Activated slot-${slot_id}"
 }
 
 #──────────────────────────────────────────────────────────────────
@@ -34,18 +179,45 @@ deploy_app() {
   local force="${1:-false}"
   local dev_mode="${2:-false}"
 
+  # Initialize slot layout (creates dirs, migrates legacy if needed)
+  init_slot_layout
+
   # Capture old version before deployment
   local old_version
   old_version=$(get_installed_mcapp_version)
 
-  deploy_release "$force" "$dev_mode"
-  deploy_webapp "$force"
-  setup_python_env
-  migrate_config
+  # Determine target slot for this deployment
+  DEPLOY_SLOT=$(get_target_slot)
+  local deploy_target="${SLOTS_DIR}/slot-${DEPLOY_SLOT}"
+  log_info "  Deploy target: slot-${DEPLOY_SLOT} (${deploy_target})"
 
-  # Capture new version after deployment
+  # Snapshot current /etc files before making changes
+  local active_slot
+  active_slot=$(get_active_slot)
+  if [[ -n "$active_slot" ]]; then
+    snapshot_etc_files "$active_slot"
+  fi
+
+  # Deploy into target slot
+  deploy_release "$force" "$dev_mode" "$deploy_target"
+  deploy_webapp "$force" "$deploy_target"
+  setup_python_env "$deploy_target"
+  migrate_config
+  deploy_shell_aliases
+
+  # Read new version from deployed slot
   local new_version
-  new_version=$(get_installed_mcapp_version)
+  if [[ -f "${deploy_target}/webapp/version.html" ]]; then
+    new_version=$(cat "${deploy_target}/webapp/version.html" 2>/dev/null)
+  else
+    new_version=$(get_installed_mcapp_version)
+  fi
+
+  # Write slot metadata
+  write_slot_meta "$DEPLOY_SLOT" "$new_version" "active"
+
+  # Swap current symlink to new slot
+  swap_current_symlink "$DEPLOY_SLOT"
 
   # Store versions for service restart logging
   export MCAPP_OLD_VERSION="$old_version"
@@ -94,7 +266,7 @@ get_installed_mcapp_version() {
     return
   fi
 
-  # Fallback: version.html bundled in install dir
+  # Fallback: version.html bundled in active slot
   if [[ -f "${INSTALL_DIR}/webapp/version.html" ]]; then
     cat "${INSTALL_DIR}/webapp/version.html" 2>/dev/null || echo "not_installed"
     return
@@ -106,6 +278,7 @@ get_installed_mcapp_version() {
 deploy_release() {
   local force="${1:-false}"
   local dev_mode="${2:-false}"
+  local deploy_target="${3:-$INSTALL_DIR}"
 
   log_info "Checking McApp release deployment..."
 
@@ -141,11 +314,12 @@ deploy_release() {
     log_info "  Updating McApp: ${installed_version} → ${remote_version}"
   fi
 
-  download_and_install_release "$remote_version"
+  download_and_install_release "$remote_version" "$deploy_target"
 }
 
 download_and_install_release() {
   local version="${1:-}"
+  local deploy_target="${2:-$INSTALL_DIR}"
 
   # If no version given, fetch latest
   if [[ -z "$version" || "$version" == "unknown" ]]; then
@@ -184,23 +358,16 @@ download_and_install_release() {
     log_warn "  No checksum file available, skipping verification"
   fi
 
-  # Backup existing installation if present
-  if [[ -d "$INSTALL_DIR" ]] && [[ -f "${INSTALL_DIR}/pyproject.toml" ]]; then
-    local backup_dir="${INSTALL_DIR}.bak.$(date +%Y%m%d%H%M%S)"
-    cp -a "$INSTALL_DIR" "$backup_dir"
-    log_info "  Backed up existing installation to ${backup_dir}"
-    prune_old_backups "$INSTALL_DIR"
-  fi
-
-  # Create install directory
-  mkdir -p "$INSTALL_DIR"
+  # Clean target slot directory (fresh extraction)
+  rm -rf "${deploy_target:?}"/*
+  mkdir -p "$deploy_target"
 
   # Extract tarball with --strip-components=1 to remove top-level dir
-  tar -xzf "${tmp_dir}/${tarball_name}" -C "$INSTALL_DIR" --strip-components=1 --warning=no-unknown-keyword
+  tar -xzf "${tmp_dir}/${tarball_name}" -C "$deploy_target" --strip-components=1 --warning=no-unknown-keyword
 
   # Set ownership to the real user (not root)
   local run_user="${SUDO_USER:-$(whoami)}"
-  chown -R "$run_user:$run_user" "$INSTALL_DIR"
+  chown -R "$run_user:$run_user" "$deploy_target"
 
   # Create runtime directories required by systemd ReadWritePaths
   mkdir -p /var/lib/mcapp
@@ -211,7 +378,7 @@ download_and_install_release() {
   # Cleanup
   rm -rf "$tmp_dir"
 
-  log_ok "  McApp ${version} deployed to ${INSTALL_DIR}"
+  log_ok "  McApp ${version} deployed to ${deploy_target}"
 }
 
 #──────────────────────────────────────────────────────────────────
@@ -220,12 +387,13 @@ download_and_install_release() {
 
 deploy_webapp() {
   local force="${1:-false}"
+  local deploy_target="${2:-$INSTALL_DIR}"
 
   log_info "Checking webapp deployment..."
 
   # New flow: if the tarball included webapp/, use it directly
-  if [[ -d "${INSTALL_DIR}/webapp" ]] && [[ -f "${INSTALL_DIR}/webapp/index.html" ]]; then
-    deploy_webapp_from_tarball "$force"
+  if [[ -d "${deploy_target}/webapp" ]] && [[ -f "${deploy_target}/webapp/index.html" ]]; then
+    deploy_webapp_from_tarball "$force" "$deploy_target"
   else
     # Fallback: old tarball without bundled webapp — download separately
     log_info "  No bundled webapp in tarball, falling back to download"
@@ -236,6 +404,7 @@ deploy_webapp() {
 # Deploy webapp from the bundled webapp/ directory in the release tarball
 deploy_webapp_from_tarball() {
   local force="${1:-false}"
+  local deploy_target="${2:-$INSTALL_DIR}"
 
   local installed_version
   local tarball_version
@@ -243,8 +412,8 @@ deploy_webapp_from_tarball() {
   installed_version=$(get_installed_webapp_version)
 
   # Read version from the bundled webapp
-  if [[ -f "${INSTALL_DIR}/webapp/version.html" ]]; then
-    tarball_version=$(cat "${INSTALL_DIR}/webapp/version.html")
+  if [[ -f "${deploy_target}/webapp/version.html" ]]; then
+    tarball_version=$(cat "${deploy_target}/webapp/version.html")
   else
     tarball_version="unknown"
   fi
@@ -265,16 +434,8 @@ deploy_webapp_from_tarball() {
   # Ensure webapp directory exists
   mkdir -p "$WEBAPP_DIR"
 
-  # Backup existing webapp
-  if [[ -d "$WEBAPP_DIR" ]] && [[ -f "${WEBAPP_DIR}/index.html" ]]; then
-    local backup_dir="${WEBAPP_DIR}.bak.$(date +%Y%m%d%H%M%S)"
-    cp -a "$WEBAPP_DIR" "$backup_dir"
-    log_info "  Backed up existing webapp to ${backup_dir}"
-    prune_old_backups "$WEBAPP_DIR"
-  fi
-
   # Copy from tarball to webapp serve dir
-  cp -a "${INSTALL_DIR}/webapp/." "$WEBAPP_DIR/"
+  cp -a "${deploy_target}/webapp/." "$WEBAPP_DIR/"
 
   # Set permissions
   chown -R www-data:www-data "$WEBAPP_DIR"
@@ -347,14 +508,6 @@ download_webapp() {
   # Ensure webapp directory exists
   mkdir -p "$WEBAPP_DIR"
 
-  # Backup existing webapp
-  if [[ -d "$WEBAPP_DIR" ]] && [[ -f "${WEBAPP_DIR}/index.html" ]]; then
-    local backup_dir="${WEBAPP_DIR}.bak.$(date +%Y%m%d%H%M%S)"
-    cp -a "$WEBAPP_DIR" "$backup_dir"
-    log_info "  Backed up existing webapp to ${backup_dir}"
-    prune_old_backups "$WEBAPP_DIR"
-  fi
-
   # Extract webapp
   tar -xzf "${tmp_dir}/webapp.tar.gz" -C "$WEBAPP_DIR" --strip-components=1 --warning=no-unknown-keyword
 
@@ -373,10 +526,12 @@ download_webapp() {
 #──────────────────────────────────────────────────────────────────
 
 setup_python_env() {
+  local deploy_target="${1:-$INSTALL_DIR}"
+
   log_info "Setting up Python environment with uv sync..."
 
-  if [[ ! -f "${INSTALL_DIR}/pyproject.toml" ]]; then
-    log_error "  No pyproject.toml found in ${INSTALL_DIR}"
+  if [[ ! -f "${deploy_target}/pyproject.toml" ]]; then
+    log_error "  No pyproject.toml found in ${deploy_target}"
     return 1
   fi
 
@@ -395,11 +550,27 @@ setup_python_env() {
     fi
   fi
 
+  # Remove stale venv to avoid shebang mismatch from migrated environments.
+  # Scripts like uvicorn have shebangs pointing to the venv's python.
+  # If the venv was copied/migrated from another path, shebangs are stale.
+  if [[ -d "${deploy_target}/.venv/bin" ]]; then
+    local sample_script
+    sample_script=$(find "${deploy_target}/.venv/bin" -maxdepth 1 -type f -name '*.py' -o -name 'uvicorn' -o -name 'mcapp' 2>/dev/null | head -1)
+    if [[ -n "$sample_script" ]]; then
+      local shebang
+      shebang=$(head -1 "$sample_script" 2>/dev/null || true)
+      if [[ "$shebang" == "#!"* && "$shebang" != *"${deploy_target}"* ]]; then
+        log_info "  Removing stale venv (shebangs point elsewhere)"
+        rm -rf "${deploy_target}/.venv"
+      fi
+    fi
+  fi
+
   # Run uv sync as the real user (not root)
   if [[ "$run_user" != "root" ]]; then
-    sudo -u "$run_user" bash -c "cd '${INSTALL_DIR}' && '${uv_bin}' sync --all-packages"
+    sudo -u "$run_user" bash -c "cd '${deploy_target}' && '${uv_bin}' sync --all-packages"
   else
-    (cd "$INSTALL_DIR" && "$uv_bin" sync --all-packages)
+    (cd "$deploy_target" && "$uv_bin" sync --all-packages)
   fi
 
   if [[ $? -eq 0 ]]; then
@@ -460,8 +631,11 @@ configure_systemd_service() {
   local mcapp_service="/etc/systemd/system/mcapp.service"
   local template_dir
 
-  # Find template directory
-  if [[ -d "${INSTALL_DIR}/bootstrap/templates" ]]; then
+  # Find template directory (prefer newly deployed slot)
+  local deploy_target="${SLOTS_DIR}/slot-${DEPLOY_SLOT:-0}"
+  if [[ -d "${deploy_target}/bootstrap/templates" ]]; then
+    template_dir="${deploy_target}/bootstrap/templates"
+  elif [[ -d "${INSTALL_DIR}/bootstrap/templates" ]]; then
     template_dir="${INSTALL_DIR}/bootstrap/templates"
   elif [[ -d "${SCRIPT_DIR}/templates" ]]; then
     template_dir="${SCRIPT_DIR}/templates"
@@ -499,19 +673,47 @@ configure_systemd_service() {
     log_info "  mcapp-ble.service configured"
   fi
 
+  # --- mcapp-update.path + mcapp-update.service (file-trigger update) ---
+  if [[ -f "${template_dir}/mcapp-update.service" ]]; then
+    sed -e "s|{{USER}}|${run_user}|g" \
+        -e "s|{{HOME}}|${run_home}|g" \
+        "${template_dir}/mcapp-update.service" > /etc/systemd/system/mcapp-update.service
+    log_info "  mcapp-update.service configured"
+  fi
+  if [[ -f "${template_dir}/mcapp-update.path" ]]; then
+    cp "${template_dir}/mcapp-update.path" /etc/systemd/system/mcapp-update.path
+    log_info "  mcapp-update.path configured"
+  fi
+
+  # Clean up legacy sudoers from previous installs
+  configure_update_sudoers "$run_user" "$run_home"
+
   systemctl daemon-reload
+}
+
+# Clean up legacy sudoers from previous installs (no longer needed — using .path trigger)
+configure_update_sudoers() {
+  local run_user="$1"
+  local run_home="$2"
+  local sudoers_file="/etc/sudoers.d/mcapp-update"
+
+  if [[ -f "$sudoers_file" ]]; then
+    rm -f "$sudoers_file"
+    log_info "  Removed legacy sudoers file (replaced by mcapp-update.path trigger)"
+  fi
 }
 
 enable_and_start_services() {
   log_info "  Enabling and starting services..."
 
-  local -a services=("lighttpd" "mcapp-ble" "mcapp")
+  local -a services=("lighttpd" "mcapp-ble" "mcapp" "mcapp-update.path")
   local failed=false
   local old_version="${MCAPP_OLD_VERSION:-unknown}"
   local new_version="${MCAPP_NEW_VERSION:-unknown}"
 
   for svc in "${services[@]}"; do
     # Enable service
+    log_info "  Enabling ${svc}..."
     if ! systemctl enable "$svc" 2>/dev/null; then
       log_warn "  Failed to enable ${svc}"
       failed=true
@@ -525,20 +727,24 @@ enable_and_start_services() {
         log_deployment_event "MAINTENANCE_START" "$old_version" "$new_version"
       fi
 
+      log_info "  Restarting ${svc}..."
       if ! systemctl restart "$svc" 2>/dev/null; then
         log_warn "  Failed to restart ${svc}"
         failed=true
       else
+        log_ok "  ${svc} restarted"
         # Log successful deployment for mcapp service
         if [[ "$svc" == "mcapp" ]]; then
           log_deployment_event "DEPLOYMENT_COMPLETE" "$old_version" "$new_version"
         fi
       fi
     else
+      log_info "  Starting ${svc}..."
       if ! systemctl start "$svc" 2>/dev/null; then
         log_warn "  Failed to start ${svc}"
         failed=true
       else
+        log_ok "  ${svc} started"
         # Log initial installation for mcapp service
         if [[ "$svc" == "mcapp" ]]; then
           log_deployment_event "INITIAL_INSTALL" "$old_version" "$new_version"
@@ -598,7 +804,7 @@ deploy_shell_aliases() {
 # Changes will be overwritten on next bootstrap run
 
 alias ll='ls -l'
-alias mcapp-sdcard='sudo "$HOME/mcapp/bootstrap/sd-card.sh"'
+alias mcapp-sdcard='sudo "$HOME/mcapp-slots/current/bootstrap/sd-card.sh"'
 alias mcapp-update='curl -fsSL https://raw.githubusercontent.com/DK5EN/McApp/main/bootstrap/mcapp.sh | sudo bash'
 alias mcapp-dev-update='curl -fsSL https://raw.githubusercontent.com/DK5EN/McApp/development/bootstrap/mcapp.sh | sudo bash -s -- --dev'
 ALIASES

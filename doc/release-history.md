@@ -1,39 +1,33 @@
-# McApp v1.4.3 Release Notes
+# McApp v1.4.4 Release Notes
 
-**Date**: February 19, 2026
+**Date**: February 20, 2026
 
 ---
 
 ### Features
 
-- **Yearly mHeard report** — New "Last Year" tab in the mHeard view querying pre-aggregated 1-hour signal buckets for long-term station signal trends.
+- **Frontend-triggered deployment with slot-based rollback** — New update system allowing OTA deployment directly from the webapp UI. Uses a slot-based architecture with automatic database snapshot/restore for safe rollbacks. Includes a real-time log terminal with subway-map step indicator showing bootstrap progress via pattern matching.
 
-- **Yearly and monthly WX weather tabs** — New "Last Month" and "Last Year" tabs in the weather view using 4-hour bucket aggregation for extended weather history.
+- **mHeard sidebar persistence** — The mHeard page now has a configurable sidebar with backend-persisted visibility and ordering. Includes a new "Last Month" (30-day) tab and a monthly dump command for 30-day stats processing.
 
-- **Bucketed telemetry endpoint** — New API endpoint for pre-aggregated telemetry data with retention extended to 365 days for long-term trend analysis.
+- **WX sidebar persistence** — Weather sidebar visibility and ordering are now persisted to the backend via new REST endpoints.
 
-- **Telemetry retention and API improvements** — Extended telemetry retention to 31 days and raised the API hour cap to 744 (31 days).
+- **Editable Temp Offset** — The temperature offset in the BLE Weather section is now editable directly from the UI.
 
-- **Sensor data in node configuration** — New "Sensors" box in the Node Configuration view showing SE register data from the device.
-
-- **Persist chat input draft** — Chat input text is now preserved across navigation via sessionStorage, so unsent messages aren't lost when switching views.
+- **TLS/SSL tunnel setup guide** — New German-language user guide for the TLS remote access setup.
 
 ### Bug Fixes
 
-- **Include recent 5-min buckets in yearly mHeard query** — Fixed missing recent data in yearly signal reports by including the most recent 5-minute buckets alongside hourly aggregates.
+- **Update system hardening** — Extensive fixes to the update/rollback pipeline:
+  - Prevent reverse DNS lookup failure from aborting health check
+  - Open firewall port 2985 for the update runner SSE stream
+  - Frontend: retry update/rollback start for 40s if backend is not ready
 
-- **Bootstrap dev→production switch** — Fixed bootstrap detection of `-dev` versions before `version_gte` comparison, preventing incorrect upgrade paths.
+- **mHeard sidebar sync** — Apply sidebar selection and ordering to all mHeard time tabs; fix "Last Month" icon.
 
-- **Bluetooth settings layout on iPhone** — Fixed clipping of Bluetooth settings layout on mobile Safari.
+### Refactoring
 
-- **Station popup from messages view** — Fixed station popup not opening when navigating to a station from the messages view.
-
-- **Group number validation** — Extended group number validation to allow 5-digit values and group 0 in network settings.
-
-- **Filter input UX** — Blur filter input on Enter key press for better mobile usability.
-
-### Chore
-
-- Move `ssl-tunnel-setup.sh` from `scripts/` to `bootstrap/` directory
-- Update dependencies and fix lint errors
-- Clean up ESLint config, update frontend dependencies, remove unused imports
+- Reorder BLE Node Configuration card layout
+- Remove redundant sensor rows from BLE Sensors card
+- Remove unused Altitude asl row from Weather card
+- Add mobile 2×2 grid layout for WX data tab buttons
