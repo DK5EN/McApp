@@ -385,15 +385,16 @@ main() {
   log_step "Activating services..."
   activate_services
 
-  # Phase 7: Health check (skip when --skip: update-runner has its own health checks)
-  if [[ "$SKIP_TO_DEPLOY" != "true" ]]; then
-    log_step "Running health checks..."
-    if health_check; then
+  # Phase 7: Health check
+  log_step "Running health checks..."
+  if health_check; then
+    if [[ "$SKIP_TO_DEPLOY" != "true" ]]; then
+      # Only show terminal summary for interactive runs (not update-runner)
       print_success_summary
-    else
-      log_error "Health checks failed - check logs above"
-      exit 1
     fi
+  else
+    log_error "Health checks failed - check logs above"
+    exit 1
   fi
 }
 
