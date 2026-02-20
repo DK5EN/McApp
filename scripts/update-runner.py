@@ -44,7 +44,21 @@ SLOTS_DIR = None  # ~/mcapp-slots
 META_DIR = None  # ~/mcapp-slots/meta
 home = None  # User home directory (inferred from script location)
 WEBAPP_SLOTS_DIR = Path("/var/www/html/webapp-slots")
-_ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')  # all ANSI escape sequences
+_DECORATIVE_LINE_RE = re.compile(r'^[\s╔╗╚╝═─┌┐└┘│┤├]+$')  # pure box-drawing decoration
+_BANNER_LINE_RE = re.compile(r'^\s*║\s*(.*?)\s*║?\s*$')      # ║ content ║ banner lines
+
+
+def _clean_line(line: str) -> str | None:
+    """Strip ANSI codes and bootstrap decorations. Returns None to skip."""
+    line = _ANSI_RE.sub('', line)
+    if _DECORATIVE_LINE_RE.match(line):
+        return None
+    m = _BANNER_LINE_RE.match(line)
+    if m:
+        content = m.group(1).strip()
+        return content if content else None
+    return line
 
 
 # ──────────────────────────────────────────────────────────────
@@ -473,8 +487,10 @@ def _run_bootstrap_streaming(cmd: list[str], env: dict, bus: EventBus) -> bool:
 
         deadline = time.time() + BOOTSTRAP_TIMEOUT_S
 
-        for line in process.stdout:
-            line = _ANSI_RE.sub('', line.rstrip("\n"))
+        for raw in process.stdout:
+            line = _clean_line(raw.rstrip("\n"))
+            if line is None:
+                continue
             print(f"[BOOTSTRAP] {line}", flush=True)
             bus.publish("log", {"line": line, "phase": "bootstrap"})
 
