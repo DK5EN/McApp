@@ -311,7 +311,13 @@ def run_update(bus: EventBus, dev_mode: bool = False) -> dict:
         # Set INSTALL_DIR to target slot
         env = os.environ.copy()
         env["HOME"] = str(home)
+        # Ensure tools like uv are found (installed in ~/.local/bin)
+        local_bin = str(home / ".local" / "bin")
+        if local_bin not in env.get("PATH", ""):
+            env["PATH"] = local_bin + ":" + env.get("PATH", "/usr/local/bin:/usr/bin:/bin")
 
+        print(f"[UPDATE-RUNNER] bootstrap cmd: {cmd}", flush=True)
+        print(f"[UPDATE-RUNNER] bootstrap HOME={env.get('HOME')}", flush=True)
         success = _run_bootstrap_streaming(cmd, env, bus)
 
         if not success:
@@ -374,6 +380,9 @@ def run_update(bus: EventBus, dev_mode: bool = False) -> dict:
         }
 
     except Exception as e:
+        import traceback
+        print(f"[UPDATE-RUNNER] ERROR in run_update: {e}", flush=True)
+        traceback.print_exc()
         bus.publish("log", {"line": f"ERROR: {e}", "phase": "error"})
         return {
             "status": "failed",
@@ -451,6 +460,7 @@ def _run_bootstrap_streaming(cmd: list[str], env: dict, bus: EventBus) -> bool:
 
         for line in process.stdout:
             line = _ANSI_RE.sub('', line.rstrip("\n"))
+            print(f"[BOOTSTRAP] {line}", flush=True)
             bus.publish("log", {"line": line, "phase": "bootstrap"})
 
             if time.time() > deadline:
@@ -664,7 +674,7 @@ def main():
     else:
         result = run_rollback(bus)
 
-    print(f"[UPDATE-RUNNER] Finished: {result.get('status')}", flush=True)
+    print(f"[UPDATE-RUNNER] Finished: {json.dumps(result)}", flush=True)
 
     # Publish final result
     UpdateHandler.result = result
