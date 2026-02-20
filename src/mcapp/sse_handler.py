@@ -215,6 +215,14 @@ class SSEManager:
                                         "msg": "blocked_texts",
                                         "data": blocked_texts,
                                     })
+                            if hasattr(storage, 'get_mheard_sidebar'):
+                                sidebar = await storage.get_mheard_sidebar()
+                                if sidebar:
+                                    yield self._format_sse_event({
+                                        "type": "response",
+                                        "msg": "mheard_sidebar",
+                                        "data": sidebar,
+                                    })
                         else:
                             logger.warning(
                                 "SSE client %s: no storage handler available",
@@ -481,6 +489,32 @@ class SSEManager:
                 if not text:
                     raise HTTPException(status_code=400, detail="Missing text")
                 await storage.update_blocked_text(str(text), bool(blocked))
+            return {"status": "ok"}
+
+        # mHeard sidebar endpoints (persist station order + hidden)
+        @app.get("/api/mheard/sidebar")
+        async def get_mheard_sidebar():
+            """Get mheard sidebar state."""
+            storage = (
+                self.message_router.storage_handler if self.message_router else None
+            )
+            if not storage or not hasattr(storage, "get_mheard_sidebar"):
+                raise HTTPException(status_code=503, detail="Storage not available")
+            result = await storage.get_mheard_sidebar()
+            return result or {"order": [], "hidden": []}
+
+        @app.post("/api/mheard/sidebar")
+        async def set_mheard_sidebar(request: Request):
+            """Set mheard sidebar state."""
+            storage = (
+                self.message_router.storage_handler if self.message_router else None
+            )
+            if not storage or not hasattr(storage, "set_mheard_sidebar"):
+                raise HTTPException(status_code=503, detail="Storage not available")
+            body = await request.json()
+            order = [str(s) for s in body.get("order", [])]
+            hidden = [str(s) for s in body.get("hidden", [])]
+            await storage.set_mheard_sidebar(order, hidden)
             return {"status": "ok"}
 
         # Health check endpoint

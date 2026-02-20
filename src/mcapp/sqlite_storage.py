@@ -23,7 +23,7 @@ VERSION = "v0.50.0"
 logger = get_logger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 # Constants matching message_storage.py
 BUCKET_SECONDS = 5 * 60
@@ -313,6 +313,21 @@ class SQLiteStorage:
                         current_version,
                     )
                     _set_schema_version(conn, 11)
+
+                if current_version < 12:
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS mheard_sidebar (
+                            id INTEGER PRIMARY KEY CHECK (id = 1),
+                            station_order TEXT NOT NULL DEFAULT '[]',
+                            hidden_stations TEXT NOT NULL DEFAULT '[]',
+                            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                        );
+                    """)
+                    logger.info(
+                        "Migration v%d → v12: created mheard_sidebar table",
+                        current_version,
+                    )
+                    _set_schema_version(conn, 12)
 
         await asyncio.to_thread(_init_db)
 
@@ -2393,6 +2408,32 @@ class SQLiteStorage:
                 (text,),
                 fetch=False,
             )
+
+    async def get_mheard_sidebar(self) -> dict | None:
+        """Get mheard sidebar state (station order + hidden stations)."""
+        rows = await self._execute(
+            "SELECT station_order, hidden_stations FROM mheard_sidebar WHERE id = 1"
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "order": json.loads(row["station_order"]),
+            "hidden": json.loads(row["hidden_stations"]),
+        }
+
+    async def set_mheard_sidebar(self, order: list[str], hidden: list[str]) -> None:
+        """Upsert mheard sidebar state."""
+        await self._execute(
+            """INSERT INTO mheard_sidebar (id, station_order, hidden_stations, updated_at)
+               VALUES (1, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(id) DO UPDATE SET
+                 station_order = excluded.station_order,
+                 hidden_stations = excluded.hidden_stations,
+                 updated_at = CURRENT_TIMESTAMP""",
+            (json.dumps(order), json.dumps(hidden)),
+            fetch=False,
+        )
 
     async def close(self) -> None:
         """Close the persistent read connection."""
