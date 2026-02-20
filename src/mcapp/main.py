@@ -278,6 +278,9 @@ class MessageRouter:
         elif command == "mheard dump":
             await self._handle_mheard_dump_command(websocket)
 
+        elif command == "mheard dump monthly":
+            await self._handle_mheard_dump_monthly_command(websocket)
+
         elif command == "mheard dump yearly":
             await self._handle_mheard_dump_yearly_command(websocket)
 
@@ -504,6 +507,41 @@ class MessageRouter:
             )
         else:
             # SSE client — broadcast to all connected clients
+            await self.publish('router', 'websocket_message', payload)
+
+    async def _handle_mheard_dump_monthly_command(self, websocket):
+        """Handle mheard dump monthly command — queries buckets for 30 days."""
+        async def progress_callback(stage, detail, callsign=None):
+            progress_msg = {
+                "type": "progress",
+                "msg": "mheard progress monthly",
+                "stage": stage,
+                "detail": detail,
+            }
+            if callsign:
+                progress_msg["callsign"] = callsign
+            if websocket:
+                await self.publish(
+                    'router', 'websocket_direct',
+                    {'websocket': websocket, 'data': progress_msg}
+                )
+            else:
+                await self.publish('router', 'websocket_message', progress_msg)
+
+        mheard = await self.storage_handler.process_mheard_monthly(
+            progress_callback=progress_callback
+        )
+        payload = {
+            "type": "response",
+            "msg": "mheard stats monthly",
+            "data": mheard
+        }
+        if websocket:
+            await self.publish(
+                'router', 'websocket_direct',
+                {'websocket': websocket, 'data': payload}
+            )
+        else:
             await self.publish('router', 'websocket_message', payload)
 
     async def _handle_mheard_dump_yearly_command(self, websocket):

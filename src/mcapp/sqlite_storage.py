@@ -31,6 +31,7 @@ VALID_RSSI_RANGE = (-140, -30)
 VALID_SNR_RANGE = (-30, 12)
 DEDUP_WINDOW_MS = 20 * 60 * 1000  # 20-minute dedup window (milliseconds)
 SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
+ONE_MONTH_MS = 30 * 24 * 60 * 60 * 1000
 ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000
 HOURLY_BUCKET_MS = 3600000
 HOURLY_GAP_THRESHOLD = 6 * 3600  # 6 hours in seconds
@@ -1884,6 +1885,117 @@ class SQLiteStorage:
             await progress_callback(
                 "bucketing",
                 f"Processing {len(bucket_rows)} hourly buckets"
+                f" for {len(qualified)} stations...",
+            )
+
+        final_result = []
+        for idx, (callsign, entries) in enumerate(sorted(qualified.items()), 1):
+            if progress_callback:
+                await progress_callback(
+                    "gaps",
+                    f"Building chart for {callsign}"
+                    f" ({idx}/{len(qualified)})...",
+                    callsign,
+                )
+
+            entries.sort(key=lambda x: x["bucket_ts"])
+            segment_id = 0
+            prev_time = None
+
+            for entry in entries:
+                bucket_time = entry["bucket_ts"] // 1000
+
+                if prev_time and (bucket_time - prev_time) > HOURLY_GAP_THRESHOLD:
+                    final_result.append({
+                        "src_type": "STATS",
+                        "timestamp": bucket_time - 3600,
+                        "callsign": callsign,
+                        "rssi": None, "snr": None,
+                        "rssi_min": None, "rssi_max": None,
+                        "snr_min": None, "snr_max": None,
+                        "count": None,
+                        "segment_id": f"{callsign}_gap_{segment_id}_to_{segment_id + 1}",
+                        "segment_size": 1,
+                        "is_gap_marker": True,
+                    })
+                    segment_id += 1
+
+                final_result.append({
+                    "src_type": "STATS",
+                    "timestamp": bucket_time,
+                    "callsign": callsign,
+                    "rssi": entry["rssi_avg"],
+                    "snr": entry["snr_avg"],
+                    "rssi_min": entry["rssi_min"],
+                    "rssi_max": entry["rssi_max"],
+                    "snr_min": entry["snr_min"],
+                    "snr_max": entry["snr_max"],
+                    "count": entry["count"],
+                    "segment_id": f"{callsign}_seg_{segment_id}",
+                    "segment_size": 1,
+                })
+                prev_time = bucket_time
+
+        result = sorted(final_result, key=lambda x: (x["callsign"], x["timestamp"]))
+
+        if progress_callback:
+            stats_entries = [r for r in result if not r.get("is_gap_marker")]
+            callsign_count = (
+                len(set(e["callsign"] for e in stats_entries)) if stats_entries else 0
+            )
+            await progress_callback(
+                "done",
+                f"{len(stats_entries)} data points for {callsign_count} stations",
+            )
+        return result
+
+    async def process_mheard_monthly(self, progress_callback=None) -> list[dict[str, Any]]:
+        """Process signal buckets for 30-day mHeard statistics."""
+        now_ms = int(time.time() * 1000)
+        cutoff_ms = now_ms - ONE_MONTH_MS
+
+        if progress_callback:
+            await progress_callback("start", "Querying monthly data...")
+
+        bucket_5min_ms = BUCKET_SECONDS * 1000
+        bucket_rows = await self._execute(
+            "SELECT callsign, bucket_ts, rssi_avg, rssi_min, rssi_max,"
+            "       snr_avg, snr_min, snr_max, count"
+            " FROM signal_buckets"
+            " WHERE bucket_size = ? AND bucket_ts >= ?"
+            " UNION ALL"
+            " SELECT callsign,"
+            "       (bucket_ts / 3600000) * 3600000 AS bucket_ts,"
+            "       SUM(rssi_avg * count) / SUM(count),"
+            "       MIN(rssi_min), MAX(rssi_max),"
+            "       SUM(snr_avg * count) / SUM(count),"
+            "       MIN(snr_min), MAX(snr_max),"
+            "       SUM(count)"
+            " FROM signal_buckets"
+            " WHERE bucket_size = ? AND bucket_ts >= ?"
+            " GROUP BY callsign, (bucket_ts / 3600000) * 3600000",
+            (HOURLY_BUCKET_MS, cutoff_ms, bucket_5min_ms, cutoff_ms),
+        )
+
+        if not bucket_rows:
+            if progress_callback:
+                await progress_callback("done", "No monthly data available")
+            return []
+
+        logger.debug("Using %d signal_buckets for monthly report", len(bucket_rows))
+
+        callsign_data: dict[str, list[dict]] = defaultdict(list)
+        for row in bucket_rows:
+            callsign_data[row["callsign"]].append(row)
+        qualified = {
+            cs: entries for cs, entries in callsign_data.items()
+            if len(entries) >= MIN_DATAPOINTS_FOR_STATS
+        }
+
+        if progress_callback:
+            await progress_callback(
+                "bucketing",
+                f"Processing {len(bucket_rows)} buckets"
                 f" for {len(qualified)} stations...",
             )
 
