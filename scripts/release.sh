@@ -504,6 +504,10 @@ build_tarball() {
   cp -r "${PROJECT_DIR}/bootstrap" "${staging}/bootstrap"
   find "${staging}/bootstrap" -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
 
+  # scripts/ directory (update-runner)
+  mkdir -p "${staging}/scripts"
+  cp "${PROJECT_DIR}/scripts/update-runner.py" "${staging}/scripts/"
+
   # webapp/ — copy built SPA from ../webapp/dist
   if [[ -d "${WEBAPP_DIR}/dist" ]]; then
     # Use tar to copy, excluding macOS metadata
