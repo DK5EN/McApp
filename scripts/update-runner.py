@@ -41,6 +41,7 @@ HEALTH_CHECK_INTERVAL_S = 3
 # Paths (resolved at runtime from slot layout)
 SLOTS_DIR = None  # ~/mcapp-slots
 META_DIR = None  # ~/mcapp-slots/meta
+home = None  # User home directory (inferred from script location)
 WEBAPP_SLOTS_DIR = Path("/var/www/html/webapp-slots")
 
 
@@ -307,9 +308,7 @@ def run_update(bus: EventBus, dev_mode: bool = False) -> dict:
 
         # Set INSTALL_DIR to target slot
         env = os.environ.copy()
-        # The bootstrap uses INSTALL_DIR from init_paths() which reads $HOME
-        # We need to override it. The simplest way is to set MCAPP_INSTALL_DIR
-        # if the bootstrap supports it, or modify the slot after extraction.
+        env["HOME"] = str(home)
 
         success = _run_bootstrap_streaming(cmd, env, bus)
 
@@ -591,7 +590,7 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
 # ──────────────────────────────────────────────────────────────
 
 def main():
-    global SLOTS_DIR, META_DIR
+    global SLOTS_DIR, META_DIR, home
 
     parser = argparse.ArgumentParser(description="McApp Update Runner")
     parser.add_argument("--mode", choices=["update", "rollback"],
@@ -620,7 +619,16 @@ def main():
     print(f"[UPDATE-RUNNER] Starting (mode={args.mode}, dev={args.dev})", flush=True)
 
     # Resolve paths
-    home = Path(args.home) if args.home else Path.home()
+    if args.home:
+        home = Path(args.home)
+    else:
+        # Infer from own location: {HOME}/mcapp-slots/current/scripts/update-runner.py
+        self_path = Path(__file__).resolve()
+        if "mcapp-slots" in self_path.parts:
+            idx = self_path.parts.index("mcapp-slots")
+            home = Path(*self_path.parts[:idx])
+        else:
+            home = Path.home()
     SLOTS_DIR = home / "mcapp-slots"
     META_DIR = SLOTS_DIR / "meta"
 
