@@ -130,6 +130,7 @@ No high ports are exposed to clients. lighttpd reverse-proxies `/events`, `/api/
 | 22/tcp | SSH | inbound | Remote administration (rate limited) |
 | 80/tcp | HTTP | inbound | lighttpd (webapp + API proxy) |
 | 1799/udp | UDP | bidirectional | MeshCom node communication |
+| 2985/tcp | HTTP | inbound | Update runner SSE stream (OTA updates) |
 | 5353/udp | mDNS | inbound | `.local` hostname resolution |
 | 2981/tcp | HTTP | localhost only | FastAPI SSE/REST (not exposed externally) |
 
@@ -171,6 +172,29 @@ Set up a cron job for automatic updates:
 0 4 * * * root curl -fsSL https://raw.githubusercontent.com/DK5EN/McApp/main/bootstrap/mcapp.sh | bash --quiet 2>&1 | logger -t mcapp-update
 ```
 
+#### Frontend-Triggered Updates (OTA)
+
+McApp supports over-the-air updates directly from the webapp UI. The system uses a slot-based architecture with 3 independent deployment slots, automatic database snapshots, and health-check-based rollback.
+
+**How it works:**
+1. The webapp checks GitHub for new releases via `GET /api/update/check`
+2. The user triggers an update from the Settings page
+3. A standalone update runner starts on **port 2985** and streams real-time progress as SSE events
+4. The bootstrap script deploys into a new slot while the current version keeps running
+5. After deployment, health checks verify the new version works correctly
+6. On failure, the system automatically rolls back to the previous slot (restoring config and database)
+
+The update runner is launched via a systemd `.path` trigger — no elevated permissions are needed from the webapp. Slot metadata (version, deployment time, active status) is persisted in `~/mcapp-slots/meta/` and available via `GET /api/update/slots`.
+
+```bash
+# Check update runner logs
+sudo journalctl -u mcapp-update --no-pager -l
+
+# View slot metadata on Pi
+ls -la ~/mcapp-slots/current  # Shows active slot symlink
+cat ~/mcapp-slots/meta/slot-*.json | jq .
+```
+
 #### Non-stable Development Release
 
 Install latest development pre-release
@@ -189,7 +213,11 @@ graph TD
 
     Browser -- "HTTP :80" --> Lighttpd["🔀 lighttpd<br/>(static files + proxy)"]
 
+    Browser -- "SSE :2985" --> UpdateRunner["🔄 Update Runner<br/>(OTA deploy)"]
+
     Lighttpd -- "/events, /api/" --> McApp["⚙️ McApp<br/>FastAPI :2981"]
+
+    McApp -- "trigger file" --> UpdateRunner
 
     McApp -- "HTTP / SSE<br/>:8081" --> BLEProxy["📡 BLE Proxy<br/>(FastAPI)"]
 
