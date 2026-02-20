@@ -311,6 +311,9 @@ def run_update(bus: EventBus, dev_mode: bool = False) -> dict:
         # Set INSTALL_DIR to target slot
         env = os.environ.copy()
         env["HOME"] = str(home)
+        # Bootstrap uses SUDO_USER to determine the real user for service files
+        if "SUDO_USER" not in env:
+            env["SUDO_USER"] = home.name  # e.g. "martin" from /home/martin
         # Ensure tools like uv are found (installed in ~/.local/bin)
         local_bin = str(home / ".local" / "bin")
         if local_bin not in env.get("PATH", ""):
