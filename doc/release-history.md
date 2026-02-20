@@ -1,3 +1,20 @@
+# McApp v1.5.0 Release Notes
+
+**Date**: February 20, 2026
+
+---
+
+### Bug Fixes
+
+- **Fix stale .venv surviving slot deployment** — Bash glob `*` doesn't match dotfiles, so `.venv` from a previous deployment survived slot cleanup in `deploy_release()`. Also improved stale shebang detection to check all scripts instead of just the first one found, preventing missed stale third-party scripts (e.g., uvicorn) when project scripts look correct.
+
+### Chores
+
+- Bump bootstrap script version to 2.3.0
+- Documentation updates (update runner, TLS setup)
+
+---
+
 # McApp v1.4.4 Release Notes
 
 **Date**: February 20, 2026
