@@ -1161,6 +1161,28 @@ class SQLiteStorage:
         co2 = data.get("co2")
         alt = data.get("alt")
 
+        # Skip all-zero readings (node without sensors)
+        # Check ONLY sensor values — altitude comes from position beacons, not sensors
+        sensor_values = (temp1, temp2, hum, qfe, gas, co2)
+        if all(v is None or v == 0 for v in sensor_values):
+            return
+
+        # Dedup: if telemetry for same callsign exists within 60s, keep better record
+        recent = await self._execute(
+            "SELECT qfe FROM telemetry WHERE callsign = ? AND timestamp > ?",
+            (callsign, timestamp - 60_000),
+        )
+        if recent:
+            existing_qfe = recent[0].get("qfe", 0) or 0
+            if existing_qfe != 0 and (qfe is None or qfe == 0):
+                return  # existing record has real data, skip this zero-value one
+            if existing_qfe == 0 and qfe and qfe != 0:
+                # New record is better — remove the zero-value one
+                await self._execute(
+                    "DELETE FROM telemetry WHERE callsign = ? AND timestamp > ?",
+                    (callsign, timestamp - 60_000), fetch=False,
+                )
+
         # For T# telemetry packets (no altitude), look up from station_positions
         if alt is None:
             rows = await self._execute(
@@ -1169,11 +1191,6 @@ class SQLiteStorage:
             )
             if rows:
                 alt = rows[0].get("alt")
-
-        # Skip all-zero readings (own node without sensors)
-        values = (temp1, temp2, hum, qfe, qnh, gas, co2, alt)
-        if all(v is None or v == 0 for v in values):
-            return
 
         logger.info(
             "Telemetry from %s: temp1=%s hum=%s qfe=%s qnh=%s alt=%s",
@@ -1189,19 +1206,20 @@ class SQLiteStorage:
         )
 
         # Update station_positions with latest telemetry values
+        # Use NULLIF(x, 0) so zero values don't overwrite real data from other paths
         await self._execute(
             """INSERT INTO station_positions
                    (callsign, temp1, temp2, hum, qfe, qnh, gas, co2,
                     telemetry_ts, last_seen)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(callsign) DO UPDATE SET
-                   temp1 = COALESCE(excluded.temp1, station_positions.temp1),
-                   temp2 = COALESCE(excluded.temp2, station_positions.temp2),
-                   hum = COALESCE(excluded.hum, station_positions.hum),
-                   qfe = COALESCE(excluded.qfe, station_positions.qfe),
-                   qnh = COALESCE(excluded.qnh, station_positions.qnh),
-                   gas = COALESCE(excluded.gas, station_positions.gas),
-                   co2 = COALESCE(excluded.co2, station_positions.co2),
+                   temp1 = COALESCE(NULLIF(excluded.temp1, 0), station_positions.temp1),
+                   temp2 = COALESCE(NULLIF(excluded.temp2, 0), station_positions.temp2),
+                   hum = COALESCE(NULLIF(excluded.hum, 0), station_positions.hum),
+                   qfe = COALESCE(NULLIF(excluded.qfe, 0), station_positions.qfe),
+                   qnh = COALESCE(NULLIF(excluded.qnh, 0), station_positions.qnh),
+                   gas = COALESCE(NULLIF(excluded.gas, 0), station_positions.gas),
+                   co2 = COALESCE(NULLIF(excluded.co2, 0), station_positions.co2),
                    telemetry_ts = excluded.telemetry_ts,
                    last_seen = MAX(station_positions.last_seen, excluded.last_seen)
             """,
