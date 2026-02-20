@@ -326,6 +326,12 @@ configure_nftables() {
       needs_update=true
     fi
 
+    # Update if port 2985 (update runner) is missing
+    if ! grep -q "dport 2985" "$nft_conf" 2>/dev/null; then
+      log_info "  Updating nftables rules (adding update runner port 2985)..."
+      needs_update=true
+    fi
+
     if [[ "$needs_update" == "false" ]]; then
       log_info "  nftables rules already configured"
       return 0
@@ -345,6 +351,7 @@ configure_nftables() {
 #   80/tcp   - HTTP (lighttpd webapp + API proxy)
 #   1799/udp - MeshCom node communication
 #   5353/udp - mDNS (avahi for .local resolution)
+#   2985/tcp - Update runner SSE stream
 #
 # Internal only (not exposed):
 #   2981/tcp - FastAPI SSE/REST (proxied via lighttpd on :80)
@@ -372,6 +379,9 @@ table inet filter {
 
     # HTTP (lighttpd webapp + API proxy)
     tcp dport 80 accept
+
+    # Update runner SSE stream (frontend-triggered updates)
+    tcp dport 2985 accept
 
     # MeshCom UDP communication
     udp dport 1799 accept
@@ -479,6 +489,9 @@ configure_iptables_legacy() {
 
   # HTTP (lighttpd - proxies ports 2980/2981)
   iptables -A INPUT -p tcp --dport 80 -j ACCEPT
+
+  # Update runner SSE stream (frontend-triggered updates)
+  iptables -A INPUT -p tcp --dport 2985 -j ACCEPT
 
   # MeshCom UDP communication
   iptables -A INPUT -p udp --dport 1799 -j ACCEPT
