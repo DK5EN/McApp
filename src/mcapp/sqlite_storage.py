@@ -23,7 +23,7 @@ VERSION = "v0.50.0"
 logger = get_logger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 14
 
 # Constants matching message_storage.py
 BUCKET_SECONDS = 5 * 60
@@ -344,6 +344,17 @@ class SQLiteStorage:
                         current_version,
                     )
                     _set_schema_version(conn, 13)
+
+                if current_version < 14:
+                    try:
+                        conn.execute("ALTER TABLE telemetry ADD COLUMN batt INTEGER")
+                    except Exception:
+                        pass  # Column may already exist
+                    logger.info(
+                        "Migration v%d → v14: added batt column to telemetry",
+                        current_version,
+                    )
+                    _set_schema_version(conn, 14)
 
         await asyncio.to_thread(_init_db)
 
@@ -1156,10 +1167,23 @@ class SQLiteStorage:
         temp2 = data.get("temp2")
         hum = data.get("hum")
         qfe = data.get("qfe")
-        qnh = None  # Node QNH is unreliable; frontend calculates from QFE + alt
         gas = data.get("gas")
         co2 = data.get("co2")
         alt = data.get("alt")
+        batt = data.get("batt")
+
+        # QFE < 850 hPa is unrealistic (firmware mapping error in UDP LoRa telemetry)
+        if qfe is not None and qfe < 850:
+            qfe = None
+
+        # If QFE missing but QNH + altitude available, calculate QFE
+        # Barometric formula: QFE = QNH × (1 - 0.0065 × alt / 288.15)^5.255
+        qnh = data.get("qnh")
+        if (qfe is None or qfe == 0) and qnh and alt:
+            if qnh > 850:  # Only use plausible QNH values
+                qfe = round(qnh * (1 - 0.0065 * alt / 288.15) ** 5.255, 1)
+
+        qnh = None  # Node QNH is unreliable; frontend calculates from QFE + alt
 
         # Skip all-zero readings (node without sensors)
         # Check ONLY sensor values — altitude comes from position beacons, not sensors
@@ -1193,15 +1217,15 @@ class SQLiteStorage:
                 alt = rows[0].get("alt")
 
         logger.info(
-            "Telemetry from %s: temp1=%s hum=%s qfe=%s qnh=%s alt=%s",
-            callsign, temp1, hum, qfe, qnh, alt,
+            "Telemetry from %s: temp1=%s hum=%s qfe=%s alt=%s batt=%s",
+            callsign, temp1, hum, qfe, alt, batt,
         )
 
         await self._execute(
             "INSERT INTO telemetry"
-            " (callsign, timestamp, temp1, temp2, hum, qfe, qnh, gas, co2, alt)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (callsign, timestamp, temp1, temp2, hum, qfe, qnh, gas, co2, alt),
+            " (callsign, timestamp, temp1, temp2, hum, qfe, qnh, gas, co2, alt, batt)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (callsign, timestamp, temp1, temp2, hum, qfe, qnh, gas, co2, alt, batt),
             fetch=False,
         )
 
@@ -1209,9 +1233,9 @@ class SQLiteStorage:
         # Use NULLIF(x, 0) so zero values don't overwrite real data from other paths
         await self._execute(
             """INSERT INTO station_positions
-                   (callsign, temp1, temp2, hum, qfe, qnh, gas, co2,
+                   (callsign, temp1, temp2, hum, qfe, qnh, gas, co2, batt,
                     telemetry_ts, last_seen)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(callsign) DO UPDATE SET
                    temp1 = COALESCE(NULLIF(excluded.temp1, 0), station_positions.temp1),
                    temp2 = COALESCE(NULLIF(excluded.temp2, 0), station_positions.temp2),
@@ -1220,10 +1244,12 @@ class SQLiteStorage:
                    qnh = COALESCE(NULLIF(excluded.qnh, 0), station_positions.qnh),
                    gas = COALESCE(NULLIF(excluded.gas, 0), station_positions.gas),
                    co2 = COALESCE(NULLIF(excluded.co2, 0), station_positions.co2),
+                   batt = COALESCE(NULLIF(excluded.batt, 0), station_positions.batt),
                    telemetry_ts = excluded.telemetry_ts,
                    last_seen = MAX(station_positions.last_seen, excluded.last_seen)
             """,
-            (callsign, temp1, temp2, hum, qfe, qnh, gas, co2, timestamp, timestamp),
+            (callsign, temp1, temp2, hum, qfe, qnh, gas, co2, batt,
+             timestamp, timestamp),
             fetch=False,
         )
 
