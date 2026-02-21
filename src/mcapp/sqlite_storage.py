@@ -903,17 +903,17 @@ class SQLiteStorage:
         query: str,
         params: tuple = (),
         fetch: bool = True,
-    ) -> list[dict[str, Any]]:
-        """Execute a query in thread pool."""
+    ) -> list[dict[str, Any]] | int:
+        """Execute a query in thread pool. Returns rows if fetch=True, rowcount otherwise."""
 
-        def _run() -> list[dict[str, Any]]:
+        def _run() -> list[dict[str, Any]] | int:
             with sqlite3.connect(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute(query, params)
                 if fetch:
                     return [dict(row) for row in cursor.fetchall()]
                 conn.commit()
-                return []
+                return cursor.rowcount
 
         return await asyncio.to_thread(_run)
 
@@ -992,11 +992,16 @@ class SQLiteStorage:
             ack_type = message.get("ack_type")
             ack_type_text = message.get("ack_type_text", "Unknown")
             if ack_id:
+                msg_id = message.get("msg_id")
+                server_flag = message.get("server_flag")
+                hop_count = message.get("hop_count")
                 logger.info(
-                    "ACK received: ack_id=%s ack_type=%s (%s)",
+                    "ACK received: ack_id=%s ack_type=%s (%s) "
+                    "msg_id=%s server=%s hops=%s",
                     ack_id, ack_type, ack_type_text,
+                    msg_id, server_flag, hop_count,
                 )
-                await self._execute(
+                rows = await self._execute(
                     "UPDATE messages SET send_success = 1 WHERE id = ("
                     "  SELECT id FROM messages WHERE msg_id = ? AND type = 'msg'"
                     "  ORDER BY timestamp DESC LIMIT 1"
@@ -1004,6 +1009,11 @@ class SQLiteStorage:
                     (ack_id,),
                     fetch=False,
                 )
+                if rows == 0:
+                    logger.warning(
+                        "ACK for unknown msg_id=%s — no matching message in DB",
+                        ack_id,
+                    )
                 # Notify frontend via SSE
                 if self._message_router:
                     await self._message_router.publish("storage", "msg_status", {

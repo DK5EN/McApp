@@ -82,12 +82,15 @@ def decode_binary_message(byte_msg: bytes) -> dict[str, Any] | str:
         hop_count = max_hop_raw & 0x7F  # Bits 0-6: Hop Count
 
         # Extract ACK-specific fields
+        # Firmware layout: [0x41][MSG_ID-4][FLAGS][ACK_MSG_ID-4][ACK_TYPE][0x00]
+        # With @ prefix:   byte[0]=@, [1]=0x41, [2-5]=msg_id, [6]=flags,
+        #                  [7-10]=ack_msg_id, [11]=ack_type, [12]=0x00
         if len(byte_msg) >= 12:
             # ACK_MSG_ID (original message ID being acknowledged)
-            [ack_id] = unpack('<I', byte_msg[6:10])
+            [ack_id] = unpack('<I', byte_msg[7:11])
 
-            # ACK_TYPE
-            ack_type = byte_msg[10] if len(byte_msg) > 10 else 0
+            # ACK_TYPE (0x00=Node, 0x01=Gateway)
+            ack_type = byte_msg[11] if len(byte_msg) > 11 else 0
             if ack_type == 0x00:
                 ack_type_text = "Node ACK"
             elif ack_type == 0x01:
