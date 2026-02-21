@@ -1310,6 +1310,8 @@ async def main():
 
     message_router = MessageRouter(storage_handler)
     message_router.set_callsign(cfg.call_sign)
+    if hasattr(storage_handler, 'set_message_router'):
+        storage_handler.set_message_router(message_router)
     message_router.cached_gps = None  # {lat, lon} — set when BLE device sends TYP="G"
     message_router.cached_ble_registers = {}  # {TYP: dict} — cached on ble_notification
 

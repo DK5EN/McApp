@@ -100,6 +100,7 @@ class SSEManager:
             message_router.subscribe("websocket_message", self._broadcast_handler)
             message_router.subscribe("ble_notification", self._broadcast_handler)
             message_router.subscribe("ble_status", self._broadcast_handler)
+            message_router.subscribe("msg_status", self._status_handler)
             # Note: websocket_direct not supported for SSE (no individual connection reference)
 
         logger.info("SSEManager initialized for %s:%d", host, port)
@@ -847,6 +848,11 @@ class SSEManager:
                 routed_message["source"],
                 truncated,
             )
+
+    async def _status_handler(self, routed_message: dict[str, Any]) -> None:
+        """Forward message status updates (ACK) to SSE clients."""
+        data = routed_message["data"]
+        await self.broadcast_message({"type": "msg_status", **data})
 
     async def broadcast_message(self, message: dict[str, Any]) -> None:
         """Broadcast message to all connected SSE clients."""

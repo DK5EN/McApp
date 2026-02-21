@@ -185,10 +185,17 @@ class SQLiteStorage:
         # Persistent read-only connection (opened in initialize())
         self._read_conn: sqlite3.Connection | None = None
 
+        # Reference to message router (set via set_message_router after construction)
+        self._message_router = None
+
         # Ensure parent directory exists
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
         logger.info("SQLite storage initialized at %s", self.db_path)
+
+    def set_message_router(self, router) -> None:
+        """Allow storage to publish events (e.g. ACK status updates)."""
+        self._message_router = router
 
     async def initialize(self) -> None:
         """Initialize database schema."""
@@ -982,7 +989,13 @@ class SQLiteStorage:
         # --- Early exit: Binary ACK → set send_success on original, skip INSERT ---
         if msg_type == "ack":
             ack_id = message.get("ack_id")
+            ack_type = message.get("ack_type")
+            ack_type_text = message.get("ack_type_text", "Unknown")
             if ack_id:
+                logger.info(
+                    "ACK received: ack_id=%s ack_type=%s (%s)",
+                    ack_id, ack_type, ack_type_text,
+                )
                 await self._execute(
                     "UPDATE messages SET send_success = 1 WHERE id = ("
                     "  SELECT id FROM messages WHERE msg_id = ? AND type = 'msg'"
@@ -991,6 +1004,12 @@ class SQLiteStorage:
                     (ack_id,),
                     fetch=False,
                 )
+                # Notify frontend via SSE
+                if self._message_router:
+                    await self._message_router.publish("storage", "msg_status", {
+                        "msg_id": ack_id,
+                        "acked": True,
+                    })
             return  # Don't store ACK as a separate row
 
         # Compute echo_id (extract {NNN from end of message text)
