@@ -499,6 +499,23 @@ class SSEManager:
                 await storage.update_blocked_text(str(text), bool(blocked))
             return {"status": "ok"}
 
+        # Delete messages by destination
+        @app.post("/api/delete_messages")
+        async def delete_messages(request: Request):
+            """Delete all messages for a destination from the database."""
+            storage = (
+                self.message_router.storage_handler if self.message_router else None
+            )
+            if not storage or not hasattr(storage, "delete_messages_by_dst"):
+                raise HTTPException(status_code=503, detail="Storage not available")
+            body = await request.json()
+            dst = body.get("dst")
+            if not dst:
+                raise HTTPException(status_code=400, detail="Missing dst")
+            own_call = body.get("own_call", "")
+            deleted = await storage.delete_messages_by_dst(str(dst), str(own_call))
+            return {"status": "ok", "deleted": deleted}
+
         # mHeard sidebar endpoints (persist station order + hidden)
         @app.get("/api/mheard/sidebar")
         async def get_mheard_sidebar():

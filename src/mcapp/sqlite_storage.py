@@ -2512,6 +2512,41 @@ class SQLiteStorage:
             fetch=False,
         )
 
+    async def delete_messages_by_dst(self, dst: str, own_call: str = "") -> int:
+        """Delete all messages (msg + ack) for a destination.
+
+        Groups (numeric dst): delete by dst column.
+        Personal (callsign): delete bidirectional using conversation_key.
+        Also cleans up the read_counts entry for that destination.
+        Returns the count of deleted message rows.
+        """
+        is_group = dst.isdigit() or dst in ("TEST", "*")
+
+        def _run() -> int:
+            with sqlite3.connect(self.db_path) as conn:
+                if is_group:
+                    cursor = conn.execute(
+                        "DELETE FROM messages WHERE dst = ?"
+                        " AND type IN ('msg', 'ack')",
+                        (dst,),
+                    )
+                else:
+                    conv_key = compute_conversation_key(own_call or dst, dst)
+                    cursor = conn.execute(
+                        "DELETE FROM messages WHERE conversation_key = ?"
+                        " AND type IN ('msg', 'ack')",
+                        (conv_key,),
+                    )
+                deleted = cursor.rowcount
+                # Clean up read_counts for this destination
+                conn.execute("DELETE FROM read_counts WHERE dst = ?", (dst,))
+                conn.commit()
+                return deleted
+
+        count = await asyncio.to_thread(_run)
+        logger.info("Deleted %d messages for dst=%s", count, dst)
+        return count
+
     async def get_hidden_destinations(self) -> list[str]:
         """Get all hidden destination identifiers."""
         rows = await self._execute("SELECT dst FROM hidden_destinations")
