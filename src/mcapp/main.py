@@ -300,6 +300,9 @@ class MessageRouter:
         elif command == "disconnect BLE":
             await self._handle_ble_disconnect_command()
 
+        elif command == "cancel reconnect BLE":
+            await self._handle_ble_cancel_reconnect_command()
+
         elif command == "connect BLE":
             await self._handle_ble_connect_command(MAC, websocket)
 
@@ -777,6 +780,14 @@ class MessageRouter:
             await client.disconnect()
         else:
             logger.warning("BLE client not available for disconnect")
+
+    async def _handle_ble_cancel_reconnect_command(self):
+        """Handle BLE cancel reconnect command"""
+        client = self._get_ble_client()
+        if client and hasattr(client, 'cancel_reconnect'):
+            await client.cancel_reconnect()
+        else:
+            logger.warning("BLE client not available for cancel reconnect")
 
     async def _handle_ble_info_command(self, websocket, query_registers: bool = True):
         """

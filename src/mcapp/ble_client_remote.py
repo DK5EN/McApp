@@ -109,7 +109,21 @@ class BLEClientRemote(BLEClientBase):
                         continue
 
                     if response.status >= 400:
-                        error_msg = response_data.get('detail', 'Unknown error')
+                        detail = response_data.get('detail', 'Unknown error')
+                        # Structured detail (dict) from enriched 409 responses
+                        if isinstance(detail, dict):
+                            error_msg = detail.get('message', str(detail))
+                            reason = detail.get('reason', '')
+                            if reason == 'reconnecting':
+                                attempt = detail.get('attempt', '?')
+                                max_a = detail.get('max_attempts', '?')
+                                dev = detail.get('device_name', '')
+                                error_msg = (
+                                    f"Cannot scan: reconnecting to {dev} "
+                                    f"(attempt {attempt}/{max_a})"
+                                )
+                        else:
+                            error_msg = str(detail)
                         raise RuntimeError(f"API error ({response.status}): {error_msg}")
 
                     return response_data
@@ -171,6 +185,16 @@ class BLEClientRemote(BLEClientBase):
 
             return devices
 
+        except RuntimeError as e:
+            error_str = str(e)
+            logger.error("Scan error: %s", error_str)
+            # Produce a user-friendly message for reconnect-blocked scans
+            msg = error_str
+            if 'reconnect' in error_str.lower() or '409' in error_str:
+                msg = ("Cannot scan: the backend is reconnecting to the device. "
+                       "Wait for reconnect to finish or cancel it first.")
+            await self._publish_status('scan BLE result', 'error', msg)
+            return []
         except Exception as e:
             logger.error("Scan error: %s", e)
             await self._publish_status('scan BLE result', 'error', str(e))
@@ -247,6 +271,30 @@ class BLEClientRemote(BLEClientBase):
             logger.error("Disconnect error: %s", e)
             await self._publish_status('disconnect BLE result', 'error', str(e))
             return False
+
+    async def cancel_reconnect(self) -> bool:
+        """Cancel any in-progress auto-reconnect on the BLE service."""
+        try:
+            response = await self._request('POST', '/api/ble/cancel_reconnect')
+            success = response.get('success', False)
+            self._status.state = ConnectionState.DISCONNECTED
+            self._status.device_address = None
+            await self._publish_status(
+                'disconnect BLE', 'ok', 'Reconnect cancelled'
+            )
+            return success
+        except Exception as e:
+            logger.error("Cancel reconnect error: %s", e)
+            return False
+
+    async def get_activity(self) -> list[dict]:
+        """Fetch the activity log from the BLE service."""
+        try:
+            response = await self._request('GET', '/api/ble/activity')
+            return response.get('events', [])
+        except Exception as e:
+            logger.error("Get activity error: %s", e)
+            return []
 
     async def pair(self, mac: str) -> bool:
         """Pair with device via remote service"""
@@ -575,9 +623,55 @@ class BLEClientRemote(BLEClientBase):
         try:
             status = json.loads(data)
             old_state = self._status.state
-
-            # Update local status
             state_str = status.get('state', 'disconnected')
+
+            # --- Reconnecting: BLE service is retrying connection ---
+            if state_str == 'reconnecting':
+                self._status.state = ConnectionState.CONNECTING
+                attempt = status.get('attempt', 0)
+                max_attempts = status.get('max_attempts', 4)
+                device_name = status.get('device_name', '')
+                logger.info("BLE reconnecting: attempt %d/%d to %s",
+                            attempt, max_attempts, device_name)
+                if self.message_router:
+                    await self.message_router.publish('ble', 'ble_status', {
+                        'src_type': 'BLE',
+                        'TYP': 'blueZ',
+                        'command': 'reconnecting BLE',
+                        'result': 'info',
+                        'msg': f'Reconnecting to {device_name} ({attempt}/{max_attempts})',
+                        'attempt': attempt,
+                        'max_attempts': max_attempts,
+                        'device_name': device_name,
+                        'device_address': status.get('device_address', ''),
+                        'next_retry_in': status.get('next_retry_in', 0),
+                        'timestamp': int(time.time() * 1000),
+                    })
+                return
+
+            # --- Reconnect exhausted: all retry attempts failed ---
+            if state_str == 'reconnect_exhausted':
+                self._status.state = ConnectionState.ERROR
+                device_name = status.get('device_name', '')
+                attempts = status.get('attempts', 4)
+                self._status.error = f"Reconnect failed after {attempts} attempts"
+                logger.warning("BLE reconnect exhausted: %d attempts to %s",
+                               attempts, device_name)
+                if self.message_router:
+                    await self.message_router.publish('ble', 'ble_status', {
+                        'src_type': 'BLE',
+                        'TYP': 'blueZ',
+                        'command': 'reconnect_exhausted BLE',
+                        'result': 'error',
+                        'msg': f'Reconnect to {device_name} failed after {attempts} attempts',
+                        'attempts': attempts,
+                        'device_name': device_name,
+                        'device_address': status.get('device_address', ''),
+                        'timestamp': int(time.time() * 1000),
+                    })
+                return
+
+            # --- Standard state transitions ---
             try:
                 new_state = ConnectionState(state_str)
             except ValueError:
@@ -590,13 +684,20 @@ class BLEClientRemote(BLEClientBase):
                     reason = status.get('reason', 'unknown')
                     logger.info("BLE remote disconnected (was %s, reason: %s)",
                                 old_state.value, reason)
-                    await self._publish_status(
-                        'disconnect BLE', 'lost', 'BLE connection lost (device reboot)'
-                    )
+                    # Don't publish "lost" if this is a user-initiated cancel
+                    if reason == 'reconnect_cancelled':
+                        await self._publish_status(
+                            'disconnect BLE', 'ok', 'Reconnect cancelled'
+                        )
+                    else:
+                        await self._publish_status(
+                            'disconnect BLE', 'lost', 'BLE connection lost (device reboot)'
+                        )
                 elif (old_state == ConnectionState.DISCONNECTED
                         and new_state == ConnectionState.CONNECTED):
                     logger.info("BLE auto-reconnected (remote service restored connection)")
                     self._status.device_address = status.get('device_address')
+                    self._status.device_name = status.get('device_name')
                     await self._publish_status(
                         'connect BLE result', 'ok', 'BLE auto-reconnected'
                     )
@@ -623,8 +724,16 @@ class BLEClientRemote(BLEClientBase):
                 self._status.state = ConnectionState.CONNECTED
                 self._status.device_address = response.get('device_address')
                 self._status.device_name = response.get('device_name')
+            elif response.get('reconnecting'):
+                self._status.state = ConnectionState.CONNECTING
+                self._status.device_address = response.get('device_address')
+                self._status.device_name = response.get('device_name')
             else:
-                self._status.state = ConnectionState(response.get('state', 'disconnected'))
+                state_str = response.get('state', 'disconnected')
+                try:
+                    self._status.state = ConnectionState(state_str)
+                except ValueError:
+                    self._status.state = ConnectionState.DISCONNECTED
                 self._status.device_address = None
 
             self._status.error = response.get('error')

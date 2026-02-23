@@ -44,6 +44,15 @@ _reconnect_task: asyncio.Task | None = None
 _auto_connect_task: asyncio.Task | None = None
 _user_disconnected: bool = False
 _last_connected_mac: str | None = None
+_last_connected_name: str | None = None
+
+# Reconnect tracking (visible to status endpoint and 409 responses)
+_reconnecting: bool = False
+_reconnect_attempt: int = 0
+_reconnect_max_attempts: int = 0
+
+# Activity log ring buffer
+_activity_log: deque[dict] = deque(maxlen=50)
 
 
 def crc16_ccitt(data: bytes) -> int:
@@ -172,6 +181,16 @@ async def _connect_and_initialize(mac: str) -> bool:
 
 # --- Auto-reconnect / auto-connect ---
 
+def _log_activity(action: str, detail: str = "", level: str = "info"):
+    """Append an entry to the activity log ring buffer."""
+    _activity_log.append({
+        "ts": int(time.time() * 1000),
+        "action": action,
+        "detail": detail,
+        "level": level,
+    })
+
+
 def _push_status_event(state: str, **kwargs):
     """Push a BLE status change event into the notification queue for SSE delivery."""
     event = {
@@ -189,6 +208,7 @@ def _on_adapter_disconnect():
     """Called by BLEAdapter when an unexpected disconnect is detected"""
     global _reconnect_task
     _push_status_event("disconnected")
+    _log_activity("disconnect", "Unexpected connection loss", "warn")
     if _user_disconnected:
         return
     logger.warning("Unexpected disconnect detected, scheduling auto-reconnect")
@@ -199,83 +219,196 @@ def _on_adapter_disconnect():
 
 async def _auto_reconnect():
     """Attempt to reconnect with exponential backoff after unexpected disconnect."""
+    global _reconnecting, _reconnect_attempt, _reconnect_max_attempts
     mac = _last_connected_mac
+    name = _last_connected_name or mac or "unknown"
     if not mac:
         logger.warning("No previous MAC address for auto-reconnect")
         return
 
     delays = [5, 10, 20, 60]
+    _reconnecting = True
+    _reconnect_max_attempts = len(delays)
+
     for attempt, delay in enumerate(delays, 1):
         if _user_disconnected:
             logger.info("Auto-reconnect cancelled (user disconnected)")
+            _reconnecting = False
+            _reconnect_attempt = 0
+            _log_activity("reconnect_cancelled", "Cancelled by user", "info")
             return
+
+        _reconnect_attempt = attempt
+        _push_status_event(
+            "reconnecting",
+            attempt=attempt,
+            max_attempts=len(delays),
+            next_retry_in=delay,
+            device_name=name,
+            device_address=mac,
+        )
+        _log_activity(
+            "reconnect_attempt",
+            f"Attempt {attempt}/{len(delays)} to {name} (waiting {delay}s)",
+            "warn",
+        )
 
         logger.info("Auto-reconnect attempt %d/%d in %ds to %s",
                     attempt, len(delays), delay, mac)
         await asyncio.sleep(delay)
 
         if _user_disconnected:
+            _reconnecting = False
+            _reconnect_attempt = 0
+            _log_activity("reconnect_cancelled", "Cancelled by user", "info")
             return
         if ble_adapter.is_connected:
             logger.info("Already reconnected, stopping auto-reconnect")
+            _reconnecting = False
+            _reconnect_attempt = 0
             return
 
         try:
             success = await _connect_and_initialize(mac)
             if success:
                 logger.info("Auto-reconnect successful to %s", mac)
-                _push_status_event("connected", device_address=mac)
+                _reconnecting = False
+                _reconnect_attempt = 0
+                _push_status_event("connected", device_address=mac, device_name=name)
+                _log_activity("reconnect_success", f"Reconnected to {name}", "info")
                 return
             else:
                 logger.warning("Auto-reconnect attempt %d failed", attempt)
+                _log_activity(
+                    "reconnect_failed",
+                    f"Attempt {attempt}/{len(delays)} failed",
+                    "error",
+                )
         except Exception as e:
             logger.warning("Auto-reconnect attempt %d error: %s", attempt, e)
+            _log_activity(
+                "reconnect_failed",
+                f"Attempt {attempt}/{len(delays)} error: {e}",
+                "error",
+            )
 
+    _reconnecting = False
+    _reconnect_attempt = 0
+    _push_status_event(
+        "reconnect_exhausted",
+        attempts=len(delays),
+        device_name=name,
+        device_address=mac,
+    )
+    _log_activity(
+        "reconnect_exhausted",
+        f"All {len(delays)} attempts to {name} failed",
+        "error",
+    )
     logger.error("Auto-reconnect exhausted all %d attempts for %s", len(delays), mac)
 
 
 async def _startup_auto_connect():
     """Auto-connect to last-known device after service startup."""
-    global _last_connected_mac, _user_disconnected
+    global _last_connected_mac, _last_connected_name, _user_disconnected
+    global _reconnecting, _reconnect_attempt, _reconnect_max_attempts
 
     mac = _load_ble_state()
     if not mac:
         logger.info("No saved BLE state — skipping auto-connect")
         return
 
+    # Also load device name from state file
+    try:
+        with open(BLE_STATE_FILE) as f:
+            state = json.load(f)
+        _last_connected_name = state.get("device_name")
+    except Exception:
+        pass
+
     _last_connected_mac = mac
     _user_disconnected = False
+    name = _last_connected_name or mac
 
     logger.info("Auto-connect: waiting %ds for Bluetooth hardware...", AUTO_CONNECT_DELAY)
+    _log_activity("startup_auto_connect", f"Waiting {AUTO_CONNECT_DELAY}s for hardware", "info")
     await asyncio.sleep(AUTO_CONNECT_DELAY)
 
     delays = [5, 10, 20, 60]
+    _reconnecting = True
+    _reconnect_max_attempts = len(delays)
+
     for attempt, delay in enumerate(delays, 1):
         if _user_disconnected:
             logger.info("Startup auto-connect cancelled (user disconnected)")
+            _reconnecting = False
+            _reconnect_attempt = 0
             return
         if ble_adapter.is_connected:
             logger.info("Already connected, stopping startup auto-connect")
+            _reconnecting = False
+            _reconnect_attempt = 0
             return
 
+        _reconnect_attempt = attempt
+        _push_status_event(
+            "reconnecting",
+            attempt=attempt,
+            max_attempts=len(delays),
+            next_retry_in=delay,
+            device_name=name,
+            device_address=mac,
+        )
+
         logger.info("Startup auto-connect attempt %d/%d to %s", attempt, len(delays), mac)
+        _log_activity(
+            "startup_connect_attempt",
+            f"Attempt {attempt}/{len(delays)} to {name}",
+            "info",
+        )
         try:
             success = await asyncio.wait_for(
                 _connect_and_initialize(mac), timeout=30.0
             )
             if success:
                 logger.info("Startup auto-connect successful to %s", mac)
-                _push_status_event("connected", device_address=mac)
+                _reconnecting = False
+                _reconnect_attempt = 0
+                _push_status_event("connected", device_address=mac, device_name=name)
+                _log_activity("connect_success", f"Connected to {name}", "info")
                 return
             else:
                 logger.warning("Startup auto-connect attempt %d failed", attempt)
+                _log_activity(
+                    "connect_failed",
+                    f"Attempt {attempt}/{len(delays)} failed",
+                    "error",
+                )
         except Exception as e:
             logger.warning("Startup auto-connect attempt %d error: %s", attempt, e)
+            _log_activity(
+                "connect_failed",
+                f"Attempt {attempt}/{len(delays)} error: {e}",
+                "error",
+            )
 
         if attempt < len(delays):
             logger.info("Retrying in %ds...", delay)
             await asyncio.sleep(delay)
 
+    _reconnecting = False
+    _reconnect_attempt = 0
+    _push_status_event(
+        "reconnect_exhausted",
+        attempts=len(delays),
+        device_name=name,
+        device_address=mac,
+    )
+    _log_activity(
+        "reconnect_exhausted",
+        f"All {len(delays)} startup attempts to {name} failed",
+        "error",
+    )
     logger.error("Startup auto-connect exhausted all attempts for %s", mac)
 
 
@@ -367,6 +500,9 @@ class StatusResponse(BaseModel):
     device_name: str | None = None
     last_activity: float | None = None
     error: str | None = None
+    reconnecting: bool = False
+    reconnect_attempt: int | None = None
+    reconnect_max_attempts: int | None = None
 
 
 class DeviceResponse(BaseModel):
@@ -399,11 +535,14 @@ async def get_status(_: bool = Depends(verify_api_key)):
 
     return StatusResponse(
         connected=ble_adapter.is_connected,
-        state=status.state.value,
-        device_address=status.device.address if status.device else None,
-        device_name=status.device.name if status.device else None,
+        state="reconnecting" if _reconnecting else status.state.value,
+        device_address=status.device.address if status.device else _last_connected_mac,
+        device_name=status.device.name if status.device else _last_connected_name,
         last_activity=status.last_activity,
-        error=status.error
+        error=status.error,
+        reconnecting=_reconnecting,
+        reconnect_attempt=_reconnect_attempt if _reconnecting else None,
+        reconnect_max_attempts=_reconnect_max_attempts if _reconnecting else None,
     )
 
 
@@ -415,18 +554,32 @@ async def scan_devices(
 ):
     """Scan for BLE devices"""
     if ble_adapter._operation_lock.locked():
-        raise HTTPException(
-            status_code=409,
-            detail="Another BLE operation is in progress"
-        )
+        detail = {
+            "message": "Cannot scan: auto-reconnect in progress"
+            if _reconnecting else "Another BLE operation is in progress",
+            "reason": "reconnecting" if _reconnecting else "busy",
+            "device_name": _last_connected_name,
+        }
+        if _reconnecting:
+            detail["attempt"] = _reconnect_attempt
+            detail["max_attempts"] = _reconnect_max_attempts
+            detail["suggested_action"] = "wait_or_cancel"
+        raise HTTPException(status_code=409, detail=detail)
     if ble_adapter.is_connected:
         raise HTTPException(
             status_code=409,
-            detail="Cannot scan while connected. Disconnect first."
+            detail={
+                "message": "Cannot scan while connected. Disconnect first.",
+                "reason": "connected",
+                "device_name": _last_connected_name,
+                "suggested_action": "disconnect_first",
+            },
         )
 
+    _log_activity("scan_start", f"Scanning for {timeout}s (prefix={prefix})", "info")
     try:
         devices = await ble_adapter.scan(timeout=timeout, prefix=prefix)
+        _log_activity("scan_result", f"Found {len(devices)} device(s)", "info")
         return ScanResponse(
             devices=[
                 DeviceResponse(
@@ -442,6 +595,7 @@ async def scan_devices(
         )
     except Exception as e:
         logger.error("Scan error: %s", e)
+        _log_activity("scan_error", str(e), "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -469,17 +623,22 @@ async def connect(request: ConnectRequest, _: bool = Depends(verify_api_key)):
             )
 
     try:
-        global _user_disconnected, _last_connected_mac
+        global _user_disconnected, _last_connected_mac, _last_connected_name
         _user_disconnected = False
+        _log_activity("connect_start", f"Connecting to {mac}", "info")
         success = await _connect_and_initialize(mac)
         if success:
             _last_connected_mac = mac
+            _last_connected_name = request.device_name
             _save_ble_state(mac, request.device_name)
+            _log_activity("connect_success", f"Connected to {mac}", "info")
             return ResultResponse(success=True, message=f"Connected to {mac}")
         else:
+            _log_activity("connect_failed", f"Failed to connect to {mac}", "error")
             return ResultResponse(success=False, message="Connection failed")
     except Exception as e:
         logger.error("Connect error: %s", e)
+        _log_activity("connect_error", str(e), "error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -487,6 +646,7 @@ async def connect(request: ConnectRequest, _: bool = Depends(verify_api_key)):
 async def disconnect(_: bool = Depends(verify_api_key)):
     """Disconnect from current device (also resets ERROR state)"""
     global _user_disconnected, _reconnect_task, _auto_connect_task
+    global _reconnecting, _reconnect_attempt
     _user_disconnected = True
     _clear_ble_state()
 
@@ -498,15 +658,60 @@ async def disconnect(_: bool = Depends(verify_api_key)):
         _reconnect_task.cancel()
         _reconnect_task = None
 
+    _reconnecting = False
+    _reconnect_attempt = 0
+
     if ble_adapter.status.state == ConnectionState.DISCONNECTED:
+        _log_activity("disconnect", "Already disconnected (user request)", "info")
         return ResultResponse(success=True, message="Already disconnected")
 
     try:
         await ble_adapter.disconnect()
+        _log_activity("disconnect", "User disconnected", "info")
         return ResultResponse(success=True, message="Disconnected")
     except Exception as e:
         logger.error("Disconnect error: %s", e)
+        _log_activity("disconnect_error", str(e), "error")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ble/cancel_reconnect", response_model=ResultResponse)
+async def cancel_reconnect(_: bool = Depends(verify_api_key)):
+    """Cancel any in-progress auto-reconnect and return to idle state."""
+    global _user_disconnected, _reconnect_task, _auto_connect_task
+    global _reconnecting, _reconnect_attempt
+    _user_disconnected = True
+    _clear_ble_state()
+
+    cancelled = False
+    if _reconnect_task and not _reconnect_task.done():
+        _reconnect_task.cancel()
+        _reconnect_task = None
+        cancelled = True
+    if _auto_connect_task and not _auto_connect_task.done():
+        _auto_connect_task.cancel()
+        _auto_connect_task = None
+        cancelled = True
+
+    _reconnecting = False
+    _reconnect_attempt = 0
+    _push_status_event("disconnected", reason="reconnect_cancelled")
+    _log_activity(
+        "reconnect_cancelled",
+        "User cancelled reconnect" if cancelled else "No reconnect in progress",
+        "info",
+    )
+
+    return ResultResponse(
+        success=True,
+        message="Reconnect cancelled" if cancelled else "No reconnect in progress",
+    )
+
+
+@app.get("/api/ble/activity")
+async def get_activity(_: bool = Depends(verify_api_key)):
+    """Return the activity log (last 50 events)."""
+    return {"events": list(_activity_log), "count": len(_activity_log)}
 
 
 @app.post("/api/ble/send", response_model=ResultResponse)
