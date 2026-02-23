@@ -1110,8 +1110,7 @@ class MessageValidator:
         src = src_raw.split(',')[0].upper() if ',' in src_raw else src_raw.upper()
         dst = dst_raw.upper()
 
-        # Normalize command to uppercase while preserving structure
-        msg = msg_raw.upper() if msg_raw.startswith('!') else msg_raw
+        msg = msg_raw
 
         normalized.update({
             'src': src,
