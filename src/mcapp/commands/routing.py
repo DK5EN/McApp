@@ -476,6 +476,16 @@ class RoutingMixin:
 
         # Parse key:value pairs
         kwargs = {}
+
+        # Special handling for wx/weather: TEXT: captures everything after it
+        if cmd in ["wx", "weather"]:
+            remaining = msg_text[len(parts[0]):].strip()
+            if remaining:
+                text_match = re.search(r'TEXT:(.*)', remaining, re.IGNORECASE)
+                if text_match:
+                    kwargs["text"] = text_match.group(1).strip()
+            return cmd, kwargs
+
         for part in parts[1:]:
             if ":" in part:
                 key, value = part.split(":", 1)

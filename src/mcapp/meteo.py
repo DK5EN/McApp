@@ -549,7 +549,7 @@ class WeatherService:
         else:
             return "bewölkt"
 
-    def format_for_lora(self, weather_data: Dict[str, Any]) -> str:
+    def format_for_lora(self, weather_data: Dict[str, Any], prefix_text: str = "") -> str:
         """Ham Radio optimiertes LoRa-Format"""
         if "error" in weather_data:
             return f"WX ERR: {weather_data['error'][:25]}"
@@ -591,14 +591,17 @@ class WeatherService:
         rain_mm = weather_data.get("niederschlag_mm", 0) or 0
         rain_info = f", {rain_mm:.1f}mm rain" if rain_mm > 0.1 else ""
 
+        # Personal text prefix
+        prefix = f"{prefix_text} " if prefix_text else ""
+
         lora_msg = (
-            f"🌤️ WX {self.stat_name}: {temp:.1f}C {humid}% rF,"
+            f"{prefix}🌤️ WX {self.stat_name}: {temp:.1f}C {humid}% rF,"
             f" {press:.1f}hPa, {wind_info}, {cloud_desc}{rain_info}"
         )
 
         if len(lora_msg) > 149:
             lora_msg = (
-                f"WX {self.stat_name}: {temp:.1f}C {humid}%rF"
+                f"{prefix}WX {self.stat_name}: {temp:.1f}C {humid}%rF"
                 f" {press:.1f}hPa {wind_info} {cloud_desc}{rain_info}"
             )
 

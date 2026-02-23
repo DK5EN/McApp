@@ -63,14 +63,14 @@ COMMANDS = {
     },
     "wx": {
         "handler": "handle_weather",
-        "args": [],
-        "format": "!wx",
+        "args": ["text"],
+        "format": "!wx [text:MESSAGE]",
         "description": "Show nodes current weather",
     },
     "weather": {
         "handler": "handle_weather",
-        "args": [],
-        "format": "!weather",
+        "args": ["text"],
+        "format": "!weather [text:MESSAGE]",
         "description": "Show nodes current weather",
     },
     "group": {

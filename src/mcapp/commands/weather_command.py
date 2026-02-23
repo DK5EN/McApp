@@ -33,7 +33,8 @@ class WeatherCommandMixin:
                     print(f"❌ Weather error: {weather_data['error']}")
                 return f"❌ Weather unavailable: {weather_data['error'][:30]}"
 
-            weather_msg = self.weather_service.format_for_lora(weather_data)
+            prefix_text = kwargs.get("text", "")
+            weather_msg = self.weather_service.format_for_lora(weather_data, prefix_text=prefix_text)
 
             if has_console:
                 source = weather_data.get("data_source", "Unknown")
