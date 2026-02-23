@@ -26,12 +26,10 @@ class CTCPingMixin:
         return result
 
     def _is_echo_message(self, msg: str) -> bool:
-        """Check if message is an echo with {xxx} suffix"""
+        """Check if message is a CTC ping echo with [CTC] signature and {xxx} suffix"""
         if not msg:
             return False
-        pattern = r"\{\d{3}$"  # Exactly 3 digits after {
-        result = bool(re.search(pattern, msg))
-        return result
+        return "[CTC]" in msg and bool(re.search(r"\{\d{3}$", msg))
 
     def _is_ping_message(self, msg: str) -> bool:
         """Check if message looks like a ping test message (not the 'started' message)"""
@@ -546,7 +544,7 @@ class CTCPingMixin:
                 if test_summary["status"] != "running":
                     break
 
-                base_msg = f"Ping test {sequence}/{repeat_count} to measure roundtrip"
+                base_msg = f"[CTC] Ping test {sequence}/{repeat_count} to measure roundtrip"
 
                 if len(base_msg) > payload_size:
                     ping_message = base_msg[:payload_size]

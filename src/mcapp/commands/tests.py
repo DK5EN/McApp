@@ -982,9 +982,10 @@ async def test_ctcping_logic(handler):
 
     # Pattern recognition tests
     pattern_tests = [
-        ("Ping test 1/3 to measure roundtrip{753", True, "Echo message detection"),
-        ("Ping test 2/5 to measure roundtripXXXX{052", True, "Echo with padding detection"),
+        ("[CTC] Ping test 1/3 to measure roundtrip{753", True, "Echo message detection"),
+        ("[CTC] Ping test 2/5 to measure roundtripXXXX{052", True, "Echo with padding detection"),
         ("Normal message{123", False, "Non-ping echo ignored"),
+        ("!wx DK5EN-12{771", False, "Command with MeshCom suffix not echo"),
         ("DK5EN-1  :ack753", True, "ACK message detection"),
         ("OE5HWN-12 :ack052", True, "ACK with different ID"),
         ("DK5EN-1  :ack75", False, "Invalid ACK (2 digits)"),
@@ -1092,7 +1093,7 @@ async def _test_simulated_ping_flows(handler, results):
         echo_data = {
             "src": handler.my_callsign,
             "dst": "W1ABC-1",
-            "msg": "Ping test 1/1 to measure roundtrip{123",
+            "msg": "[CTC] Ping test 1/1 to measure roundtrip{123",
         }
 
         await handler._handle_echo_message(echo_data)
@@ -1132,7 +1133,7 @@ async def _test_simulated_ping_flows(handler, results):
         echo_data = {
             "src": handler.my_callsign,
             "dst": "TIMEOUT-NODE",
-            "msg": "Ping test 1/1 to measure roundtrip{456",
+            "msg": "[CTC] Ping test 1/1 to measure roundtrip{456",
         }
 
         await handler._handle_echo_message(echo_data)
