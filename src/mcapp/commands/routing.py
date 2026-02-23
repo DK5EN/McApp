@@ -161,10 +161,6 @@ class RoutingMixin:
         dst = message_data.get("dst", "").strip().upper()
         msg = message_data.get("msg", "").strip()
 
-        # Commands to uppercase
-        if msg.startswith("!"):
-            msg = msg.upper()
-
         return {"src": src, "dst": dst, "msg": msg, "original": message_data}
 
     def _should_execute_command(self, src, dst, msg):
