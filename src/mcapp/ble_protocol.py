@@ -75,67 +75,33 @@ def decode_binary_message(byte_msg: bytes) -> dict[str, Any] | str:
     remaining_msg = byte_msg[7:].rstrip(b'\x00')  # Extract data after hop count byte
 
     if byte_msg[:2] == b'@A':  # Check if this is an ACK frame
-        # ACK Message Format: [0x41] [MSG_ID-4] [FLAGS] [ACK_MSG_ID-4] [ACK_TYPE] [0x00]
+        logger.debug("ACK raw hex: %s (len=%d)", byte_msg.hex(), len(byte_msg))
 
-        # Decode FLAGS byte
-        server_flag = bool(max_hop_raw & 0x80)  # Bit 7: Server Flag
-        hop_count = max_hop_raw & 0x7F  # Bits 0-6: Hop Count
+        # Firmware sends 7-byte ACKs to BLE (never 12-byte):
+        #   BLE payload: [0x41][orig_msg_id×4][ack_type][0x00]
+        #   GATT frame:  [0x40][0x41][orig_msg_id×4][ack_type][0x00][timestamp×4]
+        #
+        # Header parsing (byte_msg[1:7]) maps to:
+        #   payload_type (byte 1) = 0x41
+        #   msg_id       (bytes 2-5) = original message ID being acknowledged
+        #   max_hop_raw  (byte 6) = ack_type (0x00=Node, 0x01=Gateway) — NOT flags!
+        #
+        # Bytes 7+ are terminator (0x00) + 4-byte unix timestamp appended by firmware.
 
-        # Extract ACK-specific fields
-        # Firmware layout: [0x41][MSG_ID-4][FLAGS][ACK_MSG_ID-4][ACK_TYPE][0x00]
-        # With @ prefix:   byte[0]=@, [1]=0x41, [2-5]=msg_id, [6]=flags,
-        #                  [7-10]=ack_msg_id, [11]=ack_type, [12]=0x00
-        if len(byte_msg) >= 12:
-            # ACK_MSG_ID (original message ID being acknowledged)
-            [ack_id] = unpack('<I', byte_msg[7:11])
-
-            # ACK_TYPE (0x00=Node, 0x01=Gateway)
-            ack_type = byte_msg[11] if len(byte_msg) > 11 else 0
-            if ack_type == 0x00:
-                ack_type_text = "Node ACK"
-            elif ack_type == 0x01:
-                ack_type_text = "Gateway ACK"
-            else:
-                ack_type_text = f"Unknown ({ack_type})"
-
-            # Extract Gateway ID and ACK ID from msg_id
-            if ack_type == 0x01:
-                gateway_id = (msg_id >> 10) & 0x3FFFFF  # Bits 31-10: Gateway ID (22 Bits)
-                ack_id_part = msg_id & 0x3FF  # Bits 9-0: ACK ID (10 Bits)
-            else:
-                gateway_id = None
-                ack_id_part = None
+        ack_type = max_hop_raw  # byte 6 is ack_type in ACK frames
+        if ack_type == 0x00:
+            ack_type_text = "Node ACK"
+        elif ack_type == 0x01:
+            ack_type_text = "Gateway ACK"
         else:
-            # Fallback for legacy implementation
-            [ack_id] = unpack('<I', byte_msg[-5:-1])
-            ack_type = None
-            ack_type_text = None
-            server_flag = None
-            hop_count = max_hop
-            gateway_id = None
-            ack_id_part = None
-
-        # Display message as hex
-        [message] = unpack(f'<{len(remaining_msg)}s', remaining_msg)
-        message = message.hex().upper()
+            ack_type_text = f"Unknown ({ack_type})"
 
         json_obj = {
             "payload_type": payload_type,
             "msg_id": msg_id,
-            "max_hop": max_hop,
-            "mesh_info": mesh_info,
-            "message": message,
-            "ack_id": ack_id,
             "ack_type": ack_type,
             "ack_type_text": ack_type_text,
-            "server_flag": server_flag,
-            "hop_count": hop_count,
-            "gateway_id": gateway_id,
-            "ack_id_part": ack_id_part
         }
-
-        # Remove None values for cleaner JSON
-        json_obj = {k: v for k, v in json_obj.items() if v is not None}
 
         return json_obj
 
@@ -374,7 +340,6 @@ def transform_ack(input_dict: dict[str, Any]) -> dict[str, Any]:
         "type": "ack",
         **input_dict,
         "msg_id": format(input_dict.get("msg_id"), '08X'),
-        "ack_id": format(input_dict.get("ack_id"), '08X'),
         "timestamp": int(time.time() * 1000)
     }
 

@@ -681,8 +681,10 @@ class SQLiteStorage:
         logger.info("Backfilled conversation_key: %d DMs", dm_count)
 
         # --- 8. ACK matching: link ACK rows → send_success on originals ---
+        # In the 7-byte BLE ACK format, msg_id is the original message being
+        # acknowledged (not ack_id, which was garbage from timestamp bytes).
         ack_rows = conn.execute("""
-            SELECT id, json_extract(raw_json, '$.ack_id') AS ack_id
+            SELECT id, json_extract(raw_json, '$.msg_id') AS orig_msg_id
             FROM messages WHERE type = 'ack' AND raw_json IS NOT NULL
         """).fetchall()
         matched = 0
@@ -988,36 +990,34 @@ class SQLiteStorage:
 
         # --- Early exit: Binary ACK → set send_success on original, skip INSERT ---
         if msg_type == "ack":
-            ack_id = message.get("ack_id")
+            # Firmware sends 7-byte ACKs to BLE:
+            #   msg_id   = ID of the original message being acknowledged
+            #   ack_type = 0x00 (Node ACK) or 0x01 (Gateway ACK)
+            ack_for_msg_id = message.get("msg_id")
             ack_type = message.get("ack_type")
             ack_type_text = message.get("ack_type_text", "Unknown")
-            if ack_id:
-                msg_id = message.get("msg_id")
-                server_flag = message.get("server_flag")
-                hop_count = message.get("hop_count")
+            if ack_for_msg_id:
                 logger.info(
-                    "ACK received: ack_id=%s ack_type=%s (%s) "
-                    "msg_id=%s server=%s hops=%s",
-                    ack_id, ack_type, ack_type_text,
-                    msg_id, server_flag, hop_count,
+                    "ACK received: original_msg=%s ack_type=%s (%s)",
+                    ack_for_msg_id, ack_type, ack_type_text,
                 )
                 rows = await self._execute(
                     "UPDATE messages SET send_success = 1 WHERE id = ("
                     "  SELECT id FROM messages WHERE msg_id = ? AND type = 'msg'"
                     "  ORDER BY timestamp DESC LIMIT 1"
                     ")",
-                    (ack_id,),
+                    (ack_for_msg_id,),
                     fetch=False,
                 )
                 if rows == 0:
                     logger.warning(
-                        "ACK for unknown msg_id=%s — no matching message in DB",
-                        ack_id,
+                        "ACK for unknown original_msg=%s — no matching message in DB",
+                        ack_for_msg_id,
                     )
                 # Notify frontend via SSE
                 if self._message_router:
                     await self._message_router.publish("storage", "msg_status", {
-                        "msg_id": ack_id,
+                        "msg_id": ack_for_msg_id,
                         "acked": True,
                     })
             return  # Don't store ACK as a separate row

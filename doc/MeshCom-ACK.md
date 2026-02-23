@@ -141,3 +141,26 @@ Payload format:
 - Broadcast messages with special prefixes ({MCP}, {SET}, {CET}) do not generate gateway ACKs
 - The retransmission logic uses the ACK status to decide on retries
 - ACK messages themselves are marked with status 0xFF (no retransmission)
+
+### BLE vs. LoRa ACK Formats
+
+**Important:** The firmware sends two different ACK formats:
+
+**7-byte ACK (sent to BLE phone):**
+```
+[0x41] [ORIG_MSG_ID - 4 Bytes] [ACK_TYPE] [0x00]
+```
+- Only contains the original message ID and ack type
+- No separate ACK sender ID or FLAGS byte
+- `addBLEOutBuffer` appends a 4-byte unix timestamp
+- `sendToPhone` prepends `0x40`, making the GATT notification:
+  `[0x40][0x41][orig_msg_id×4][ack_type][0x00][timestamp×4]` (12 bytes total)
+
+**12-byte ACK (sent over LoRa mesh):**
+```
+[0x41] [ACK_MSG_ID - 4 Bytes] [FLAGS] [ORIG_MSG_ID - 4 Bytes] [ACK_TYPE] [0x00]
+```
+- Contains both the ACK sender's counter and the original message ID
+- This format is described in the main section above but is **never sent to BLE**
+
+McApp parses the 7-byte BLE format: `msg_id` (bytes 2-5 after `@` prefix) is the original message ID used for DB lookup. `ack_type` is byte 6 (the position that would be FLAGS in non-ACK messages).
