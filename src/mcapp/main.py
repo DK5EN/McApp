@@ -915,6 +915,13 @@ class MessageRouter:
         """Handle UDP messages from WebSocket and route to UDP handler"""
         message_data = routed_message['data']
 
+        if has_console:
+            print(
+                f"📡 _udp_message_handler: src_type={message_data.get('src_type')!r} "
+                f"src={message_data.get('src')} dst={message_data.get('dst')} "
+                f"msg={message_data.get('msg', '')[:40]}"
+            )
+
         # EARLY NORMALIZATION - ab hier alles uppercase
         normalized_data = self.validator.normalize_message_data(message_data)
 

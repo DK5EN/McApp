@@ -18,6 +18,17 @@ class RoutingMixin:
         message_data = routed_message["data"]
         src_type = message_data.get("src_type")
 
+        if has_console:
+            print(
+                f"📋 CommandHandler._message_handler: "
+                f"source={routed_message.get('source')} "
+                f"type={routed_message.get('type')} "
+                f"src_type={src_type!r} "
+                f"src={message_data.get('src')} "
+                f"dst={message_data.get('dst')} "
+                f"msg={message_data.get('msg', '')[:30]}"
+            )
+
         if "msg" not in message_data:
             return
 

@@ -3,7 +3,10 @@
 import asyncio
 import time
 
+from ..logging_setup import get_logger
 from .constants import MAX_CHUNKS, MAX_RESPONSE_LENGTH, has_console
+
+logger = get_logger(__name__)
 
 
 class ResponseMixin:
@@ -91,7 +94,11 @@ class ResponseMixin:
                                     f"📋 CommandHandler: Sent chunk {i + 1} via UDP to {recipient}"
                                 )
                         else:
-                            print("TransportUnavailableError BLE and UDP not available", src_type)
+                            logger.warning(
+                                "RESPONSE LOST: No transport for src_type=%r, "
+                                "recipient=%s, msg=%s",
+                                src_type, recipient, chunk[:40],
+                            )
                     except Exception as ble_error:
                         if has_console:
                             print(f"⚠️  CommandHandler: send failed to {recipient}: {ble_error}")
