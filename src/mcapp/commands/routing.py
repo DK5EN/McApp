@@ -45,8 +45,6 @@ class RoutingMixin:
         if not msg_text or not msg_text.startswith("!"):
             return
 
-        msg_text = re.sub(r"\{\d+$", "", msg_text)  # Remove {829 at end
-
         msg_id = message_data.get("msg_id")
         if self._is_duplicate_msg_id(msg_id):
             if has_console:
@@ -58,6 +56,13 @@ class RoutingMixin:
         src = normalized["src"]
         dst = normalized["dst"]
         msg_text = normalized["msg"]
+
+        # Skip our own messages echoed back from the mesh
+        # (these arrive as mesh_message from UDP with our callsign as src)
+        if src == self.my_callsign and routed_message.get('source') == 'udp':
+            if has_console:
+                print(f"📋 CommandHandler: Skipping own echo from mesh: {msg_text[:30]}")
+            return
 
         if has_console:
             print(f"📋 CommandHandler: Checking command '{msg_text}' from {src} to {dst}")
@@ -171,6 +176,9 @@ class RoutingMixin:
 
         dst = message_data.get("dst", "").strip().upper()
         msg = message_data.get("msg", "").strip()
+
+        # Strip MeshCom message ID suffix ({NNN) before any routing decisions
+        msg = re.sub(r"\{\d+$", "", msg).strip()
 
         return {"src": src, "dst": dst, "msg": msg, "original": message_data}
 
