@@ -436,13 +436,26 @@ def dispatcher(input_dict: dict[str, Any], own_callsign: str = "") -> dict[str, 
             logger.warning("Type not found! %s", input_dict)
 
     elif input_dict.get("payload_type") == 58:
-        return transform_msg(input_dict, own_callsign)
+        result = transform_msg(input_dict, own_callsign)
+        if result:
+            logger.info(
+                "BLE dispatch: type=msg src=%s msg_id=%s dst=%s",
+                result.get("src"), result.get("msg_id"), result.get("dst"),
+            )
+        return result
 
     elif input_dict.get("payload_type") == 33:
         msg = input_dict.get("message", "")
         if msg.startswith("T#"):
-            return transform_tele(input_dict, own_callsign)
-        return transform_pos(input_dict, own_callsign)
+            result = transform_tele(input_dict, own_callsign)
+        else:
+            result = transform_pos(input_dict, own_callsign)
+        if result:
+            logger.info(
+                "BLE dispatch: type=%s src=%s msg_id=%s",
+                result.get("type"), result.get("src"), result.get("msg_id"),
+            )
+        return result
 
     elif input_dict.get("payload_type") == 65:
         return transform_ack(input_dict)

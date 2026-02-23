@@ -976,6 +976,13 @@ class SQLiteStorage:
         last_sending = message.get("last_sending")
         transformer = message.get("transformer")
 
+        # Diagnostic: log every BLE notification with msg_id for ACK correlation
+        if src_type in ("ble", "ble_remote"):
+            logger.info(
+                "BLE store: src=%s type=%s msg_id=%s transformer=%s msg=%.40s",
+                src, msg_type, msg_id, transformer, msg,
+            )
+
         # Normalize callsign from relay path
         parts = src.split(",")
         callsign = parts[0].strip() if parts else src
@@ -1010,9 +1017,22 @@ class SQLiteStorage:
                     fetch=False,
                 )
                 if rows == 0:
+                    # Show nearby msg_ids to help diagnose ACK correlation
+                    recent = await self._execute(
+                        "SELECT msg_id, src, type FROM messages "
+                        "WHERE timestamp > ? ORDER BY timestamp DESC LIMIT 5",
+                        (timestamp - 300_000,),
+                    )
+                    nearby = (
+                        ", ".join(
+                            f"{r['src']}:{r['msg_id']}" for r in recent
+                        )
+                        if recent else "none"
+                    )
                     logger.warning(
-                        "ACK for unknown original_msg=%s — no matching message in DB",
-                        ack_for_msg_id,
+                        "ACK for unknown original_msg=%s — no matching message in DB"
+                        " (nearby: %s)",
+                        ack_for_msg_id, nearby,
                     )
                 # Notify frontend via SSE
                 if self._message_router:
