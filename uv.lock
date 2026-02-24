@@ -626,7 +626,7 @@ wheels = [
 
 [[package]]
 name = "mcapp"
-version = "1.4.3"
+version = "1.6.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -653,7 +653,7 @@ requires-dist = [
 
 [[package]]
 name = "mcapp-ble-service"
-version = "1.4.3"
+version = "1.6.1"
 source = { editable = "ble_service" }
 dependencies = [
     { name = "dbus-next" },
