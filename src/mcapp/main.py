@@ -14,6 +14,7 @@ from pathlib import Path
 # BLE client abstraction - supports local, remote, and disabled modes
 from .ble_client import BLEMode, ConnectionState, create_ble_client
 from .commands import create_command_handler
+from .commands.shadow import compare_normalize, normalize_unified
 from .config_loader import (
     BLE_SERVICE_URL,
     MESHCOM_UDP_PORT,
@@ -1126,6 +1127,10 @@ class MessageValidator:
 
         if has_console and (src != src_raw or dst != dst_raw):
             print(f"🔧 Normalized: src='{src_raw}'→'{src}', dst='{dst_raw}'→'{dst}'")
+
+        # Shadow: compare with unified normalizer
+        shadow_result = normalize_unified(message_data, context="message")
+        compare_normalize(normalized, shadow_result, "message", message_data)
 
         return normalized
 

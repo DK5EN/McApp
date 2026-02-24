@@ -9,6 +9,7 @@ from .constants import (
     DEFAULT_THROTTLE_TIMEOUT,
     has_console,
 )
+from .shadow import compare_normalize, compare_routing, normalize_unified
 
 logger = get_logger(__name__)
 
@@ -69,6 +70,12 @@ class RoutingMixin:
 
         # NEW: Use simplified reception logic
         should_execute, target_type = self._should_execute_command(src, dst, msg_text)
+
+        # Shadow: compare with v2 routing logic
+        shadow_result = self._should_execute_command_v2(src, dst, msg_text)
+        compare_routing(
+            (should_execute, target_type), shadow_result, src, dst, msg_text
+        )
 
         if not should_execute:
             if has_console:
@@ -180,7 +187,11 @@ class RoutingMixin:
         # Strip MeshCom message ID suffix ({NNN) before any routing decisions
         msg = re.sub(r"\{\d+$", "", msg).strip()
 
-        return {"src": src, "dst": dst, "msg": msg, "original": message_data}
+        result = {"src": src, "dst": dst, "msg": msg, "original": message_data}
+        # Shadow: compare with unified normalizer
+        shadow_result = normalize_unified(message_data, context="command")
+        compare_normalize(result, shadow_result, "command", message_data)
+        return result
 
     def _should_execute_command(self, src, dst, msg):
         """Simplified reception logic with P2P support"""
@@ -286,87 +297,47 @@ class RoutingMixin:
             print("🔍 → No match - NO EXECUTION")
         return False, None
 
-    def _should_execute_command_old(self, src, dst, msg):
-        """Simplified reception logic from table"""
+    def _should_execute_command_v2(self, src, dst, msg):
+        """Flat routing logic with early returns (shadow candidate for v1 replacement)."""
         src = src.upper()
         dst = dst.upper()
         msg = msg.upper()
-
-        if has_console:
-            print(f"🔍 Command execution check: src='{src}', dst='{dst}', msg='{msg[:20]}...'")
-
-        # Invalid destinations never execute
-        if dst in ["*", "ALL", ""]:
-            if has_console:
-                print(f"🔍 → Invalid dst '{dst}' - NO EXECUTION")
-            return False, None
-
         target = self.extract_target_callsign(msg)
+        is_own = src == self.my_callsign
 
-        if src == self.my_callsign:
-            if not target:
-                if has_console:
-                    print("🔍 → Our command without target - EXECUTE (local intent)")
-                if dst == self.my_callsign:
-                    return True, "direct"
-                elif self.is_group(dst):
-                    return True, "group"
-                else:
-                    return True, "direct"
+        def _target_type(dst_val):
+            """Return 'group' for group destinations, 'direct' otherwise."""
+            return "group" if self.is_group(dst_val) else "direct"
 
-            elif target == self.my_callsign:
-                if has_console:
-                    print("🔍 → Our command with our target - EXECUTE (local execution)")
-                if dst == self.my_callsign:
-                    return True, "direct"
-                elif self.is_group(dst):
-                    return True, "group"
-                else:
-                    return True, "direct"
-
-            else:
-                if has_console:
-                    print(
-                        f"🔍 → Our command with remote"
-                        f" target '{target}' - NO EXECUTION"
-                        f" (remote intent)"
-                    )
-                return False, None
-
-        # Target must be us
-        if target != self.my_callsign:
-            if has_console:
-                print(f"🔍 → Target '{target}' != us ({self.my_callsign}) - NO EXECUTION")
+        # --- Broadcast destinations ---
+        if dst in ("*", "ALL", ""):
+            if is_own:
+                return True, "group"
             return False, None
 
-        # Direct to us → always OK
+        # --- Our own commands ---
+        if is_own:
+            # Remote intent: target is someone else
+            if target and target != self.my_callsign:
+                return False, None
+            # Local intent: no target or target is us
+            return True, _target_type(dst)
+
+        # --- Incoming: direct P2P to us ---
         if dst == self.my_callsign:
-            if has_console:
-                print("🔍 → Direct message to us - EXECUTE")
+            if target and target != self.my_callsign:
+                return False, None
             return True, "direct"
 
-        # Group message → check permissions
+        # --- Incoming: group message ---
         if self.is_group(dst):
-            execute = self.group_responses_enabled or self._is_admin(src)
-            reason = (
-                "Groups ON"
-                if self.group_responses_enabled
-                else "Admin override"
-                if self._is_admin(src)
-                else "Groups OFF"
-            )
-            if has_console:
-                print(
-                    f"🔍 → Group '{dst}' - {'EXECUTE' if execute else 'NO EXECUTION'} ({reason})"
-                )
-
-            if execute:
-                return True, "group"
-            else:
+            if target != self.my_callsign:
                 return False, None
+            if self.group_responses_enabled or self._is_admin(src):
+                return True, "group"
+            return False, None
 
-        if has_console:
-            print("🔍 → No match - NO EXECUTION")
+        # --- No match ---
         return False, None
 
     def extract_target_callsign(self, msg):
