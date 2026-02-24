@@ -600,6 +600,22 @@ class SSEManager:
             data = await asyncio.to_thread(self.weather_service.get_weather_data)
             return data
 
+        @app.get("/api/weather/preview")
+        async def get_weather_preview(text: str = ""):
+            """Return the formatted WX message as it would appear on the mesh."""
+            if not self.weather_service:
+                raise HTTPException(status_code=503, detail="Weather service not available")
+
+            if self.weather_service.lat is None:
+                return {"preview": "WX: Warte auf GPS..."}
+
+            data = await asyncio.to_thread(self.weather_service.get_weather_data)
+            if "error" in data:
+                return {"preview": f"WX ERR: {data['error'][:25]}"}
+
+            formatted = self.weather_service.format_for_lora(data, prefix_text=text)
+            return {"preview": formatted}
+
         # Server time endpoint (for frontend clock sync)
         @app.get("/api/time")
         async def get_time():
