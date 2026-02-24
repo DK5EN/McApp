@@ -225,7 +225,7 @@ class UDPHandler:
 
             if self.message_router:
                 await self.message_router.publish('udp', 'mesh_message', message)
-                logger.info(
+                logger.debug(
                     "UDP→mesh_message: src=%s dst=%s src_type=%s keys=%s",
                     message.get('src'), message.get('dst'),
                     message.get('src_type', '<MISSING>'),

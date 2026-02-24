@@ -22,7 +22,7 @@ class RoutingMixin:
         message_data = routed_message["data"]
         src_type = message_data.get("src_type")
 
-        logger.info(
+        logger.debug(
             "CommandHandler._message_handler: source=%s type=%s "
             "src_type=%r src=%s dst=%s msg=%.30s",
             routed_message.get('source'), routed_message.get('type'),

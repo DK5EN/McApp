@@ -978,7 +978,7 @@ class SQLiteStorage:
 
         # Diagnostic: log every BLE notification with msg_id for ACK correlation
         if src_type in ("ble", "ble_remote"):
-            logger.info(
+            logger.debug(
                 "BLE store: src=%s type=%s msg_id=%s transformer=%s msg=%.40s",
                 src, msg_type, msg_id, transformer, msg,
             )
@@ -1265,7 +1265,7 @@ class SQLiteStorage:
             if rows:
                 alt = rows[0].get("alt")
 
-        logger.info(
+        logger.debug(
             "Telemetry from %s: temp1=%s hum=%s qfe=%s alt=%s batt=%s",
             callsign, temp1, hum, qfe, alt, batt,
         )

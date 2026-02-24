@@ -438,7 +438,7 @@ def dispatcher(input_dict: dict[str, Any], own_callsign: str = "") -> dict[str, 
     elif input_dict.get("payload_type") == 58:
         result = transform_msg(input_dict, own_callsign)
         if result:
-            logger.info(
+            logger.debug(
                 "BLE dispatch: type=msg src=%s msg_id=%s dst=%s",
                 result.get("src"), result.get("msg_id"), result.get("dst"),
             )
@@ -451,7 +451,7 @@ def dispatcher(input_dict: dict[str, Any], own_callsign: str = "") -> dict[str, 
         else:
             result = transform_pos(input_dict, own_callsign)
         if result:
-            logger.info(
+            logger.debug(
                 "BLE dispatch: type=%s src=%s msg_id=%s",
                 result.get("type"), result.get("src"), result.get("msg_id"),
             )
