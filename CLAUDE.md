@@ -53,6 +53,14 @@ BLE mode: `remote` or `disabled` (`MCAPP_BLE_MODE` env override). See `ble_servi
 
 ## Deployment
 
-Target: Raspberry Pi Zero 2W (`ssh mcapp.local`). DB at `/var/lib/mcapp/messages.db` (SQLite, WAL mode, schema v10). Logs: `sudo journalctl -u mcapp.service -f`.
+Two Raspberry Pi Zero 2W targets: `mcapp.local` (production) and `rpizero.local` (integration).
+
+**On-device layout (both Pis, same structure):**
+- Slot system: `~/mcapp-slots/slot-0`, `slot-1`, `slot-2`; `~/mcapp-slots/current` symlink points to active slot
+- Service: `systemctl status mcapp` — `ExecStart=/home/martin/.local/bin/uv run mcapp`
+- Source: `~/mcapp-slots/current/src/mcapp/`
+- Config: `/etc/mcapp/config.json`
+- DB: `/var/lib/mcapp/messages.db` (SQLite, WAL mode, schema v10)
+- Logs: `sudo journalctl -u mcapp.service -f`
 
 See `bootstrap/README.md` for installation, `doc/tls-architecture.md` for TLS setup, `doc/tls-maintenance-SOP.md` for maintenance.
