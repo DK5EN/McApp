@@ -991,15 +991,19 @@ class MessageRouter:
 
         udp_handler = self.get_protocol('udp')
 
+        # Strip internal routing fields before sending to firmware
+        # Firmware only accepts: type, dst, msg, src
+        send_data = {k: v for k, v in normalized_data.items() if k != 'src_type'}
+
         self._logger.info(
             "UDP_DIAG sending: target=%s payload_keys=%s",
             getattr(udp_handler, 'target_address', '?'),
-            list(normalized_data.keys()),
+            list(send_data.keys()),
         )
 
         if udp_handler:
             try:
-                await udp_handler.send_message(normalized_data)
+                await udp_handler.send_message(send_data)
                 if has_console:
                     print("📡 UDP message sent successfully to mesh network")
             except Exception as e:
