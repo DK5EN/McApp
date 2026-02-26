@@ -201,7 +201,7 @@ deploy_app() {
 
   # Deploy into target slot
   deploy_release "$force" "$dev_mode" "$deploy_target" "$pin_tag"
-  deploy_webapp "$force" "$deploy_target"
+  deploy_webapp "$force" "$deploy_target" "$pin_tag"
   setup_python_env "$deploy_target"
   migrate_config
   deploy_shell_aliases
@@ -397,12 +397,13 @@ download_and_install_release() {
 deploy_webapp() {
   local force="${1:-false}"
   local deploy_target="${2:-$INSTALL_DIR}"
+  local pin_tag="${3:-}"
 
   log_info "Checking webapp deployment..."
 
   # New flow: if the tarball included webapp/, use it directly
   if [[ -d "${deploy_target}/webapp" ]] && [[ -f "${deploy_target}/webapp/index.html" ]]; then
-    deploy_webapp_from_tarball "$force" "$deploy_target"
+    deploy_webapp_from_tarball "$force" "$deploy_target" "$pin_tag"
   else
     # Fallback: old tarball without bundled webapp — download separately
     log_info "  No bundled webapp in tarball, falling back to download"
@@ -414,6 +415,7 @@ deploy_webapp() {
 deploy_webapp_from_tarball() {
   local force="${1:-false}"
   local deploy_target="${2:-$INSTALL_DIR}"
+  local pin_tag="${3:-}"
 
   local installed_version
   local tarball_version
@@ -430,7 +432,9 @@ deploy_webapp_from_tarball() {
   log_info "  Installed: ${installed_version}"
   log_info "  Bundled:   ${tarball_version}"
 
-  if [[ "$force" != "true" ]] && [[ "$installed_version" != "not_installed" ]] && \
+  if [[ -n "$pin_tag" ]]; then
+    log_info "  Pinned tag: deploying bundled webapp"
+  elif [[ "$force" != "true" ]] && [[ "$installed_version" != "not_installed" ]] && \
      [[ "$tarball_version" != "unknown" ]] && \
      [[ "$installed_version" != *-dev* || "$tarball_version" == *-dev* ]] && \
      version_gte "$installed_version" "$tarball_version"; then

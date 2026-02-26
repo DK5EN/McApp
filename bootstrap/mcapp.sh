@@ -34,7 +34,7 @@ else
   readonly PIPED_MODE=true
 fi
 
-readonly GITHUB_REPO_BRANCH_DEFAULT="main"
+readonly GITHUB_REPO_BRANCH_DEFAULT="development"
 GITHUB_RAW_BASE="https://raw.githubusercontent.com/DK5EN/McApp/${GITHUB_REPO_BRANCH_DEFAULT}"
 
 # Re-enable nounset now that BASH_SOURCE detection is done
