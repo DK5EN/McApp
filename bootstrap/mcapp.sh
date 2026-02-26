@@ -23,7 +23,7 @@ set -eo pipefail
 #──────────────────────────────────────────────────────────────────
 # CONSTANTS
 #──────────────────────────────────────────────────────────────────
-readonly SCRIPT_VERSION="2.3.0"
+readonly SCRIPT_VERSION="2.4.0"
 
 # Detect piped mode (curl | bash) — BASH_SOURCE is empty when piped
 if [[ -n "${BASH_SOURCE[0]:-}" && "${BASH_SOURCE[0]}" != "bash" ]]; then
@@ -389,6 +389,7 @@ main() {
 
   # Phase 5: Application deployment
   log_step "Deploying application..."
+  [[ -n "$PIN_TAG" ]] && log_info "Pinning to tag: ${PIN_TAG}"
   deploy_app "$FORCE" "$DEV_MODE" "$PIN_TAG"
 
   # Phase 6: Service activation
