@@ -149,18 +149,11 @@ source_libs() {
   # If installed to share dir, use those
   elif [[ -d "${SHARE_DIR}/lib" ]]; then
     lib_dir="${SHARE_DIR}/lib"
-  # Piped mode: prefer local libs in user's home, then download from GitHub
+  # Piped mode: download from GitHub (always fresh to pick up bootstrap changes)
   elif [[ "$PIPED_MODE" == "true" ]]; then
-    local real_home
-    real_home=$(get_real_home)
-    if [[ -d "${real_home}/bootstrap/lib" ]]; then
-      lib_dir="${real_home}/bootstrap/lib"
-      log_info "Piped mode — using local libs from ${lib_dir}"
-    else
-      lib_dir=$(download_libs)
-      # Clean up downloaded libs when script exits
-      trap "rm -rf '$lib_dir'" EXIT
-    fi
+    lib_dir=$(download_libs)
+    # Clean up downloaded libs when script exits
+    trap "rm -rf '$lib_dir'" EXIT
   else
     log_error "Cannot find library files"
     exit 1
