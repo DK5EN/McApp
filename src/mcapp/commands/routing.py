@@ -4,12 +4,12 @@ import re
 
 from ..logging_setup import get_logger
 from .constants import (
-    CALLSIGN_TARGET_PATTERN,
     COMMAND_THROTTLING,
     DEFAULT_THROTTLE_TIMEOUT,
     has_console,
 )
-from .shadow import normalize_unified
+from .parsing import extract_target_callsign, is_group, parse_command_v2
+from .shadow import compare_parse_command, normalize_unified
 
 logger = get_logger(__name__)
 
@@ -217,67 +217,12 @@ class RoutingMixin:
         return False, None
 
     def extract_target_callsign(self, msg):
-        """Extract target callsign from command message.
-
-        Priority:
-        1. Explicit target: parameter (scanned anywhere in message)
-        2. Fallback: first standalone callsign (right-to-left, skip key:value)
-
-        Commands that never have targets: GROUP, KB, TOPIC
-        """
-        if not msg or not msg.startswith("!"):
-            return None
-
-        msg_upper = msg.upper().strip()
-        parts = msg_upper.split()
-
-        if len(parts) < 2:
-            return None
-
-        command = parts[0][1:]  # Remove ! prefix
-
-        # Commands that NEVER have targets (admin-only, local state)
-        if command in ["GROUP", "KB", "TOPIC"]:
-            return None
-
-        # Priority 1: Explicit target:CALLSIGN parameter (scanned anywhere)
-        for part in parts[1:]:
-            if part.startswith("TARGET:"):
-                potential = part[7:]  # Remove 'TARGET:' prefix
-                if potential in ["LOCAL", ""]:
-                    return None  # Explicit local execution
-                if re.match(CALLSIGN_TARGET_PATTERN, potential):
-                    return potential
-                return None  # Invalid target format
-
-        # Priority 2: Positional fallback (right-to-left, skip key:value pairs)
-        for part in reversed(parts[1:]):
-            if ":" in part:
-                continue  # Skip key:value arguments
-            potential = part.strip()
-            if re.match(CALLSIGN_TARGET_PATTERN, potential):
-                return potential
-
-        return None
+        """Delegate to shared pure function."""
+        return extract_target_callsign(msg)
 
     def is_group(self, dst):
-        """Check if destination is a group"""
-        if not dst:
-            return False
-
-        # Special group 'TEST'
-        if dst.upper() == "TEST":
-            return True
-
-        # Numeric groups: 1-99999
-        if dst.isdigit():
-            try:
-                group_num = int(dst)
-                return 1 <= group_num <= 99999
-            except ValueError:
-                return False
-
-        return False
+        """Delegate to shared pure function."""
+        return is_group(dst)
 
     def _is_admin(self, callsign):
         """Check if callsign is admin (DK5EN with any SID)"""
@@ -286,42 +231,15 @@ class RoutingMixin:
         base_call = callsign.split("-")[0] if "-" in callsign else callsign
         return base_call.upper() == self.admin_callsign_base.upper()
 
-    def _is_valid_target(self, dst, src):
-        """Check if message is for us (callsign) or valid group (1-5 digits or 'TEST')"""
-        if has_console:
-            print(f"🔍 valid_target dubug {dst}, {src}")
-
-        # Always allow direct messages to our callsign
-        if dst.upper() == self.my_callsign.upper():
-            if has_console:
-                print("🔍 valid_target Ture, callsign")
-            return True, "callsign"
-
-        # Check if dst is a valid group format
-        is_valid_group = dst == "TEST" or (dst and dst.isdigit() and 1 <= len(dst) <= 5)
-        if not is_valid_group:
-            if has_console:
-                print("🔍 valid_target False, None")
-            return False, None
-
-        # Admin always allowed for groups
-        if self._is_admin(src):
-            if has_console:
-                print("🔍 valid_target admin override, True, group")
-            return True, "group"
-
-        # Non-admin only allowed if group responses are enabled
-        if self.group_responses_enabled:
-            if has_console:
-                print("🔍 valid_target group responses enabled, True, group")
-            return True, "group"
-
-        if has_console:
-            print("🔍 valid_target no match, False, None")
-        return False, None
-
     def parse_command(self, msg_text):
-        """Parse command text into command and arguments"""
+        """Parse command — shadow mode: runs v1 + v2, compares, returns v1."""
+        v1_result = self._parse_command_v1(msg_text)
+        v2_result = parse_command_v2(msg_text)
+        compare_parse_command(v1_result, v2_result, msg_text)
+        return v1_result
+
+    def _parse_command_v1(self, msg_text):
+        """Original parse_command (v1) — kept for shadow comparison."""
         from .handler import COMMANDS
 
         if not msg_text.startswith("!"):
@@ -383,7 +301,6 @@ class RoutingMixin:
                         if ":" in part:
                             key, value = part.split(":", 1)
                             key = key.lower()
-                            # target: is handled by extract_target_callsign routing
                             if key == "call":
                                 kwargs["call"] = value.upper()
                             elif key == "payload":
@@ -415,14 +332,19 @@ class RoutingMixin:
 
                                 if interval_part:
                                     try:
-                                        interval_value = int(interval_part.split(":", 1)[1])
+                                        interval_value = int(
+                                            interval_part.split(":", 1)[1]
+                                        )
                                         kwargs["interval"] = interval_value
                                     except (ValueError, IndexError):
                                         pass
                                 elif len(parts) >= 4 and parts[-1].isdigit():
                                     try:
                                         kwargs["interval"] = int(parts[-1])
-                                        if text_parts and text_parts[-1] == parts[-1]:
+                                        if (
+                                            text_parts
+                                            and text_parts[-1] == parts[-1]
+                                        ):
                                             text_parts = text_parts[:-1]
                                             kwargs["text"] = (
                                                 " ".join(text_parts)

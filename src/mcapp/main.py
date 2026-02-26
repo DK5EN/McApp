@@ -14,6 +14,7 @@ from pathlib import Path
 # BLE client abstraction - supports local, remote, and disabled modes
 from .ble_client import BLEMode, ConnectionState, create_ble_client
 from .commands import create_command_handler
+from .commands.parsing import extract_target_callsign, is_group
 from .commands.shadow import normalize_unified
 from .config_loader import (
     BLE_SERVICE_URL,
@@ -1109,70 +1110,12 @@ class MessageValidator:
         return normalize_unified(message_data, context="message")
 
     def extract_target_callsign(self, msg):
-        """Extract target callsign from command message.
-
-        Priority:
-        1. Explicit target: parameter (scanned anywhere in message)
-        2. Fallback: first standalone callsign (right-to-left, skip key:value)
-
-        Commands that never have targets: GROUP, KB, TOPIC
-        """
-        if not msg or not msg.startswith('!'):
-            return None
-
-        msg_upper = msg.upper().strip()
-        parts = msg_upper.split()
-
-        if len(parts) < 2:
-            return None
-
-        command = parts[0][1:]
-
-        # Commands that NEVER have targets (admin-only, local state)
-        if command in ['GROUP', 'KB', 'TOPIC']:
-            return None
-
-        # Callsign pattern: requires letter + digit, min 3 chars
-        callsign_pattern = r'^(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]{3,8}(-\d{1,2})?$'
-
-        # Priority 1: Explicit target:CALLSIGN parameter (scanned anywhere)
-        for part in parts[1:]:
-            if part.startswith('TARGET:'):
-                potential = part[7:]  # Remove 'TARGET:' prefix
-                if potential in ['LOCAL', '']:
-                    return None  # Explicit local execution
-                if re.match(callsign_pattern, potential):
-                    return potential
-                return None  # Invalid target format
-
-        # Priority 2: Positional fallback (right-to-left, skip key:value pairs)
-        for part in reversed(parts[1:]):
-            if ':' in part:
-                continue  # Skip key:value arguments
-            potential = part.strip()
-            if re.match(callsign_pattern, potential):
-                return potential
-
-        return None
+        """Delegate to shared pure function."""
+        return extract_target_callsign(msg)
 
     def is_group(self, dst):
-        """Check if destination is a group"""
-        if not dst:
-            return False
-
-        # Special group 'TEST'
-        if dst.upper() == 'TEST':
-            return True
-
-        # Numeric groups: 1-99999
-        if dst.isdigit():
-            try:
-                group_num = int(dst)
-                return 1 <= group_num <= 99999
-            except ValueError:
-                return False
-
-        return False
+        """Delegate to shared pure function."""
+        return is_group(dst)
 
     def is_valid_destination(self, dst):
         """Validate destination format (assumes already uppercase)"""
