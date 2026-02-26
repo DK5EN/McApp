@@ -24,8 +24,6 @@ async def run_all_tests(handler):
     self_suppress_passed = await test_self_command_suppression_logic(handler)
     remote_exec_passed = await test_remote_command_execution(handler)
     incoming_personal_passed = await test_incoming_personal_commands(handler)
-    shadow_parity_passed = test_shadow_routing_parity(handler)
-
     total_passed = all(
         [
             basic_passed,
@@ -39,7 +37,6 @@ async def run_all_tests(handler):
             self_suppress_passed,
             remote_exec_passed,
             incoming_personal_passed,
-            shadow_parity_passed,
         ]
     )
 
@@ -1704,112 +1701,3 @@ async def test_incoming_personal_commands(handler):
     return passed == total
 
 
-def test_shadow_routing_parity(handler):
-    """Test that _should_execute_command and _should_execute_command_v2 return identical results."""
-    if has_console:
-        print("\n🧪 Testing Shadow Routing Parity (v1 vs v2):")
-        print("=" * 55)
-
-    # Comprehensive test cases: (src, dst, msg, groups_enabled)
-    test_cases = [
-        # Broadcast destinations
-        (handler.my_callsign, "*", "!TIME", True),
-        (handler.my_callsign, "ALL", "!WX", True),
-        (handler.my_callsign, "", "!USERINFO", True),
-        ("OE1ABC-5", "", "!WX", True),
-        ("OE1ABC-5", "*", "!WX", True),
-        ("OE1ABC-5", "ALL", "!WX", True),
-        # Group without target
-        (handler.admin_callsign_base, "20", "!WX", True),
-        (handler.admin_callsign_base, "20", "!WX", False),
-        ("OE1ABC-5", "20", "!STATS", True),
-        ("OE1ABC-5", "20", "!STATS", False),
-        # Group with our target
-        (handler.admin_callsign_base, "20", f"!WX {handler.my_callsign}", True),
-        (handler.admin_callsign_base, "20", f"!WX {handler.my_callsign}", False),
-        ("OE1ABC-5", "20", f"!TIME {handler.my_callsign}", True),
-        ("OE1ABC-5", "20", f"!TIME {handler.my_callsign}", False),
-        # Group with foreign target
-        ("OE1ABC-5", "20", "!WX OE1ABC-5", True),
-        # TEST group
-        (handler.admin_callsign_base, "TEST", f"!WX {handler.my_callsign}", True),
-        ("OE1ABC-5", "TEST", f"!TIME {handler.my_callsign}", False),
-        # Direct to us
-        (handler.admin_callsign_base, handler.my_callsign, "!TIME", True),
-        ("OE1ABC-5", handler.my_callsign, "!DICE", True),
-        (handler.admin_callsign_base, handler.my_callsign,
-         f"!TIME {handler.my_callsign}", True),
-        ("OE1ABC-5", handler.my_callsign,
-         f"!DICE {handler.my_callsign}", True),
-        ("OE1ABC-5", handler.my_callsign,
-         f"!DICE {handler.my_callsign}", False),
-        # Direct P2P with other target
-        ("OE1ABC-5", handler.my_callsign, "!DICE OE5HWN-12", True),
-        # Direct to someone else
-        (handler.admin_callsign_base, "OE1ABC-5", "!WX", True),
-        # Own commands
-        (handler.my_callsign, "20", f"!WX {handler.my_callsign}", True),
-        (handler.my_callsign, handler.my_callsign, "!GROUP", True),
-        (handler.my_callsign, handler.my_callsign, "!GROUP ON", True),
-        (handler.my_callsign, handler.my_callsign, "!KB", True),
-        (handler.my_callsign, handler.my_callsign,
-         "!SEARCH OE5HWN-12", True),
-        (handler.my_callsign, handler.my_callsign,
-         "!SEARCH call:OE5HWN-12", True),
-        (handler.my_callsign, handler.my_callsign, "!TOPIC", True),
-        # Own with remote target
-        (handler.my_callsign, "20", "!WX OE5HWN-12", True),
-        (handler.my_callsign, "OE5HWN-12", "!TIME OE5HWN-12", True),
-        # Incoming intent variations
-        ("OE5HWN-12", handler.my_callsign, "!TIME", True),
-        ("OE5HWN-12", handler.my_callsign,
-         f"!TIME {handler.my_callsign}", True),
-        ("OE5HWN-12", "20", f"!WX {handler.my_callsign}", True),
-        ("OE5HWN-12", "20", f"!WX {handler.my_callsign}", False),
-        ("OE5HWN-12", "20", "!WX OE1ABC-5", True),
-        ("OE5HWN-12", "20", "!WX", True),
-        ("OE5HWN-12", "*", f"!WX {handler.my_callsign}", True),
-        ("OE5HWN-12", "", f"!TIME {handler.my_callsign}", True),
-        # target: parameter variations
-        ("OE5HWN-12", "20",
-         f"!MHEARD TARGET:{handler.my_callsign} TYPE:MSG", True),
-        ("OE5HWN-12", "20",
-         f"!POS TARGET:{handler.my_callsign} CALL:DB0ED", True),
-        (handler.my_callsign, "20",
-         "!MHEARD TARGET:OE5HWN-12 TYPE:MSG", True),
-        (handler.my_callsign, handler.my_callsign,
-         "!WX TARGET:LOCAL", True),
-    ]
-
-    mismatches = 0
-    for src, dst, msg, groups_enabled in test_cases:
-        old_groups_setting = handler.group_responses_enabled
-        handler.group_responses_enabled = groups_enabled
-
-        try:
-            v1_result = handler._should_execute_command(src, dst, msg)
-            v2_result = handler._should_execute_command_v2(src, dst, msg)
-
-            if v1_result != v2_result:
-                mismatches += 1
-                if has_console:
-                    print(
-                        f"❌ PARITY FAIL | {src}→{dst} '{msg[:30]}' "
-                        f"groups={'ON' if groups_enabled else 'OFF'}"
-                    )
-                    print(f"     v1={v1_result} v2={v2_result}")
-        finally:
-            handler.group_responses_enabled = old_groups_setting
-
-    total = len(test_cases)
-    passed_count = total - mismatches
-
-    if has_console:
-        print(f"🧪 Shadow Routing Parity: {passed_count}/{total} tests passed")
-        if mismatches == 0:
-            print("🎉 All parity tests passed — v1 and v2 are equivalent!")
-        else:
-            print(f"⚠️ {mismatches} parity mismatches detected!")
-        print("=" * 55)
-
-    return mismatches == 0

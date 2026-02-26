@@ -9,7 +9,7 @@ from .constants import (
     DEFAULT_THROTTLE_TIMEOUT,
     has_console,
 )
-from .shadow import compare_normalize, compare_routing, normalize_unified
+from .shadow import normalize_unified
 
 logger = get_logger(__name__)
 
@@ -68,14 +68,7 @@ class RoutingMixin:
         if has_console:
             print(f"📋 CommandHandler: Checking command '{msg_text}' from {src} to {dst}")
 
-        # NEW: Use simplified reception logic
         should_execute, target_type = self._should_execute_command(src, dst, msg_text)
-
-        # Shadow: compare with v2 routing logic
-        shadow_result = self._should_execute_command_v2(src, dst, msg_text)
-        compare_routing(
-            (should_execute, target_type), shadow_result, src, dst, msg_text
-        )
 
         if not should_execute:
             if has_console:
@@ -177,128 +170,11 @@ class RoutingMixin:
                 )
 
     def normalize_command_data(self, message_data):
-        """Normalize command data with uppercase conversion"""
-        src_raw = message_data.get("src", "UNKNOWN")
-        src = src_raw.split(",")[0].strip().upper() if "," in src_raw else src_raw.strip().upper()
-
-        dst = message_data.get("dst", "").strip().upper()
-        msg = message_data.get("msg", "").strip()
-
-        # Strip MeshCom message ID suffix ({NNN) before any routing decisions
-        msg = re.sub(r"\{\d+$", "", msg).strip()
-
-        result = {"src": src, "dst": dst, "msg": msg, "original": message_data}
-        # Shadow: compare with unified normalizer
-        shadow_result = normalize_unified(message_data, context="command")
-        compare_normalize(result, shadow_result, "command", message_data)
-        return result
+        """Normalize command data with uppercase conversion."""
+        return normalize_unified(message_data, context="command")
 
     def _should_execute_command(self, src, dst, msg):
-        """Simplified reception logic with P2P support"""
-        src = src.upper()
-        dst = dst.upper()
-        msg = msg.upper()
-
-        if has_console:
-            print(f"🔍 Command execution check: src='{src}', dst='{dst}', msg='{msg[:20]}...'")
-
-        if dst in ["*", "ALL", ""]:
-            # Nur eigene Befehle an Broadcast-Destinationen ausführen
-            if src == self.my_callsign:
-                if has_console:
-                    print(f"🔍 → Own broadcast command '{dst}' - EXECUTE")
-                return True, "group"
-            else:
-                if has_console:
-                    print(f"🔍 → Remote broadcast command '{dst}' from {src} - NO EXECUTION")
-                return False, None
-
-        target = self.extract_target_callsign(msg)
-
-        if src == self.my_callsign:
-            # Our own commands - existing logic remains the same
-            if not target:
-                if has_console:
-                    print("🔍 → Our command without target - EXECUTE (local intent)")
-                if dst == self.my_callsign:
-                    return True, "direct"
-                elif self.is_group(dst):
-                    return True, "group"
-                else:
-                    return True, "direct"
-            elif target == self.my_callsign:
-                if has_console:
-                    print("🔍 → Our command with our target - EXECUTE (local execution)")
-                if dst == self.my_callsign:
-                    return True, "direct"
-                elif self.is_group(dst):
-                    return True, "group"
-                else:
-                    return True, "direct"
-            else:
-                if has_console:
-                    print(
-                        f"🔍 → Our command with remote"
-                        f" target '{target}' - NO EXECUTION"
-                        f" (remote intent)"
-                    )
-                return False, None
-
-        # === INCOMING COMMANDS ===
-
-        # Direct P2P message to us
-        if dst == self.my_callsign:
-            if not target:
-                # Personal message without target → execute (P2P intent)
-                if has_console:
-                    print("🔍 → P2P message without target - EXECUTE (personal chat)")
-                return True, "direct"
-            elif target == self.my_callsign:
-                # Personal message with our target → execute
-                if has_console:
-                    print("🔍 → P2P message with our target - EXECUTE")
-                return True, "direct"
-            else:
-                # Personal message with other target → don't execute
-                if has_console:
-                    print(f"🔍 → P2P message with other target '{target}' - NO EXECUTION")
-                return False, None
-
-        # Group message → requires our callsign as target
-        if self.is_group(dst):
-            if target != self.my_callsign:
-                if has_console:
-                    print("🔍 → Group message without our target - NO EXECUTION")
-                return False, None
-
-            # Group message with our target → check permissions
-            execute = self.group_responses_enabled or self._is_admin(src)
-            reason = (
-                "Groups ON"
-                if self.group_responses_enabled
-                else "Admin override"
-                if self._is_admin(src)
-                else "Groups OFF"
-            )
-            if has_console:
-                print(
-                    f"🔍 → Group '{dst}' with our"
-                    f" target - "
-                    f"{'EXECUTE' if execute else 'NO EXECUTION'}"
-                    f" ({reason})"
-                )
-
-            if execute:
-                return True, "group"
-            else:
-                return False, None
-
-        if has_console:
-            print("🔍 → No match - NO EXECUTION")
-        return False, None
-
-    def _should_execute_command_v2(self, src, dst, msg):
-        """Flat routing logic with early returns (shadow candidate for v1 replacement)."""
+        """Flat routing logic with early returns."""
         src = src.upper()
         dst = dst.upper()
         msg = msg.upper()

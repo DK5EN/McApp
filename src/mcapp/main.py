@@ -14,7 +14,7 @@ from pathlib import Path
 # BLE client abstraction - supports local, remote, and disabled modes
 from .ble_client import BLEMode, ConnectionState, create_ble_client
 from .commands import create_command_handler
-from .commands.shadow import compare_normalize, normalize_unified
+from .commands.shadow import normalize_unified
 from .config_loader import (
     BLE_SERVICE_URL,
     MESHCOM_UDP_PORT,
@@ -1105,34 +1105,8 @@ class MessageValidator:
         self.my_callsign = my_callsign.upper()
 
     def normalize_message_data(self, message_data):
-        """Normalize message data - uppercase and validate early"""
-        normalized = message_data.copy()
-
-        # Defensive uppercase normalization
-        src_raw = message_data.get('src', '').strip()
-        dst_raw = message_data.get('dst', '').strip()
-        msg_raw = message_data.get('msg', '').strip()
-
-        # Handle comma-separated src (path routing)
-        src = src_raw.split(',')[0].upper() if ',' in src_raw else src_raw.upper()
-        dst = dst_raw.upper()
-
-        msg = msg_raw
-
-        normalized.update({
-            'src': src,
-            'dst': dst,
-            'msg': msg
-        })
-
-        if has_console and (src != src_raw or dst != dst_raw):
-            print(f"🔧 Normalized: src='{src_raw}'→'{src}', dst='{dst_raw}'→'{dst}'")
-
-        # Shadow: compare with unified normalizer
-        shadow_result = normalize_unified(message_data, context="message")
-        compare_normalize(normalized, shadow_result, "message", message_data)
-
-        return normalized
+        """Normalize message data - uppercase and validate early."""
+        return normalize_unified(message_data, context="message")
 
     def extract_target_callsign(self, msg):
         """Extract target callsign from command message.

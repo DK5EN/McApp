@@ -36,3 +36,4 @@ Then evaluate:
 | Date | rpizero.local | mcapp.local | Result |
 |---|---|---|---|
 | 2026-02-25 | 0 mismatches, 16h uptime, 38 lines/h | 0 mismatches, 15h uptime, 60 lines/h | Not enough data yet (<24h) |
+| 2026-02-26 | 0 mismatches, 22h uptime, 52 lines/h | 0 mismatches, 21h uptime, 103 lines/h | Not enough data yet (<24h) |
