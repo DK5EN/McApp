@@ -939,12 +939,21 @@ class MessageRouter:
         if not normalized_data.get('src') and self.my_callsign:
             normalized_data['src'] = self.my_callsign
 
+        self._logger.info(
+            "UDP_DIAG normalize: src=%s dst=%s msg=%.40s keys=%s",
+            normalized_data.get('src'), normalized_data.get('dst'),
+            normalized_data.get('msg', ''), list(normalized_data.keys()),
+        )
+
         if has_console:
             print(f"📡 UDP Handler: Processing '{normalized_data.get('msg')}'"
                   f" from {normalized_data.get('src')}"
                   f" to {normalized_data.get('dst')}")
 
-        if self._should_suppress_outbound(normalized_data):
+        suppress_result = self._should_suppress_outbound(normalized_data)
+        self._logger.info("UDP_DIAG suppress=%s", suppress_result)
+
+        if suppress_result:
             reason = self.validator.get_suppression_reason(normalized_data)
             if v2:
                 compare_outbound_decision(
@@ -960,6 +969,7 @@ class MessageRouter:
 
         # Check if this is a self-message first
         is_self_message = await self._handle_outgoing_message(normalized_data, 'udp')
+        self._logger.info("UDP_DIAG self_message=%s", is_self_message)
 
         if is_self_message:
             if v2:
@@ -980,6 +990,12 @@ class MessageRouter:
             print("📡 UDP Handler: Sending external message to mesh network")
 
         udp_handler = self.get_protocol('udp')
+
+        self._logger.info(
+            "UDP_DIAG sending: target=%s payload_keys=%s",
+            getattr(udp_handler, 'target_address', '?'),
+            list(normalized_data.keys()),
+        )
 
         if udp_handler:
             try:

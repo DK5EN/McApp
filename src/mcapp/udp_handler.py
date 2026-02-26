@@ -241,13 +241,15 @@ class UDPHandler:
             loop = asyncio.get_running_loop()
 
             json_data = json.dumps(message_data).encode("utf-8")
+            logger.info(
+                "UDP_SEND to %s (%d bytes): %.200s",
+                self.target_address, len(json_data), json_data.decode("utf-8"),
+            )
             await loop.run_in_executor(None, udp_sock.sendto, json_data, self.target_address)
-
-            #if has_console:
-            #    print(f"UDP message sent to {self.target_address}: {message_data}")
+            logger.info("UDP_SEND success")
 
         except Exception as e:
-            print(f"Error sending UDP message: {e}")
+            logger.error("UDP_SEND failed: %s", e, exc_info=True)
         finally:
             udp_sock.close()
 
