@@ -178,6 +178,7 @@ swap_current_symlink() {
 deploy_app() {
   local force="${1:-false}"
   local dev_mode="${2:-false}"
+  local pin_tag="${3:-}"
 
   # Initialize slot layout (creates dirs, migrates legacy if needed)
   init_slot_layout
@@ -199,7 +200,7 @@ deploy_app() {
   fi
 
   # Deploy into target slot
-  deploy_release "$force" "$dev_mode" "$deploy_target"
+  deploy_release "$force" "$dev_mode" "$deploy_target" "$pin_tag"
   deploy_webapp "$force" "$deploy_target"
   setup_python_env "$deploy_target"
   migrate_config
@@ -279,6 +280,7 @@ deploy_release() {
   local force="${1:-false}"
   local dev_mode="${2:-false}"
   local deploy_target="${3:-$INSTALL_DIR}"
+  local pin_tag="${4:-}"
 
   log_info "Checking McApp release deployment..."
 
@@ -287,7 +289,10 @@ deploy_release() {
 
   installed_version=$(get_installed_mcapp_version)
 
-  if [[ "$dev_mode" == "true" ]]; then
+  if [[ -n "$pin_tag" ]]; then
+    remote_version="$pin_tag"
+    log_info "  Mode: pinned tag"
+  elif [[ "$dev_mode" == "true" ]]; then
     remote_version=$(get_latest_prerelease_version)
     log_info "  Mode: development (pre-release)"
   else
@@ -298,7 +303,9 @@ deploy_release() {
   log_info "  Remote:    ${remote_version}"
 
   # Decide if update needed
-  if [[ "$force" == "true" ]]; then
+  if [[ -n "$pin_tag" ]]; then
+    log_info "  Pinned to tag: ${pin_tag}"
+  elif [[ "$force" == "true" ]]; then
     log_info "  Force mode: reinstalling release"
   elif [[ "$installed_version" == "not_installed" ]]; then
     log_info "  McApp not installed, downloading..."

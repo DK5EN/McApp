@@ -14,6 +14,7 @@
 #   --fix         Repair mode: reinstall broken components
 #   --skip        Skip system setup & packages, deploy only
 #   --dev         Install latest development pre-release
+#   --tag TAG     Install a specific release tag (e.g. v1.5.1)
 #   --quiet       Minimal output (for cron jobs)
 #   --version     Show script version and exit
 
@@ -93,6 +94,7 @@ RECONFIGURE=false
 FIX_MODE=false
 QUIET=false
 DEV_MODE=false
+PIN_TAG=""
 SKIP_TO_DEPLOY=false
 
 #──────────────────────────────────────────────────────────────────
@@ -233,6 +235,10 @@ parse_args() {
         GITHUB_RAW_BASE="https://raw.githubusercontent.com/DK5EN/McApp/development"
         shift
         ;;
+      --tag)
+        PIN_TAG="$2"
+        shift 2
+        ;;
       --quiet)
         QUIET=true
         shift
@@ -268,6 +274,7 @@ Options:
   --fix         Repair mode: reinstall broken components
   --skip        Skip system setup & packages, deploy only
   --dev         Install latest development pre-release
+  --tag TAG     Install a specific release tag (e.g. v1.5.1, v1.6.0)
   --quiet       Minimal output (for cron jobs)
   --version     Show script version and exit
   --help, -h    Show this help message
@@ -291,6 +298,9 @@ Examples:
   # Quick deploy only (skip system setup & packages)
   sudo ./mcapp.sh --skip
   sudo ./mcapp.sh --skip --dev
+
+  # Install a specific version (for bisecting regressions)
+  sudo ./mcapp.sh --skip --tag v1.5.1
 
   # Change configuration
   sudo ./mcapp.sh --reconfigure
@@ -379,7 +389,7 @@ main() {
 
   # Phase 5: Application deployment
   log_step "Deploying application..."
-  deploy_app "$FORCE" "$DEV_MODE"
+  deploy_app "$FORCE" "$DEV_MODE" "$PIN_TAG"
 
   # Phase 6: Service activation
   log_step "Activating services..."
