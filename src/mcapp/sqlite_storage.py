@@ -1029,7 +1029,7 @@ class SQLiteStorage:
                         )
                         if recent else "none"
                     )
-                    logger.warning(
+                    logger.debug(
                         "ACK for unknown original_msg=%s — no matching message in DB"
                         " (nearby: %s)",
                         ack_for_msg_id, nearby,
@@ -1701,7 +1701,7 @@ class SQLiteStorage:
                 conn.close()
 
         initial, summary = await asyncio.to_thread(_run)
-        logger.info(
+        logger.debug(
             "smart_initial: %d msgs, %d pos, %d acks",
             len(initial["messages"]), len(initial["positions"]),
             len(initial["acks"]),

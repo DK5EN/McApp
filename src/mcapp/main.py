@@ -856,7 +856,7 @@ class MessageRouter:
         try:
             infos = await loop.run_in_executor(None, socket.getaddrinfo, hostname, None)
             ip = infos[0][4][0]
-            logger.info("Resolved %s to %s", hostname, ip)
+            logger.debug("Resolved %s to %s", hostname, ip)
 
             await self.publish('ble', 'ble_status', {
                 'src_type': 'BLE',
@@ -939,7 +939,7 @@ class MessageRouter:
         if not normalized_data.get('src') and self.my_callsign:
             normalized_data['src'] = self.my_callsign
 
-        self._logger.info(
+        self._logger.debug(
             "UDP_DIAG normalize: src=%s dst=%s msg=%.40s keys=%s",
             normalized_data.get('src'), normalized_data.get('dst'),
             normalized_data.get('msg', ''), list(normalized_data.keys()),
@@ -951,7 +951,7 @@ class MessageRouter:
                   f" to {normalized_data.get('dst')}")
 
         suppress_result = self._should_suppress_outbound(normalized_data)
-        self._logger.info("UDP_DIAG suppress=%s", suppress_result)
+        self._logger.debug("UDP_DIAG suppress=%s", suppress_result)
 
         if suppress_result:
             reason = self.validator.get_suppression_reason(normalized_data)
@@ -969,7 +969,7 @@ class MessageRouter:
 
         # Check if this is a self-message first
         is_self_message = await self._handle_outgoing_message(normalized_data, 'udp')
-        self._logger.info("UDP_DIAG self_message=%s", is_self_message)
+        self._logger.debug("UDP_DIAG self_message=%s", is_self_message)
 
         if is_self_message:
             if v2:
@@ -995,7 +995,7 @@ class MessageRouter:
         # Firmware only accepts: type, dst, msg, src
         send_data = {k: v for k, v in normalized_data.items() if k != 'src_type'}
 
-        self._logger.info(
+        self._logger.debug(
             "UDP_DIAG sending: target=%s payload_keys=%s",
             getattr(udp_handler, 'target_address', '?'),
             list(send_data.keys()),

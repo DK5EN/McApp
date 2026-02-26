@@ -146,7 +146,7 @@ class SSEManager:
             async with self.clients_lock:
                 self.clients[client_id] = client
 
-            logger.info("SSE client connected: %s", client_id)
+            logger.debug("SSE client connected: %s", client_id)
 
             async def event_generator():
                 try:
@@ -173,7 +173,7 @@ class SSEManager:
                             else:
                                 initial_data = await storage.get_smart_initial()
                                 summary = await storage.get_summary()
-                            logger.info(
+                            logger.debug(
                                 "SSE client %s: sending smart_initial"
                                 " (%d msgs, %d pos, %d acks)",
                                 client_id,
@@ -286,13 +286,13 @@ class SSEManager:
                                 if cached_regs:
                                     for reg_data in cached_regs.values():
                                         yield self._format_sse_event(reg_data)
-                                    logger.info(
+                                    logger.debug(
                                         "SSE client %s: sent %d cached BLE"
                                         " registers",
                                         client_id, len(cached_regs),
                                     )
 
-                        logger.info("SSE client %s: initial data sent", client_id)
+                        logger.debug("SSE client %s: initial data sent", client_id)
                     except Exception as e:
                         logger.error(
                             "SSE client %s: failed to send initial data: %s",
@@ -323,7 +323,7 @@ class SSEManager:
                     client.disconnect()
                     async with self.clients_lock:
                         self.clients.pop(client_id, None)
-                    logger.info("SSE client disconnected: %s", client_id)
+                    logger.debug("SSE client disconnected: %s", client_id)
 
             return StreamingResponse(
                 event_generator(),
