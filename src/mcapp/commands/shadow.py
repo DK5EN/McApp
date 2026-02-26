@@ -96,5 +96,5 @@ def normalize_unified(message_data: dict, context: str = "command") -> dict:
     msg = re.sub(r"\{\d+$", "", msg).strip()
 
     result = message_data.copy()
-    result.update({"src": src, "dst": dst, "msg": msg, "original": message_data})
+    result.update({"src": src, "dst": dst, "msg": msg})
     return result

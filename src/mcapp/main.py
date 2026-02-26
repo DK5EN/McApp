@@ -925,9 +925,12 @@ class MessageRouter:
         )
 
         # Shadow: classify with v2 (pure, no side effects)
-        v2 = classify_outbound_v2(
-            message_data, "udp", self.my_callsign, self.validator
-        )
+        try:
+            v2 = classify_outbound_v2(
+                message_data, "udp", self.my_callsign, self.validator
+            )
+        except Exception:
+            v2 = None
 
         # EARLY NORMALIZATION - ab hier alles uppercase
         normalized_data = self.validator.normalize_message_data(message_data)
@@ -943,9 +946,10 @@ class MessageRouter:
 
         if self._should_suppress_outbound(normalized_data):
             reason = self.validator.get_suppression_reason(normalized_data)
-            compare_outbound_decision(
-                "suppress", reason, v2.action, v2.reason, "udp", message_data
-            )
+            if v2:
+                compare_outbound_decision(
+                    "suppress", reason, v2.action, v2.reason, "udp", message_data
+                )
             self.log_message_routing_decision(
                 normalized_data, "UDP_SUPPRESSION", "SUPPRESS", reason
             )
@@ -958,16 +962,18 @@ class MessageRouter:
         is_self_message = await self._handle_outgoing_message(normalized_data, 'udp')
 
         if is_self_message:
-            compare_outbound_decision(
-                "self_message", "", v2.action, v2.reason, "udp", message_data
-            )
+            if v2:
+                compare_outbound_decision(
+                    "self_message", "", v2.action, v2.reason, "udp", message_data
+                )
             if has_console:
                 print("📡 UDP Handler: Self-message handled, not sending to mesh")
             return
 
-        compare_outbound_decision(
-            "send", "", v2.action, v2.reason, "udp", message_data
-        )
+        if v2:
+            compare_outbound_decision(
+                "send", "", v2.action, v2.reason, "udp", message_data
+            )
 
         # External message - send to mesh network
         if has_console:
@@ -1004,9 +1010,12 @@ class MessageRouter:
         message_data = routed_message['data']
 
         # Shadow: classify with v2 (pure, no side effects)
-        v2 = classify_outbound_v2(
-            message_data, "ble", self.my_callsign, self.validator
-        )
+        try:
+            v2 = classify_outbound_v2(
+                message_data, "ble", self.my_callsign, self.validator
+            )
+        except Exception:
+            v2 = None
 
         # EARLY NORMALIZATION - ab hier alles uppercase
         normalized_data = self.validator.normalize_message_data(message_data)
@@ -1032,9 +1041,10 @@ class MessageRouter:
 
         if suppress:
             reason = self.validator.get_suppression_reason(normalized_data)
-            compare_outbound_decision(
-                "suppress", reason, v2.action, v2.reason, "ble", message_data
-            )
+            if v2:
+                compare_outbound_decision(
+                    "suppress", reason, v2.action, v2.reason, "ble", message_data
+                )
             self.log_message_routing_decision(
                 normalized_data, "BLE_SUPPRESSION", "SUPPRESS", reason
             )
@@ -1047,16 +1057,18 @@ class MessageRouter:
         is_self_message = await self._handle_outgoing_message(normalized_data, 'ble')
 
         if is_self_message:
-            compare_outbound_decision(
-                "self_message", "", v2.action, v2.reason, "ble", message_data
-            )
+            if v2:
+                compare_outbound_decision(
+                    "self_message", "", v2.action, v2.reason, "ble", message_data
+                )
             if has_console:
                 print("📱 BLE Handler: Self-message handled, not sending to device")
             return
 
-        compare_outbound_decision(
-            "send", "", v2.action, v2.reason, "ble", message_data
-        )
+        if v2:
+            compare_outbound_decision(
+                "send", "", v2.action, v2.reason, "ble", message_data
+            )
 
         # External message - send to BLE device
         if has_console:
