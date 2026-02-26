@@ -2,8 +2,28 @@
 
 import asyncio
 import re
+from pathlib import Path
 
 from .constants import has_console
+
+# Test fixture DB: copy from production via
+#   scp mcapp.local:/var/lib/mcapp/messages.db tests/fixtures/messages.db
+_TEST_DB_PATH = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "messages.db"
+
+
+async def _ensure_storage(handler):
+    """Attach a read-only test storage if handler has none and fixture DB exists."""
+    if handler.storage_handler:
+        return
+    if not _TEST_DB_PATH.exists():
+        if has_console:
+            print(f"    (no test DB at {_TEST_DB_PATH}, storage tests will show errors)")
+        return
+    from ..sqlite_storage import create_sqlite_storage
+
+    handler.storage_handler = await create_sqlite_storage(str(_TEST_DB_PATH))
+    if has_console:
+        print(f"    Loaded test DB: {_TEST_DB_PATH}")
 
 
 async def run_all_tests(handler):
@@ -12,6 +32,8 @@ async def run_all_tests(handler):
         print("\n" + "=" * 60)
         print("🧪 COMMAND HANDLER TEST SUITE")
         print("=" * 60)
+
+    await _ensure_storage(handler)
 
     basic_passed = test_reception_logic(handler)
     intent_passed = test_intent_based_reception_logic(handler)
@@ -1192,14 +1214,14 @@ async def test_self_command_execution(handler):
         ("!WX", ["🌤️", "weather", "°C", "hPa"], "Weather command should return weather data"),
         ("!TIME", ["🕐", "Uhr", "2025"], "Time command should return current time"),
         ("!DICE", ["🎲", "DK5EN-1:", "[", "]", "→"], "Dice command should return dice roll"),
-        ("!STATS", ["📊", "Stats", "storage not available"],
-         "Stats command should return statistics or storage error"),
-        ("!MHEARD TYPE:POS LIMIT:5", ["📻", "MH:", "storage not available"],
-         "MHeard command should return heard stations or storage error"),
-        ("!SEARCH CALL:DK5EN-1 DAYS:1", ["🔍", "DK5EN-1", "storage not available"],
-         "Search command should return results or storage error"),
-        ("!POS CALL:DK5EN-1", ["🔍", "DK5EN-1", "storage not available"],
-         "Position search should return data or storage error"),
+        ("!STATS", ["📊", "Stats", "Messages:", "Positions:"],
+         "Stats command should return message statistics"),
+        ("!MHEARD LIMIT:5", ["📻", "MH:"],
+         "MHeard command should return heard stations"),
+        ("!SEARCH CALL:DK5EN-1 DAYS:1", ["🔍"],
+         "Search command should return search results"),
+        ("!POS CALL:DK5EN-1", ["🔍"],
+         "Position search should return position data"),
         ("!HELP", ["📋", "Available commands"],
          "Help command should return command list"),
         ("!USERINFO", ["Node"], "User info should return node information"),
