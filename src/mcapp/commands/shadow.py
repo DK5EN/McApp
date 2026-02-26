@@ -42,6 +42,40 @@ def compare_parse_command(
         )
 
 
+def compare_outbound_decision(
+    v1_action: str,
+    v1_reason: str,
+    v2_action: str,
+    v2_reason: str,
+    protocol: str,
+    message_data: dict,
+) -> None:
+    """Compare v1 outbound handler path with v2 classification."""
+    if v1_action == v2_action:
+        if v1_action == "suppress" and v1_reason != v2_reason:
+            logger.warning(
+                "SHADOW outbound REASON MISMATCH: proto=%s src=%s dst=%s "
+                "v1_reason=%r v2_reason=%r",
+                protocol,
+                message_data.get("src", ""),
+                message_data.get("dst", ""),
+                v1_reason,
+                v2_reason,
+            )
+        return
+
+    logger.warning(
+        "SHADOW outbound ACTION MISMATCH: proto=%s src=%s dst=%s msg=%.40s "
+        "v1=%s v2=%s",
+        protocol,
+        message_data.get("src", ""),
+        message_data.get("dst", ""),
+        message_data.get("msg", ""),
+        v1_action,
+        v2_action,
+    )
+
+
 def normalize_unified(message_data: dict, context: str = "command") -> dict:
     """Unified normalization — standardizes src/dst/msg fields.
 
