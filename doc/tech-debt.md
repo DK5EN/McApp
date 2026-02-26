@@ -1,6 +1,6 @@
 # Tech Debt: Komplexe Funktionen & Refactoring-Kandidaten
 
-Stand: 2026-02-26
+Stand: 2026-02-27
 
 ## Ziel
 
@@ -21,6 +21,15 @@ alles erwartbar und einfach verständlich.
 ### `main.py: route_command()` — Kein Problem
 - Analysiert und für sauber befunden. 16 Commands, jeder Branch ein Einzeiler-Dispatch.
   `startswith`-Checks für Device-Commands passen nicht in ein Dict. Bleibt so.
+
+### `commands/data_commands.py: handle_search()` — SQL-Aggregation
+- **Was war:** 108 Zeilen — `search_messages()` holte ALLE Messages (ignorierte
+  callsign/search_type komplett), Filtering + Counting + MAX-Tracking + SID-Extraktion
+  alles in Python-Loop
+- **Was ist:** `get_search_summary()` im Storage-Layer macht 3 gezielte SQL-Queries
+  (COUNT/MAX/GROUP BY, DISTINCT destinations, SID-Gruppierung). `handle_search()`
+  ist jetzt 52 Zeilen reines Response-Formatting.
+- **Alte Methode** `search_messages()` entfernt (keine anderen Aufrufer)
 
 ---
 
@@ -184,26 +193,9 @@ aber `locals()`-Pattern ist fragil bei Refactoring
 
 ---
 
-### 8. `commands/data_commands.py: handle_search()` (L11-118, 108 Zeilen) — REFACTORING SINNVOLL
+### 8. `commands/data_commands.py: handle_search()` — ~~REFACTORING SINNVOLL~~ ERLEDIGT
 
-**Was die Funktion tut:** Messages nach Callsign durchsuchen und Zusammenfassung bauen.
-
-**Probleme:**
-- **Search-Pattern Setup** (L21-32) — 3 Branches (prefix/exact/all), OK
-- **Message-Loop** (L45-88) — hier liegt das Problem:
-  - 3 Matching-Strategien verschachtelt (L53-66)
-  - SID-Activity-Tracking nur für prefix-Search (L67-72)
-  - msg vs pos Counting (L74-85)
-  - Alles in einer Loop
-- **Response-Building** (L90-117) — 5 Conditional Blocks aneinandergereiht
-
-**Empfehlung:** Message-Loop-Body in eigene Methode extrahieren.
-Oder besser: Die Zähllogik in den Storage-Layer verschieben (SQL kann
-COUNT, GROUP BY, MAX direkt). Das würde die ganze Funktion auf ~30 Zeilen
-Response-Formatting reduzieren.
-
-**Priorität:** MITTEL — funktioniert, ist aber unnötig komplex für eine
-Aufgabe die SQL besser lösen könnte
+Zähllogik in SQL verschoben (`get_search_summary()`), siehe "Bereits erledigt".
 
 ---
 
@@ -213,7 +205,7 @@ Aufgabe die SQL besser lösen könnte
 |----------|-----------|-----------|
 | `_handle_ack_message()` (ctcping) | Refactoring nötig — Dual-Tracking, tiefe Verschachtelung | **HOCH** |
 | `_message_handler()` (routing) | Aufräumen — zu lang, Exception-Handling extrahieren | MITTEL |
-| `handle_search()` (data_commands) | Refactoring sinnvoll — Logik in SQL verschieben | MITTEL |
+| ~~`handle_search()` (data_commands)~~ | ~~Refactoring sinnvoll~~ — ERLEDIGT | ~~MITTEL~~ |
 | `decode_binary_message()` (ble_protocol) | Optional — in 2-3 Funktionen aufteilen | NIEDRIG |
 | `_udp_message_handler()` (main) | Erledigt sich mit Shadow-Removal | WARTET |
 | `_should_execute_command()` (routing) | Kein Problem — sauber mit Early Returns | KEINE |

@@ -17,75 +17,20 @@ class DataCommandsMixin:
         if not self.storage_handler:
             return "❌ Message storage not available"
 
-        # Determine search pattern
+        # Determine search type and display label
         if user != "*" and "-" not in user:
-            search_pattern = user.upper() + "-"
             search_type = "prefix"
             display_call = user.upper() + "-*"
         elif user != "*":
-            search_pattern = user.upper()
             search_type = "exact"
             display_call = user.upper()
         else:
-            search_pattern = "*"
             search_type = "all"
             display_call = "*"
 
-        msg_count = 0
-        pos_count = 0
-        last_msg_time = None
-        last_pos_time = None
-        destinations = set()
-        sids_activity = {}
-
-        raw_messages = await self.storage_handler.search_messages(
-            user, days, search_type,
-        )
-
-        for raw_data in raw_messages:
-            try:
-                timestamp = raw_data.get("timestamp", 0)
-                src = raw_data.get("src", "")
-                msg_type = raw_data.get("type", "")
-                dst = raw_data.get("dst", "")
-
-                matched_callsigns = []
-                if search_type == "all":
-                    matched_callsigns = [src.split(",")[0]]
-                elif search_type == "prefix":
-                    src_calls = [call.strip().upper() for call in src.split(",")]
-                    matched_callsigns = [
-                        call for call in src_calls if call.startswith(search_pattern)
-                    ]
-                    if not matched_callsigns:
-                        continue
-
-                elif search_type == "exact":
-                    if search_pattern not in src.upper():
-                        continue
-                    matched_callsigns = [search_pattern]
-                if search_type == "prefix":
-                    for callsign in matched_callsigns:
-                        if "-" in callsign:
-                            sid = callsign.split("-")[1]
-                            if sid not in sids_activity or timestamp > sids_activity[sid]:
-                                sids_activity[sid] = timestamp
-
-                if msg_type == "msg":
-                    msg_count += 1
-                    if last_msg_time is None or timestamp > last_msg_time:
-                        last_msg_time = timestamp
-
-                    if dst and dst.isdigit():
-                        destinations.add(dst)
-
-                elif msg_type == "pos":
-                    pos_count += 1
-                    if last_pos_time is None or timestamp > last_pos_time:
-                        last_pos_time = timestamp
-
-            except (KeyError, TypeError):
-                continue
+        summary = await self.storage_handler.get_search_summary(user, days, search_type)
+        msg_count = summary["msg_count"]
+        pos_count = summary["pos_count"]
 
         if msg_count == 0 and pos_count == 0:
             return f"🔍 No activity for {display_call} in last {days} day(s)"
@@ -93,27 +38,26 @@ class DataCommandsMixin:
         response = f"🔍 {display_call} ({days}d): "
 
         if msg_count > 0:
-            last_msg_str = time.strftime("%H:%M", time.localtime(last_msg_time / 1000))
+            last_msg_str = time.strftime("%H:%M", time.localtime(summary["last_msg"] / 1000))
             response += f"{msg_count} msg (last {last_msg_str})"
 
         if msg_count > 0 and pos_count > 0:
             response += " / "
 
         if pos_count > 0:
-            last_pos_str = time.strftime("%H:%M", time.localtime(last_pos_time / 1000))
+            last_pos_str = time.strftime("%H:%M", time.localtime(summary["last_pos"] / 1000))
             response += f"{pos_count} pos (last {last_pos_str})"
 
-        if search_type == "prefix" and sids_activity:
-            sorted_sids = sorted(sids_activity.items(), key=lambda x: x[1], reverse=True)
-            sid_info = []
-            for sid, timestamp in sorted_sids:
-                last_time = time.strftime("%H:%M", time.localtime(timestamp / 1000))
-                sid_info.append(f"-{sid} @{last_time}")
+        if search_type == "prefix" and summary["sids"]:
+            sorted_sids = sorted(summary["sids"].items(), key=lambda x: x[1], reverse=True)
+            sid_info = [
+                f"-{sid} @{time.strftime('%H:%M', time.localtime(ts / 1000))}"
+                for sid, ts in sorted_sids
+            ]
             response += f" / SIDs: {', '.join(sid_info)}"
 
-        if destinations:
-            sorted_destinations = sorted(destinations, key=int)
-            response += f" / Groups: {','.join(sorted_destinations)}"
+        if summary["destinations"]:
+            response += f" / Groups: {','.join(summary['destinations'])}"
 
         return response
 

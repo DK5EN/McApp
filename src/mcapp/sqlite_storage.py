@@ -2399,17 +2399,72 @@ class SQLiteStorage:
 
         return dict(stations)
 
-    async def search_messages(self, callsign: str, days: int, search_type: str) -> list[dict]:
-        """Search messages by callsign and timeframe."""
+    async def get_search_summary(
+        self, callsign: str, days: int, search_type: str,
+    ) -> dict[str, Any]:
+        """Aggregate search: counts, last timestamps, destinations, SIDs."""
         cutoff_ms = int((time.time() - days * 86400) * 1000)
 
-        rows = await self._execute(
-            f"SELECT {_MSG_SELECT} FROM messages"
-            " WHERE timestamp >= ? ORDER BY timestamp DESC",
-            (cutoff_ms,),
-        )
+        # Build src filter based on search type
+        if search_type == "prefix":
+            src_filter = " AND UPPER(src) LIKE ?"
+            params: tuple = (cutoff_ms, f"%{callsign.upper()}-%" )
+        elif search_type == "exact":
+            src_filter = " AND UPPER(src) LIKE ?"
+            params = (cutoff_ms, f"%{callsign.upper()}%")
+        else:
+            src_filter = ""
+            params = (cutoff_ms,)
 
-        return [self._build_message_dict(row) for row in rows]
+        # Query 1: counts and last timestamps by type
+        rows = await self._execute(
+            "SELECT type, COUNT(*) as cnt, MAX(timestamp) as last_ts"
+            f" FROM messages WHERE timestamp >= ?{src_filter}"
+            " GROUP BY type",
+            params,
+        )
+        result: dict[str, Any] = {
+            "msg_count": 0, "pos_count": 0,
+            "last_msg": None, "last_pos": None,
+            "destinations": [], "sids": {},
+        }
+        for row in rows:
+            if row["type"] == "msg":
+                result["msg_count"] = row["cnt"]
+                result["last_msg"] = row["last_ts"]
+            elif row["type"] == "pos":
+                result["pos_count"] = row["cnt"]
+                result["last_pos"] = row["last_ts"]
+
+        # Query 2: distinct numeric destinations
+        dest_rows = await self._execute(
+            "SELECT DISTINCT dst FROM messages"
+            f" WHERE timestamp >= ? AND type = 'msg'{src_filter}"
+            " AND dst GLOB '[0-9]*'",
+            params,
+        )
+        result["destinations"] = sorted([r["dst"] for r in dest_rows], key=int)
+
+        # Query 3: SID activity (prefix search only)
+        if search_type == "prefix":
+            sid_rows = await self._execute(
+                "SELECT src, MAX(timestamp) as last_ts FROM messages"
+                f" WHERE timestamp >= ?{src_filter}"
+                " GROUP BY src",
+                params,
+            )
+            sids: dict[str, int] = {}
+            pattern = callsign.upper() + "-"
+            for row in sid_rows:
+                for part in row["src"].split(","):
+                    part = part.strip().upper()
+                    if part.startswith(pattern) and "-" in part:
+                        sid = part.split("-")[1]
+                        if sid not in sids or row["last_ts"] > sids[sid]:
+                            sids[sid] = row["last_ts"]
+            result["sids"] = sids
+
+        return result
 
     async def get_positions(self, callsign: str, days: int) -> list[dict]:
         """Get position data for a callsign."""
