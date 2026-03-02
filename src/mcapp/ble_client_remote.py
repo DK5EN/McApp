@@ -60,6 +60,8 @@ class BLEClientRemote(BLEClientBase):
 
     async def _ensure_session(self):
         """Ensure HTTP session exists"""
+        if not self._running:
+            return
         if self._session is None or self._session.closed:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             self._session = aiohttp.ClientSession(timeout=timeout)
@@ -82,6 +84,8 @@ class BLEClientRemote(BLEClientBase):
         quiet: bool = False,
     ) -> dict:
         """Make HTTP request to remote service, with retry on 409 (busy) and connection errors"""
+        if not self._running:
+            raise aiohttp.ClientError("BLE client stopped")
         await self._ensure_session()
 
         url = urljoin(self.remote_url, endpoint)
@@ -740,6 +744,6 @@ class BLEClientRemote(BLEClientBase):
             return self._status
 
         except Exception as e:
-            logger.error("Status refresh error: %s", e)
+            logger.warning("Status refresh error: %s", e)
             self._status.error = str(e)
             return self._status
