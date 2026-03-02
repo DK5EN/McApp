@@ -14,8 +14,7 @@ from pathlib import Path
 # BLE client abstraction - supports local, remote, and disabled modes
 from .ble_client import BLEMode, ConnectionState, create_ble_client
 from .commands import create_command_handler
-from .commands.parsing import extract_target_callsign, is_group
-from .commands.shadow import normalize_unified
+from .commands.parsing import extract_target_callsign, is_group, normalize_unified
 from .config_loader import (
     BLE_SERVICE_URL,
     MESHCOM_UDP_PORT,
@@ -971,7 +970,8 @@ class MessageRouter:
 
         # Strip internal routing fields before sending to firmware
         # Firmware only accepts: type, dst, msg, src
-        send_data = {k: v for k, v in normalized_data.items() if k != 'src_type'}
+        normalized_data.pop('src_type', None)
+        send_data = normalized_data
 
         self._logger.debug(
             "UDP_DIAG sending: target=%s payload_keys=%s",

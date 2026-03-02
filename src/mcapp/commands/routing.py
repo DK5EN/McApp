@@ -5,8 +5,7 @@ from .constants import (
     COMMAND_THROTTLING,
     DEFAULT_THROTTLE_TIMEOUT,
 )
-from .parsing import extract_target_callsign, is_group, parse_command_v2
-from .shadow import normalize_unified
+from .parsing import extract_target_callsign, is_group, normalize_unified, parse_command_v2
 
 logger = get_logger(__name__)
 
