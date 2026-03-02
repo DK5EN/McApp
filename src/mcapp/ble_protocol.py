@@ -233,19 +233,39 @@ def parse_aprs_position(message: str) -> dict[str, Any] | None:
 
     # Weather fields from weather stations (e.g. DK5EN-12)
     # /P=940.3 (QFE), /H=42.1 (humidity), /T=22.6 (temp), /Q=956.9 (QNH)
+    # /T2=... (temp2), /H2=... (hum2) for dual-sensor stations
     weather_fields = {
         "temp1": r"/T=(-?[\d.]+)",
+        "temp2": r"/T2=(-?[\d.]+)",
         "hum": r"/H=([\d.]+)",
+        "hum2": r"/H2=([\d.]+)",
         "qfe": r"/P=([\d.]+)",
         "qnh": r"/Q=([\d.]+)",
     }
+    matched_spans: list[tuple[int, int]] = []
     for field, pattern in weather_fields.items():
         m = re.search(pattern, message)
         if m:
             try:
                 result[field] = float(m.group(1))
+                matched_spans.append(m.span())
             except ValueError:
                 pass
+
+    # Capture any remaining /KEY=VALUE extensions into extras
+    extras: dict[str, float] = {}
+    for m in re.finditer(r"/([A-Za-z]\w*)=(-?[\d.]+)", message):
+        if any(m.start() >= s and m.start() < e for s, e in matched_spans):
+            continue  # already matched above
+        key = m.group(1)
+        if key in ("A", "B", "R"):
+            continue  # already handled: altitude, battery, groups
+        try:
+            extras[key] = float(m.group(2))
+        except ValueError:
+            pass
+    if extras:
+        result["extras"] = extras
 
     return result
 

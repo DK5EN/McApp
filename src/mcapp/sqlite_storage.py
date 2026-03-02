@@ -23,7 +23,7 @@ VERSION = "v0.50.0"
 logger = get_logger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 # Constants matching message_storage.py
 BUCKET_SECONDS = 5 * 60
@@ -363,6 +363,24 @@ class SQLiteStorage:
                     )
                     _set_schema_version(conn, 14)
 
+                if current_version < 15:
+                    for tbl in ("telemetry", "station_positions"):
+                        for col, typedef in [
+                            ("hum2", "REAL"),
+                            ("extras", "TEXT"),
+                        ]:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {tbl} ADD COLUMN {col} {typedef}"
+                                )
+                            except Exception:
+                                pass  # Column may already exist
+                    logger.info(
+                        "Migration v%d → v15: added hum2, extras columns",
+                        current_version,
+                    )
+                    _set_schema_version(conn, 15)
+
         await asyncio.to_thread(_init_db)
 
         # Open persistent read-only connection for query methods
@@ -581,11 +599,13 @@ class SQLiteStorage:
             ("temp1", "REAL"),
             ("temp2", "REAL"),
             ("hum", "REAL"),
+            ("hum2", "REAL"),
             ("qfe", "REAL"),
             ("qnh", "REAL"),
             ("gas", "INTEGER"),
             ("co2", "INTEGER"),
             ("telemetry_ts", "INTEGER"),
+            ("extras", "TEXT"),
         ]:
             try:
                 conn.execute(
@@ -600,8 +620,9 @@ class SQLiteStorage:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 callsign TEXT NOT NULL,
                 timestamp INTEGER NOT NULL,
-                temp1 REAL, temp2 REAL, hum REAL,
-                qfe REAL, qnh REAL, gas INTEGER, co2 INTEGER
+                temp1 REAL, temp2 REAL, hum REAL, hum2 REAL,
+                qfe REAL, qnh REAL, gas INTEGER, co2 INTEGER,
+                alt REAL, batt INTEGER, extras TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_telemetry_cs_ts
                 ON telemetry(callsign, timestamp DESC);
@@ -989,6 +1010,16 @@ class SQLiteStorage:
         relay_via = ",".join(p.strip() for p in parts[1:]) if len(parts) > 1 else ""
         msg_via = via_field or relay_via
 
+        # Forensic logging: capture raw data for messages with >4 hops
+        hop_count = len(msg_via.split(",")) if msg_via else 0
+        if hop_count > 4:
+            logger.warning(
+                "HIGH_HOP_FORENSIC hops=%d src=%s dst=%s type=%s via=%s "
+                "max_hop=%s mesh_info=%s src_type=%s raw=%s",
+                hop_count, callsign, dst, msg_type, msg_via,
+                max_hop, mesh_info, src_type, raw,
+            )
+
         # --- Early exit: Telemetry → dedicated table ---
         if msg_type == "tele":
             logger.debug("Telemetry raw message: %s", message)
@@ -1206,6 +1237,18 @@ class SQLiteStorage:
             data["send_success"] = 1
         return data
 
+    # Keys in telemetry dicts that are NOT sensor readings (used for extras extraction)
+    _TELEMETRY_META_KEYS = frozenset({
+        "timestamp", "src", "src_type", "type", "msg", "dst", "via",
+        "transformer", "transformer2", "tele_seq", "lat", "lon", "lat_dir",
+        "lon_dir", "aprs_symbol", "aprs_symbol_group", "hw_id", "firmware",
+        "fw_sub", "gw", "lora_mod", "mesh", "rssi", "snr",
+    })
+    _TELEMETRY_KNOWN_KEYS = frozenset({
+        "temp1", "temp2", "hum", "hum2", "qfe", "qnh", "gas", "co2",
+        "alt", "batt",
+    })
+
     async def store_telemetry(self, callsign: str, data: dict[str, Any]) -> None:
         """Store telemetry in dedicated table and update station_positions."""
         if not callsign:
@@ -1215,11 +1258,23 @@ class SQLiteStorage:
         temp1 = data.get("temp1")
         temp2 = data.get("temp2")
         hum = data.get("hum")
+        hum2 = data.get("hum2")
         qfe = data.get("qfe")
         gas = data.get("gas")
         co2 = data.get("co2")
         alt = data.get("alt")
         batt = data.get("batt")
+
+        # Collect unknown sensor keys into extras JSON
+        extras_dict: dict[str, Any] = {}
+        # Merge pre-parsed extras from APRS parser (dict of key→float)
+        if isinstance(data.get("extras"), dict):
+            extras_dict.update(data["extras"])
+        all_known = self._TELEMETRY_META_KEYS | self._TELEMETRY_KNOWN_KEYS | {"extras"}
+        for k, v in data.items():
+            if k not in all_known and v is not None and v != 0:
+                extras_dict[k] = v
+        extras_json = json.dumps(extras_dict) if extras_dict else None
 
         # QFE < 850 hPa is unrealistic (firmware mapping error in UDP LoRa telemetry)
         if qfe is not None and qfe < 850:
@@ -1236,21 +1291,53 @@ class SQLiteStorage:
 
         # Skip all-zero readings (node without sensors)
         # Check ONLY sensor values — altitude comes from position beacons, not sensors
-        sensor_values = (temp1, temp2, hum, qfe, gas, co2)
+        sensor_values = (temp1, temp2, hum, hum2, qfe, gas, co2)
         if all(v is None or v == 0 for v in sensor_values):
             return
 
-        # Dedup: if telemetry for same callsign exists within 60s, keep better record
+        # Dedup: if telemetry for same callsign exists within 60s, merge & keep best
         recent = await self._execute(
-            "SELECT qfe FROM telemetry WHERE callsign = ? AND timestamp > ?",
+            "SELECT id, temp2, hum2, qfe, extras"
+            " FROM telemetry WHERE callsign = ? AND timestamp > ?",
             (callsign, timestamp - 60_000),
         )
         if recent:
-            existing_qfe = recent[0].get("qfe", 0) or 0
-            if existing_qfe != 0 and (qfe is None or qfe == 0):
-                return  # existing record has real data, skip this zero-value one
-            if existing_qfe == 0 and qfe and qfe != 0:
-                # New record is better — remove the zero-value one
+            existing = recent[0]
+            existing_qfe = existing.get("qfe", 0) or 0
+            new_has_qfe = qfe is not None and qfe != 0
+
+            if existing_qfe != 0 and not new_has_qfe:
+                # Existing record has real QFE; merge new non-null sensor values into it
+                merge_sets = []
+                merge_vals = []
+                for col, val in [("temp2", temp2), ("hum2", hum2)]:
+                    if val is not None and val != 0 and not (existing.get(col) or 0):
+                        merge_sets.append(f"{col} = ?")
+                        merge_vals.append(val)
+                if extras_json and not existing.get("extras"):
+                    merge_sets.append("extras = ?")
+                    merge_vals.append(extras_json)
+                if merge_sets:
+                    merge_vals.append(existing["id"])
+                    await self._execute(
+                        f"UPDATE telemetry SET {', '.join(merge_sets)}"
+                        " WHERE id = ?",
+                        tuple(merge_vals), fetch=False,
+                    )
+                return  # keep existing record with real QFE
+
+            if existing_qfe == 0 and new_has_qfe:
+                # New record is better — merge non-null values from old, then replace
+                if not (temp2 and temp2 != 0):
+                    old_t2 = existing.get("temp2")
+                    if old_t2 and old_t2 != 0:
+                        temp2 = old_t2
+                if not (hum2 and hum2 != 0):
+                    old_h2 = existing.get("hum2")
+                    if old_h2 and old_h2 != 0:
+                        hum2 = old_h2
+                if not extras_json and existing.get("extras"):
+                    extras_json = existing["extras"]
                 await self._execute(
                     "DELETE FROM telemetry WHERE callsign = ? AND timestamp > ?",
                     (callsign, timestamp - 60_000), fetch=False,
@@ -1266,15 +1353,17 @@ class SQLiteStorage:
                 alt = rows[0].get("alt")
 
         logger.debug(
-            "Telemetry from %s: temp1=%s hum=%s qfe=%s alt=%s batt=%s",
-            callsign, temp1, hum, qfe, alt, batt,
+            "Telemetry from %s: temp1=%s temp2=%s hum=%s qfe=%s alt=%s batt=%s",
+            callsign, temp1, temp2, hum, qfe, alt, batt,
         )
 
         await self._execute(
             "INSERT INTO telemetry"
-            " (callsign, timestamp, temp1, temp2, hum, qfe, qnh, gas, co2, alt, batt)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (callsign, timestamp, temp1, temp2, hum, qfe, qnh, gas, co2, alt, batt),
+            " (callsign, timestamp, temp1, temp2, hum, hum2,"
+            "  qfe, qnh, gas, co2, alt, batt, extras)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (callsign, timestamp, temp1, temp2, hum, hum2,
+             qfe, qnh, gas, co2, alt, batt, extras_json),
             fetch=False,
         )
 
@@ -1282,23 +1371,25 @@ class SQLiteStorage:
         # Use NULLIF(x, 0) so zero values don't overwrite real data from other paths
         await self._execute(
             """INSERT INTO station_positions
-                   (callsign, temp1, temp2, hum, qfe, qnh, gas, co2, batt,
-                    telemetry_ts, last_seen)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   (callsign, temp1, temp2, hum, hum2, qfe, qnh, gas, co2, batt,
+                    telemetry_ts, last_seen, extras)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(callsign) DO UPDATE SET
                    temp1 = COALESCE(NULLIF(excluded.temp1, 0), station_positions.temp1),
                    temp2 = COALESCE(NULLIF(excluded.temp2, 0), station_positions.temp2),
                    hum = COALESCE(NULLIF(excluded.hum, 0), station_positions.hum),
+                   hum2 = COALESCE(NULLIF(excluded.hum2, 0), station_positions.hum2),
                    qfe = COALESCE(NULLIF(excluded.qfe, 0), station_positions.qfe),
                    qnh = COALESCE(NULLIF(excluded.qnh, 0), station_positions.qnh),
                    gas = COALESCE(NULLIF(excluded.gas, 0), station_positions.gas),
                    co2 = COALESCE(NULLIF(excluded.co2, 0), station_positions.co2),
                    batt = COALESCE(NULLIF(excluded.batt, 0), station_positions.batt),
                    telemetry_ts = excluded.telemetry_ts,
-                   last_seen = MAX(station_positions.last_seen, excluded.last_seen)
+                   last_seen = MAX(station_positions.last_seen, excluded.last_seen),
+                   extras = COALESCE(excluded.extras, station_positions.extras)
             """,
-            (callsign, temp1, temp2, hum, qfe, qnh, gas, co2, batt,
-             timestamp, timestamp),
+            (callsign, temp1, temp2, hum, hum2, qfe, qnh, gas, co2, batt,
+             timestamp, timestamp, extras_json),
             fetch=False,
         )
 
@@ -1623,7 +1714,7 @@ class SQLiteStorage:
         if row["via_paths"] and row["via_paths"] != "[]":
             pos_data["via_paths"] = row["via_paths"]
         # Telemetry fields
-        for tf in ("temp1", "temp2", "hum", "qfe", "qnh", "gas", "co2"):
+        for tf in ("temp1", "temp2", "hum", "hum2", "qfe", "qnh", "gas", "co2"):
             if row.get(tf) is not None:
                 pos_data[tf] = row[tf]
         return pos_data
@@ -2569,7 +2660,8 @@ class SQLiteStorage:
         """Return telemetry data for chart display, limited to recent data."""
         cutoff = int((time.time() - hours * 3600) * 1000)
         return await self._execute(
-            "SELECT callsign, timestamp, temp1, temp2, hum, qfe, qnh, alt"
+            "SELECT callsign, timestamp, temp1, temp2, hum, hum2,"
+            " qfe, qnh, gas, co2, alt, batt, extras"
             " FROM telemetry WHERE timestamp > ? ORDER BY callsign, timestamp",
             (cutoff,),
         )
@@ -2586,7 +2678,9 @@ class SQLiteStorage:
                 callsign,
                 (timestamp / {bucket_ms}) * {bucket_ms} AS bucket_ts,
                 MIN(temp1) AS temp1_min, MAX(temp1) AS temp1_max,
+                MIN(temp2) AS temp2_min, MAX(temp2) AS temp2_max,
                 MIN(hum) AS hum_min, MAX(hum) AS hum_max,
+                MIN(hum2) AS hum2_min, MAX(hum2) AS hum2_max,
                 MIN(qfe) AS qfe_min, MAX(qfe) AS qfe_max,
                 MIN(alt) AS alt_min, MAX(alt) AS alt_max,
                 COUNT(*) AS count
