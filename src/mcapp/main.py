@@ -897,20 +897,23 @@ class MessageRouter:
             logger.warning("BLE client not available for set command")
 
     def _should_suppress_outbound(self, message_data):
-        """Check if outbound message should be suppressed using validator"""
+        """Check if outbound message should be suppressed using validator.
+
+        Returns (suppress: bool, reason: str).
+        """
         if not self.validator:
             if has_console:
                 print("⚠️ Validator not initialized, no suppression")
-            return False
+            return False, ""
 
         suppress = self.validator.should_suppress_outbound(message_data)
+        reason = self.validator.get_suppression_reason(message_data)
 
         if has_console:
-            reason = self.validator.get_suppression_reason(message_data)
             action = "SUPPRESS" if suppress else "FORWARD"
             print(f"🔄 Suppression decision: {action} - {reason}")
 
-        return suppress
+        return suppress, reason
 
     async def _udp_message_handler(self, routed_message):
         """Handle UDP messages from WebSocket and route to UDP handler"""
@@ -940,11 +943,10 @@ class MessageRouter:
                   f" from {normalized_data.get('src')}"
                   f" to {normalized_data.get('dst')}")
 
-        suppress_result = self._should_suppress_outbound(normalized_data)
+        suppress_result, reason = self._should_suppress_outbound(normalized_data)
         self._logger.debug("UDP_DIAG suppress=%s", suppress_result)
 
         if suppress_result:
-            reason = self.validator.get_suppression_reason(normalized_data)
             self.log_message_routing_decision(
                 normalized_data, "UDP_SUPPRESSION", "SUPPRESS", reason
             )
@@ -1026,11 +1028,10 @@ class MessageRouter:
             print(f"📱 BLE Handler: Processing '{msg}'"
                   f" from {normalized_data.get('src')} to '{dst}'")
 
-        suppress = self._should_suppress_outbound(normalized_data)
+        suppress, reason = self._should_suppress_outbound(normalized_data)
         self._logger.debug("BLE Handler: suppress=%s", suppress)
 
         if suppress:
-            reason = self.validator.get_suppression_reason(normalized_data)
             self.log_message_routing_decision(
                 normalized_data, "BLE_SUPPRESSION", "SUPPRESS", reason
             )
