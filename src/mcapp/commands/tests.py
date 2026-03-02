@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 from .constants import has_console
+from .parsing import parse_command
 
 # Test fixture DB: copy from production via
 #   scp mcapp.local:/var/lib/mcapp/messages.db tests/fixtures/messages.db
@@ -1246,7 +1247,7 @@ async def test_self_command_execution(handler):
                     print(f"❌ Command {command} should execute but doesn't")
                 continue
 
-            cmd_result = handler.parse_command(command)
+            cmd_result = parse_command(command)
             if not cmd_result:
                 status = "❌ FAIL"
                 results.append((status, description, False))

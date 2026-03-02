@@ -73,7 +73,7 @@ def is_group(dst: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# parse_command_v2: dispatch-based command parser
+# Dispatch-based command parser
 # ---------------------------------------------------------------------------
 
 def _collect_kv(parts: list[str]) -> dict:
@@ -259,8 +259,8 @@ def normalize_unified(message_data: dict, context: str = "command") -> dict:
     return result
 
 
-def parse_command_v2(msg_text: str) -> tuple[str, dict] | None:
-    """Dispatch-based command parser (v2)."""
+def parse_command(msg_text: str) -> tuple[str, dict] | None:
+    """Dispatch-based command parser."""
     from .handler import COMMANDS
 
     if not msg_text.startswith("!"):

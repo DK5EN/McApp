@@ -5,7 +5,7 @@ from .constants import (
     COMMAND_THROTTLING,
     DEFAULT_THROTTLE_TIMEOUT,
 )
-from .parsing import extract_target_callsign, is_group, normalize_unified, parse_command_v2
+from .parsing import extract_target_callsign, is_group, normalize_unified, parse_command
 
 logger = get_logger(__name__)
 
@@ -104,7 +104,7 @@ class RoutingMixin:
     ):
         """Parse a !command, check per-command throttle, execute, and send response."""
         try:
-            cmd_result = self.parse_command(msg_text)
+            cmd_result = parse_command(msg_text)
 
             if not cmd_result:
                 self._mark_msg_id_processed(msg_id)
@@ -205,10 +205,6 @@ class RoutingMixin:
             return False
         base_call = callsign.split("-")[0] if "-" in callsign else callsign
         return base_call.upper() == self.admin_callsign_base.upper()
-
-    def parse_command(self, msg_text):
-        """Parse a !command message into (cmd, kwargs) or None."""
-        return parse_command_v2(msg_text)
 
     async def execute_command(self, cmd, kwargs, requester):
         """Execute a command and return response"""
