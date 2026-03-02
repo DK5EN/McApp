@@ -1,14 +1,12 @@
 """RoutingMixin: message handling, command parsing, execution routing."""
 
-import re
-
 from ..logging_setup import get_logger
 from .constants import (
     COMMAND_THROTTLING,
     DEFAULT_THROTTLE_TIMEOUT,
 )
 from .parsing import extract_target_callsign, is_group, parse_command_v2
-from .shadow import compare_parse_command, normalize_unified
+from .shadow import normalize_unified
 
 logger = get_logger(__name__)
 
@@ -210,143 +208,8 @@ class RoutingMixin:
         return base_call.upper() == self.admin_callsign_base.upper()
 
     def parse_command(self, msg_text):
-        """Parse command — shadow mode: runs v1 + v2, compares, returns v1."""
-        v1_result = self._parse_command_v1(msg_text)
-        v2_result = parse_command_v2(msg_text)
-        compare_parse_command(v1_result, v2_result, msg_text)
-        return v1_result
-
-    def _parse_command_v1(self, msg_text):
-        """Original parse_command (v1) — kept for shadow comparison."""
-        from .handler import COMMANDS
-
-        if not msg_text.startswith("!"):
-            return None
-
-        parts = msg_text[1:].split()
-        if not parts:
-            return None
-
-        cmd = parts[0].lower()
-
-        if cmd not in COMMANDS:
-            return None
-
-        # Parse key:value pairs
-        kwargs = {}
-
-        # Special handling for wx/weather: TEXT: captures everything after it
-        if cmd in ["wx", "weather"]:
-            remaining = msg_text[len(parts[0]):].strip()
-            if remaining:
-                text_match = re.search(r'TEXT:(.*)', remaining, re.IGNORECASE)
-                if text_match:
-                    kwargs["text"] = text_match.group(1).strip()
-            return cmd, kwargs
-
-        for part in parts[1:]:
-            if ":" in part:
-                key, value = part.split(":", 1)
-                kwargs[key.lower()] = value
-            else:
-                # Handle positional arguments for simple commands
-                if cmd in ["s", "search"] and not kwargs:
-                    kwargs["call"] = part
-
-                elif cmd == "pos" and not kwargs:
-                    kwargs["call"] = part
-
-                elif cmd == "stats" and not kwargs:
-                    try:
-                        kwargs["hours"] = int(part)
-                    except ValueError:
-                        pass
-
-                elif cmd in ["mh", "mheard"] and not kwargs:
-                    try:
-                        kwargs["limit"] = int(part)
-                    except ValueError:
-                        if part.lower() in ["msg", "pos", "all"]:
-                            kwargs["type"] = part.lower()
-                        else:
-                            pass
-
-                elif cmd == "group" and not kwargs:
-                    kwargs["state"] = part
-
-                elif cmd == "ctcping" and not kwargs:
-                    for part in parts[1:]:
-                        if ":" in part:
-                            key, value = part.split(":", 1)
-                            key = key.lower()
-                            if key == "call":
-                                kwargs["call"] = value.upper()
-                            elif key == "payload":
-                                kwargs["payload"] = value
-                            elif key == "repeat":
-                                kwargs["repeat"] = value
-
-                elif cmd == "topic" and not kwargs:
-                    if len(parts) >= 2:
-                        if parts[1].upper() == "DELETE" and len(parts) >= 3:
-                            kwargs["action"] = "delete"
-                            kwargs["group"] = parts[2].upper()
-                        else:
-                            kwargs["group"] = parts[1].upper()
-
-                            if len(parts) >= 3:
-                                text_parts = []
-                                interval_part = None
-
-                                for i, part in enumerate(parts[2:], 2):
-                                    if ":" in part and part.startswith("interval:"):
-                                        interval_part = part
-                                        break
-                                    else:
-                                        text_parts.append(parts[i])
-
-                                if text_parts:
-                                    kwargs["text"] = " ".join(text_parts)
-
-                                if interval_part:
-                                    try:
-                                        interval_value = int(
-                                            interval_part.split(":", 1)[1]
-                                        )
-                                        kwargs["interval"] = interval_value
-                                    except (ValueError, IndexError):
-                                        pass
-                                elif len(parts) >= 4 and parts[-1].isdigit():
-                                    try:
-                                        kwargs["interval"] = int(parts[-1])
-                                        if (
-                                            text_parts
-                                            and text_parts[-1] == parts[-1]
-                                        ):
-                                            text_parts = text_parts[:-1]
-                                            kwargs["text"] = (
-                                                " ".join(text_parts)
-                                                if text_parts
-                                                else kwargs.get("text", "")
-                                            )
-                                    except ValueError:
-                                        pass
-
-                elif cmd == "kb" and not kwargs:
-                    if len(parts) >= 2:
-                        first_arg = parts[1].upper()
-
-                        if first_arg in ["LIST", "DELALL"]:
-                            kwargs["callsign"] = first_arg.lower()
-                        else:
-                            kwargs["callsign"] = first_arg
-
-                            if len(parts) >= 3:
-                                second_arg = parts[2].upper()
-                                if second_arg == "DEL":
-                                    kwargs["action"] = "del"
-
-        return cmd, kwargs
+        """Parse a !command message into (cmd, kwargs) or None."""
+        return parse_command_v2(msg_text)
 
     async def execute_command(self, cmd, kwargs, requester):
         """Execute a command and return response"""
