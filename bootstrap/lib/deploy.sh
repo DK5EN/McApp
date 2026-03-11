@@ -330,8 +330,15 @@ deploy_release() {
   elif [[ "$dev_mode" == "false" ]] && [[ "$installed_version" == *-dev* ]]; then
     log_info "  Switching from dev to production: ${installed_version} → ${remote_version}"
   elif [[ "$target_has_code" == "true" ]] && version_gte "$installed_version" "${remote_version#v}"; then
-    log_info "  McApp is up to date"
-    return 0
+    # Catch stale dev content in target slot when deploying production
+    local slot_webapp="${deploy_target}/webapp/version.html"
+    if [[ "$dev_mode" == "false" ]] && [[ -f "$slot_webapp" ]] \
+        && grep -q -- '-dev\.' "$slot_webapp"; then
+      log_info "  Target slot has dev content, repopulating with production release"
+    else
+      log_info "  McApp is up to date"
+      return 0
+    fi
   elif [[ "$target_has_code" == "false" ]] && version_gte "$installed_version" "${remote_version#v}"; then
     log_info "  McApp is up to date but target slot is empty, populating..."
   else
