@@ -202,6 +202,17 @@ deploy_app() {
   # Deploy into target slot
   deploy_release "$force" "$dev_mode" "$deploy_target" "$pin_tag"
   deploy_webapp "$force" "$deploy_target" "$pin_tag"
+
+  # Guard: if target slot is still empty after deploy steps (e.g. version
+  # unchanged and slot was never populated), stay on the current slot.
+  # Without this, setup_python_env would fail on the empty directory.
+  if [[ ! -f "${deploy_target}/pyproject.toml" ]]; then
+    log_info "  Nothing to deploy — staying on current slot"
+    export MCAPP_OLD_VERSION="$old_version"
+    export MCAPP_NEW_VERSION="$old_version"
+    return 0
+  fi
+
   setup_python_env "$deploy_target"
   migrate_config
   deploy_shell_aliases
@@ -302,6 +313,10 @@ deploy_release() {
   log_info "  Installed: ${installed_version}"
   log_info "  Remote:    ${remote_version}"
 
+  # Check if target slot already has code (empty slots must always be populated)
+  local target_has_code=false
+  [[ -f "${deploy_target}/pyproject.toml" ]] && target_has_code=true
+
   # Decide if update needed
   if [[ -n "$pin_tag" ]]; then
     log_info "  Pinned to tag: ${pin_tag}"
@@ -309,14 +324,16 @@ deploy_release() {
     log_info "  Force mode: reinstalling release"
   elif [[ "$installed_version" == "not_installed" ]]; then
     log_info "  McApp not installed, downloading..."
-  elif [[ "$remote_version" == "unknown" ]]; then
+  elif [[ "$remote_version" == "unknown" ]] && [[ "$target_has_code" == "true" ]]; then
     log_warn "  Cannot check remote version, skipping update"
     return 0
   elif [[ "$dev_mode" == "false" ]] && [[ "$installed_version" == *-dev* ]]; then
     log_info "  Switching from dev to production: ${installed_version} → ${remote_version}"
-  elif version_gte "$installed_version" "${remote_version#v}"; then
+  elif [[ "$target_has_code" == "true" ]] && version_gte "$installed_version" "${remote_version#v}"; then
     log_info "  McApp is up to date"
     return 0
+  elif [[ "$target_has_code" == "false" ]] && version_gte "$installed_version" "${remote_version#v}"; then
+    log_info "  McApp is up to date but target slot is empty, populating..."
   else
     log_info "  Updating McApp: ${installed_version} → ${remote_version}"
   fi
