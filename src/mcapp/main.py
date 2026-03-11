@@ -14,6 +14,7 @@ from pathlib import Path
 # BLE client abstraction - supports local, remote, and disabled modes
 from .ble_client import BLEMode, ConnectionState, create_ble_client
 from .commands import create_command_handler
+from .commands.parsing import extract_target_callsign, is_group, normalize_unified
 from .config_loader import (
     BLE_SERVICE_URL,
     MESHCOM_UDP_PORT,
@@ -853,7 +854,7 @@ class MessageRouter:
         try:
             infos = await loop.run_in_executor(None, socket.getaddrinfo, hostname, None)
             ip = infos[0][4][0]
-            logger.info("Resolved %s to %s", hostname, ip)
+            logger.debug("Resolved %s to %s", hostname, ip)
 
             await self.publish('ble', 'ble_status', {
                 'src_type': 'BLE',
@@ -896,20 +897,23 @@ class MessageRouter:
             logger.warning("BLE client not available for set command")
 
     def _should_suppress_outbound(self, message_data):
-        """Check if outbound message should be suppressed using validator"""
+        """Check if outbound message should be suppressed using validator.
+
+        Returns (suppress: bool, reason: str).
+        """
         if not self.validator:
             if has_console:
                 print("⚠️ Validator not initialized, no suppression")
-            return False
+            return False, ""
 
         suppress = self.validator.should_suppress_outbound(message_data)
+        reason = self.validator.get_suppression_reason(message_data)
 
         if has_console:
-            reason = self.validator.get_suppression_reason(message_data)
             action = "SUPPRESS" if suppress else "FORWARD"
             print(f"🔄 Suppression decision: {action} - {reason}")
 
-        return suppress
+        return suppress, reason
 
     async def _udp_message_handler(self, routed_message):
         """Handle UDP messages from WebSocket and route to UDP handler"""
@@ -928,13 +932,21 @@ class MessageRouter:
         if not normalized_data.get('src') and self.my_callsign:
             normalized_data['src'] = self.my_callsign
 
+        self._logger.debug(
+            "UDP_DIAG normalize: src=%s dst=%s msg=%.40s keys=%s",
+            normalized_data.get('src'), normalized_data.get('dst'),
+            normalized_data.get('msg', ''), list(normalized_data.keys()),
+        )
+
         if has_console:
             print(f"📡 UDP Handler: Processing '{normalized_data.get('msg')}'"
                   f" from {normalized_data.get('src')}"
                   f" to {normalized_data.get('dst')}")
 
-        if self._should_suppress_outbound(normalized_data):
-            reason = self.validator.get_suppression_reason(normalized_data)
+        suppress_result, reason = self._should_suppress_outbound(normalized_data)
+        self._logger.debug("UDP_DIAG suppress=%s", suppress_result)
+
+        if suppress_result:
             self.log_message_routing_decision(
                 normalized_data, "UDP_SUPPRESSION", "SUPPRESS", reason
             )
@@ -945,6 +957,7 @@ class MessageRouter:
 
         # Check if this is a self-message first
         is_self_message = await self._handle_outgoing_message(normalized_data, 'udp')
+        self._logger.debug("UDP_DIAG self_message=%s", is_self_message)
 
         if is_self_message:
             if has_console:
@@ -957,9 +970,20 @@ class MessageRouter:
 
         udp_handler = self.get_protocol('udp')
 
+        # Strip internal routing fields before sending to firmware
+        # Firmware only accepts: type, dst, msg, src
+        normalized_data.pop('src_type', None)
+        send_data = normalized_data
+
+        self._logger.debug(
+            "UDP_DIAG sending: target=%s payload_keys=%s",
+            getattr(udp_handler, 'target_address', '?'),
+            list(send_data.keys()),
+        )
+
         if udp_handler:
             try:
-                await udp_handler.send_message(normalized_data)
+                await udp_handler.send_message(send_data)
                 if has_console:
                     print("📡 UDP message sent successfully to mesh network")
             except Exception as e:
@@ -1004,11 +1028,10 @@ class MessageRouter:
             print(f"📱 BLE Handler: Processing '{msg}'"
                   f" from {normalized_data.get('src')} to '{dst}'")
 
-        suppress = self._should_suppress_outbound(normalized_data)
+        suppress, reason = self._should_suppress_outbound(normalized_data)
         self._logger.debug("BLE Handler: suppress=%s", suppress)
 
         if suppress:
-            reason = self.validator.get_suppression_reason(normalized_data)
             self.log_message_routing_decision(
                 normalized_data, "BLE_SUPPRESSION", "SUPPRESS", reason
             )
@@ -1104,96 +1127,16 @@ class MessageValidator:
         self.my_callsign = my_callsign.upper()
 
     def normalize_message_data(self, message_data):
-        """Normalize message data - uppercase and validate early"""
-        normalized = message_data.copy()
-
-        # Defensive uppercase normalization
-        src_raw = message_data.get('src', '').strip()
-        dst_raw = message_data.get('dst', '').strip()
-        msg_raw = message_data.get('msg', '').strip()
-
-        # Handle comma-separated src (path routing)
-        src = src_raw.split(',')[0].upper() if ',' in src_raw else src_raw.upper()
-        dst = dst_raw.upper()
-
-        msg = msg_raw
-
-        normalized.update({
-            'src': src,
-            'dst': dst,
-            'msg': msg
-        })
-
-        if has_console and (src != src_raw or dst != dst_raw):
-            print(f"🔧 Normalized: src='{src_raw}'→'{src}', dst='{dst_raw}'→'{dst}'")
-
-        return normalized
+        """Normalize message data - uppercase and validate early."""
+        return normalize_unified(message_data, context="message")
 
     def extract_target_callsign(self, msg):
-        """Extract target callsign from command message.
-
-        Priority:
-        1. Explicit target: parameter (scanned anywhere in message)
-        2. Fallback: first standalone callsign (right-to-left, skip key:value)
-
-        Commands that never have targets: GROUP, KB, TOPIC
-        """
-        if not msg or not msg.startswith('!'):
-            return None
-
-        msg_upper = msg.upper().strip()
-        parts = msg_upper.split()
-
-        if len(parts) < 2:
-            return None
-
-        command = parts[0][1:]
-
-        # Commands that NEVER have targets (admin-only, local state)
-        if command in ['GROUP', 'KB', 'TOPIC']:
-            return None
-
-        # Callsign pattern: requires letter + digit, min 3 chars
-        callsign_pattern = r'^(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]{3,8}(-\d{1,2})?$'
-
-        # Priority 1: Explicit target:CALLSIGN parameter (scanned anywhere)
-        for part in parts[1:]:
-            if part.startswith('TARGET:'):
-                potential = part[7:]  # Remove 'TARGET:' prefix
-                if potential in ['LOCAL', '']:
-                    return None  # Explicit local execution
-                if re.match(callsign_pattern, potential):
-                    return potential
-                return None  # Invalid target format
-
-        # Priority 2: Positional fallback (right-to-left, skip key:value pairs)
-        for part in reversed(parts[1:]):
-            if ':' in part:
-                continue  # Skip key:value arguments
-            potential = part.strip()
-            if re.match(callsign_pattern, potential):
-                return potential
-
-        return None
+        """Delegate to shared pure function."""
+        return extract_target_callsign(msg)
 
     def is_group(self, dst):
-        """Check if destination is a group"""
-        if not dst:
-            return False
-
-        # Special group 'TEST'
-        if dst.upper() == 'TEST':
-            return True
-
-        # Numeric groups: 1-99999
-        if dst.isdigit():
-            try:
-                group_num = int(dst)
-                return 1 <= group_num <= 99999
-            except ValueError:
-                return False
-
-        return False
+        """Delegate to shared pure function."""
+        return is_group(dst)
 
     def is_valid_destination(self, dst):
         """Validate destination format (assumes already uppercase)"""

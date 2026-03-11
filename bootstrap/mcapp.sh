@@ -14,6 +14,7 @@
 #   --fix         Repair mode: reinstall broken components
 #   --skip        Skip system setup & packages, deploy only
 #   --dev         Install latest development pre-release
+#   --tag TAG     Install a specific release tag (e.g. v1.5.1)
 #   --quiet       Minimal output (for cron jobs)
 #   --version     Show script version and exit
 
@@ -22,7 +23,7 @@ set -eo pipefail
 #──────────────────────────────────────────────────────────────────
 # CONSTANTS
 #──────────────────────────────────────────────────────────────────
-readonly SCRIPT_VERSION="2.3.0"
+readonly SCRIPT_VERSION="2.4.0"
 
 # Detect piped mode (curl | bash) — BASH_SOURCE is empty when piped
 if [[ -n "${BASH_SOURCE[0]:-}" && "${BASH_SOURCE[0]}" != "bash" ]]; then
@@ -33,7 +34,7 @@ else
   readonly PIPED_MODE=true
 fi
 
-readonly GITHUB_REPO_BRANCH_DEFAULT="main"
+readonly GITHUB_REPO_BRANCH_DEFAULT="development"
 GITHUB_RAW_BASE="https://raw.githubusercontent.com/DK5EN/McApp/${GITHUB_REPO_BRANCH_DEFAULT}"
 
 # Re-enable nounset now that BASH_SOURCE detection is done
@@ -93,6 +94,7 @@ RECONFIGURE=false
 FIX_MODE=false
 QUIET=false
 DEV_MODE=false
+PIN_TAG=""
 SKIP_TO_DEPLOY=false
 
 #──────────────────────────────────────────────────────────────────
@@ -147,18 +149,11 @@ source_libs() {
   # If installed to share dir, use those
   elif [[ -d "${SHARE_DIR}/lib" ]]; then
     lib_dir="${SHARE_DIR}/lib"
-  # Piped mode: prefer local libs in user's home, then download from GitHub
+  # Piped mode: download from GitHub (always fresh to pick up bootstrap changes)
   elif [[ "$PIPED_MODE" == "true" ]]; then
-    local real_home
-    real_home=$(get_real_home)
-    if [[ -d "${real_home}/bootstrap/lib" ]]; then
-      lib_dir="${real_home}/bootstrap/lib"
-      log_info "Piped mode — using local libs from ${lib_dir}"
-    else
-      lib_dir=$(download_libs)
-      # Clean up downloaded libs when script exits
-      trap "rm -rf '$lib_dir'" EXIT
-    fi
+    lib_dir=$(download_libs)
+    # Clean up downloaded libs when script exits
+    trap "rm -rf '$lib_dir'" EXIT
   else
     log_error "Cannot find library files"
     exit 1
@@ -233,6 +228,10 @@ parse_args() {
         GITHUB_RAW_BASE="https://raw.githubusercontent.com/DK5EN/McApp/development"
         shift
         ;;
+      --tag)
+        PIN_TAG="$2"
+        shift 2
+        ;;
       --quiet)
         QUIET=true
         shift
@@ -268,6 +267,7 @@ Options:
   --fix         Repair mode: reinstall broken components
   --skip        Skip system setup & packages, deploy only
   --dev         Install latest development pre-release
+  --tag TAG     Install a specific release tag (e.g. v1.5.1, v1.6.0)
   --quiet       Minimal output (for cron jobs)
   --version     Show script version and exit
   --help, -h    Show this help message
@@ -291,6 +291,9 @@ Examples:
   # Quick deploy only (skip system setup & packages)
   sudo ./mcapp.sh --skip
   sudo ./mcapp.sh --skip --dev
+
+  # Install a specific version (for bisecting regressions)
+  sudo ./mcapp.sh --skip --tag v1.5.1
 
   # Change configuration
   sudo ./mcapp.sh --reconfigure
@@ -379,7 +382,8 @@ main() {
 
   # Phase 5: Application deployment
   log_step "Deploying application..."
-  deploy_app "$FORCE" "$DEV_MODE"
+  [[ -n "$PIN_TAG" ]] && log_info "Pinning to tag: ${PIN_TAG}"
+  deploy_app "$FORCE" "$DEV_MODE" "$PIN_TAG"
 
   # Phase 6: Service activation
   log_step "Activating services..."

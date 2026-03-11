@@ -178,6 +178,7 @@ swap_current_symlink() {
 deploy_app() {
   local force="${1:-false}"
   local dev_mode="${2:-false}"
+  local pin_tag="${3:-}"
 
   # Initialize slot layout (creates dirs, migrates legacy if needed)
   init_slot_layout
@@ -199,8 +200,8 @@ deploy_app() {
   fi
 
   # Deploy into target slot
-  deploy_release "$force" "$dev_mode" "$deploy_target"
-  deploy_webapp "$force" "$deploy_target"
+  deploy_release "$force" "$dev_mode" "$deploy_target" "$pin_tag"
+  deploy_webapp "$force" "$deploy_target" "$pin_tag"
   setup_python_env "$deploy_target"
   migrate_config
   deploy_shell_aliases
@@ -279,6 +280,7 @@ deploy_release() {
   local force="${1:-false}"
   local dev_mode="${2:-false}"
   local deploy_target="${3:-$INSTALL_DIR}"
+  local pin_tag="${4:-}"
 
   log_info "Checking McApp release deployment..."
 
@@ -287,7 +289,10 @@ deploy_release() {
 
   installed_version=$(get_installed_mcapp_version)
 
-  if [[ "$dev_mode" == "true" ]]; then
+  if [[ -n "$pin_tag" ]]; then
+    remote_version="$pin_tag"
+    log_info "  Mode: pinned tag"
+  elif [[ "$dev_mode" == "true" ]]; then
     remote_version=$(get_latest_prerelease_version)
     log_info "  Mode: development (pre-release)"
   else
@@ -298,7 +303,9 @@ deploy_release() {
   log_info "  Remote:    ${remote_version}"
 
   # Decide if update needed
-  if [[ "$force" == "true" ]]; then
+  if [[ -n "$pin_tag" ]]; then
+    log_info "  Pinned to tag: ${pin_tag}"
+  elif [[ "$force" == "true" ]]; then
     log_info "  Force mode: reinstalling release"
   elif [[ "$installed_version" == "not_installed" ]]; then
     log_info "  McApp not installed, downloading..."
@@ -390,12 +397,13 @@ download_and_install_release() {
 deploy_webapp() {
   local force="${1:-false}"
   local deploy_target="${2:-$INSTALL_DIR}"
+  local pin_tag="${3:-}"
 
   log_info "Checking webapp deployment..."
 
   # New flow: if the tarball included webapp/, use it directly
   if [[ -d "${deploy_target}/webapp" ]] && [[ -f "${deploy_target}/webapp/index.html" ]]; then
-    deploy_webapp_from_tarball "$force" "$deploy_target"
+    deploy_webapp_from_tarball "$force" "$deploy_target" "$pin_tag"
   else
     # Fallback: old tarball without bundled webapp — download separately
     log_info "  No bundled webapp in tarball, falling back to download"
@@ -407,6 +415,7 @@ deploy_webapp() {
 deploy_webapp_from_tarball() {
   local force="${1:-false}"
   local deploy_target="${2:-$INSTALL_DIR}"
+  local pin_tag="${3:-}"
 
   local installed_version
   local tarball_version
@@ -423,7 +432,9 @@ deploy_webapp_from_tarball() {
   log_info "  Installed: ${installed_version}"
   log_info "  Bundled:   ${tarball_version}"
 
-  if [[ "$force" != "true" ]] && [[ "$installed_version" != "not_installed" ]] && \
+  if [[ -n "$pin_tag" ]]; then
+    log_info "  Pinned tag: deploying bundled webapp"
+  elif [[ "$force" != "true" ]] && [[ "$installed_version" != "not_installed" ]] && \
      [[ "$tarball_version" != "unknown" ]] && \
      [[ "$installed_version" != *-dev* || "$tarball_version" == *-dev* ]] && \
      version_gte "$installed_version" "$tarball_version"; then
