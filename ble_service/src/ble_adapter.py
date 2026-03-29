@@ -168,6 +168,8 @@ class BLEAdapter:
         self._operation_lock = asyncio.Lock()
         self._write_lock = asyncio.Lock()
         self._keepalive_task: asyncio.Task | None = None
+        self._dst_check_task: asyncio.Task | None = None
+        self._last_utc_offset: float | None = None
         self._connected_mac: str | None = None
         self._agent_registered: bool = False
         self._cancel_connect: bool = False
@@ -329,8 +331,9 @@ class BLEAdapter:
                     # Subscribe to D-Bus PropertiesChanged for instant disconnect detection
                     self._subscribe_device_properties()
 
-                    # Start keepalive
+                    # Start keepalive and DST check
                     self._start_keepalive()
+                    self._start_dst_check()
 
                     logger.info("Connected to %s", mac)
                     return True
@@ -536,14 +539,16 @@ class BLEAdapter:
 
         self._status.state = ConnectionState.DISCONNECTING
 
-        # Stop keepalive
-        if self._keepalive_task and not self._keepalive_task.done():
-            self._keepalive_task.cancel()
-            try:
-                await self._keepalive_task
-            except asyncio.CancelledError:
-                pass
-            self._keepalive_task = None
+        # Stop keepalive and DST check
+        for task_attr in ('_keepalive_task', '_dst_check_task'):
+            task = getattr(self, task_attr)
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            setattr(self, task_attr, None)
 
         # Unsubscribe device property listener
         self._unsubscribe_device_properties()
@@ -669,10 +674,12 @@ class BLEAdapter:
         self._status.error = "Connection lost"
         self._connected_mac = None
 
-        # Cancel keepalive
-        if self._keepalive_task and not self._keepalive_task.done():
-            self._keepalive_task.cancel()
-            self._keepalive_task = None
+        # Cancel keepalive and DST check
+        for task_attr in ('_keepalive_task', '_dst_check_task'):
+            task = getattr(self, task_attr)
+            if task and not task.done():
+                task.cancel()
+            setattr(self, task_attr, None)
 
         # Unsubscribe device property listener
         self._device_props_handler = None
@@ -733,7 +740,30 @@ class BLEAdapter:
         return await self.write(bytes(byte_array))
 
     async def set_time(self) -> bool:
-        """Set current time on device"""
+        """Set current time and UTC offset on device.
+
+        Sends the UTC offset first (--utcoff via A0 command), then the
+        Unix timestamp (0x20 message).  This ensures the firmware always
+        uses the correct offset when converting UTC → local time, even
+        after DST transitions.
+        """
+        from datetime import datetime, timezone
+
+        # Calculate current UTC offset of the system timezone (handles DST)
+        local_now = datetime.now(timezone.utc).astimezone()
+        utc_offset_hours = local_now.utcoffset().total_seconds() / 3600
+
+        # Send UTC offset first so the firmware applies it to the timestamp
+        offset_cmd = f"--utcoff {utc_offset_hours:+.1f}"
+        logger.info("Syncing UTC offset: %s", offset_cmd)
+        if await self.send_command(offset_cmd):
+            self._last_utc_offset = utc_offset_hours
+        else:
+            logger.warning("Failed to send UTC offset (continuing with time sync)")
+
+        await asyncio.sleep(0.3)
+
+        # Send Unix timestamp
         now = int(time.time())
         data = 6 .to_bytes(1, 'big') + bytes([0x20]) + now.to_bytes(4, byteorder='little')
         return await self.write(data)
@@ -953,6 +983,37 @@ class BLEAdapter:
                 if self.is_connected:
                     logger.debug("Sending keepalive")
                     await self.send_command("--pos")
+        except asyncio.CancelledError:
+            pass
+
+    def _start_dst_check(self):
+        """Start periodic DST transition check"""
+        if self._dst_check_task and not self._dst_check_task.done():
+            return
+        self._dst_check_task = asyncio.create_task(self._dst_check_loop())
+
+    async def _dst_check_loop(self):
+        """Check hourly for DST transitions and update device UTC offset."""
+        from datetime import datetime, timezone
+
+        try:
+            while self.is_connected:
+                await asyncio.sleep(3600)
+                if not self.is_connected:
+                    break
+
+                local_now = datetime.now(timezone.utc).astimezone()
+                current_offset = local_now.utcoffset().total_seconds() / 3600
+
+                if (
+                    self._last_utc_offset is not None
+                    and current_offset != self._last_utc_offset
+                ):
+                    logger.info(
+                        "DST transition detected: UTC%+.1f -> UTC%+.1f",
+                        self._last_utc_offset, current_offset,
+                    )
+                    await self.set_time()
         except asyncio.CancelledError:
             pass
 
