@@ -1,29 +1,18 @@
 # Release History
 
-## v1.6.2
+## v1.6.3 (2026-03-29)
 
-### Bug Fixes
+### Highlights
 
-- **Increase dedup window from 20 to 60 minutes** for LoRa relay messages, reducing
-  duplicate message delivery to web clients
-- **Fix stale dev slot in production deploy** — repopulate target slot when it contains
-  stale development content, preventing upgrade failures
-- **Fix upgrade failure when target slot is empty** — handle missing slot gracefully
-  during deployment
+- Automatic summer/winter time switching: the `--settime` command now sends the
+  UTC offset along with the time and auto-detects DST transitions, so MeshCom
+  nodes always display the correct local time without manual intervention.
 
-### Frontend
+### Backend (MCProxy)
 
-- **Fade stale station markers** on positions map, with MapLibre inline opacity override
-  to ensure correct rendering
-- **Fix temp/humidity chart** — align series by timestamp for correct tooltips and add
-  `spanGaps` to connect sparse data points
-- **Update all dependencies** including Vite 8 major upgrade
-- **Fix high severity vulnerability** in `flatted` dependency
+- **[fix]** Send UTC offset with `--settime` and auto-detect DST transitions
+- **[chore]** Update dependencies (starlette 1.0, aiohttp 3.13.4, attrs 26.1)
 
-### Documentation
+### Frontend (webapp)
 
-- Add SQLite performance analysis notes
-
-### Diagnostics
-
-- Add dedup diagnostic logging to frontend for hunting duplicate messages bug
+- **[chore]** Update dependencies (vue, maplibre-gl, vite, eslint, vue-router)
