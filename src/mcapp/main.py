@@ -155,37 +155,30 @@ class MessageRouter:
 
             results.append((status, description, actual, expected, reason))
 
-            if has_console:
-                print(f"{status} | {description}")
-                print(f"     {src}→{dst} '{msg}' → {actual} (expected: {expected})")
-                print(f"     Reason: {reason}")
-                print()
+            logger.info("%s | %s", status, description)
+            logger.info("     %s→%s '%s' → %s (expected: %s)", src, dst, msg, actual, expected)
+            logger.info("     Reason: %s", reason)
 
         # Summary
         passed = sum(1 for r in results if r[0].startswith("✅"))
         total = len(results)
 
-        if has_console:
-            print(f"🧪 Test Summary: {passed}/{total} tests passed")
-            if passed == total:
-                print("🎉 All suppression tests passed!")
-            else:
-                print("⚠️ Some tests failed - check logic!")
-            print("=" * 50)
+        logger.info("Test Summary: %d/%d tests passed", passed, total)
+        if passed == total:
+            logger.info("All suppression tests passed!")
+        else:
+            logger.warning("Some suppression tests failed - check logic!")
 
         return passed == total
 
     def log_message_routing_decision(self, message_data, decision_type, action, reason):
         """Centralized logging for message routing decisions"""
-        if not has_console:
-            return
-
         src = message_data.get('src', 'unknown')
         dst = message_data.get('dst', 'unknown')
         raw_msg = message_data.get('msg', '')
         msg = raw_msg[:20] + ('...' if len(raw_msg) > 20 else '')
 
-        print(f"🔄 {decision_type}: {src}→{dst} '{msg}' → {action} ({reason})")
+        self._logger.debug("%s: %s→%s '%s' → %s (%s)", decision_type, src, dst, msg, action, reason)
 
     async def _storage_handler(self, routed_message):
         """Handle message storage for all routed messages"""
@@ -194,8 +187,7 @@ class MessageRouter:
 
             src = message_data.get('src', '').split(',')[0].upper()
             if self._is_callsign_blocked(src):
-                if has_console:
-                    print(f"🚫 Blocked message from {src}")
+                self._logger.debug("Blocked message from %s", src)
                 return
 
             raw_json = json.dumps(message_data)
@@ -217,8 +209,7 @@ class MessageRouter:
     def subscribe(self, message_type: str, handler_func):
         """Subscribe to specific message types"""
         self._subscribers[message_type].append(handler_func)
-        if has_console:
-            print(f"MessageRouter: {handler_func.__name__} subscribed to '{message_type}'")
+        self._logger.debug("'%s' subscribed to '%s'", handler_func.__name__, message_type)
 
     async def publish(self, source: str, message_type: str, data: dict):
         """Publish message from one protocol to all subscribers"""
@@ -247,19 +238,17 @@ class MessageRouter:
 
     def list_subscriptions(self):
         """Debug: List all current subscriptions"""
-        if has_console:
-            print("MessageRouter subscriptions:")
-            for msg_type, handlers in self._subscribers.items():
-                handler_names = [h.__name__ for h in handlers]
-                print(f"  {msg_type}: {handler_names}")
+        self._logger.debug("MessageRouter subscriptions:")
+        for msg_type, handlers in self._subscribers.items():
+            handler_names = [h.__name__ for h in handlers]
+            self._logger.debug("  %s: %s", msg_type, handler_names)
 
     async def route_command(
         self, command: str, websocket=None, MAC=None,
         BLE_Pin=None, data=None, **kwargs
     ):
       """Route commands to appropriate protocol handlers"""
-      if has_console:
-        print(f"MessageRouter: Routing command '{command}'")
+      self._logger.debug("Routing command '%s'", command)
 
       try:
         # Smart initial payload (paginated)
@@ -321,7 +310,7 @@ class MessageRouter:
             await self._handle_device_a0_command(command)
 
         else:
-            print(f"MessageRouter: Unknown command '{command}'")
+            self._logger.warning("Unknown command '%s'", command)
             if websocket:
                 error_msg = {
                     'src_type': 'system',
@@ -332,7 +321,7 @@ class MessageRouter:
                 await self.publish('router', 'websocket_message', error_msg)
 
       except Exception as e:
-        print(f"MessageRouter ERROR: Failed to route command '{command}': {e}")
+        self._logger.warning("Failed to route command '%s': %s", command, e, exc_info=True)
         if websocket:
             error_msg = {
                 'src_type': 'system',
@@ -353,14 +342,10 @@ class MessageRouter:
             summary = await self.storage_handler.get_summary()
         acks_list = initial_data.get("acks", [])
 
-        if has_console:
-            print(f"📦 smart_initial sending: "
-                  f"{len(initial_data['messages'])} msgs, "
-                  f"{len(initial_data['positions'])} pos, "
-                  f"{len(acks_list)} acks")
-            if acks_list:
-                for a in acks_list[:5]:
-                    print(f"  ACK: {a[:120]}")
+        self._logger.debug(
+            "smart_initial sending: %d msgs, %d pos, %d acks",
+            len(initial_data['messages']), len(initial_data['positions']), len(acks_list)
+        )
 
         payload = {
             "type": "response",
@@ -902,16 +887,14 @@ class MessageRouter:
         Returns (suppress: bool, reason: str).
         """
         if not self.validator:
-            if has_console:
-                print("⚠️ Validator not initialized, no suppression")
+            self._logger.warning("Validator not initialized, no suppression")
             return False, ""
 
         suppress = self.validator.should_suppress_outbound(message_data)
         reason = self.validator.get_suppression_reason(message_data)
 
-        if has_console:
-            action = "SUPPRESS" if suppress else "FORWARD"
-            print(f"🔄 Suppression decision: {action} - {reason}")
+        action = "SUPPRESS" if suppress else "FORWARD"
+        self._logger.debug("Suppression decision: %s - %s", action, reason)
 
         return suppress, reason
 
@@ -938,10 +921,10 @@ class MessageRouter:
             normalized_data.get('msg', ''), list(normalized_data.keys()),
         )
 
-        if has_console:
-            print(f"📡 UDP Handler: Processing '{normalized_data.get('msg')}'"
-                  f" from {normalized_data.get('src')}"
-                  f" to {normalized_data.get('dst')}")
+        self._logger.debug(
+            "UDP Handler: Processing '%s' from %s to %s",
+            normalized_data.get('msg'), normalized_data.get('src'), normalized_data.get('dst')
+        )
 
         suppress_result, reason = self._should_suppress_outbound(normalized_data)
         self._logger.debug("UDP_DIAG suppress=%s", suppress_result)
@@ -960,13 +943,11 @@ class MessageRouter:
         self._logger.debug("UDP_DIAG self_message=%s", is_self_message)
 
         if is_self_message:
-            if has_console:
-                print("📡 UDP Handler: Self-message handled, not sending to mesh")
+            self._logger.debug("UDP Handler: Self-message handled, not sending to mesh")
             return
 
         # External message - send to mesh network
-        if has_console:
-            print("📡 UDP Handler: Sending external message to mesh network")
+        self._logger.debug("UDP Handler: Sending external message to mesh network")
 
         udp_handler = self.get_protocol('udp')
 
@@ -984,10 +965,9 @@ class MessageRouter:
         if udp_handler:
             try:
                 await udp_handler.send_message(send_data)
-                if has_console:
-                    print("📡 UDP message sent successfully to mesh network")
+                self._logger.debug("UDP message sent successfully to mesh network")
             except Exception as e:
-                print(f"📡 UDP message send failed: {e}")
+                self._logger.warning("UDP message send failed: %s", e)
                 await self.publish('system', 'websocket_message', {
                     'src_type': 'system',
                     'type': 'error',
@@ -995,7 +975,7 @@ class MessageRouter:
                     'timestamp': int(time.time() * 1000)
                 })
         else:
-            print("📡 UDP handler not available, can't send message")
+            self._logger.warning("UDP handler not available, can't send message")
             await self.publish('system', 'websocket_message', {
                 'src_type': 'system',
                 'type': 'error',
@@ -1024,9 +1004,9 @@ class MessageRouter:
             msg, normalized_data.get('src'), dst
         )
 
-        if has_console:
-            print(f"📱 BLE Handler: Processing '{msg}'"
-                  f" from {normalized_data.get('src')} to '{dst}'")
+        self._logger.debug(
+            "BLE Handler: Processing '%s' from %s to '%s'", msg, normalized_data.get('src'), dst
+        )
 
         suppress, reason = self._should_suppress_outbound(normalized_data)
         self._logger.debug("BLE Handler: suppress=%s", suppress)
@@ -1044,13 +1024,11 @@ class MessageRouter:
         is_self_message = await self._handle_outgoing_message(normalized_data, 'ble')
 
         if is_self_message:
-            if has_console:
-                print("📱 BLE Handler: Self-message handled, not sending to device")
+            self._logger.debug("BLE Handler: Self-message handled, not sending to device")
             return
 
         # External message - send to BLE device
-        if has_console:
-            print("📱 BLE Handler: Sending external message to BLE device")
+        self._logger.debug("BLE Handler: Sending external message to BLE device")
         client = self._get_ble_client()
         if client:
             await client.send_message(msg, dst)
@@ -1083,9 +1061,10 @@ class MessageRouter:
         """Unified handler for outgoing messages - handles self-message detection"""
 
         if self._is_message_to_self(message_data):
-            if has_console:
-                print(f"🔄 MessageRouter: Detected self-message to "
-                      f"{message_data.get('dst')}, routing to CommandHandler only")
+            self._logger.debug(
+                "Detected self-message to %s, routing to CommandHandler only",
+                message_data.get('dst')
+            )
             synthetic_message = self._create_synthetic_message(message_data)
             await self._route_to_command_handler(synthetic_message)
             return True  # Indicates message was handled as self-message
@@ -1094,8 +1073,7 @@ class MessageRouter:
 
     async def _route_to_command_handler(self, synthetic_message):
         """Route synthetic message to CommandHandler"""
-        if has_console:
-            print(f"🔄 MessageRouter: Creating synthetic message: {synthetic_message}")
+        self._logger.debug("Creating synthetic message: %s", synthetic_message)
 
         routed_message = {
             'source': 'self',
@@ -1104,20 +1082,18 @@ class MessageRouter:
             'timestamp': int(time.time() * 1000)
         }
 
-        if has_console:
-            print("🔄 MessageRouter: Routing to CommandHandler subscribers...")
-            subs = len(self._subscribers['ble_notification'])
-            print(f"🔄 MessageRouter: Available subscribers"
-                  f" for 'ble_notification': {subs}")
+        self._logger.debug(
+            "Routing to CommandHandler subscribers (ble_notification count=%d)",
+            len(self._subscribers['ble_notification'])
+        )
 
         # Find CommandHandler subscribers
         for handler in self._subscribers['ble_notification']:
             try:
                 await handler(routed_message)
-                if has_console:
-                    print("🔄 MessageRouter: Routed self-message to CommandHandler")
+                self._logger.debug("Routed self-message to CommandHandler")
             except Exception as e:
-                print(f"MessageRouter ERROR: Failed to route self-message: {e}")
+                self._logger.warning("Failed to route self-message: %s", e, exc_info=True)
 
 
 class MessageValidator:
@@ -1125,6 +1101,7 @@ class MessageValidator:
 
     def __init__(self, my_callsign):
         self.my_callsign = my_callsign.upper()
+        self._logger = get_logger(f"{__name__}.MessageValidator")
 
     def normalize_message_data(self, message_data):
         """Normalize message data - uppercase and validate early."""
@@ -1141,32 +1118,26 @@ class MessageValidator:
     def is_valid_destination(self, dst):
         """Validate destination format (assumes already uppercase)"""
         if not dst:
-            if has_console:
-                print("🔍 Invalid dst: empty")
+            self._logger.debug("Invalid dst: empty")
             return False
 
         # Invalid destinations from table
         invalid_destinations = ['*', 'ALL', '']
         if dst in invalid_destinations:
-            if has_console:
-                print(f"🔍 Invalid dst: '{dst}' in blacklist")
+            self._logger.debug("Invalid dst: '%s' in blacklist", dst)
             return False
 
         # Valid: callsign pattern
         if re.match(r'^[A-Z0-9]{2,8}(-\d{1,2})?$', dst):
-            if has_console:
-                print(f"🔍 Valid dst: '{dst}' matches callsign pattern")
+            self._logger.debug("Valid dst: '%s' matches callsign pattern", dst)
             return True
 
         # Valid: group pattern
         if self.is_group(dst):
-            if has_console:
-                print(f"🔍 Valid dst: '{dst}' is group")
+            self._logger.debug("Valid dst: '%s' is group", dst)
             return True
 
-        if has_console:
-            print(f"🔍 Invalid dst: '{dst}' no pattern match")
-
+        self._logger.debug("Invalid dst: '%s' no pattern match", dst)
         return False
 
     def is_command(self, msg):
@@ -1184,44 +1155,37 @@ class MessageValidator:
         dst = message_data.get('dst', '')
         msg = message_data.get('msg', '')
 
-        if has_console:
-            print(f"🔍 Suppression check: src='{src}', dst='{dst}', msg='{msg[:20]}...'")
+        self._logger.debug("Suppression check: src='%s', dst='%s', msg='%.20s...'", src, dst, msg)
 
         # Only check our own outgoing commands
         if src != self.my_callsign:
-            if has_console:
-                print(f"🔍 → NOT our message ({src} != {self.my_callsign}) - NO SUPPRESSION")
+            self._logger.debug("NOT our message (%s != %s) - NO SUPPRESSION", src, self.my_callsign)
             return False
 
         # Must be a command
         if not self.is_command(msg):
-            if has_console:
-                print("🔍 → Not a command - NO SUPPRESSION")
+            self._logger.debug("Not a command - NO SUPPRESSION")
             return False
 
         # Invalid destinations always suppress
         if not self.is_valid_destination(dst):
-            if has_console:
-                print(f"🔍 → Invalid destination '{dst}' - SUPPRESS")
+            self._logger.debug("Invalid destination '%s' - SUPPRESS", dst)
             return True
 
         target = self.extract_target_callsign(msg)
 
         # No target → execute locally
         if not target:
-            if has_console:
-                print(f"🔍 → No target in '{msg}' - SUPPRESS (local execution)")
+            self._logger.debug("No target in '%s' - SUPPRESS (local execution)", msg)
             return True
 
         # Target is us → execute locally
         if target == self.my_callsign:
-            if has_console:
-                print(f"🔍 → Target is us ({target}) - SUPPRESS (local execution)")
+            self._logger.debug("Target is us (%s) - SUPPRESS (local execution)", target)
             return True
 
         # Target is someone else → send to mesh
-        if has_console:
-            print(f"🔍 → Target is '{target}' (not us) - NO SUPPRESSION (send to mesh)")
+        self._logger.debug("Target is '%s' (not us) - NO SUPPRESSION (send to mesh)", target)
         return False
 
     def get_suppression_reason(self, message_data):

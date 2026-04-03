@@ -156,7 +156,8 @@ class SSEManager:
                             "type": "connected",
                             "client_id": client_id,
                             "timestamp": int(time.time() * 1000),
-                        }
+                        },
+                        "system:connected",
                     )
 
                     # Send initial data (messages, positions, BLE status)
@@ -185,12 +186,12 @@ class SSEManager:
                                 "type": "response",
                                 "msg": "smart_initial",
                                 "data": initial_data,
-                            })
+                            }, "proxy:initial")
                             yield self._format_sse_event({
                                 "type": "response",
                                 "msg": "summary",
                                 "data": summary,
-                            })
+                            }, "proxy:summary")
                             # Send persisted read counts for unread badge sync
                             if hasattr(storage, 'get_read_counts'):
                                 read_counts = await storage.get_read_counts()
@@ -199,7 +200,7 @@ class SSEManager:
                                         "type": "response",
                                         "msg": "read_counts",
                                         "data": read_counts,
-                                    })
+                                    }, "proxy:read_counts")
                             if hasattr(storage, 'get_hidden_destinations'):
                                 hidden_dsts = await storage.get_hidden_destinations()
                                 if hidden_dsts:
@@ -207,7 +208,7 @@ class SSEManager:
                                         "type": "response",
                                         "msg": "hidden_destinations",
                                         "data": hidden_dsts,
-                                    })
+                                    }, "proxy:hidden_destinations")
                             if hasattr(storage, 'get_blocked_texts'):
                                 blocked_texts = await storage.get_blocked_texts()
                                 if blocked_texts:
@@ -215,7 +216,7 @@ class SSEManager:
                                         "type": "response",
                                         "msg": "blocked_texts",
                                         "data": blocked_texts,
-                                    })
+                                    }, "proxy:blocked_texts")
                             if hasattr(storage, 'get_mheard_sidebar'):
                                 sidebar = await storage.get_mheard_sidebar()
                                 if sidebar:
@@ -223,7 +224,7 @@ class SSEManager:
                                         "type": "response",
                                         "msg": "mheard_sidebar",
                                         "data": sidebar,
-                                    })
+                                    }, "proxy:mheard_sidebar")
                             if hasattr(storage, 'get_wx_sidebar'):
                                 wx_sidebar = await storage.get_wx_sidebar()
                                 if wx_sidebar:
@@ -231,7 +232,7 @@ class SSEManager:
                                         "type": "response",
                                         "msg": "wx_sidebar",
                                         "data": wx_sidebar,
-                                    })
+                                    }, "proxy:wx_sidebar")
                         else:
                             logger.warning(
                                 "SSE client %s: no storage handler available",
@@ -274,7 +275,7 @@ class SSEManager:
                                     "msg": "BLE not connected",
                                     "timestamp": int(time.time() * 1000),
                                 }
-                            yield self._format_sse_event(ble_info)
+                            yield self._format_sse_event(ble_info, "ble:status")
 
                             # If BLE is connected, serve cached registers instantly
                             # instead of re-querying the device.
@@ -285,7 +286,9 @@ class SSEManager:
                                 )
                                 if cached_regs:
                                     for reg_data in cached_regs.values():
-                                        yield self._format_sse_event(reg_data)
+                                        yield self._format_sse_event(
+                                            reg_data, self._get_event_type(reg_data)
+                                        )
                                     logger.debug(
                                         "SSE client %s: sent %d cached BLE"
                                         " registers",
@@ -307,14 +310,15 @@ class SSEManager:
                         try:
                             # Wait for message with timeout (for keepalive)
                             data = await asyncio.wait_for(client.queue.get(), timeout=30.0)
-                            yield self._format_sse_event(data)
+                            yield self._format_sse_event(data, self._get_event_type(data))
                         except asyncio.TimeoutError:
                             # Send keepalive ping
                             yield self._format_sse_event(
                                 {
                                     "type": "ping",
                                     "timestamp": int(time.time() * 1000),
-                                }
+                                },
+                                "system:ping",
                             )
 
                 except asyncio.CancelledError:
@@ -840,6 +844,54 @@ class SSEManager:
             "can_rollback": rollback_target is not None,
             "rollback_target": rollback_target,
         }
+
+    # Mapping (type, msg) pairs → SSE event name for response messages
+    _RESPONSE_EVENT_MAP: dict[str, str] = {
+        "smart_initial": "proxy:initial",
+        "summary": "proxy:summary",
+        "read_counts": "proxy:read_counts",
+        "hidden_destinations": "proxy:hidden_destinations",
+        "blocked_texts": "proxy:blocked_texts",
+        "mheard_sidebar": "proxy:mheard_sidebar",
+        "wx_sidebar": "proxy:wx_sidebar",
+        "messages_page": "proxy:messages_page",
+    }
+
+    # Mapping simple type → SSE event name
+    _SIMPLE_TYPE_MAP: dict[str, str] = {
+        "connected": "system:connected",
+        "ping": "system:ping",
+        "msg_status": "msg:status",
+    }
+
+    # Mapping mheard msg strings → SSE event name
+    _MHEARD_MSG_MAP: dict[str, str] = {
+        "mheard progress": "mheard:progress",
+        "mheard stats": "mheard:stats",
+        "mheard progress monthly": "mheard:progress-monthly",
+        "mheard stats monthly": "mheard:stats-monthly",
+        "mheard progress yearly": "mheard:progress-yearly",
+        "mheard stats yearly": "mheard:stats-yearly",
+    }
+
+    @staticmethod
+    def _get_event_type(data: dict[str, Any]) -> str:
+        """Derive the SSE event: name from message data."""
+        type_ = data.get("type", "")
+        msg = data.get("msg", "")
+        src_type = data.get("src_type", "")
+
+        if mapped := SSEManager._SIMPLE_TYPE_MAP.get(type_):
+            return mapped
+        if type_ == "response":
+            return SSEManager._RESPONSE_EVENT_MAP.get(msg, "mesh:message")
+        if msg in SSEManager._MHEARD_MSG_MAP:
+            return SSEManager._MHEARD_MSG_MAP[msg]
+        if src_type in ("BLE", "ble_remote") and data.get("TYP"):
+            return "ble:status"
+        if data.get("command") == "resolve-ip":
+            return "proxy:resolve_ip"
+        return "mesh:message"
 
     @staticmethod
     def _format_sse_event(data: dict[str, Any], event_type: str | None = None) -> str:
