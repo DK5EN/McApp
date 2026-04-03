@@ -2,7 +2,6 @@
 import asyncio
 import json
 import os
-import re
 import signal
 import sys
 import time
@@ -14,7 +13,7 @@ from pathlib import Path
 # BLE client abstraction - supports local, remote, and disabled modes
 from .ble_client import BLEMode, ConnectionState, create_ble_client
 from .commands import create_command_handler
-from .commands.parsing import extract_target_callsign, is_group, normalize_unified
+from .commands.parsing import is_group, normalize_unified
 from .config_loader import (
     BLE_SERVICE_URL,
     MESHCOM_UDP_PORT,
@@ -1097,7 +1096,11 @@ class MessageRouter:
 
 
 class MessageValidator:
-    """Centralized message validation and normalization"""
+    """Centralized message validation and normalization.
+
+    Delegates suppression logic to pure functions in suppression.py,
+    keeping this class as a thin stateful wrapper.
+    """
 
     def __init__(self, my_callsign):
         self.my_callsign = my_callsign.upper()
@@ -1107,111 +1110,31 @@ class MessageValidator:
         """Normalize message data - uppercase and validate early."""
         return normalize_unified(message_data, context="message")
 
-    def extract_target_callsign(self, msg):
-        """Delegate to shared pure function."""
-        return extract_target_callsign(msg)
-
     def is_group(self, dst):
         """Delegate to shared pure function."""
         return is_group(dst)
-
-    def is_valid_destination(self, dst):
-        """Validate destination format (assumes already uppercase)"""
-        if not dst:
-            self._logger.debug("Invalid dst: empty")
-            return False
-
-        # Invalid destinations from table
-        invalid_destinations = ['*', 'ALL', '']
-        if dst in invalid_destinations:
-            self._logger.debug("Invalid dst: '%s' in blacklist", dst)
-            return False
-
-        # Valid: callsign pattern
-        if re.match(r'^[A-Z0-9]{2,8}(-\d{1,2})?$', dst):
-            self._logger.debug("Valid dst: '%s' matches callsign pattern", dst)
-            return True
-
-        # Valid: group pattern
-        if self.is_group(dst):
-            self._logger.debug("Valid dst: '%s' is group", dst)
-            return True
-
-        self._logger.debug("Invalid dst: '%s' no pattern match", dst)
-        return False
-
-    def is_command(self, msg):
-        """Check if message is a command"""
-        return msg and msg.startswith('!')
 
     def is_self_message(self, src, dst):
         """Check if message is from us to us"""
         return src == self.my_callsign and dst == self.my_callsign
 
+    def should_suppress_outbound(self, message_data: dict) -> bool:
+        """Return True if this outbound message should be executed locally.
 
-    def should_suppress_outbound(self, message_data):
-        """Implement simplified suppression logic from table"""
-        src = message_data.get('src', '')
-        dst = message_data.get('dst', '')
-        msg = message_data.get('msg', '')
+        Delegates to suppression.should_suppress_outbound().
+        """
+        from .suppression import should_suppress_outbound
+        result = should_suppress_outbound(message_data, self.my_callsign, self.is_group)
+        self._logger.debug(
+            "Suppression check src=%s dst=%s → %s",
+            message_data.get("src", ""), message_data.get("dst", ""), result,
+        )
+        return result
 
-        self._logger.debug("Suppression check: src='%s', dst='%s', msg='%.20s...'", src, dst, msg)
-
-        # Only check our own outgoing commands
-        if src != self.my_callsign:
-            self._logger.debug("NOT our message (%s != %s) - NO SUPPRESSION", src, self.my_callsign)
-            return False
-
-        # Must be a command
-        if not self.is_command(msg):
-            self._logger.debug("Not a command - NO SUPPRESSION")
-            return False
-
-        # Invalid destinations always suppress
-        if not self.is_valid_destination(dst):
-            self._logger.debug("Invalid destination '%s' - SUPPRESS", dst)
-            return True
-
-        target = self.extract_target_callsign(msg)
-
-        # No target → execute locally
-        if not target:
-            self._logger.debug("No target in '%s' - SUPPRESS (local execution)", msg)
-            return True
-
-        # Target is us → execute locally
-        if target == self.my_callsign:
-            self._logger.debug("Target is us (%s) - SUPPRESS (local execution)", target)
-            return True
-
-        # Target is someone else → send to mesh
-        self._logger.debug("Target is '%s' (not us) - NO SUPPRESSION (send to mesh)", target)
-        return False
-
-    def get_suppression_reason(self, message_data):
-        """Get human-readable reason for suppression decision"""
-        src = message_data.get('src', '')
-        dst = message_data.get('dst', '')
-        msg = message_data.get('msg', '')
-
-        if src != self.my_callsign:
-            return f"Not our message ({src})"
-
-        if not self.is_command(msg):
-            return "Not a command"
-
-        if not self.is_valid_destination(dst):
-            return f"Invalid destination ({dst})"
-
-        target = self.extract_target_callsign(msg)
-
-        if not target:
-            return "No target → local execution"
-
-        if target == self.my_callsign:
-            return f"Target is us ({target}) → local execution"
-
-        return f"Target is {target} → send to mesh"
+    def get_suppression_reason(self, message_data: dict) -> str:
+        """Return a human-readable reason for the suppression decision."""
+        from .suppression import get_suppression_reason
+        return get_suppression_reason(message_data, self.my_callsign, self.is_group)
 
 
 async def main():

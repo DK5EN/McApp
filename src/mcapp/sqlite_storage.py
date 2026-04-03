@@ -355,8 +355,8 @@ class SQLiteStorage:
                 if current_version < 14:
                     try:
                         conn.execute("ALTER TABLE telemetry ADD COLUMN batt INTEGER")
-                    except Exception:
-                        pass  # Column may already exist
+                    except sqlite3.OperationalError:
+                        logger.debug("Column batt already exists in telemetry, skipping")
                     logger.info(
                         "Migration v%d → v14: added batt column to telemetry",
                         current_version,
@@ -373,8 +373,10 @@ class SQLiteStorage:
                                 conn.execute(
                                     f"ALTER TABLE {tbl} ADD COLUMN {col} {typedef}"
                                 )
-                            except Exception:
-                                pass  # Column may already exist
+                            except sqlite3.OperationalError:
+                                logger.debug(
+                                    "Column %s already exists in %s, skipping", col, tbl
+                                )
                     logger.info(
                         "Migration v%d → v15: added hum2, extras columns",
                         current_version,
@@ -599,7 +601,7 @@ class SQLiteStorage:
             try:
                 conn.execute(f"ALTER TABLE messages ADD COLUMN {col} {typedef}")
             except sqlite3.OperationalError:
-                pass  # Column already exists
+                logger.debug("Column %s already exists in messages, skipping", col)
 
         # --- 2. Telemetry columns on station_positions ---
         for col, typedef in [
@@ -619,7 +621,7 @@ class SQLiteStorage:
                     f"ALTER TABLE station_positions ADD COLUMN {col} {typedef}"
                 )
             except sqlite3.OperationalError:
-                pass
+                logger.debug("Column %s already exists in station_positions, skipping", col)
 
         # --- 3. Telemetry table ---
         conn.executescript("""
@@ -757,7 +759,7 @@ class SQLiteStorage:
         try:
             conn.execute("ALTER TABLE telemetry ADD COLUMN alt REAL")
         except sqlite3.OperationalError:
-            pass  # Column already exists (idempotent)
+            logger.debug("Column alt already exists in telemetry, skipping")
 
     async def _init_bucket_accumulators(self) -> None:
         """Load current partial buckets from signal_log into memory."""

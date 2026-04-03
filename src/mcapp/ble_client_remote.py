@@ -50,6 +50,7 @@ class BLEClientRemote(BLEClientBase):
         self._status.mode = BLEMode.REMOTE
         self._last_connect_attempt: float = 0
         self._connect_cooldown: float = 15.0
+        self._sse_disconnect_buffer: float = 2.0  # seconds to wait before declaring disconnect
 
     def _headers(self) -> dict:
         """Get request headers with API key"""
@@ -482,14 +483,30 @@ class BLEClientRemote(BLEClientBase):
                 break
             except Exception as e:
                 if self._running:
-                    # Notify frontend if we were connected when SSE dropped
+                    # Buffer before declaring disconnect — brief SSE blips (e.g. 1-2s network
+                    # hiccup) should not trigger a disconnect notification. If the SSE reconnects
+                    # within _sse_disconnect_buffer seconds the device is still considered
+                    # connected and no notification is sent.
                     if self._status.state == ConnectionState.CONNECTED:
-                        logger.info("BLE service SSE dropped while connected — notifying frontend")
-                        self._status.state = ConnectionState.DISCONNECTED
-                        self._status.device_address = None
-                        await self._publish_status(
-                            'disconnect BLE', 'lost', 'BLE service connection lost'
+                        was_connected_device = self._status.device_address
+                        logger.info(
+                            "BLE service SSE dropped while connected — "
+                            "waiting %.1fs before notifying frontend",
+                            self._sse_disconnect_buffer,
                         )
+                        await asyncio.sleep(self._sse_disconnect_buffer)
+                        # Only notify if still disconnected (SSE hasn't recovered yet)
+                        if (
+                            self._running
+                            and self._status.state == ConnectionState.CONNECTED
+                            and self._status.device_address == was_connected_device
+                        ):
+                            logger.info("BLE service SSE still down — notifying frontend")
+                            self._status.state = ConnectionState.DISCONNECTED
+                            self._status.device_address = None
+                            await self._publish_status(
+                                'disconnect BLE', 'lost', 'BLE service connection lost'
+                            )
                     if not hasattr(self, '_sse_backoff'):
                         self._sse_backoff = 5
                     logger.warning("SSE connection error: %s, reconnecting in %ds...",
