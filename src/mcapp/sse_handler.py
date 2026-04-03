@@ -399,10 +399,12 @@ class SSEManager:
                 logger.error("Failed to send message via SSE API: %s", e)
                 raise HTTPException(status_code=500, detail=str(e))
 
-        # Status endpoint
+        # Status endpoint — intentional health/observability endpoint.
+        # Returns version, connected client count, and uptime.
+        # Not called by the frontend UI, but useful for ops monitoring and debugging.
         @app.get("/api/status")
         async def get_status():
-            """Get SSE server status."""
+            """Get SSE server status (version, client count, uptime). Health endpoint."""
             async with self.clients_lock:
                 client_count = len(self.clients)
 
@@ -453,23 +455,17 @@ class SSEManager:
 
         @app.post("/api/hidden_destinations")
         async def set_hidden_destinations(request: Request):
-            """Show/hide destinations. Single: {dst, hidden}. Bulk: {destinations: [...]}."""
+            """Update hidden destinations. Bulk: {destinations: [...]}."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
             )
-            if not storage or not hasattr(storage, "update_hidden_destination"):
+            if not storage or not hasattr(storage, "set_hidden_destinations"):
                 raise HTTPException(status_code=503, detail="Storage not available")
             body = await request.json()
-            if "destinations" in body:
-                await storage.set_hidden_destinations(
-                    [str(d) for d in body["destinations"]]
-                )
-            else:
-                dst = body.get("dst")
-                hidden = body.get("hidden", True)
-                if not dst:
-                    raise HTTPException(status_code=400, detail="Missing dst")
-                await storage.update_hidden_destination(str(dst), bool(hidden))
+            destinations = body.get("destinations")
+            if destinations is None:
+                raise HTTPException(status_code=400, detail="Missing destinations")
+            await storage.set_hidden_destinations([str(d) for d in destinations])
             return {"status": "ok"}
 
         # Blocked texts endpoints (persist blocked message patterns)
@@ -485,23 +481,18 @@ class SSEManager:
 
         @app.post("/api/blocked_texts")
         async def set_blocked_texts(request: Request):
-            """Add/remove blocked texts. Single: {text, blocked}. Bulk: {texts: [...]}."""
+            """Add/remove a blocked text pattern. Single: {text, blocked}."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
             )
             if not storage or not hasattr(storage, "update_blocked_text"):
                 raise HTTPException(status_code=503, detail="Storage not available")
             body = await request.json()
-            if "texts" in body:
-                await storage.set_blocked_texts(
-                    [str(t) for t in body["texts"]]
-                )
-            else:
-                text = body.get("text")
-                blocked = body.get("blocked", True)
-                if not text:
-                    raise HTTPException(status_code=400, detail="Missing text")
-                await storage.update_blocked_text(str(text), bool(blocked))
+            text = body.get("text")
+            blocked = body.get("blocked", True)
+            if not text:
+                raise HTTPException(status_code=400, detail="Missing text")
+            await storage.update_blocked_text(str(text), bool(blocked))
             return {"status": "ok"}
 
         # Delete messages by destination
@@ -676,11 +667,6 @@ class SSEManager:
 
         # ── Update / Deployment Endpoints ──────────────────────────
 
-        @app.get("/api/update/check")
-        async def check_update():
-            """Check GitHub for available version updates (cached 5 min)."""
-            return await self._check_update_version()
-
         @app.post("/api/update/start")
         async def start_update(request: Request):
             """Launch the update runner process."""
@@ -701,43 +687,6 @@ class SSEManager:
         return app
 
     # ── Update / Deployment Helpers ─────────────────────────────
-
-    _update_check_cache: dict[str, Any] = {}
-    _update_check_time: float = 0.0
-
-    async def _check_update_version(self) -> dict[str, Any]:
-        """Check GitHub releases for available version (cached 5 min)."""
-        now = time.time()
-        if now - self._update_check_time < 300 and self._update_check_cache:
-            return self._update_check_cache
-
-        import urllib.error
-        import urllib.request
-
-        installed = self._get_installed_version()
-        available = "unknown"
-
-        try:
-            url = "https://api.github.com/repos/DK5EN/McApp/releases/latest"
-            req = urllib.request.Request(url, headers={"User-Agent": "McApp"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = json.loads(resp.read().decode())
-                available = data.get("tag_name", "unknown")
-        except (urllib.error.URLError, OSError, json.JSONDecodeError):
-            pass
-
-        result = {
-            "installed": installed,
-            "available": available,
-            "update_available": (
-                available != "unknown"
-                and installed != "not_installed"
-                and available.lstrip("v") != installed.lstrip("v")
-            ),
-        }
-        self._update_check_cache = result
-        self._update_check_time = now
-        return result
 
     def _get_installed_version(self) -> str:
         """Read installed version from version.html."""

@@ -501,22 +501,29 @@ class SQLiteStorage:
 
         # 5. Pre-aggregate signal_buckets from signal_log
         bucket_ms = BUCKET_SECONDS * 1000
-        conn.execute(f"""
+        conn.execute(
+            """
             INSERT OR REPLACE INTO signal_buckets
                 (callsign, bucket_ts, bucket_size, rssi_avg, rssi_min, rssi_max,
                  snr_avg, snr_min, snr_max, count)
             SELECT
                 callsign,
-                (timestamp / {bucket_ms}) * {bucket_ms} AS bucket_ts,
-                {bucket_ms},
+                (timestamp / ?) * ? AS bucket_ts,
+                ?,
                 AVG(rssi), MIN(rssi), MAX(rssi),
                 AVG(snr), MIN(snr), MAX(snr),
                 COUNT(*)
             FROM signal_log
-            WHERE rssi BETWEEN {VALID_RSSI_RANGE[0]} AND {VALID_RSSI_RANGE[1]}
-              AND snr BETWEEN {VALID_SNR_RANGE[0]} AND {VALID_SNR_RANGE[1]}
+            WHERE rssi BETWEEN ? AND ?
+              AND snr BETWEEN ? AND ?
             GROUP BY callsign, bucket_ts
-        """)
+            """,
+            (
+                bucket_ms, bucket_ms, bucket_ms,
+                VALID_RSSI_RANGE[0], VALID_RSSI_RANGE[1],
+                VALID_SNR_RANGE[0], VALID_SNR_RANGE[1],
+            ),
+        )
         bucket_count = conn.execute("SELECT changes()").fetchone()[0]
         logger.info("Pre-aggregated %d signal_buckets entries", bucket_count)
 
