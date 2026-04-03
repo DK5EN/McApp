@@ -160,14 +160,6 @@ These remain as **Priority 4 — Future** items. See [Section 8](#8-remaining-op
 
 ### Still Open (2 items)
 
-#### TODO-B2: `system:connected` / `system:ping` SSE Events
-
-Backend sends these typed SSE events on connection and as keepalive. Frontend has no consumers — events arrive and are silently discarded. Not in frontend `EventMap`.
-
-**Action:** Either (a) add frontend consumers (connection ID display, latency indicator in status bar) or (b) stop sending them from backend if the frontend SSE heartbeat detection is sufficient.
-
----
-
 ### Priority 4 — Multi-Node BLE Preparation (Future)
 
 | ID | Description | Files |
