@@ -3,6 +3,7 @@
 **Date:** 2026-04-17
 **Scope:** `src/mcapp/` full tree + `ble_service/` + dependencies
 **Reviewers:** 4 parallel audit agents (DRY, bugs, efficiency, CVE) + human verification of cited lines
+**Status:** bug + efficiency fixes applied in commit `5e0ab88`. DRY extractions deferred.
 
 ---
 
@@ -14,6 +15,28 @@
 - **Pi-specific efficiency concerns**: `TimezoneFinder` re-instantiation per request, unbounded dedup caches, per-client JSON serialization on SSE broadcast.
 
 The codebase is in good shape overall. The Priority 1/2/3 refactor commits have paid off — `print()`→logger migration is mostly complete, typed SSE events landed, BLE disconnect debounce and suppression extraction tightened the router. Remaining issues are second-order.
+
+---
+
+## Changes applied (commit `5e0ab88`)
+
+| § | Item | Status |
+|---|---|---|
+| 1 | CVE audit, `uv lock --upgrade`, aiohttp→httpx migration committed | ✅ applied |
+| 2.1 | `response.py` — `continue` placement | ✅ applied |
+| 2.2 | Periodic dedup cleanup task | ✅ applied |
+| 2.3 | Cap `cached_ble_registers` | ⏭️ not needed (TYP whitelist at `main.py:1168` already caps at 12 entries) |
+| 2.4 | Parameterize `bucket_5min_ms` SQL | ✅ applied |
+| 2.5 | Offload blocking file I/O to thread | ✅ applied |
+| 2.6 | SSE shutdown guard | ✅ applied |
+| 4.1 | `TimezoneFinder` singleton | ✅ applied |
+| 4.2 | SSE serialize-once broadcast | ✅ applied |
+| 4.3 | Dedup `print` → `logger.debug` | ✅ applied |
+| 4.4 | Combine SELECT+UPDATE pattern in storage | ⏭️ deferred (needs schema-level review) |
+| 4.5 | Parallel SSE fan-out via `asyncio.gather` | ✅ applied |
+| 3.x | DRY extractions (§3.1–3.4) | ⏭️ deferred (higher-risk refactor, not in this pass) |
+
+Verification after commit: `uvx ruff check` → **pass**. No test regressions (startup tests not run per user direction).
 
 ---
 
@@ -36,70 +59,59 @@ The codebase is in good shape overall. The Priority 1/2/3 refactor commits have 
 All others already at latest (httpx 0.28.1, uvicorn 0.44.0, starlette 1.0.0, anyio 4.13.0, h11 0.16.0, certifi 2026.2.25, idna 3.11, sse-starlette 3.3.4, timezonefinder 8.2.2).
 
 ### Notes on the working tree
-The pre-existing uncommitted `pyproject.toml` diff (dropping `aiohttp`/`aiohttp-sse-client`/`requests` in favor of `httpx`) was already present when this review started — not part of this audit. It reduces `uv.lock` from 1147 → 222 lines (~81% smaller). **Before committing that change, verify no code still imports `aiohttp` or `requests`** (`grep -r "import aiohttp\|import requests\|from aiohttp\|from requests" src/`).
+The pre-existing uncommitted `pyproject.toml` diff (dropping `aiohttp`/`aiohttp-sse-client`/`requests` in favor of `httpx`) was already present when this review started — not part of the CVE audit itself. It reduces `uv.lock` from 1147 → 222 lines (~81% smaller). Verified: no code still imports `aiohttp` or `requests` (grep clean). The migration landed in commit `5e0ab88` alongside the review fixes.
 
 ### Verification
 - `uvx ruff check` → **pass** ("All checks passed!")
 - `uv sync` → clean
 - `pip-audit` (PyPI + OSV) → clean
-
-**Working tree left dirty as requested.** No commits made.
+- Committed in `5e0ab88` on `development`.
 
 ---
 
 ## 2. Bugs & Correctness
 
-### 2.1 — `continue` nested inside `if has_console` in response handler
+### 2.1 — `continue` nested inside `if has_console` in response handler ✅ FIXED
 
 - **Severity:** medium
 - **File:** `src/mcapp/commands/response.py:102-105`
-- **Bug:** The `continue` after a failed BLE send is inside the `if has_console:` branch. When console is disabled (production Pi without TTY attached), exception is swallowed but loop falls through to `asyncio.sleep(12)` for a chunk that failed. Behavior silently differs between dev and prod.
-- **Fix:** Move `continue` out of the `if has_console` block:
-  ```python
-  except Exception as ble_error:
-      if has_console:
-          print(f"⚠️  CommandHandler: send failed to {recipient}: {ble_error}")
-      logger.warning("CommandHandler: send failed to %s: %s", recipient, ble_error)
-      continue
-  ```
+- **Bug:** The `continue` after a failed BLE send was inside the `if has_console:` branch. When console is disabled (production Pi without TTY attached), exception was swallowed but loop fell through to `asyncio.sleep(12)` for a chunk that failed. Behavior silently differed between dev and prod.
+- **Applied:** rewrote the `except` block to always log via `logger.warning` and `continue`; the `has_console` print was removed to keep the branch tight.
 
-### 2.2 — Unbounded dedup/throttle dicts
+### 2.2 — Unbounded dedup/throttle dicts ✅ FIXED
 
 - **Severity:** medium
-- **File:** `src/mcapp/commands/dedup.py:15-28` (module-level dicts)
-- **Bug:** `processed_msg_ids`, `command_throttle`, `failed_attempts`, `blocked_users`, `block_notifications_sent` only grow. Cleanup is lazy (runs per check) and stops running during quiet periods, leaving stale entries until the next message.
-- **Impact on Pi Zero 2W (512 MB RAM):** 50k stale entries × ~100 bytes each = ~5 MB per namespace leaked over long uptime windows.
-- **Fix:** Add a periodic background task (e.g., every hour) that calls the cleanup functions regardless of incoming traffic. Or use `cachetools.TTLCache` to eliminate manual cleanup entirely.
+- **File:** `src/mcapp/commands/dedup.py`
+- **Bug:** `processed_msg_ids`, `command_throttle`, `failed_attempts`, `blocked_users`, `block_notifications_sent` only grew. Cleanup was lazy (runs per check) and stopped running during quiet periods, leaving stale entries until the next message.
+- **Applied:** added `_dedup_cleanup_loop` running every hour (`CLEANUP_INTERVAL_SECONDS = 3600`) plus `_cleanup_failed_attempts`. `start_dedup_cleanup` / `stop_dedup_cleanup` wired into `main.py` lifecycle (started right after `register_protocol('commands')`, cancelled in the shutdown path before beacon cleanup).
 
-### 2.3 — Unbounded `cached_ble_registers`
+### 2.3 — Unbounded `cached_ble_registers` ⏭️ NOT NEEDED
 
-- **Severity:** medium
-- **File:** `src/mcapp/main.py` (around register caching — verify current line; agent cited 1162/1169)
-- **Bug:** BLE registers dict only clears on disconnect. A long-lived connection with many register-type updates (TYP=`I`/`SN`/`G`/…) grows without bound.
-- **Fix:** Cap size (e.g., 50 entries with `OrderedDict.popitem(last=False)` when exceeded) or key the dict on the finite set of known register types so updates are replacements, not appends.
+- **Severity:** originally flagged medium
+- **File:** `src/mcapp/main.py:1162-1169`
+- **Verdict after verification:** the insert site at `main.py:1168` already gates on a hardcoded TYP whitelist (`"I", "SN", "G", "SA", "SE", "S1", "SW", "S2", "W", "AN", "IO", "TM"` — 12 keys). The dict is already bounded at 12 entries; updates are replacements, not appends. The review finding was overcautious — no code change shipped.
 
-### 2.4 — f-string SQL with hardcoded values (style, not injection)
+### 2.4 — f-string SQL with hardcoded values (style, not injection) ✅ FIXED
 
 - **Severity:** low
 - **Files:** `src/mcapp/sqlite_storage.py:1561-1563` (size-based pruning), `1613`, `1623` (bucket aggregation)
-- **Finding:** The bug agent flagged these as SQL injection. **They are not** — table names come from a hardcoded tuple (`line 1550-1556`), and `bucket_5min_ms = BUCKET_SECONDS * 1000` is a constant. But: SQLite does not parameterize table names, so f-strings are the only option there. For `bucket_5min_ms` (line 1613, 1623), switch to `?` parameters — cheap and removes the pattern.
-- **Fix:** Parameterize `bucket_5min_ms`. Leave table-name f-strings with a comment noting the allowlist.
+- **Finding:** The bug agent flagged these as SQL injection. **They are not** — table names come from a hardcoded tuple (lines 1550-1556), and `bucket_5min_ms = BUCKET_SECONDS * 1000` is a constant. SQLite does not parameterize table names, so the f-strings on 1561-1563 stay.
+- **Applied:** `bucket_5min_ms` is now passed as a `?` placeholder in both the aggregate-into-hourly INSERT and the subsequent DELETE (`aggregate_hourly_buckets`).
 
-### 2.5 — Blocking file I/O on the event loop
+### 2.5 — Blocking file I/O on the event loop ✅ FIXED
 
 - **Severity:** low-medium
 - **Files:**
-  - `src/mcapp/main.py` — startup `Path.exists()`/`Path.rename()` for dump handling (~line 1145)
-  - `src/mcapp/sse_handler.py:729-730, 766` — `.write_text()` / `.read_text()` in async route handlers (update endpoints)
-- **Bug:** Sync file I/O called from async context. On µSD storage the block can be 10–100 ms.
-- **Fix:** Wrap in `await asyncio.to_thread(...)`.
+  - `src/mcapp/main.py:1146-1149` — startup `Path.exists()` / `Path.rename()` for dump handling
+  - `src/mcapp/sse_handler.py` (`_launch_update_runner`) — `args_file.write_text(...)`, `trigger_file.write_text("")`
+- **Applied:** both sites now use `asyncio.to_thread(...)`. The `_read_slot_info` helper was already run via `to_thread` at the caller, so its internal `read_text`/`is_symlink` calls are fine.
 
-### 2.6 — SSE generator cleanup under shutdown
+### 2.6 — SSE generator cleanup under shutdown ✅ FIXED
 
 - **Severity:** low
-- **File:** `src/mcapp/sse_handler.py:305-340`
-- **Bug:** `event_generator()`'s `while client.connected:` has no secondary shutdown guard; if `stop_server()` is called mid-generator, clients may leak through the teardown path.
-- **Fix:** Add a shared shutdown `asyncio.Event` that the generator also checks. `queue.get()` already has a 30 s timeout, so worst-case leak is bounded — this is a polish fix.
+- **File:** `src/mcapp/sse_handler.py`
+- **Bug:** `event_generator()`'s `while client.connected:` had no secondary shutdown guard; if `stop_server()` was called mid-generator, clients could leak through the teardown path.
+- **Applied:** `stop_server()` now sets the existing `_shutdown_event` up front. The event generator's outer loop condition is `while client.connected and not self._shutdown_event.is_set():`, so running generators exit on the next iteration.
 
 ---
 
@@ -158,50 +170,44 @@ The pre-existing uncommitted `pyproject.toml` diff (dropping `aiohttp`/`aiohttp-
 
 ## 4. Efficiency (Pi Zero 2W)
 
-### 4.1 — `TimezoneFinder()` instantiated per request (HIGH)
+### 4.1 — `TimezoneFinder()` instantiated per request (HIGH) ✅ FIXED
 
-- **File:** `src/mcapp/sse_handler.py:656` (inside `/api/timezone`)
-- **Problem:** `TimezoneFinder()` loads a ~100 KB geo dataset on every request. ~100–200 ms latency on Pi storage per call + GC churn.
-- **Fix:** Module-level singleton: `_TF = TimezoneFinder()` at import; reuse. Also used by `meteo.py` — share the same singleton.
+- **File:** `src/mcapp/sse_handler.py` (inside `/api/timezone`)
+- **Problem:** `TimezoneFinder()` loaded a ~100 KB geo dataset on every request. ~100–200 ms latency on Pi storage per call + GC churn.
+- **Applied:** lazy module-level singleton `_get_tz_finder()` at the top of `sse_handler.py`. First call instantiates once; subsequent calls reuse. (Correction from earlier draft: `meteo.py` does **not** use `TimezoneFinder`, so there's nothing to share. Only `sse_handler.py` needs the singleton.)
 
-### 4.2 — SSE broadcast serializes the same payload per client (MEDIUM)
+### 4.2 — SSE broadcast serializes the same payload per client (MEDIUM) ✅ FIXED
 
-- **File:** `src/mcapp/sse_handler.py:313, 316, 851`
-- **Problem:** Each client's `event_generator` calls `_format_sse_event(data, ...)` → `json.dumps(data)`. With N subscribers, payload is JSON-encoded N times.
-- **Fix:** Format once in `broadcast_message` and push the string into client queues, or cache the serialized form on the routed message and let generators reuse it.
+- **File:** `src/mcapp/sse_handler.py`
+- **Problem:** Each client's `event_generator` called `_format_sse_event(data, ...)` → `json.dumps(data)`. With N subscribers, payload was JSON-encoded N times.
+- **Applied:** `SSEClient.queue` now stores pre-formatted `str` events. `broadcast_message` formats once, then fans the same string out to every client (see §4.5). The event generator yields queued events verbatim. Keepalive pings and per-client initial-data yields continue to format inline — those aren't duplicated across clients, so no gain from caching them.
 
-### 4.3 — `print()` and `has_console` debug in dedup hot path (MEDIUM)
+### 4.3 — `print()` and `has_console` debug in dedup hot path (MEDIUM) ✅ FIXED
 
-- **File:** `src/mcapp/commands/dedup.py:54-55`, `135-164`
+- **File:** `src/mcapp/commands/dedup.py`
 - **Problem:** Per-message debug prints during throttle checks and cleanup. Conditional on `has_console`, which is truthy in production on the Pi.
-- **Fix:** Switch to `logger.debug()` — respects log level, zero cost when disabled. Matches the Priority 1 migration already started.
+- **Applied:** all `has_console`/`print` blocks replaced with `logger.debug(...)` or (for the user-block event) `logger.info(...)`. `has_console` is no longer imported in this file. Continues the Priority 1 migration.
 
-### 4.4 — SELECT-then-UPDATE pattern in message storage (LOW-MEDIUM)
+### 4.4 — SELECT-then-UPDATE pattern in message storage (LOW-MEDIUM) ⏭️ DEFERRED
 
 - **File:** `src/mcapp/sqlite_storage.py:1051-1057`, `1102-1109`, `1176-1183`, `1196-1202`
 - **Problem:** Every message stored triggers 2–3 separate `_execute()` calls. At peak mesh traffic, context-switch and thread-pool overhead add up on a single-core Pi.
-- **Fix:** Combine into `INSERT ... ON CONFLICT DO UPDATE` or `UPDATE ... WHERE id = (SELECT ...)` where applicable.
+- **Why deferred:** combining into `INSERT ... ON CONFLICT DO UPDATE` or `UPDATE ... WHERE id = (SELECT ...)` is schema-sensitive and easy to get subtly wrong; wants its own focused pass rather than being bundled with unrelated fixes.
 
-### 4.5 — Sequential fan-out in `broadcast_message` (LOW)
+### 4.5 — Sequential fan-out in `broadcast_message` (LOW) ✅ FIXED
 
-- **File:** `src/mcapp/sse_handler.py:883-887`
-- **Problem:** Clients iterated sequentially; a slow `client.send()` delays all others.
-- **Fix:** `await asyncio.gather(*[c.send(m) for c in clients], return_exceptions=True)` once per broadcast.
+- **File:** `src/mcapp/sse_handler.py`
+- **Problem:** Clients iterated sequentially; a slow `client.send()` delayed all others.
+- **Applied:** `asyncio.gather(*(client.send(event) for client in clients), return_exceptions=True)` — exceptions are logged per-client instead of aborting the fan-out. Paired with §4.2 so every client receives the same pre-formatted string.
 
 ---
 
-## 5. Recommended Action Order
+## 5. Remaining Work
 
-Rough priority (high value, low risk first):
+Everything in §2 and §4 except §4.4 landed in `5e0ab88`. What's still open:
 
-1. **Ship CVE/lockfile refresh** — `uv.lock` already regenerated, ruff clean. Verify no dangling `aiohttp`/`requests` imports (see §1), then commit.
-2. **§2.1** — `response.py` `continue` placement. One-line fix, silent prod bug.
-3. **§4.1** — `TimezoneFinder` singleton. One-line fix, big latency win.
-4. **§4.3** — Dedup `print()` → `logger.debug`. Continues the Priority 1 migration.
-5. **§3.1 + §3.2** — Extract `_build_progress_message` and `_send_payload` in `MessageRouter`. ~30-minute refactor, kills six duplications.
-6. **§2.2** — Periodic dedup cleanup task. Protects long-uptime deployments.
-7. **§3.3 + §3.4** — BLE client consolidation. Bigger refactor; pairs well with §2.3 cache cap.
-8. **§4.2** — SSE serialize-once. Worth doing if client counts grow.
-9. **§2.5, §4.4, §4.5** — Polish pass.
+1. **§3.1 + §3.2** — Extract `_build_progress_message` and `_send_payload` in `MessageRouter`. Kills six duplications of the `if websocket: … else: …` branch and three mheard progress closures. ~30-minute refactor.
+2. **§3.3 + §3.4** — BLE client consolidation: pull `_publish_status` onto `BLEClientBase` and wrap the try/except/publish boilerplate in `_execute_ble_operation`. Bigger refactor.
+3. **§4.4** — Collapse SELECT-then-UPDATE in `sqlite_storage.py` into single statements. Schema-sensitive, deserves its own focused PR.
 
-All fixes are compatible with the current architecture; none require schema or API changes.
+No new findings surfaced during the bug/efficiency pass. All shipped changes are compatible with the current architecture — no schema or API changes.
