@@ -12,7 +12,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
-import requests
+import httpx
 
 VERSION = "v0.46.0"
 
@@ -482,19 +482,19 @@ class WeatherService:
             "messzeitpunkt": current.get("time", "unbekannt")
         }
 
-    def _make_request(self, url: str, params: Dict) -> requests.Response:
+    def _make_request(self, url: str, params: Dict) -> httpx.Response:
         """Robuste HTTP-Request mit Retry-Logic"""
         for attempt in range(self.max_retries + 1):
             try:
-                response = requests.get(url, params=params, timeout=self.timeout,
+                response = httpx.get(url, params=params, timeout=self.timeout,
                                      headers={"User-Agent": "HamRadio-WeatherService/1.0"})
                 response.raise_for_status()
                 return response
-            except requests.exceptions.Timeout:
+            except httpx.TimeoutException:
                 if attempt == self.max_retries:
                     raise WeatherServiceError("Request Timeout")
                 time.sleep(1)
-            except requests.exceptions.RequestException as e:
+            except httpx.HTTPError as e:
                 if attempt == self.max_retries:
                     raise WeatherServiceError(f"HTTP-Fehler: {e}")
                 time.sleep(1)

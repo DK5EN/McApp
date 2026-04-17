@@ -14,6 +14,18 @@ from typing import Any
 
 from .logging_setup import get_logger
 
+# Module-level TimezoneFinder singleton: the constructor loads a ~100 KB dataset
+# into memory, so we instantiate once on first use and reuse across requests.
+_tz_finder: Any = None
+
+
+def _get_tz_finder() -> Any:
+    global _tz_finder
+    if _tz_finder is None:
+        from timezonefinder import TimezoneFinder
+        _tz_finder = TimezoneFinder()
+    return _tz_finder
+
 VERSION = "v0.50.0"
 
 logger = get_logger(__name__)
@@ -58,14 +70,16 @@ class SSEClient:
 
     def __init__(self, client_id: str):
         self.client_id = client_id
-        self.queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        # Queue stores pre-formatted SSE event strings so broadcast payloads are
+        # serialized once and shared across all clients instead of re-formatted N times.
+        self.queue: asyncio.Queue[str] = asyncio.Queue()
         self.connected = True
         self.connected_at = time.time()
 
-    async def send(self, data: dict[str, Any]) -> None:
-        """Queue a message for this client."""
+    async def send(self, event: str) -> None:
+        """Queue a pre-formatted SSE event string for this client."""
         if self.connected:
-            await self.queue.put(data)
+            await self.queue.put(event)
 
     def disconnect(self) -> None:
         """Mark client as disconnected."""
@@ -302,15 +316,15 @@ class SSEManager:
                             client_id, e, exc_info=True,
                         )
 
-                    while client.connected:
+                    while client.connected and not self._shutdown_event.is_set():
                         # Check if client disconnected
                         if await request.is_disconnected():
                             break
 
                         try:
-                            # Wait for message with timeout (for keepalive)
-                            data = await asyncio.wait_for(client.queue.get(), timeout=30.0)
-                            yield self._format_sse_event(data, self._get_event_type(data))
+                            # Wait for pre-formatted event with timeout (for keepalive)
+                            event = await asyncio.wait_for(client.queue.get(), timeout=30.0)
+                            yield event
                         except asyncio.TimeoutError:
                             # Send keepalive ping
                             yield self._format_sse_event(
@@ -651,10 +665,7 @@ class SSEManager:
             import zoneinfo
             from datetime import datetime
 
-            from timezonefinder import TimezoneFinder
-
-            tf = TimezoneFinder()
-            tz_name = tf.timezone_at(lat=lat, lng=lon)
+            tz_name = _get_tz_finder().timezone_at(lat=lat, lng=lon)
             if not tz_name:
                 raise HTTPException(
                     status_code=400, detail="No timezone found for coordinates"
@@ -726,8 +737,10 @@ class SSEManager:
         args_file = pathlib.Path("/var/lib/mcapp/update-args.json")
         trigger_file = pathlib.Path("/var/lib/mcapp/update-trigger")
 
-        args_file.write_text(json.dumps({"mode": mode, "dev": dev}))
-        trigger_file.write_text("")
+        await asyncio.to_thread(
+            args_file.write_text, json.dumps({"mode": mode, "dev": dev}),
+        )
+        await asyncio.to_thread(trigger_file.write_text, "")
         logger.info("Update trigger file written")
 
         # Frontend will retry stream connection until runner is ready
@@ -879,12 +892,18 @@ class SSEManager:
         if not clients:
             return
 
-        # Queue message for all clients
-        for client in clients:
-            try:
-                await client.send(message)
-            except Exception as e:
-                logger.warning("Failed to queue message for SSE client %s: %s", client.client_id, e)
+        # Serialize once, fan out in parallel so one slow client doesn't stall the rest.
+        event = self._format_sse_event(message, self._get_event_type(message))
+        results = await asyncio.gather(
+            *(client.send(event) for client in clients),
+            return_exceptions=True,
+        )
+        for client, result in zip(clients, results):
+            if isinstance(result, Exception):
+                logger.warning(
+                    "Failed to queue message for SSE client %s: %s",
+                    client.client_id, result,
+                )
 
     async def _disconnect_all_clients(self) -> None:
         """Disconnect all SSE clients."""
@@ -927,6 +946,8 @@ class SSEManager:
 
     async def stop_server(self) -> None:
         """Stop the SSE/FastAPI server."""
+        # Tell every active event_generator loop to wind down on the next tick.
+        self._shutdown_event.set()
         if self.server:
             self.server.should_exit = True
 

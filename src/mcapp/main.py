@@ -1143,10 +1143,10 @@ async def main():
     storage_handler = await create_sqlite_storage(cfg.storage.db_path)
     # One-time migration: import mcdump.json into SQLite, then rename to prevent re-import
     dump_path = Path("mcdump.json")
-    if dump_path.exists():
+    if await asyncio.to_thread(dump_path.exists):
         count = await storage_handler.load_dump(str(dump_path))
         migrated_path = dump_path.with_suffix(".json.migrated")
-        dump_path.rename(migrated_path)
+        await asyncio.to_thread(dump_path.rename, migrated_path)
         logger.info("Migrated dump file → %s (%d messages imported)", migrated_path, count)
     await storage_handler.prune_messages(
         cfg.storage.prune_hours, block_list,
@@ -1210,6 +1210,7 @@ async def main():
         cfg.user_info_text
     )
     message_router.register_protocol('commands', command_handler)
+    command_handler.start_dedup_cleanup()
 
     # UDP Handler
     udp_handler = UDPHandler(
@@ -1418,6 +1419,8 @@ async def main():
         )
     except asyncio.TimeoutError:
         logger.warning("Beacon cleanup timeout")
+
+    await command_handler.stop_dedup_cleanup()
 
     # Clean shutdown sequence with timeouts
     try:

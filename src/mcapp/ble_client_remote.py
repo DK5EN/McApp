@@ -13,8 +13,7 @@ import time
 from typing import Callable
 from urllib.parse import urljoin
 
-import aiohttp
-from aiohttp_sse_client import client as sse_client
+import httpx
 
 from .ble_client import BLEClientBase, BLEDevice, BLEMode, BLEStatus, ConnectionState
 from .ble_protocol import decode_binary_message, decode_json_message, dispatcher
@@ -44,7 +43,7 @@ class BLEClientRemote(BLEClientBase):
         self.message_router = message_router
         self.timeout = timeout
 
-        self._session: aiohttp.ClientSession | None = None
+        self._client: httpx.AsyncClient | None = None
         self._sse_task: asyncio.Task | None = None
         self._running = False
         self._status.mode = BLEMode.REMOTE
@@ -59,20 +58,19 @@ class BLEClientRemote(BLEClientBase):
             headers["X-API-Key"] = self.api_key
         return headers
 
-    async def _ensure_session(self):
-        """Ensure HTTP session exists"""
+    async def _ensure_client(self):
+        """Ensure HTTP client exists"""
         if not self._running:
             return
-        if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=self.timeout)
-            self._session = aiohttp.ClientSession(timeout=timeout)
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=httpx.Timeout(self.timeout))
 
-    async def _reset_session(self):
-        """Close and recreate the HTTP session"""
-        if self._session and not self._session.closed:
-            await self._session.close()
-        self._session = None
-        await self._ensure_session()
+    async def _reset_client(self):
+        """Close and recreate the HTTP client"""
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
+        self._client = None
+        await self._ensure_client()
 
     async def _request(
         self,
@@ -86,61 +84,59 @@ class BLEClientRemote(BLEClientBase):
     ) -> dict:
         """Make HTTP request to remote service, with retry on 409 (busy) and connection errors"""
         if not self._running:
-            raise aiohttp.ClientError("BLE client stopped")
-        await self._ensure_session()
+            raise httpx.HTTPError("BLE client stopped")
+        await self._ensure_client()
 
         url = urljoin(self.remote_url, endpoint)
-        timeout = (
-            aiohttp.ClientTimeout(total=request_timeout) if request_timeout else None
-        )
+        timeout = httpx.Timeout(request_timeout) if request_timeout else None
 
         for attempt in range(1 + retries):
             try:
-                async with self._session.request(
+                response = await self._client.request(
                     method,
                     url,
                     headers=self._headers(),
                     json=data if data else None,
                     timeout=timeout,
-                ) as response:
-                    response_data = await response.json()
+                )
+                response_data = response.json()
 
-                    if response.status == 409 and attempt < retries:
-                        logger.info(
-                            "BLE busy (409), retry %d/%d in %.1fs: %s",
-                            attempt + 1, retries, retry_delay, endpoint
-                        )
-                        await asyncio.sleep(retry_delay)
-                        continue
+                if response.status_code == 409 and attempt < retries:
+                    logger.info(
+                        "BLE busy (409), retry %d/%d in %.1fs: %s",
+                        attempt + 1, retries, retry_delay, endpoint
+                    )
+                    await asyncio.sleep(retry_delay)
+                    continue
 
-                    if response.status >= 400:
-                        detail = response_data.get('detail', 'Unknown error')
-                        # Structured detail (dict) from enriched 409 responses
-                        if isinstance(detail, dict):
-                            error_msg = detail.get('message', str(detail))
-                            reason = detail.get('reason', '')
-                            if reason == 'reconnecting':
-                                attempt = detail.get('attempt', '?')
-                                max_a = detail.get('max_attempts', '?')
-                                dev = detail.get('device_name', '')
-                                error_msg = (
-                                    f"Cannot scan: reconnecting to {dev} "
-                                    f"(attempt {attempt}/{max_a})"
-                                )
-                        else:
-                            error_msg = str(detail)
-                        raise RuntimeError(f"API error ({response.status}): {error_msg}")
+                if response.status_code >= 400:
+                    detail = response_data.get('detail', 'Unknown error')
+                    # Structured detail (dict) from enriched 409 responses
+                    if isinstance(detail, dict):
+                        error_msg = detail.get('message', str(detail))
+                        reason = detail.get('reason', '')
+                        if reason == 'reconnecting':
+                            attempt = detail.get('attempt', '?')
+                            max_a = detail.get('max_attempts', '?')
+                            dev = detail.get('device_name', '')
+                            error_msg = (
+                                f"Cannot scan: reconnecting to {dev} "
+                                f"(attempt {attempt}/{max_a})"
+                            )
+                    else:
+                        error_msg = str(detail)
+                    raise RuntimeError(f"API error ({response.status_code}): {error_msg}")
 
-                    return response_data
+                return response_data
 
-            except aiohttp.ClientError as e:
+            except httpx.HTTPError as e:
                 if attempt < retries:
                     log = logger.debug if quiet else logger.warning
                     log(
                         "HTTP request failed (%s), retry %d/%d: %s",
                         e, attempt + 1, retries, endpoint
                     )
-                    await self._reset_session()
+                    await self._reset_client()
                     await asyncio.sleep(retry_delay)
                     continue
                 log_final = logger.debug if quiet else logger.error
@@ -411,7 +407,7 @@ class BLEClientRemote(BLEClientBase):
 
         # Check connection to remote service
         try:
-            await self._ensure_session()
+            await self._ensure_client()
             status = await self._request('GET', '/api/ble/status', retries=4, quiet=True)
             logger.info("Remote service status: %s", status.get('state', 'unknown'))
 
@@ -447,10 +443,10 @@ class BLEClientRemote(BLEClientBase):
                 pass
             self._sse_task = None
 
-        # Close HTTP session
-        if self._session and not self._session.closed:
-            await self._session.close()
-            self._session = None
+        # Close HTTP client
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
 
     async def _sse_loop(self):
         """SSE notification listener loop"""
@@ -463,27 +459,41 @@ class BLEClientRemote(BLEClientBase):
             try:
                 logger.info("Connecting to SSE stream: %s", url)
 
-                timeout = aiohttp.ClientTimeout(total=None, sock_read=90)
-                async with sse_client.EventSource(
-                    url, headers=headers, timeout=timeout
-                ) as event_source:
-                    self._sse_backoff = 5  # Reset on successful connection
-                    async for event in event_source:
-                        if not self._running:
-                            break
+                async with httpx.AsyncClient(timeout=httpx.Timeout(
+                    connect=30.0, read=90.0, write=30.0, pool=30.0,
+                )) as sse_client:
+                    async with sse_client.stream('GET', url, headers=headers) as response:
+                        response.raise_for_status()
+                        self._sse_backoff = 5  # Reset on successful connection
 
-                        if event.type == 'notification':
-                            await self._handle_notification(event.data)
-                        elif event.type == 'status':
-                            await self._handle_status(event.data)
-                        elif event.type == 'ping':
-                            logger.debug("SSE ping received")
+                        event_type = ''
+                        event_data = ''
+
+                        async for line in response.aiter_lines():
+                            if not self._running:
+                                break
+
+                            if line.startswith('event:'):
+                                event_type = line[6:].strip()
+                            elif line.startswith('data:'):
+                                event_data = line[5:].strip()
+                            elif line == '':
+                                # Empty line = end of SSE event
+                                if event_type and event_data:
+                                    if event_type == 'notification':
+                                        await self._handle_notification(event_data)
+                                    elif event_type == 'status':
+                                        await self._handle_status(event_data)
+                                    elif event_type == 'ping':
+                                        logger.debug("SSE ping received")
+                                event_type = ''
+                                event_data = ''
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 if self._running:
-                    # Buffer before declaring disconnect — brief SSE blips (e.g. 1-2s network
+                    # Buffer before declaring disconnect -- brief SSE blips (e.g. 1-2s network
                     # hiccup) should not trigger a disconnect notification. If the SSE reconnects
                     # within _sse_disconnect_buffer seconds the device is still considered
                     # connected and no notification is sent.
@@ -516,7 +526,7 @@ class BLEClientRemote(BLEClientBase):
                 else:
                     break
             else:
-                # Reset backoff on clean exit from async for (shouldn't normally happen)
+                # Reset backoff on clean exit from stream (shouldn't normally happen)
                 self._sse_backoff = 5
 
     async def _handle_notification(self, data: str):

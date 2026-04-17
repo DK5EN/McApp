@@ -1596,7 +1596,7 @@ class SQLiteStorage:
         bucket_5min_ms = BUCKET_SECONDS * 1000
 
         await self._execute(
-            f"""
+            """
             INSERT OR REPLACE INTO signal_buckets
                 (callsign, bucket_ts, bucket_size, rssi_avg, rssi_min, rssi_max,
                  snr_avg, snr_min, snr_max, count)
@@ -1610,19 +1610,18 @@ class SQLiteStorage:
                 MIN(snr_min), MAX(snr_max),
                 SUM(count)
             FROM signal_buckets
-            WHERE bucket_size = {bucket_5min_ms}
+            WHERE bucket_size = ?
               AND bucket_ts < ?
             GROUP BY callsign, hour_ts
             """,
-            (cutoff_ms,),
+            (bucket_5min_ms, cutoff_ms),
             fetch=False,
         )
 
         # Remove the aggregated 5-min buckets
         await self._execute(
-            f"DELETE FROM signal_buckets WHERE bucket_size = {bucket_5min_ms}"
-            " AND bucket_ts < ?",
-            (cutoff_ms,),
+            "DELETE FROM signal_buckets WHERE bucket_size = ? AND bucket_ts < ?",
+            (bucket_5min_ms, cutoff_ms),
             fetch=False,
         )
 

@@ -100,9 +100,10 @@ class ResponseMixin:
                                 src_type, recipient, chunk[:40],
                             )
                     except Exception as ble_error:
-                        if has_console:
-                            print(f"⚠️  CommandHandler: send failed to {recipient}: {ble_error}")
-                            continue
+                        logger.warning(
+                            "CommandHandler: send failed to %s: %s", recipient, ble_error,
+                        )
+                        continue
 
             # Small delay between chunks
             if i < len(chunks) - 1:

@@ -1,9 +1,17 @@
 """DedupMixin: deduplication, throttling, and abuse protection."""
 
+import asyncio
 import hashlib
 import time
 
-from .constants import COMMAND_THROTTLING, DEFAULT_THROTTLE_TIMEOUT, has_console
+from ..logging_setup import get_logger
+from .constants import COMMAND_THROTTLING, DEFAULT_THROTTLE_TIMEOUT
+
+logger = get_logger(__name__)
+
+# Periodic cleanup interval: run background sweep every hour so stale
+# entries are evicted even during quiet traffic periods.
+CLEANUP_INTERVAL_SECONDS = 3600
 
 
 class DedupMixin:
@@ -26,6 +34,53 @@ class DedupMixin:
         self.block_duration = 5 * DEFAULT_THROTTLE_TIMEOUT
         self.blocked_users = {}  # {src: block_timestamp}
         self.block_notifications_sent = set()
+
+        self._dedup_cleanup_task: asyncio.Task | None = None
+
+    def start_dedup_cleanup(self) -> None:
+        """Start the periodic cleanup task. Idempotent."""
+        if self._dedup_cleanup_task is None or self._dedup_cleanup_task.done():
+            self._dedup_cleanup_task = asyncio.create_task(self._dedup_cleanup_loop())
+
+    async def stop_dedup_cleanup(self) -> None:
+        """Cancel the periodic cleanup task."""
+        task = self._dedup_cleanup_task
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        self._dedup_cleanup_task = None
+
+    async def _dedup_cleanup_loop(self) -> None:
+        """Sweep expired entries on a fixed interval so quiet periods don't leak memory."""
+        while True:
+            try:
+                await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
+                now = time.time()
+                self._cleanup_msg_id_cache(now)
+                self._cleanup_throttle_cache(now)
+                self._cleanup_blocked_users(now)
+                self._cleanup_failed_attempts(now)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning("Dedup cleanup sweep failed: %s", e)
+
+    def _cleanup_failed_attempts(self, current_time: float) -> None:
+        """Drop failed-attempt entries whose window has passed."""
+        cutoff = current_time - self.failed_attempt_window
+        empty_srcs = []
+        for src, timestamps in self.failed_attempts.items():
+            kept = [ts for ts in timestamps if ts > cutoff]
+            if kept:
+                self.failed_attempts[src] = kept
+            else:
+                empty_srcs.append(src)
+        for src in empty_srcs:
+            del self.failed_attempts[src]
 
     def _get_content_hash(self, src, msg_text, dst=None):
         """Create hash from source + command (without arguments for command-specific throttling)"""
@@ -51,8 +106,7 @@ class DedupMixin:
             content = f"{src}:{msg_text}"
 
         hash_value = hashlib.md5(content.encode()).hexdigest()[:8]
-        if has_console:
-            print(f"🔍 Hash generation: '{content}' -> {hash_value}")
+        logger.debug("Hash generation: %r -> %s", content, hash_value)
 
         return hash_value
 
@@ -102,15 +156,10 @@ class DedupMixin:
         # Check if user should be blocked
         if len(self.failed_attempts[src]) >= self.max_failed_attempts:
             self.blocked_users[src] = current_time
-            if has_console:
-                print(
-                    f"🚫 CommandHandler: BLOCKED"
-                    f" user {src} for"
-                    f" {self.block_duration / 60}"
-                    f" minutes due to"
-                    f" {len(self.failed_attempts[src])}"
-                    f" failed attempts"
-                )
+            logger.info(
+                "BLOCKED user %s for %.1f minutes after %d failed attempts",
+                src, self.block_duration / 60, len(self.failed_attempts[src]),
+            )
 
     def _cleanup_msg_id_cache(self, current_time):
         """Remove old entries from msg_id cache"""
@@ -126,15 +175,10 @@ class DedupMixin:
         for src in expired:
             del self.blocked_users[src]
             self.block_notifications_sent.discard(src)
-
-            if has_console:
-                print(f"🔓 CommandHandler: UNBLOCKED user {src}")
+            logger.info("UNBLOCKED user %s", src)
 
     def _cleanup_throttle_cache(self, current_time, timeout=None):
         """Remove old entries from throttle cache with specific timeout"""
-        if has_console:
-            print(f"🔍 Cleanup throttle cache at {current_time}")
-
         expired = []
 
         for chash, data in self.command_throttle.items():
@@ -153,20 +197,8 @@ class DedupMixin:
                 entry_timeout = DEFAULT_THROTTLE_TIMEOUT
 
             age = current_time - timestamp
-
-            if has_console:
-                print(
-                    f"🔍   Entry hash:{chash}"
-                    f" cmd:{cmd}"
-                    f" age:{age:.1f}s"
-                    f" timeout:{entry_timeout}s"
-                    f" -> {'EXPIRED' if age > entry_timeout else 'VALID'}"
-                )
-
             if age > entry_timeout:
                 expired.append(chash)
 
         for chash in expired:
             del self.command_throttle[chash]
-            if has_console:
-                print(f"🔍   Removed expired hash:{chash}")
