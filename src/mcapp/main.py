@@ -35,15 +35,10 @@ try:
 except ImportError:
     SSE_AVAILABLE = False
 
+from . import __version__
 from .classifier import Classifier
 from .classifier.seed import seed_builtin_rules
-
-try:
-    from .classifier.tests import run_all_tests as run_classifier_tests
-except ImportError:
-    run_classifier_tests = None  # tests module lands in a later commit
-
-from . import __version__
+from .classifier.tests import run_all_tests as run_classifier_tests
 from .sqlite_storage import SQLiteStorage, create_sqlite_storage
 
 VERSION = f"v{__version__}"
@@ -1391,10 +1386,8 @@ async def main():
         logger.info("Running command handler test suite...")
         command_handler_passed = await command_handler.run_all_tests()
 
-        classifier_tests_passed = True
-        if run_classifier_tests is not None:
-            logger.info("Running classifier test suite...")
-            classifier_tests_passed = await run_classifier_tests(storage_handler)
+        logger.info("Running classifier test suite...")
+        classifier_tests_passed = await run_classifier_tests(storage_handler)
 
         if suppression_passed and command_handler_passed and classifier_tests_passed:
             logger.info("All tests passed! System ready.")

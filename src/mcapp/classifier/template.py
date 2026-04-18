@@ -66,65 +66,57 @@ async def update_stats(
     src = str(msg.get("src") or "")
     text = str(msg.get("msg") or "")
 
-    existing = await storage._execute(
+    # Atomic upsert — two concurrent classifies on the same fresh
+    # template_hash must not race between SELECT and INSERT.
+    await storage._execute(
+        "INSERT INTO beacon_templates "
+        "(template_hash, example_msg, example_src, srcs, count, "
+        " first_seen, last_seen, auto_beacon, user_action) "
+        "VALUES (?, ?, ?, ?, 1, ?, ?, 0, NULL) "
+        "ON CONFLICT(template_hash) DO UPDATE SET "
+        "  example_msg = excluded.example_msg, "
+        "  example_src = excluded.example_src, "
+        "  count = beacon_templates.count + 1, "
+        "  last_seen = excluded.last_seen",
+        (template_hash, text, src, json.dumps([src]), now_iso, now_iso),
+        fetch=False,
+    )
+    # Read back and update srcs list separately — srcs needs in-Python
+    # deduplication + cap, which is awkward to express in pure SQL.
+    rows = await storage._execute(
         "SELECT template_hash, example_msg, example_src, srcs, count, "
         "first_seen, last_seen, auto_beacon, user_action "
         "FROM beacon_templates WHERE template_hash = ?",
         (template_hash,),
     )
-    if existing:
-        row = existing[0]
-        try:
-            srcs_list = json.loads(row["srcs"]) if row["srcs"] else []
-            if not isinstance(srcs_list, list):
-                srcs_list = []
-        except json.JSONDecodeError:
+    row = rows[0]
+    try:
+        srcs_list = json.loads(row["srcs"]) if row["srcs"] else []
+        if not isinstance(srcs_list, list):
             srcs_list = []
-        # Dedupe-preserving order: remove then append so newest src is last.
-        if src in srcs_list:
-            srcs_list.remove(src)
-        srcs_list.append(src)
-        if len(srcs_list) > SRCS_CAP:
-            srcs_list = srcs_list[-SRCS_CAP:]
-        new_count = row["count"] + 1
-        await storage._execute(
-            "UPDATE beacon_templates "
-            "SET example_msg = ?, example_src = ?, srcs = ?, count = ?, "
-            "    last_seen = ? "
-            "WHERE template_hash = ?",
-            (text, src, json.dumps(srcs_list), new_count, now_iso, template_hash),
-            fetch=False,
-        )
-        return {
-            "template_hash": template_hash,
-            "example_msg": text,
-            "example_src": src,
-            "srcs": srcs_list,
-            "count": new_count,
-            "first_seen": row["first_seen"],
-            "last_seen": now_iso,
-            "auto_beacon": bool(row["auto_beacon"]),
-            "user_action": row["user_action"],
-        }
-    # Insert path
+    except json.JSONDecodeError:
+        srcs_list = []
+    # Dedupe-preserving order: remove then append so newest src is last.
+    if src in srcs_list:
+        srcs_list.remove(src)
+    srcs_list.append(src)
+    if len(srcs_list) > SRCS_CAP:
+        srcs_list = srcs_list[-SRCS_CAP:]
     await storage._execute(
-        "INSERT INTO beacon_templates "
-        "(template_hash, example_msg, example_src, srcs, count, first_seen, "
-        " last_seen, auto_beacon, user_action) "
-        "VALUES (?, ?, ?, ?, 1, ?, ?, 0, NULL)",
-        (template_hash, text, src, json.dumps([src]), now_iso, now_iso),
+        "UPDATE beacon_templates SET srcs = ? WHERE template_hash = ?",
+        (json.dumps(srcs_list), template_hash),
         fetch=False,
     )
     return {
         "template_hash": template_hash,
-        "example_msg": text,
-        "example_src": src,
-        "srcs": [src],
-        "count": 1,
-        "first_seen": now_iso,
-        "last_seen": now_iso,
-        "auto_beacon": False,
-        "user_action": None,
+        "example_msg": row["example_msg"],
+        "example_src": row["example_src"],
+        "srcs": srcs_list,
+        "count": int(row["count"]),
+        "first_seen": row["first_seen"],
+        "last_seen": row["last_seen"],
+        "auto_beacon": bool(row["auto_beacon"]),
+        "user_action": row["user_action"],
     }
 
 
