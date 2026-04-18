@@ -42,7 +42,8 @@ MIN_DATAPOINTS_FOR_STATS = 10
 _MSG_SELECT = (
     "msg_id, src, dst, msg, type, timestamp, rssi, snr, src_type,"
     " via, hw_id, lora_mod, max_hop, mesh_info, firmware, fw_sub,"
-    " last_hw_id, last_sending, transformer, echo_id, acked, send_success"
+    " last_hw_id, last_sending, transformer, echo_id, acked, send_success,"
+    " category, tags, info_score, template_hash, classifier_ver"
 )
 
 
@@ -188,6 +189,9 @@ class SQLiteStorage:
         # Reference to message router (set via set_message_router after construction)
         self._message_router = None
 
+        # Reference to classifier (set via set_classifier after construction)
+        self._classifier = None
+
         # Ensure parent directory exists
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -196,6 +200,10 @@ class SQLiteStorage:
     def set_message_router(self, router) -> None:
         """Allow storage to publish events (e.g. ACK status updates)."""
         self._message_router = router
+
+    def set_classifier(self, classifier) -> None:
+        """Wire the classifier so store_message() annotates new rows inline."""
+        self._classifier = classifier
 
     async def initialize(self) -> None:
         """Initialize database schema."""
@@ -1274,17 +1282,41 @@ class SQLiteStorage:
             if existing:
                 return
 
+        # Inline classification (before INSERT so columns land in the same row).
+        # Classifier.classify() has its own fallback; NULL columns mean "no
+        # classifier wired yet" and will be picked up by a later reclassify run.
+        if self._classifier is not None:
+            cls = await self._classifier.classify({
+                "msg": msg,
+                "src": callsign,
+                "dst": dst,
+                "type": msg_type,
+                "timestamp": timestamp,
+            })
+            cls_cols = (
+                cls.category,
+                json.dumps(list(cls.tags)),
+                cls.info_score,
+                cls.template_hash,
+                cls.classifier_version,
+            )
+        else:
+            cls_cols = (None, None, None, None, None)
+
         params = (
             msg_id, src, dst, msg, msg_type, timestamp, rssi, snr, src_type, raw,
             msg_via, hw_id, lora_mod, max_hop, mesh_info, firmware, fw_sub,
             last_hw_id, last_sending, transformer, echo_id, conversation_key,
+            *cls_cols,
         )
         await self._execute(
             "INSERT INTO messages"
             " (msg_id, src, dst, msg, type, timestamp, rssi, snr, src_type, raw_json,"
             "  via, hw_id, lora_mod, max_hop, mesh_info, firmware, fw_sub,"
-            "  last_hw_id, last_sending, transformer, echo_id, conversation_key)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "  last_hw_id, last_sending, transformer, echo_id, conversation_key,"
+            "  category, tags, info_score, template_hash, classifier_ver)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
+            "         ?, ?, ?, ?, ?)",
             params,
             fetch=False,
         )
