@@ -39,6 +39,22 @@ uvx ruff check --fix       # Auto-fix
 No pytest — tests are built into the app and run at startup when `has_console()` is true:
 - `message_router.test_suppression_logic()`
 - `command_handler.run_all_tests()` (in `src/mcapp/commands/tests.py`)
+- `classifier.run_all_tests()` (in `src/mcapp/classifier/tests.py`) — uses an ephemeral tempfile SQLite so the live DB is untouched
+
+## Classifier
+
+Every inbound message is annotated inline in `store_message()` with a primary `category`, free-form `tags` (JSON array), `info_score ∈ [0, 1]`, and a 12-char `template_hash`. Messages are never dropped — the webapp decides what to hide.
+
+- Layer 1 (`classifier/rules.py` + `seed.py`): data-driven regex rules in the `classifier_rules` table. First match by `(priority, id)` sets category; all matches contribute tags. Seed defaults are `builtin=1` — editable via REST but never deleted.
+- Layer 2 (`classifier/template.py`): fingerprint normalizes URLs/emojis/numbers and hashes sha1[:12]. `beacon_templates` tracks count/srcs/auto_beacon per fingerprint. When `count_same_src_same_template_within_24h >= 5`, `auto_beacon=1` flips and an SSE event fires once. `user_action='promote'|'demote'` overrides the automatic flag.
+- Layer 3 (`classifier/score.py`): blended info score with tunable weights. Keep the weights together in that file so tuning has an obvious home.
+- Orchestrator (`classifier/classify.py`): `Classifier.classify(msg)` combines all three layers, catches any exception and falls back to `(category='other', tags=(), info_score=0.5, template_hash=sha1(msg)[:12])` so the classifier never blocks ingestion.
+
+Rule mutations (POST/PATCH/DELETE `/api/classifier/rules`) bump `classifier_ver` in `classifier_meta`; startup then auto-backfills once per version via a `backfill_done:v{N}` marker. Restarts of the same slot do not re-backfill.
+
+SSE events: `proxy:classifier_rules` (on connect + after mutations), `proxy:classifier_stats` (60 s), `proxy:classifier_template_event` (threshold crossing), `proxy:reclassify_progress` (batch updates).
+
+Schema migrations: add new columns to `messages` or new tables via a `current_version < N` block in `sqlite_storage.initialize()` and bump `SCHEMA_VERSION`. Current schema: v16.
 
 ## Configuration
 
@@ -60,7 +76,7 @@ Two Raspberry Pi Zero 2W targets: `mcapp.local` (production) and `rpizero.local`
 - Service: `systemctl status mcapp` — `ExecStart=/home/martin/.local/bin/uv run mcapp`
 - Source: `~/mcapp-slots/current/src/mcapp/`
 - Config: `/etc/mcapp/config.json`
-- DB: `/var/lib/mcapp/messages.db` (SQLite, WAL mode, schema v10)
+- DB: `/var/lib/mcapp/messages.db` (SQLite, WAL mode, schema v16)
 - Logs: `sudo journalctl -u mcapp.service -f`
 
 See `bootstrap/README.md` for installation, `doc/tls-architecture.md` for TLS setup, `doc/tls-maintenance-SOP.md` for maintenance.
