@@ -7,7 +7,7 @@ import sys
 import time
 import traceback
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # BLE client abstraction - supports local, remote, and disabled modes
@@ -34,6 +34,14 @@ try:
     SSE_AVAILABLE = True
 except ImportError:
     SSE_AVAILABLE = False
+
+from .classifier import Classifier
+from .classifier.seed import seed_builtin_rules
+
+try:
+    from .classifier.tests import run_all_tests as run_classifier_tests
+except ImportError:
+    run_classifier_tests = None  # tests module lands in a later commit
 
 from . import __version__
 from .sqlite_storage import SQLiteStorage, create_sqlite_storage
@@ -1154,6 +1162,17 @@ async def main():
         prune_hours_ack=cfg.storage.prune_hours_ack,
     )
 
+    # Classifier — seeds builtin rules, loads + compiles them, and is wired to
+    # storage so store_message() annotates new rows inline.
+    logger.info("Initializing classifier...")
+    classifier = Classifier(storage_handler)
+    seeded = await seed_builtin_rules(storage_handler)
+    if seeded:
+        logger.info("Seeded %d builtin classifier rules", seeded)
+    await classifier.load()
+    if hasattr(storage_handler, "set_classifier"):
+        storage_handler.set_classifier(classifier)
+
     message_router = MessageRouter(storage_handler)
     message_router.set_callsign(cfg.call_sign)
     if hasattr(storage_handler, 'set_message_router'):
@@ -1231,6 +1250,21 @@ async def main():
         )
         if sse_manager:
             message_router.register_protocol('sse', sse_manager)
+            if hasattr(sse_manager, "set_classifier"):
+                sse_manager.set_classifier(classifier)
+
+            async def _emit_template_event(payload: dict) -> None:
+                await sse_manager.broadcast_event(
+                    "proxy:classifier_template_event", payload,
+                )
+
+            async def _emit_reclassify_progress(payload: dict) -> None:
+                await sse_manager.broadcast_event(
+                    "proxy:reclassify_progress", payload,
+                )
+
+            classifier.on_template_event = _emit_template_event
+            classifier.on_reclassify_progress = _emit_reclassify_progress
     else:
         logger.warning("FastAPI/Uvicorn not installed — SSE transport unavailable")
 
@@ -1357,7 +1391,12 @@ async def main():
         logger.info("Running command handler test suite...")
         command_handler_passed = await command_handler.run_all_tests()
 
-        if suppression_passed and command_handler_passed:
+        classifier_tests_passed = True
+        if run_classifier_tests is not None:
+            logger.info("Running classifier test suite...")
+            classifier_tests_passed = await run_classifier_tests(storage_handler)
+
+        if suppression_passed and command_handler_passed and classifier_tests_passed:
             logger.info("All tests passed! System ready.")
         else:
             logger.warning("Some tests failed. Check implementation.")
@@ -1399,12 +1438,76 @@ async def main():
 
     prune_task = asyncio.create_task(_nightly_prune())
 
+    # Backfill classification on unclassified rows once per classifier_version.
+    # Auto-trigger semantics: "ON but only once per release slot" — the marker
+    # lives in classifier_meta keyed by the current version, so a restart of
+    # the same slot is a no-op and a rule edit (which bumps the version)
+    # triggers a fresh backfill.
+    async def _maybe_backfill_classifier() -> None:
+        marker_key = f"backfill_done:v{classifier.classifier_version}"
+        marker = await storage_handler._execute(
+            "SELECT value FROM classifier_meta WHERE key = ?",
+            (marker_key,),
+        )
+        if marker:
+            logger.info(
+                "Classifier backfill marker present for v%d, skipping",
+                classifier.classifier_version,
+            )
+            return
+        unclassified = await storage_handler._execute(
+            "SELECT COUNT(*) AS n FROM messages "
+            "WHERE classifier_ver IS NULL OR classifier_ver < ?",
+            (classifier.classifier_version,),
+        )
+        total = int(unclassified[0]["n"]) if unclassified else 0
+        if total > 0:
+            job_id, scheduled = await classifier.reclassify()
+            logger.info(
+                "Classifier backfill scheduled: job=%s rows=%d",
+                job_id, scheduled,
+            )
+        await storage_handler._execute(
+            "INSERT INTO classifier_meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (marker_key, datetime.now(timezone.utc).isoformat()),
+            fetch=False,
+        )
+
+    asyncio.create_task(_maybe_backfill_classifier())
+
+    # Classifier stats broadcaster — pushes proxy:classifier_stats every 60 s.
+    async def _classifier_stats_broadcast():
+        """Emit aggregate classifier stats every 60 seconds."""
+        while not stop_event.is_set():
+            try:
+                if sse_manager is not None:
+                    stats = await classifier.collect_stats()
+                    await sse_manager.broadcast_event(
+                        "proxy:classifier_stats", stats,
+                    )
+            except Exception as exc:
+                logger.warning("classifier stats broadcast failed: %s", exc)
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=60.0)
+            except asyncio.TimeoutError:
+                continue
+
+        logger.debug("Classifier stats broadcaster stopped")
+
+    classifier_stats_task = asyncio.create_task(_classifier_stats_broadcast())
+
     await stop_event.wait()
 
-    # Cancel the nightly prune task
+    # Cancel background tasks
     prune_task.cancel()
+    classifier_stats_task.cancel()
     try:
         await prune_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await classifier_stats_task
     except asyncio.CancelledError:
         pass
 
