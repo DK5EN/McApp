@@ -23,7 +23,7 @@ VERSION = "v0.50.0"
 logger = get_logger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 # Constants matching message_storage.py
 BUCKET_SECONDS = 5 * 60
@@ -382,6 +382,79 @@ class SQLiteStorage:
                         current_version,
                     )
                     _set_schema_version(conn, 15)
+
+                if current_version < 16:
+                    for col, typedef in [
+                        ("category", "TEXT"),
+                        ("tags", "TEXT"),
+                        ("info_score", "REAL"),
+                        ("template_hash", "TEXT"),
+                        ("classifier_ver", "INTEGER"),
+                    ]:
+                        try:
+                            conn.execute(
+                                f"ALTER TABLE messages ADD COLUMN {col} {typedef}"
+                            )
+                        except sqlite3.OperationalError:
+                            logger.debug(
+                                "Column %s already exists in messages, skipping", col
+                            )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_messages_category "
+                        "ON messages(category)"
+                    )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_messages_template_hash "
+                        "ON messages(template_hash)"
+                    )
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS classifier_rules (
+                            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                            name       TEXT NOT NULL,
+                            pattern    TEXT NOT NULL,
+                            scope      TEXT NOT NULL DEFAULT 'msg',
+                            category   TEXT NOT NULL,
+                            extra_tags TEXT,
+                            priority   INTEGER NOT NULL DEFAULT 100,
+                            enabled    INTEGER NOT NULL DEFAULT 1,
+                            builtin    INTEGER NOT NULL DEFAULT 0,
+                            created_at TEXT NOT NULL,
+                            updated_at TEXT NOT NULL
+                        );
+                    """)
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS beacon_templates (
+                            template_hash TEXT PRIMARY KEY,
+                            example_msg   TEXT NOT NULL,
+                            example_src   TEXT NOT NULL,
+                            srcs          TEXT NOT NULL,
+                            count         INTEGER NOT NULL DEFAULT 0,
+                            first_seen    TEXT NOT NULL,
+                            last_seen     TEXT NOT NULL,
+                            auto_beacon   INTEGER NOT NULL DEFAULT 0,
+                            user_action   TEXT
+                        );
+                    """)
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_beacon_templates_count "
+                        "ON beacon_templates(count DESC)"
+                    )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_beacon_templates_last_seen "
+                        "ON beacon_templates(last_seen DESC)"
+                    )
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS classifier_meta (
+                            key   TEXT PRIMARY KEY,
+                            value TEXT NOT NULL
+                        );
+                    """)
+                    logger.info(
+                        "Migration v%d → v16: added classifier columns + "
+                        "classifier_rules/beacon_templates/classifier_meta tables",
+                        current_version,
+                    )
+                    _set_schema_version(conn, 16)
 
         await asyncio.to_thread(_init_db)
 
