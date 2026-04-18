@@ -10,6 +10,7 @@ import json
 import time
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any
 
 from .logging_setup import get_logger
@@ -101,6 +102,7 @@ class SSEManager:
         self.port = port
         self.message_router = message_router
         self.weather_service = weather_service
+        self.classifier: Any = None
         self.clients: dict[str, SSEClient] = {}
         self.clients_lock = asyncio.Lock()
         self.app: FastAPI | None = None
@@ -118,6 +120,10 @@ class SSEManager:
             # Note: websocket_direct not supported for SSE (no individual connection reference)
 
         logger.info("SSEManager initialized for %s:%d", host, port)
+
+    def set_classifier(self, classifier: Any) -> None:
+        """Wire the classifier so REST routes can access rules/templates/reclassify."""
+        self.classifier = classifier
 
     def _create_app(self) -> FastAPI:
         """Create and configure the FastAPI application."""
@@ -247,6 +253,27 @@ class SSEManager:
                                         "msg": "wx_sidebar",
                                         "data": wx_sidebar,
                                     }, "proxy:wx_sidebar")
+                            # Classifier rules snapshot — webapp hydrates its rule editor without
+                            # a round-trip.
+                            if self.classifier is not None and storage is not None:
+                                try:
+                                    rule_rows = await storage._execute(
+                                        "SELECT id, name, pattern, scope, category, extra_tags, "
+                                        "priority, enabled, builtin, created_at, updated_at "
+                                        "FROM classifier_rules ORDER BY priority ASC, id ASC"
+                                    )
+                                    yield self._format_sse_event(
+                                        {"rules": rule_rows},
+                                        "proxy:classifier_rules",
+                                    )
+                                except Exception as exc:
+                                    logger.warning("classifier rules snapshot failed: %s", exc)
+                            if self.classifier is not None:
+                                try:
+                                    stats = await self.classifier.collect_stats()
+                                    yield self._format_sse_event(stats, "proxy:classifier_stats")
+                                except Exception as exc:
+                                    logger.warning("classifier stats snapshot failed: %s", exc)
                         else:
                             logger.warning(
                                 "SSE client %s: no storage handler available",
@@ -695,6 +722,267 @@ class SSEManager:
             """Get slot metadata (versions, active slot, rollback target)."""
             return await asyncio.to_thread(self._read_slot_info)
 
+        # ── Classifier REST surface ──────────────────────────────────
+
+        def _storage():
+            s = self.message_router.storage_handler if self.message_router else None
+            if not s:
+                raise HTTPException(status_code=503, detail="Storage not available")
+            return s
+
+        def _classifier():
+            if self.classifier is None:
+                raise HTTPException(status_code=503, detail="Classifier not available")
+            return self.classifier
+
+        @app.get("/api/classifier/rules")
+        async def get_classifier_rules():
+            storage = _storage()
+            return await storage._execute(
+                "SELECT id, name, pattern, scope, category, extra_tags, priority, "
+                "enabled, builtin, created_at, updated_at "
+                "FROM classifier_rules ORDER BY priority ASC, id ASC"
+            )
+
+        @app.post("/api/classifier/rules")
+        async def create_classifier_rule(request: Request):
+            storage = _storage()
+            classifier = _classifier()
+            body = await request.json()
+            required = ("name", "pattern", "category")
+            if not all(body.get(k) for k in required):
+                raise HTTPException(status_code=400, detail="Missing name/pattern/category")
+            now = datetime.now(timezone.utc).isoformat()
+            extra_tags = body.get("extra_tags") or []
+            await storage._execute(
+                "INSERT INTO classifier_rules "
+                "(name, pattern, scope, category, extra_tags, priority, enabled, "
+                " builtin, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
+                (
+                    str(body["name"]),
+                    str(body["pattern"]),
+                    str(body.get("scope") or "msg"),
+                    str(body["category"]),
+                    json.dumps(list(extra_tags)),
+                    int(body.get("priority", 100)),
+                    1 if body.get("enabled", True) else 0,
+                    now, now,
+                ),
+                fetch=False,
+            )
+            new_ver = await classifier.bump_version()
+            rules = await storage._execute(
+                "SELECT id, name, pattern, scope, category, extra_tags, priority, "
+                "enabled, builtin, created_at, updated_at "
+                "FROM classifier_rules ORDER BY priority ASC, id ASC"
+            )
+            await self.broadcast_event(
+                "proxy:classifier_rules",
+                {"rules": rules, "classifier_version": new_ver},
+            )
+            return {"status": "ok", "classifier_version": new_ver}
+
+        @app.patch("/api/classifier/rules/{rule_id}")
+        async def patch_classifier_rule(rule_id: int, request: Request):
+            storage = _storage()
+            classifier = _classifier()
+            body = await request.json()
+            existing = await storage._execute(
+                "SELECT id FROM classifier_rules WHERE id = ?", (rule_id,),
+            )
+            if not existing:
+                raise HTTPException(status_code=404, detail="Rule not found")
+            updatable = {"name", "pattern", "scope", "category", "priority", "enabled"}
+            assignments: list[str] = []
+            params: list[Any] = []
+            for key in updatable:
+                if key in body:
+                    if key == "enabled":
+                        assignments.append("enabled = ?")
+                        params.append(1 if body[key] else 0)
+                    elif key == "priority":
+                        assignments.append("priority = ?")
+                        params.append(int(body[key]))
+                    else:
+                        assignments.append(f"{key} = ?")
+                        params.append(str(body[key]))
+            if "extra_tags" in body:
+                assignments.append("extra_tags = ?")
+                params.append(json.dumps(list(body["extra_tags"])))
+            if not assignments:
+                return {"status": "noop"}
+            assignments.append("updated_at = ?")
+            params.append(datetime.now(timezone.utc).isoformat())
+            params.append(rule_id)
+            await storage._execute(
+                f"UPDATE classifier_rules SET {', '.join(assignments)} WHERE id = ?",
+                tuple(params),
+                fetch=False,
+            )
+            new_ver = await classifier.bump_version()
+            rules = await storage._execute(
+                "SELECT id, name, pattern, scope, category, extra_tags, priority, "
+                "enabled, builtin, created_at, updated_at "
+                "FROM classifier_rules ORDER BY priority ASC, id ASC"
+            )
+            await self.broadcast_event(
+                "proxy:classifier_rules",
+                {"rules": rules, "classifier_version": new_ver},
+            )
+            return {"status": "ok", "classifier_version": new_ver}
+
+        @app.delete("/api/classifier/rules/{rule_id}")
+        async def delete_classifier_rule(rule_id: int):
+            storage = _storage()
+            classifier = _classifier()
+            row = await storage._execute(
+                "SELECT builtin FROM classifier_rules WHERE id = ?", (rule_id,),
+            )
+            if not row:
+                raise HTTPException(status_code=404, detail="Rule not found")
+            if row[0]["builtin"]:
+                raise HTTPException(status_code=404, detail="Builtin rules cannot be deleted")
+            await storage._execute(
+                "DELETE FROM classifier_rules WHERE id = ?", (rule_id,),
+                fetch=False,
+            )
+            new_ver = await classifier.bump_version()
+            rules = await storage._execute(
+                "SELECT id, name, pattern, scope, category, extra_tags, priority, "
+                "enabled, builtin, created_at, updated_at "
+                "FROM classifier_rules ORDER BY priority ASC, id ASC"
+            )
+            await self.broadcast_event(
+                "proxy:classifier_rules",
+                {"rules": rules, "classifier_version": new_ver},
+            )
+            return {"status": "ok", "classifier_version": new_ver}
+
+        @app.post("/api/classifier/rules/test")
+        async def test_classifier_rule(request: Request):
+            import re as _re
+            storage = _storage()
+            body = await request.json()
+            pattern = body.get("pattern")
+            if not pattern:
+                raise HTTPException(status_code=400, detail="Missing pattern")
+            scope = body.get("scope", "msg")
+            sample_msg = body.get("sample_msg")
+            try:
+                regex = _re.compile(str(pattern))
+            except _re.error as exc:
+                raise HTTPException(status_code=400, detail=f"Invalid regex: {exc}")
+
+            sample_match: bool | None = None
+            if sample_msg is not None:
+                sample_match = bool(regex.search(str(sample_msg)))
+
+            rows = await storage._execute(
+                "SELECT id, msg_id, src, dst, msg, type, timestamp FROM messages "
+                "ORDER BY id DESC LIMIT 500"
+            )
+            matches: list[dict[str, Any]] = []
+            for row in rows:
+                if scope == "src":
+                    target = row.get("src") or ""
+                elif scope == "dst":
+                    target = row.get("dst") or ""
+                elif scope == "combined":
+                    target = (
+                        f"{row.get('src') or ''}|{row.get('dst') or ''}|{row.get('msg') or ''}"
+                    )
+                else:
+                    target = row.get("msg") or ""
+                if regex.search(target):
+                    matches.append(row)
+                    if len(matches) >= 10:
+                        break
+            return {
+                "matches": sample_match if sample_match is not None else bool(matches),
+                "sample_match": sample_match,
+                "sample_matches": matches,
+                "scanned": len(rows),
+            }
+
+        @app.get("/api/classifier/templates")
+        async def get_classifier_templates(
+            min_count: int = 0,
+            auto_only: bool = False,
+            limit: int = 100,
+        ):
+            storage = _storage()
+            where: list[str] = []
+            params: list[Any] = []
+            if min_count > 0:
+                where.append("count >= ?")
+                params.append(min_count)
+            if auto_only:
+                where.append("auto_beacon = 1")
+            where_sql = f" WHERE {' AND '.join(where)}" if where else ""
+            params.append(max(1, min(limit, 500)))
+            return await storage._execute(
+                f"SELECT template_hash, example_msg, example_src, srcs, count, "
+                f"first_seen, last_seen, auto_beacon, user_action "
+                f"FROM beacon_templates{where_sql} "
+                f"ORDER BY count DESC LIMIT ?",
+                tuple(params),
+            )
+
+        @app.patch("/api/classifier/templates/{template_hash}")
+        async def patch_classifier_template(template_hash: str, request: Request):
+            storage = _storage()
+            body = await request.json()
+            action = body.get("user_action")
+            if action not in (None, "promote", "demote"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="user_action must be 'promote', 'demote', or null",
+                )
+            existing = await storage._execute(
+                "SELECT template_hash FROM beacon_templates WHERE template_hash = ?",
+                (template_hash,),
+            )
+            if not existing:
+                raise HTTPException(status_code=404, detail="Template not found")
+            await storage._execute(
+                "UPDATE beacon_templates SET user_action = ? WHERE template_hash = ?",
+                (action, template_hash),
+                fetch=False,
+            )
+            return {"status": "ok", "user_action": action}
+
+        @app.post("/api/classifier/templates/{template_hash}/preview")
+        async def preview_classifier_template(template_hash: str):
+            storage = _storage()
+            rows = await storage._execute(
+                "SELECT id, msg_id, src, dst, msg, type, timestamp, category, tags, "
+                "info_score FROM messages WHERE template_hash = ? "
+                "ORDER BY timestamp DESC LIMIT 20",
+                (template_hash,),
+            )
+            return {"template_hash": template_hash, "messages": rows}
+
+        @app.post("/api/classifier/reclassify")
+        async def post_classifier_reclassify(request: Request):
+            classifier = _classifier()
+            body = await request.json() if request.headers.get("content-length") else {}
+            since = body.get("since")
+            category = body.get("category")
+            job_id, total = await classifier.reclassify(
+                since=int(since) if since is not None else None,
+                category=str(category) if category else None,
+            )
+            return {"job_id": job_id, "estimated_rows": total}
+
+        @app.get("/api/classifier/status")
+        async def get_classifier_status():
+            classifier = _classifier()
+            return {
+                "classifier_version": classifier.classifier_version,
+                "jobs": classifier.all_jobs(),
+            }
+
         return app
 
     # ── Update / Deployment Helpers ─────────────────────────────
@@ -903,6 +1191,26 @@ class SSEManager:
                 logger.warning(
                     "Failed to queue message for SSE client %s: %s",
                     client.client_id, result,
+                )
+
+    async def broadcast_event(self, event_type: str, payload: dict[str, Any]) -> None:
+        """Fan out a pre-typed SSE event. Classifier events use this path so the
+        inference in _get_event_type() stays limited to mesh-payload heuristics.
+        """
+        async with self.clients_lock:
+            clients = list(self.clients.values())
+        if not clients:
+            return
+        event = self._format_sse_event(payload, event_type)
+        results = await asyncio.gather(
+            *(client.send(event) for client in clients),
+            return_exceptions=True,
+        )
+        for client, result in zip(clients, results):
+            if isinstance(result, Exception):
+                logger.warning(
+                    "Failed to queue %s for SSE client %s: %s",
+                    event_type, client.client_id, result,
                 )
 
     async def _disconnect_all_clients(self) -> None:
