@@ -69,6 +69,10 @@ class Classifier:
         self._rules: list[rules_mod.CompiledRule] = []
         self._version: int = 1
         self._lock = asyncio.Lock()
+        # Serializes the 3-statement update_stats sequence so concurrent
+        # classify() calls for the same template_hash can't clobber each
+        # other's srcs list (codereview-20260419.md §3.1).
+        self._update_stats_lock = asyncio.Lock()
         self._jobs: dict[str, _ReclassifyJob] = {}
         self.on_template_event: OnTemplateEvent | None = None
         self.on_reclassify_progress: OnReclassifyProgress | None = None
@@ -127,7 +131,8 @@ class Classifier:
             user_action: str | None = None
             if touch_stats:
                 row = await template_mod.update_stats(
-                    self._storage, tpl_hash, msg, now_ms
+                    self._storage, tpl_hash, msg, now_ms,
+                    lock=self._update_stats_lock,
                 )
                 tpl_count = int(row.get("count") or 0)
                 user_action = row.get("user_action")

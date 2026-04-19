@@ -5,6 +5,8 @@ production data is never touched.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import tempfile
 import time
@@ -381,6 +383,93 @@ async def _test_auto_beacon_promote() -> tuple[str, bool, str]:
 
 
 # ---------------------------------------------------------------------------
+# Concurrency regressions (codereview-20260419.md §3.1, §3.2)
+# ---------------------------------------------------------------------------
+
+
+async def _test_update_stats_concurrent_srcs_preserved() -> tuple[str, bool, str]:
+    """Two concurrent update_stats calls for the same template_hash with
+    different srcs must both end up in the final srcs list. Pre-fix, the
+    in-Python dedupe+UPDATE sequence could clobber one writer's contribution.
+    """
+    name = "test_update_stats_concurrent_srcs_preserved"
+    storage, path = await _fresh_storage()
+    try:
+        now_ms = int(time.time() * 1000)
+        tpl_hash = template_mod.fingerprint("concurrent-srcs-test")
+        lock = asyncio.Lock()
+        await asyncio.gather(
+            template_mod.update_stats(
+                storage, tpl_hash, {"msg": "concurrent-srcs-test", "src": "OE1AAA"},
+                now_ms, lock=lock,
+            ),
+            template_mod.update_stats(
+                storage, tpl_hash, {"msg": "concurrent-srcs-test", "src": "OE1BBB"},
+                now_ms, lock=lock,
+            ),
+        )
+        rows = await storage._execute(
+            "SELECT srcs, count FROM beacon_templates WHERE template_hash = ?",
+            (tpl_hash,),
+        )
+        srcs = json.loads(rows[0]["srcs"])
+        if "OE1AAA" not in srcs or "OE1BBB" not in srcs:
+            return name, False, f"expected both srcs preserved, got {srcs!r}"
+        if int(rows[0]["count"]) != 2:
+            return name, False, f"expected count=2, got {rows[0]['count']}"
+    except Exception as exc:
+        return name, False, str(exc)
+    finally:
+        await _cleanup(storage, path)
+    return name, True, ""
+
+
+async def _test_auto_beacon_status_single_just_crossed() -> tuple[str, bool, str]:
+    """Two concurrent auto_beacon_status callers crossing the threshold
+    together must produce exactly one just_crossed=True. Pre-fix, the
+    SELECT-then-UPDATE race could emit two SSE events.
+    """
+    name = "test_auto_beacon_status_single_just_crossed"
+    storage, path = await _fresh_storage()
+    try:
+        now_ms = int(time.time() * 1000)
+        tpl_hash = template_mod.fingerprint("concurrent-threshold-test")
+        src = "OE1ABC"
+        await storage._execute(
+            "INSERT INTO beacon_templates "
+            "(template_hash, example_msg, example_src, srcs, count, first_seen, "
+            " last_seen, auto_beacon, user_action) "
+            "VALUES (?, ?, ?, ?, 0, datetime('now'), datetime('now'), 0, NULL)",
+            (tpl_hash, "concurrent-threshold-test", src, "[]"),
+            fetch=False,
+        )
+        for i in range(4):
+            await storage._execute(
+                "INSERT INTO messages (src, dst, msg, type, timestamp, template_hash) "
+                "VALUES (?, '*', ?, 'msg', ?, ?)",
+                (src, "concurrent-threshold-test", now_ms - i * 1000, tpl_hash),
+                fetch=False,
+            )
+        r1, r2 = await asyncio.gather(
+            template_mod.auto_beacon_status(storage, tpl_hash, src, now_ms, None),
+            template_mod.auto_beacon_status(storage, tpl_hash, src, now_ms, None),
+        )
+        if not (r1[0] and r2[0]):
+            return name, False, f"expected both is_auto=True, got {r1!r} {r2!r}"
+        crossings = int(r1[1]) + int(r2[1])
+        if crossings != 1:
+            return name, False, (
+                f"expected exactly 1 just_crossed=True, got {crossings} "
+                f"(r1={r1!r}, r2={r2!r})"
+            )
+    except Exception as exc:
+        return name, False, str(exc)
+    finally:
+        await _cleanup(storage, path)
+    return name, True, ""
+
+
+# ---------------------------------------------------------------------------
 # Integration (end-to-end) test
 # ---------------------------------------------------------------------------
 
@@ -463,6 +552,10 @@ async def run_all_tests(storage: Any = None) -> bool:
     results.append(await _test_auto_beacon_threshold())
     results.append(await _test_auto_beacon_demote())
     results.append(await _test_auto_beacon_promote())
+
+    # Concurrency regressions
+    results.append(await _test_update_stats_concurrent_srcs_preserved())
+    results.append(await _test_auto_beacon_status_single_just_crossed())
 
     # Integration
     results.append(await _test_integration_classify())

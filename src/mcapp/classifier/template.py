@@ -3,9 +3,11 @@
 # count so the effective count reflects the message that is about to be stored.
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
+from contextlib import AsyncExitStack
 from datetime import datetime, timezone
 from typing import Any
 
@@ -53,6 +55,7 @@ async def update_stats(
     template_hash: str,
     msg: dict[str, Any],
     now_ms: int,
+    lock: asyncio.Lock | None = None,
 ) -> dict[str, Any]:
     """UPSERT into beacon_templates. Returns the resulting row as a dict.
 
@@ -61,52 +64,59 @@ async def update_stats(
     - first_seen set on insert only
     - example_msg / example_src refreshed to the most recent
     - srcs list deduplicated, capped at SRCS_CAP (oldest dropped)
+
+    If `lock` is provided, the three-statement sequence (UPSERT + SELECT +
+    UPDATE srcs) runs under it so concurrent callers for the same
+    template_hash can't clobber each other's srcs list.
     """
     now_iso = datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc).isoformat()
     src = str(msg.get("src") or "")
     text = str(msg.get("msg") or "")
 
-    # Atomic upsert — two concurrent classifies on the same fresh
-    # template_hash must not race between SELECT and INSERT.
-    await storage._execute(
-        "INSERT INTO beacon_templates "
-        "(template_hash, example_msg, example_src, srcs, count, "
-        " first_seen, last_seen, auto_beacon, user_action) "
-        "VALUES (?, ?, ?, ?, 1, ?, ?, 0, NULL) "
-        "ON CONFLICT(template_hash) DO UPDATE SET "
-        "  example_msg = excluded.example_msg, "
-        "  example_src = excluded.example_src, "
-        "  count = beacon_templates.count + 1, "
-        "  last_seen = excluded.last_seen",
-        (template_hash, text, src, json.dumps([src]), now_iso, now_iso),
-        fetch=False,
-    )
-    # Read back and update srcs list separately — srcs needs in-Python
-    # deduplication + cap, which is awkward to express in pure SQL.
-    rows = await storage._execute(
-        "SELECT template_hash, example_msg, example_src, srcs, count, "
-        "first_seen, last_seen, auto_beacon, user_action "
-        "FROM beacon_templates WHERE template_hash = ?",
-        (template_hash,),
-    )
-    row = rows[0]
-    try:
-        srcs_list = json.loads(row["srcs"]) if row["srcs"] else []
-        if not isinstance(srcs_list, list):
+    async with AsyncExitStack() as stack:
+        if lock is not None:
+            await stack.enter_async_context(lock)
+        # Atomic upsert — two concurrent classifies on the same fresh
+        # template_hash must not race between SELECT and INSERT.
+        await storage._execute(
+            "INSERT INTO beacon_templates "
+            "(template_hash, example_msg, example_src, srcs, count, "
+            " first_seen, last_seen, auto_beacon, user_action) "
+            "VALUES (?, ?, ?, ?, 1, ?, ?, 0, NULL) "
+            "ON CONFLICT(template_hash) DO UPDATE SET "
+            "  example_msg = excluded.example_msg, "
+            "  example_src = excluded.example_src, "
+            "  count = beacon_templates.count + 1, "
+            "  last_seen = excluded.last_seen",
+            (template_hash, text, src, json.dumps([src]), now_iso, now_iso),
+            fetch=False,
+        )
+        # Read back and update srcs list separately — srcs needs in-Python
+        # deduplication + cap, which is awkward to express in pure SQL.
+        rows = await storage._execute(
+            "SELECT template_hash, example_msg, example_src, srcs, count, "
+            "first_seen, last_seen, auto_beacon, user_action "
+            "FROM beacon_templates WHERE template_hash = ?",
+            (template_hash,),
+        )
+        row = rows[0]
+        try:
+            srcs_list = json.loads(row["srcs"]) if row["srcs"] else []
+            if not isinstance(srcs_list, list):
+                srcs_list = []
+        except json.JSONDecodeError:
             srcs_list = []
-    except json.JSONDecodeError:
-        srcs_list = []
-    # Dedupe-preserving order: remove then append so newest src is last.
-    if src in srcs_list:
-        srcs_list.remove(src)
-    srcs_list.append(src)
-    if len(srcs_list) > SRCS_CAP:
-        srcs_list = srcs_list[-SRCS_CAP:]
-    await storage._execute(
-        "UPDATE beacon_templates SET srcs = ? WHERE template_hash = ?",
-        (json.dumps(srcs_list), template_hash),
-        fetch=False,
-    )
+        # Dedupe-preserving order: remove then append so newest src is last.
+        if src in srcs_list:
+            srcs_list.remove(src)
+        srcs_list.append(src)
+        if len(srcs_list) > SRCS_CAP:
+            srcs_list = srcs_list[-SRCS_CAP:]
+        await storage._execute(
+            "UPDATE beacon_templates SET srcs = ? WHERE template_hash = ?",
+            (json.dumps(srcs_list), template_hash),
+            fetch=False,
+        )
     return {
         "template_hash": template_hash,
         "example_msg": row["example_msg"],
@@ -158,17 +168,13 @@ async def auto_beacon_status(
     if effective < AUTO_BEACON_THRESHOLD:
         return False, False
 
-    # Already auto_beacon? If yes, no transition.
-    tpl_rows = await storage._execute(
-        "SELECT auto_beacon FROM beacon_templates WHERE template_hash = ?",
-        (template_hash,),
-    )
-    was_auto = bool(tpl_rows[0]["auto_beacon"]) if tpl_rows else False
-    if was_auto:
-        return True, False
-    await storage._execute(
-        "UPDATE beacon_templates SET auto_beacon = 1 WHERE template_hash = ?",
+    # Atomic flip: only the first writer to switch auto_beacon 0 -> 1 sees
+    # rowcount == 1 and returns just_crossed=True. Concurrent callers see
+    # rowcount == 0 and return just_crossed=False, so the SSE event fires once.
+    rowcount = await storage._execute(
+        "UPDATE beacon_templates SET auto_beacon = 1 "
+        "WHERE template_hash = ? AND auto_beacon = 0",
         (template_hash,),
         fetch=False,
     )
-    return True, True
+    return True, bool(rowcount)
