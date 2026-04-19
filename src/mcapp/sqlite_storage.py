@@ -1272,7 +1272,7 @@ class SQLiteStorage:
                 )
                 return
 
-        # Time-windowed dedup: reject only if same msg_id was seen within 20 minutes.
+        # Time-windowed dedup: reject only if same msg_id was seen within DEDUP_WINDOW_MS.
         # MHeard beacons (msg_id=None) skip this check — they have their own throttle.
         if msg_id is not None:
             existing = await self._execute(
