@@ -797,7 +797,8 @@ class SSEManager:
                 ),
                 fetch=False,
             )
-            new_ver = await classifier.bump_version()
+            new_ver = await storage.bump_classifier_version()
+            await classifier.load()
             rules = await storage._execute(
                 "SELECT id, name, pattern, scope, category, extra_tags, priority, "
                 "enabled, builtin, created_at, updated_at "
@@ -846,7 +847,8 @@ class SSEManager:
                 tuple(params),
                 fetch=False,
             )
-            new_ver = await classifier.bump_version()
+            new_ver = await storage.bump_classifier_version()
+            await classifier.load()
             rules = await storage._execute(
                 "SELECT id, name, pattern, scope, category, extra_tags, priority, "
                 "enabled, builtin, created_at, updated_at "
@@ -873,7 +875,8 @@ class SSEManager:
                 "DELETE FROM classifier_rules WHERE id = ?", (rule_id,),
                 fetch=False,
             )
-            new_ver = await classifier.bump_version()
+            new_ver = await storage.bump_classifier_version()
+            await classifier.load()
             rules = await storage._execute(
                 "SELECT id, name, pattern, scope, category, extra_tags, priority, "
                 "enabled, builtin, created_at, updated_at "
@@ -995,18 +998,18 @@ class SSEManager:
             body = await request.json() if request.headers.get("content-length") else {}
             since = body.get("since")
             category = body.get("category")
-            job_id, total = await classifier.reclassify(
-                since=int(since) if since is not None else None,
-                category=str(category) if category else None,
+            job = await classifier.reclassify(
+                since_ms=int(since) if since is not None else None,
+                category_filter=str(category) if category else None,
             )
-            return {"job_id": job_id, "estimated_rows": total}
+            return {"job_id": job.job_id, "estimated_rows": job.total}
 
         @app.get("/api/classifier/status")
         async def get_classifier_status():
             classifier = _classifier()
             return {
-                "classifier_version": classifier.classifier_version,
-                "jobs": classifier.all_jobs(),
+                "classifier_version": classifier.version,
+                "jobs": classifier.get_all_jobs(),
             }
 
         return app

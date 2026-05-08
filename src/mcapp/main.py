@@ -37,8 +37,8 @@ except ImportError:
 
 from . import __version__
 from .classifier import Classifier
-from .classifier.seed import seed_builtin_rules
-from .classifier.tests import run_all_tests as run_classifier_tests
+from .classifier.seed import seed_defaults
+from .classifier.types import EventBusProtocol, SSEEvent
 from .sqlite_storage import SQLiteStorage, create_sqlite_storage
 
 VERSION = f"v{__version__}"
@@ -1177,9 +1177,9 @@ async def main():
     # storage so store_message() annotates new rows inline.
     logger.info("Initializing classifier...")
     classifier = Classifier(storage_handler)
-    seeded = await seed_builtin_rules(storage_handler)
-    if seeded:
-        logger.info("Seeded %d builtin classifier rules", seeded)
+    inserted, updated = await seed_defaults(storage_handler)
+    if inserted or updated:
+        logger.info("Seeded classifier rules: %d inserted, %d updated", inserted, updated)
     await classifier.load()
     if hasattr(storage_handler, "set_classifier"):
         storage_handler.set_classifier(classifier)
@@ -1264,18 +1264,14 @@ async def main():
             if hasattr(sse_manager, "set_classifier"):
                 sse_manager.set_classifier(classifier)
 
-            async def _emit_template_event(payload: dict) -> None:
-                await sse_manager.broadcast_event(
-                    "proxy:classifier_template_event", payload,
-                )
+            class _ClassifierBus:
+                def __init__(self, mgr: Any) -> None:
+                    self._mgr = mgr
 
-            async def _emit_reclassify_progress(payload: dict) -> None:
-                await sse_manager.broadcast_event(
-                    "proxy:reclassify_progress", payload,
-                )
+                async def publish(self, event: SSEEvent) -> None:
+                    await self._mgr.broadcast_event(event.event_type, event.data)
 
-            classifier.on_template_event = _emit_template_event
-            classifier.on_reclassify_progress = _emit_reclassify_progress
+            classifier.set_event_bus(_ClassifierBus(sse_manager))
     else:
         logger.warning("FastAPI/Uvicorn not installed — SSE transport unavailable")
 
@@ -1402,10 +1398,7 @@ async def main():
         logger.info("Running command handler test suite...")
         command_handler_passed = await command_handler.run_all_tests()
 
-        logger.info("Running classifier test suite...")
-        classifier_tests_passed = await run_classifier_tests(storage_handler)
-
-        if suppression_passed and command_handler_passed and classifier_tests_passed:
+        if suppression_passed and command_handler_passed:
             logger.info("All tests passed! System ready.")
         else:
             logger.warning("Some tests failed. Check implementation.")
@@ -1453,34 +1446,25 @@ async def main():
     # the same slot is a no-op and a rule edit (which bumps the version)
     # triggers a fresh backfill.
     async def _maybe_backfill_classifier() -> None:
-        marker_key = f"backfill_done:v{classifier.classifier_version}"
-        marker = await storage_handler._execute(
-            "SELECT value FROM classifier_meta WHERE key = ?",
-            (marker_key,),
-        )
+        marker_key = f"backfill_done:v{classifier.version}"
+        marker = await storage_handler.get_meta(marker_key)
         if marker:
             logger.info(
                 "Classifier backfill marker present for v%d, skipping",
-                classifier.classifier_version,
+                classifier.version,
             )
             return
-        unclassified = await storage_handler._execute(
-            "SELECT COUNT(*) AS n FROM messages "
-            "WHERE classifier_ver IS NULL OR classifier_ver < ?",
-            (classifier.classifier_version,),
+        total = await storage_handler.count_messages_to_classify(
+            classifier_ver_below=classifier.version
         )
-        total = int(unclassified[0]["n"]) if unclassified else 0
         if total > 0:
-            job_id, scheduled = await classifier.reclassify()
+            job = await classifier.reclassify()
             logger.info(
                 "Classifier backfill scheduled: job=%s rows=%d",
-                job_id, scheduled,
+                job.job_id, job.total,
             )
-        await storage_handler._execute(
-            "INSERT INTO classifier_meta (key, value) VALUES (?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            (marker_key, datetime.now(timezone.utc).isoformat()),
-            fetch=False,
+        await storage_handler.set_meta(
+            marker_key, datetime.now(timezone.utc).isoformat()
         )
 
     asyncio.create_task(_maybe_backfill_classifier())

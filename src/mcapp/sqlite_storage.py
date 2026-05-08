@@ -3011,6 +3011,349 @@ class SQLiteStorage:
             fetch=False,
         )
 
+    # ── Classifier Storage API ─────────────────────────────────────────────
+    # These methods satisfy the StorageProtocol defined in
+    # classifier/types.py, allowing the shared classifier subtree to run
+    # in MCProxy without any meshcom_mock imports.
+
+    async def get_classifier_rules(self, enabled_only: bool = False) -> list[dict]:
+        where = "WHERE enabled = 1" if enabled_only else ""
+        rows = await self._execute(
+            f"SELECT * FROM classifier_rules {where} ORDER BY priority ASC, id ASC"  # noqa: S608
+        )
+        assert isinstance(rows, list)
+        for r in rows:
+            try:
+                r["extra_tags"] = json.loads(r["extra_tags"]) if r.get("extra_tags") else []
+            except (json.JSONDecodeError, TypeError):
+                r["extra_tags"] = []
+            r["enabled"] = bool(r["enabled"])
+            r["builtin"] = bool(r["builtin"])
+        return rows
+
+    async def insert_classifier_rule(
+        self,
+        *,
+        name: str,
+        pattern: str,
+        category: str,
+        scope: str = "msg",
+        extra_tags: list[str] | None = None,
+        priority: int = 100,
+        enabled: bool = True,
+        builtin: bool = False,
+    ) -> dict:
+        now_zulu = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
+        tags_json = json.dumps(extra_tags) if extra_tags else None
+
+        def _run() -> int:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.execute(
+                    "INSERT INTO classifier_rules "
+                    "(name, pattern, scope, category, extra_tags, priority, "
+                    " enabled, builtin, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (name, pattern, scope, category, tags_json, priority,
+                     int(enabled), int(builtin), now_zulu, now_zulu),
+                )
+                conn.commit()
+                return cursor.lastrowid  # type: ignore[return-value]
+
+        rule_id = await asyncio.to_thread(_run)
+        rows = await self._execute(
+            "SELECT * FROM classifier_rules WHERE id = ?", (rule_id,)
+        )
+        assert isinstance(rows, list)
+        row = rows[0]
+        row["extra_tags"] = json.loads(row["extra_tags"]) if row.get("extra_tags") else []
+        row["enabled"] = bool(row["enabled"])
+        row["builtin"] = bool(row["builtin"])
+        return row
+
+    async def update_classifier_rule(self, rule_id: int, **updates: object) -> dict | None:
+        allowed = {"name", "pattern", "scope", "category", "extra_tags", "priority", "enabled"}
+        set_parts: list[str] = []
+        params: list[object] = []
+        for key, value in updates.items():
+            if key not in allowed:
+                continue
+            if key == "extra_tags":
+                params.append(json.dumps(value) if value else None)
+            elif key == "enabled":
+                params.append(int(bool(value)))
+            else:
+                params.append(value)
+            set_parts.append(f"{key} = ?")
+        if not set_parts:
+            rows = await self._execute(
+                "SELECT * FROM classifier_rules WHERE id = ?", (rule_id,)
+            )
+            assert isinstance(rows, list)
+            return rows[0] if rows else None
+        now_zulu = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
+        set_parts.append("updated_at = ?")
+        params.extend([now_zulu, rule_id])
+        await self._execute(
+            f"UPDATE classifier_rules SET {', '.join(set_parts)} WHERE id = ?",  # noqa: S608
+            tuple(params),
+            fetch=False,
+        )
+        rows = await self._execute(
+            "SELECT * FROM classifier_rules WHERE id = ?", (rule_id,)
+        )
+        assert isinstance(rows, list)
+        if not rows:
+            return None
+        row = rows[0]
+        row["extra_tags"] = json.loads(row["extra_tags"]) if row.get("extra_tags") else []
+        row["enabled"] = bool(row["enabled"])
+        row["builtin"] = bool(row["builtin"])
+        return row
+
+    async def get_beacon_template(self, template_hash: str) -> dict | None:
+        rows = await self._execute(
+            "SELECT * FROM beacon_templates WHERE template_hash = ?",
+            (template_hash,),
+        )
+        assert isinstance(rows, list)
+        if not rows:
+            return None
+        row = rows[0]
+        try:
+            row["srcs"] = json.loads(row["srcs"]) if row.get("srcs") else []
+        except (json.JSONDecodeError, TypeError):
+            row["srcs"] = []
+        row["auto_beacon"] = bool(row["auto_beacon"])
+        return row
+
+    async def upsert_beacon_template(
+        self, hash_: str, msg: str, src: str, now_ms: int
+    ) -> dict:
+        from .classifier.types import _ms_to_zulu  # avoid top-level circular
+        now_zulu = _ms_to_zulu(now_ms)
+
+        def _run() -> None:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO beacon_templates "
+                    "(template_hash, example_msg, example_src, srcs, count, "
+                    " first_seen, last_seen) "
+                    "VALUES (?, ?, ?, ?, 0, ?, ?)",
+                    (hash_, msg, src, json.dumps([src]), now_zulu, now_zulu),
+                )
+                # Load current srcs and merge
+                row = conn.execute(
+                    "SELECT srcs FROM beacon_templates WHERE template_hash = ?",
+                    (hash_,),
+                ).fetchone()
+                srcs: list[str] = []
+                if row and row[0]:
+                    try:
+                        srcs = json.loads(row[0])
+                    except (json.JSONDecodeError, TypeError):
+                        srcs = []
+                if src not in srcs:
+                    srcs.append(src)
+                conn.execute(
+                    "UPDATE beacon_templates "
+                    "SET count = count + 1, example_msg = ?, example_src = ?, "
+                    "    srcs = ?, last_seen = ? "
+                    "WHERE template_hash = ?",
+                    (msg, src, json.dumps(srcs), now_zulu, hash_),
+                )
+                conn.commit()
+
+        await asyncio.to_thread(_run)
+        result = await self.get_beacon_template(hash_)
+        assert result is not None
+        return result
+
+    async def set_template_auto_beacon(
+        self, template_hash: str, auto_beacon: bool
+    ) -> dict | None:
+        await self._execute(
+            "UPDATE beacon_templates SET auto_beacon = ? WHERE template_hash = ?",
+            (int(auto_beacon), template_hash),
+            fetch=False,
+        )
+        return await self.get_beacon_template(template_hash)
+
+    async def count_recent_messages_by_template_src(
+        self, hash_: str, src: str, since_ms: int
+    ) -> int:
+        # MCProxy stores timestamp as INTEGER ms (not ISO string)
+        rows = await self._execute(
+            "SELECT COUNT(*) AS n FROM messages "
+            "WHERE template_hash = ? AND src = ? AND timestamp >= ?",
+            (hash_, src, since_ms),
+        )
+        assert isinstance(rows, list)
+        return int(rows[0]["n"]) if rows else 0
+
+    async def clear_stale_auto_beacons(
+        self, human_categories: frozenset[str], min_tokens: int
+    ) -> int:
+        from .classifier.template import _tokenize_normalized
+        cleared = 0
+        placeholders = ",".join("?" * len(human_categories))
+
+        def _clear_by_category() -> int:
+            with sqlite3.connect(self.db_path) as conn:
+                cur = conn.execute(
+                    f"UPDATE beacon_templates SET auto_beacon = 0 "  # noqa: S608
+                    f"WHERE user_action IS NULL AND auto_beacon = 1 "
+                    f"AND EXISTS ("
+                    f"  SELECT 1 FROM messages m "
+                    f"  WHERE m.template_hash = beacon_templates.template_hash "
+                    f"  AND m.category IN ({placeholders}) LIMIT 1"
+                    f")",
+                    tuple(human_categories),
+                )
+                conn.commit()
+                return cur.rowcount
+
+        cleared += await asyncio.to_thread(_clear_by_category)
+
+        rows = await self._execute(
+            "SELECT template_hash, example_msg FROM beacon_templates "
+            "WHERE auto_beacon = 1 AND user_action IS NULL"
+        )
+        assert isinstance(rows, list)
+        for row in rows:
+            tokens = _tokenize_normalized(row["example_msg"] or "")
+            if len(tokens) <= min_tokens:
+                await self._execute(
+                    "UPDATE beacon_templates SET auto_beacon = 0 WHERE template_hash = ?",
+                    (row["template_hash"],),
+                    fetch=False,
+                )
+                cleared += 1
+        return cleared
+
+    async def get_classifier_version(self) -> int:
+        ver_str = await self.get_meta("classifier_version")
+        try:
+            return int(ver_str) if ver_str is not None else 0
+        except (ValueError, TypeError):
+            return 0
+
+    async def count_messages_to_classify(
+        self, *, classifier_ver_below: int | None = None
+    ) -> int:
+        if classifier_ver_below is None:
+            rows = await self._execute("SELECT COUNT(*) AS n FROM messages")
+        else:
+            rows = await self._execute(
+                "SELECT COUNT(*) AS n FROM messages "
+                "WHERE classifier_ver IS NULL OR classifier_ver < ?",
+                (classifier_ver_below,),
+            )
+        assert isinstance(rows, list)
+        return int(rows[0]["n"]) if rows else 0
+
+    async def get_messages_to_classify(
+        self,
+        *,
+        classifier_ver_below: int | None = None,
+        category: str | None = None,
+        since_ms: int | None = None,
+        limit: int = 500,
+        offset: int = 0,
+    ) -> list[dict]:
+        conditions: list[str] = []
+        params: list[object] = []
+        if classifier_ver_below is not None:
+            conditions.append("(classifier_ver IS NULL OR classifier_ver < ?)")
+            params.append(classifier_ver_below)
+        if category is not None:
+            conditions.append("category = ?")
+            params.append(category)
+        if since_ms is not None:
+            conditions.append("timestamp >= ?")
+            params.append(since_ms)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        rows = await self._execute(
+            f"SELECT {_MSG_SELECT} FROM messages {where} "  # noqa: S608
+            f"ORDER BY id ASC LIMIT ? OFFSET ?",
+            (*params, limit, offset),  # type: ignore[arg-type]
+        )
+        assert isinstance(rows, list)
+        return rows
+
+    async def update_message_classification(
+        self,
+        row_id: Any,
+        *,
+        category: str,
+        tags: list[str],
+        info_score: float,
+        template_hash: str,
+        classifier_ver: int,
+    ) -> None:
+        await self._execute(
+            "UPDATE messages SET category = ?, tags = ?, info_score = ?, "
+            "template_hash = ?, classifier_ver = ? WHERE id = ?",
+            (category, json.dumps(tags), info_score, template_hash, classifier_ver, row_id),
+            fetch=False,
+        )
+
+    async def get_meta(self, key: str) -> str | None:
+        rows = await self._execute(
+            "SELECT value FROM classifier_meta WHERE key = ?", (key,)
+        )
+        assert isinstance(rows, list)
+        return rows[0]["value"] if rows else None
+
+    async def set_meta(self, key: str, value: str) -> None:
+        await self._execute(
+            "INSERT INTO classifier_meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+            fetch=False,
+        )
+
+    async def count_messages_by_category(self, since_ms: int) -> dict[str, int]:
+        # MCProxy timestamp is INTEGER ms
+        rows = await self._execute(
+            "SELECT category, COUNT(*) AS n FROM messages "
+            "WHERE category IS NOT NULL AND timestamp >= ? GROUP BY category",
+            (since_ms,),
+        )
+        assert isinstance(rows, list)
+        return {r["category"]: r["n"] for r in rows}
+
+    async def get_top_beacon_templates(
+        self, since_ms: int, limit: int = 10
+    ) -> list[dict]:
+        from .classifier.types import _ms_to_zulu
+        cutoff = _ms_to_zulu(since_ms)
+        rows = await self._execute(
+            "SELECT template_hash, example_msg, count, auto_beacon "
+            "FROM beacon_templates WHERE last_seen >= ? "
+            "ORDER BY count DESC LIMIT ?",
+            (cutoff, limit),
+        )
+        assert isinstance(rows, list)
+        for r in rows:
+            r["auto_beacon"] = bool(r["auto_beacon"])
+        return rows
+
+    async def count_auto_beacon_templates(self) -> int:
+        rows = await self._execute(
+            "SELECT COUNT(*) AS n FROM beacon_templates WHERE auto_beacon = 1"
+        )
+        assert isinstance(rows, list)
+        return int(rows[0]["n"]) if rows else 0
+
+    def get_heartbeat_window_size(self) -> int:
+        return 0
+
+    async def bump_classifier_version(self) -> int:
+        current = await self.get_classifier_version()
+        new_ver = current + 1
+        await self.set_meta("classifier_version", str(new_ver))
+        return new_ver
+
     async def close(self) -> None:
         """Close the persistent read connection."""
         def _close():
