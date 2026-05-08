@@ -998,9 +998,20 @@ class SSEManager:
             body = await request.json() if request.headers.get("content-length") else {}
             since = body.get("since")
             category = body.get("category")
+
+            async def _progress(job: Any) -> None:
+                await self.broadcast_event(
+                    "proxy:reclassify_progress",
+                    {
+                        "job_id": job.job_id, "processed": job.processed,
+                        "total": job.total, "done": job.done,
+                    },
+                )
+
             job = await classifier.reclassify(
                 since_ms=int(since) if since is not None else None,
                 category_filter=str(category) if category else None,
+                progress_cb=_progress,
             )
             return {"job_id": job.job_id, "estimated_rows": job.total}
 

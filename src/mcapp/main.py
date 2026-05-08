@@ -9,6 +9,7 @@ import traceback
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 # BLE client abstraction - supports local, remote, and disabled modes
 from .ble_client import BLEMode, ConnectionState, create_ble_client
@@ -38,7 +39,7 @@ except ImportError:
 from . import __version__
 from .classifier import Classifier
 from .classifier.seed import seed_defaults
-from .classifier.types import EventBusProtocol, SSEEvent
+from .classifier.types import SSEEvent
 from .sqlite_storage import SQLiteStorage, create_sqlite_storage
 
 VERSION = f"v{__version__}"
@@ -1458,7 +1459,17 @@ async def main():
             classifier_ver_below=classifier.version
         )
         if total > 0:
-            job = await classifier.reclassify()
+            async def _backfill_progress(job: Any) -> None:
+                if sse_manager is not None:
+                    await sse_manager.broadcast_event(
+                        "proxy:reclassify_progress",
+                        {
+                            "job_id": job.job_id, "processed": job.processed,
+                            "total": job.total, "done": job.done,
+                        },
+                    )
+
+            job = await classifier.reclassify(progress_cb=_backfill_progress)
             logger.info(
                 "Classifier backfill scheduled: job=%s rows=%d",
                 job.job_id, job.total,

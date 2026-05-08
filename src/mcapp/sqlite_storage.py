@@ -3273,7 +3273,7 @@ class SQLiteStorage:
             params.append(since_ms)
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         rows = await self._execute(
-            f"SELECT {_MSG_SELECT} FROM messages {where} "  # noqa: S608
+            f"SELECT id, {_MSG_SELECT} FROM messages {where} "  # noqa: S608
             f"ORDER BY id ASC LIMIT ? OFFSET ?",
             (*params, limit, offset),  # type: ignore[arg-type]
         )
