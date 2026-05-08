@@ -274,6 +274,12 @@ class SSEManager:
                                     yield self._format_sse_event(stats, "proxy:classifier_stats")
                                 except Exception as exc:
                                     logger.warning("classifier stats snapshot failed: %s", exc)
+                            if hasattr(storage, "get_filter_prefs"):
+                                try:
+                                    fp = await storage.get_filter_prefs()
+                                    yield self._format_sse_event(fp, "proxy:filter_prefs")
+                                except Exception as exc:
+                                    logger.warning("filter_prefs snapshot failed: %s", exc)
                         else:
                             logger.warning(
                                 "SSE client %s: no storage handler available",
@@ -603,6 +609,26 @@ class SSEManager:
             order = [str(s) for s in body.get("order", [])]
             hidden = [str(s) for s in body.get("hidden", [])]
             await storage.set_wx_sidebar(order, hidden)
+            return {"status": "ok"}
+
+        @app.get("/api/filter_prefs")
+        async def get_filter_prefs():
+            storage = (
+                self.message_router.storage_handler if self.message_router else None
+            )
+            if not storage or not hasattr(storage, "get_filter_prefs"):
+                raise HTTPException(status_code=503, detail="Storage not available")
+            return await storage.get_filter_prefs()
+
+        @app.post("/api/filter_prefs")
+        async def set_filter_prefs(request: Request):
+            storage = (
+                self.message_router.storage_handler if self.message_router else None
+            )
+            if not storage or not hasattr(storage, "set_filter_prefs"):
+                raise HTTPException(status_code=503, detail="Storage not available")
+            body = await request.json()
+            await storage.set_filter_prefs(body)
             return {"status": "ok"}
 
         # Health check endpoint

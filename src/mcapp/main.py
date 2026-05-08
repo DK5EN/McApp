@@ -425,6 +425,22 @@ class MessageRouter:
                 else:
                     await self.publish('router', 'websocket_message', bt_payload)
 
+        # Send persisted spam filter preferences
+        if hasattr(self.storage_handler, 'get_filter_prefs'):
+            fp = await self.storage_handler.get_filter_prefs()
+            fp_payload = {
+                "type": "response",
+                "msg": "filter_prefs",
+                "data": fp,
+            }
+            if websocket:
+                await self.publish(
+                    'router', 'websocket_direct',
+                    {'websocket': websocket, 'data': fp_payload},
+                )
+            else:
+                await self.publish('router', 'websocket_message', fp_payload)
+
     async def _handle_summary_command(self, websocket):
         """Handle summary command - sends message counts per destination."""
         summary = await self.storage_handler.get_summary()

@@ -23,7 +23,7 @@ VERSION = "v0.50.0"
 logger = get_logger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 # Constants matching message_storage.py
 BUCKET_SECONDS = 5 * 60
@@ -463,6 +463,20 @@ class SQLiteStorage:
                         current_version,
                     )
                     _set_schema_version(conn, 16)
+
+                if current_version < 17:
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS filter_prefs (
+                            id INTEGER PRIMARY KEY CHECK (id = 1),
+                            prefs TEXT NOT NULL DEFAULT '{}',
+                            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                        );
+                    """)
+                    logger.info(
+                        "Migration v%d → v17: added filter_prefs table",
+                        current_version,
+                    )
+                    _set_schema_version(conn, 17)
 
         await asyncio.to_thread(_init_db)
 
@@ -2975,6 +2989,25 @@ class SQLiteStorage:
                  hidden_stations = excluded.hidden_stations,
                  updated_at = CURRENT_TIMESTAMP""",
             (json.dumps(order), json.dumps(hidden)),
+            fetch=False,
+        )
+
+    async def get_filter_prefs(self) -> dict:
+        """Get persisted spam filter preferences."""
+        rows = await self._execute("SELECT prefs FROM filter_prefs WHERE id = 1")
+        if not rows:
+            return {}
+        return json.loads(rows[0]["prefs"])
+
+    async def set_filter_prefs(self, prefs: dict) -> None:
+        """Upsert spam filter preferences."""
+        await self._execute(
+            """INSERT INTO filter_prefs (id, prefs, updated_at)
+               VALUES (1, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(id) DO UPDATE SET
+                 prefs = excluded.prefs,
+                 updated_at = CURRENT_TIMESTAMP""",
+            (json.dumps(prefs),),
             fetch=False,
         )
 
