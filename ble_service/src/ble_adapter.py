@@ -35,6 +35,7 @@ Extended Register Queries:
 """
 
 import asyncio
+import hashlib
 import logging
 import time
 from dataclasses import dataclass, field
@@ -62,6 +63,19 @@ AGENT_PATH = "/com/mcapp/agent"
 # Nordic UART Service UUIDs
 NUS_RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  # Write to device
 NUS_TX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  # Read from device (notify)
+
+
+def build_hello_bytes(pin: int) -> bytes:
+    """Build the BLE hello message for the given PIN.
+
+    pin == 0: 4-byte open hello (no authentication).
+    pin 100000-999999: 36-byte hello with SHA-256 of zero-padded 6-digit PIN string.
+    The firmware hashes the ASCII string e.g. b"123456", not the integer bytes.
+    """
+    if pin > 0:
+        digest = hashlib.sha256(f"{pin:06d}".encode()).digest()
+        return bytes([0x24, 0x10, 0x20, 0x30]) + digest
+    return b'\x04\x10\x20\x30'
 
 
 class ConnectionState(Enum):
