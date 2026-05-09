@@ -1189,10 +1189,12 @@ class SSEManager:
 
         if mapped := SSEManager._SIMPLE_TYPE_MAP.get(type_):
             return mapped
-        if type_ == "response":
-            return SSEManager._RESPONSE_EVENT_MAP.get(msg, "mesh:message")
+        # mheard stats/progress carry msg="mheard ..." with type="response"|"progress";
+        # check the mheard map first so the response branch doesn't swallow them as mesh:message.
         if msg in SSEManager._MHEARD_MSG_MAP:
             return SSEManager._MHEARD_MSG_MAP[msg]
+        if type_ == "response":
+            return SSEManager._RESPONSE_EVENT_MAP.get(msg, "mesh:message")
         if src_type in ("BLE", "ble_remote") and data.get("TYP"):
             return "ble:status"
         if data.get("command") == "resolve-ip":
