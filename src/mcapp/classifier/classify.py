@@ -28,7 +28,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
 from .rules import CompiledRule, load_rules, match_rules
 from .score import compute as score_compute
@@ -44,7 +44,6 @@ from .types import (
     EventBusProtocol,
     SSEEvent,
     StorageProtocol,
-    _ms_to_zulu,
 )
 
 logger = logging.getLogger(__name__)
@@ -65,7 +64,7 @@ class ReclassifyJob:
     done: bool = False
     error: str | None = None
     # Internal reference kept so the GC doesn't collect the asyncio task.
-    _task: asyncio.Task | None = field(default=None, compare=False, repr=False)
+    _task: asyncio.Task[None] | None = field(default=None, compare=False, repr=False)
 
 
 class Classifier:
@@ -98,7 +97,7 @@ class Classifier:
 
     async def classify(
         self,
-        msg: dict,
+        msg: dict[str, Any],
         *,
         now_ms: int | None = None,
         update_stats: bool = True,
@@ -326,7 +325,7 @@ class Classifier:
                 except Exception:
                     logger.exception("progress_cb (done) raised — ignoring")
 
-    async def collect_stats(self) -> dict:
+    async def collect_stats(self) -> dict[str, Any]:
         """Return the proxy:classifier_stats payload.
 
         Shape::
