@@ -10,7 +10,7 @@ import base64
 import json
 import logging
 import time
-from typing import Callable
+from typing import Any, Callable, cast
 from urllib.parse import urljoin
 
 import httpx
@@ -33,10 +33,10 @@ class BLEClientRemote(BLEClientBase):
         self,
         remote_url: str,
         api_key: str | None = None,
-        notification_callback: Callable[[dict], None] | None = None,
-        message_router=None,
+        notification_callback: Callable[[dict[str, Any]], None] | None = None,
+        message_router: Any = None,
         timeout: float = 30.0,
-    ):
+    ) -> None:
         super().__init__(notification_callback)
         self.remote_url = remote_url.rstrip('/')
         self.api_key = api_key
@@ -44,28 +44,29 @@ class BLEClientRemote(BLEClientBase):
         self.timeout = timeout
 
         self._client: httpx.AsyncClient | None = None
-        self._sse_task: asyncio.Task | None = None
+        self._sse_task: asyncio.Task[None] | None = None
         self._running = False
         self._status.mode = BLEMode.REMOTE
         self._last_connect_attempt: float = 0
         self._connect_cooldown: float = 15.0
         self._sse_disconnect_buffer: float = 2.0  # seconds to wait before declaring disconnect
+        self._sse_backoff: float = 5.0
 
-    def _headers(self) -> dict:
+    def _headers(self) -> dict[str, str]:
         """Get request headers with API key"""
-        headers = {"Content-Type": "application/json"}
+        headers: dict[str, str] = {"Content-Type": "application/json"}
         if self.api_key:
             headers["X-API-Key"] = self.api_key
         return headers
 
-    async def _ensure_client(self):
+    async def _ensure_client(self) -> None:
         """Ensure HTTP client exists"""
         if not self._running:
             return
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(timeout=httpx.Timeout(self.timeout))
 
-    async def _reset_client(self):
+    async def _reset_client(self) -> None:
         """Close and recreate the HTTP client"""
         if self._client and not self._client.is_closed:
             await self._client.aclose()
@@ -76,12 +77,12 @@ class BLEClientRemote(BLEClientBase):
         self,
         method: str,
         endpoint: str,
-        data: dict | None = None,
+        data: dict[str, Any] | None = None,
         retries: int = 2,
         retry_delay: float = 1.5,
         request_timeout: float | None = None,
         quiet: bool = False,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Make HTTP request to remote service, with retry on 409 (busy) and connection errors"""
         if not self._running:
             raise httpx.HTTPError("BLE client stopped")
@@ -92,6 +93,7 @@ class BLEClientRemote(BLEClientBase):
 
         for attempt in range(1 + retries):
             try:
+                assert self._client is not None
                 response = await self._client.request(
                     method,
                     url,
@@ -99,7 +101,7 @@ class BLEClientRemote(BLEClientBase):
                     json=data if data else None,
                     timeout=timeout,
                 )
-                response_data = response.json()
+                response_data: dict[str, Any] = response.json()
 
                 if response.status_code == 409 and attempt < retries:
                     logger.info(
@@ -145,7 +147,7 @@ class BLEClientRemote(BLEClientBase):
 
         raise RuntimeError("BLE service busy after retries")
 
-    async def _publish_status(self, command: str, result: str, msg: str):
+    async def _publish_status(self, command: str, result: str, msg: str) -> None:
         """Publish BLE status through message router"""
         if self.message_router:
             await self.message_router.publish('ble', 'ble_status', {
@@ -228,7 +230,7 @@ class BLEClientRemote(BLEClientBase):
                 request_timeout=45.0,  # Allow for 3×10s BLE attempts + cleanup
             )
 
-            success = response.get('success', False)
+            success = cast(bool, response.get('success', False))
 
             if success:
                 self._status.state = ConnectionState.CONNECTED
@@ -260,7 +262,7 @@ class BLEClientRemote(BLEClientBase):
             await self._publish_status('disconnect BLE', 'info', 'Disconnecting...')
 
             response = await self._request('POST', '/api/ble/disconnect')
-            success = response.get('success', False)
+            success = cast(bool, response.get('success', False))
 
             self._status.state = ConnectionState.DISCONNECTED
             self._status.device_address = None
@@ -277,7 +279,7 @@ class BLEClientRemote(BLEClientBase):
         """Cancel any in-progress auto-reconnect on the BLE service."""
         try:
             response = await self._request('POST', '/api/ble/cancel_reconnect')
-            success = response.get('success', False)
+            success = cast(bool, response.get('success', False))
             self._status.state = ConnectionState.DISCONNECTED
             self._status.device_address = None
             await self._publish_status(
@@ -288,11 +290,11 @@ class BLEClientRemote(BLEClientBase):
             logger.error("Cancel reconnect error: %s", e)
             return False
 
-    async def get_activity(self) -> list[dict]:
+    async def get_activity(self) -> list[dict[str, Any]]:
         """Fetch the activity log from the BLE service."""
         try:
             response = await self._request('GET', '/api/ble/activity')
-            return response.get('events', [])
+            return cast(list[dict[str, Any]], response.get('events', []))
         except Exception as e:
             logger.error("Get activity error: %s", e)
             return []
@@ -308,9 +310,10 @@ class BLEClientRemote(BLEClientBase):
                 {'device_address': mac}
             )
 
-            success = response.get('success', False)
+            success = cast(bool, response.get('success', False))
             result = 'ok' if success else 'error'
-            await self._publish_status('pair BLE result', result, response.get('message', ''))
+            msg = cast(str, response.get('message', ''))
+            await self._publish_status('pair BLE result', result, msg)
 
             return success
 
@@ -330,9 +333,10 @@ class BLEClientRemote(BLEClientBase):
                 {'device_address': mac}
             )
 
-            success = response.get('success', False)
+            success = cast(bool, response.get('success', False))
             result = 'ok' if success else 'error'
-            await self._publish_status('unpair BLE result', result, response.get('message', ''))
+            msg = cast(str, response.get('message', ''))
+            await self._publish_status('unpair BLE result', result, msg)
 
             return success
 
@@ -352,7 +356,7 @@ class BLEClientRemote(BLEClientBase):
                 '/api/ble/send',
                 {'message': msg, 'group': group}
             )
-            return response.get('success', False)
+            return cast(bool, response.get('success', False))
 
         except Exception as e:
             logger.error("Send message error: %s", e)
@@ -369,7 +373,7 @@ class BLEClientRemote(BLEClientBase):
                 '/api/ble/send',
                 {'command': cmd}
             )
-            return response.get('success', False)
+            return cast(bool, response.get('success', False))
 
         except Exception as e:
             logger.error("Send command error: %s", e)
@@ -380,7 +384,7 @@ class BLEClientRemote(BLEClientBase):
         if cmd == "--settime":
             try:
                 response = await self._request('POST', '/api/ble/settime')
-                return response.get('success', False)
+                return cast(bool, response.get('success', False))
             except Exception as e:
                 logger.error("Set time error: %s", e)
                 return False
@@ -448,10 +452,10 @@ class BLEClientRemote(BLEClientBase):
             await self._client.aclose()
             self._client = None
 
-    async def _sse_loop(self):
+    async def _sse_loop(self) -> None:
         """SSE notification listener loop"""
         url = urljoin(self.remote_url, '/api/ble/notifications')
-        headers = {}
+        headers: dict[str, str] = {}
         if self.api_key:
             headers['X-API-Key'] = self.api_key
 
@@ -466,8 +470,8 @@ class BLEClientRemote(BLEClientBase):
                         response.raise_for_status()
                         self._sse_backoff = 5  # Reset on successful connection
 
-                        event_type = ''
-                        event_data = ''
+                        event_type: str = ''
+                        event_data: str = ''
 
                         async for line in response.aiter_lines():
                             if not self._running:
@@ -529,10 +533,10 @@ class BLEClientRemote(BLEClientBase):
                 # Reset backoff on clean exit from stream (shouldn't normally happen)
                 self._sse_backoff = 5
 
-    async def _handle_notification(self, data: str):
+    async def _handle_notification(self, data: str) -> None:
         """Handle incoming SSE notification"""
         try:
-            notification = json.loads(data)
+            notification: dict[str, Any] = json.loads(data)
 
             # CONFFIN is a status message, not a mesh message
             if notification.get('format') == 'json' and 'parsed' in notification:
@@ -568,12 +572,12 @@ class BLEClientRemote(BLEClientBase):
         """Get own callsign from message router if available."""
         return getattr(self.message_router, 'my_callsign', '') if self.message_router else ''
 
-    def _transform_notification(self, notification: dict) -> dict | None:
+    def _transform_notification(self, notification: dict[str, Any]) -> dict[str, Any] | None:
         """Transform SSE notification to match local BLE handler format"""
         own_call = self._get_own_callsign()
         if notification.get('format') == 'json' and 'parsed' in notification:
             # JSON notification - run through dispatcher like local mode
-            parsed = notification['parsed']
+            parsed = cast(dict[str, Any], notification['parsed'])
             typ = parsed.get("TYP", "?")
             _routine_typs = {
                 "MH", "G", "I", "SA", "SN", "W", "IO", "TM", "AN",
@@ -615,7 +619,7 @@ class BLEClientRemote(BLEClientBase):
                                 decoded.get("dest", ""),
                                 msg,
                             )
-                        output = dispatcher(decoded, own_call)
+                        output = dispatcher(cast(dict[str, Any], decoded), own_call)
                         if output:
                             if output.get('transformer') not in ('generic_ble', 'mh'):
                                 output['src_type'] = 'ble_remote'
@@ -624,8 +628,11 @@ class BLEClientRemote(BLEClientBase):
                             )
                             return output
                     elif raw_bytes.startswith(b'D{'):
-                        decoded = decode_json_message(raw_bytes)
-                        output = dispatcher(decoded, own_call)
+                        decoded_maybe = decode_json_message(raw_bytes)
+                        if isinstance(decoded_maybe, dict):
+                            output = dispatcher(decoded_maybe, own_call)
+                        else:
+                            output = None
                         if output:
                             if output.get('transformer') not in ('generic_ble', 'mh'):
                                 output['src_type'] = 'ble_remote'
@@ -649,10 +656,10 @@ class BLEClientRemote(BLEClientBase):
             notification['src_type'] = 'ble_remote'
             return notification
 
-    async def _handle_status(self, data: str):
+    async def _handle_status(self, data: str) -> None:
         """Handle SSE status update"""
         try:
-            status = json.loads(data)
+            status: dict[str, Any] = json.loads(data)
             old_state = self._status.state
             state_str = status.get('state', 'disconnected')
 

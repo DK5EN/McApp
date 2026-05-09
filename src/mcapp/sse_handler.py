@@ -107,7 +107,7 @@ class SSEManager:
         self.clients_lock = asyncio.Lock()
         self.app: FastAPI | None = None
         self.server: Any = None
-        self._server_task: asyncio.Task | None = None
+        self._server_task: asyncio.Task[None] | None = None
         self._shutdown_event = asyncio.Event()
 
         # Subscribe to messages from the router
@@ -129,7 +129,7 @@ class SSEManager:
         """Create and configure the FastAPI application."""
 
         @asynccontextmanager
-        async def lifespan(app: FastAPI):
+        async def lifespan(app: FastAPI) -> Any:
             """Handle startup and shutdown."""
             logger.info("SSE server starting up")
             yield
@@ -154,7 +154,7 @@ class SSEManager:
 
         # SSE endpoint
         @app.get("/events")
-        async def sse_endpoint(request: Request):
+        async def sse_endpoint(request: Request) -> StreamingResponse:
             """
             Server-Sent Events endpoint.
 
@@ -168,7 +168,7 @@ class SSEManager:
 
             logger.debug("SSE client connected: %s", client_id)
 
-            async def event_generator():
+            async def event_generator() -> Any:
                 try:
                     # Send initial connection confirmation
                     yield self._format_sse_event(
@@ -388,7 +388,7 @@ class SSEManager:
 
         # Message sending endpoint
         @app.post("/api/send")
-        async def send_message(request: SendMessageRequest):
+        async def send_message(request: SendMessageRequest) -> dict[str, str]:
             """
             Send a message through the mesh network.
 
@@ -450,7 +450,7 @@ class SSEManager:
         # Returns version, connected client count, and uptime.
         # Not called by the frontend UI, but useful for ops monitoring and debugging.
         @app.get("/api/status")
-        async def get_status():
+        async def get_status() -> dict[str, int | str]:
             """Get SSE server status (version, client count, uptime). Health endpoint."""
             async with self.clients_lock:
                 client_count = len(self.clients)
@@ -464,7 +464,7 @@ class SSEManager:
 
         # Read counts endpoints (unread badge persistence)
         @app.get("/api/read_counts")
-        async def get_read_counts():
+        async def get_read_counts() -> Any:
             """Get persisted read counts for unread badge sync."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
@@ -474,7 +474,7 @@ class SSEManager:
             return await storage.get_read_counts()
 
         @app.post("/api/read_counts")
-        async def set_read_count(request: Request):
+        async def set_read_count(request: Request) -> dict[str, str]:
             """Persist a read count for a destination."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
@@ -491,7 +491,7 @@ class SSEManager:
 
         # Hidden destinations endpoints (persist hidden groups)
         @app.get("/api/hidden_destinations")
-        async def get_hidden_destinations():
+        async def get_hidden_destinations() -> Any:
             """Get list of hidden destination identifiers."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
@@ -501,7 +501,7 @@ class SSEManager:
             return await storage.get_hidden_destinations()
 
         @app.post("/api/hidden_destinations")
-        async def set_hidden_destinations(request: Request):
+        async def set_hidden_destinations(request: Request) -> dict[str, str]:
             """Update hidden destinations. Bulk: {destinations: [...]}."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
@@ -517,7 +517,7 @@ class SSEManager:
 
         # Blocked texts endpoints (persist blocked message patterns)
         @app.get("/api/blocked_texts")
-        async def get_blocked_texts():
+        async def get_blocked_texts() -> Any:
             """Get list of blocked text patterns."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
@@ -527,7 +527,7 @@ class SSEManager:
             return await storage.get_blocked_texts()
 
         @app.post("/api/blocked_texts")
-        async def set_blocked_texts(request: Request):
+        async def set_blocked_texts(request: Request) -> dict[str, str]:
             """Add/remove a blocked text pattern. Single: {text, blocked}."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
@@ -544,7 +544,7 @@ class SSEManager:
 
         # Delete messages by destination
         @app.post("/api/delete_messages")
-        async def delete_messages(request: Request):
+        async def delete_messages(request: Request) -> dict[str, int | str]:
             """Delete all messages for a destination from the database."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
@@ -561,7 +561,7 @@ class SSEManager:
 
         # mHeard sidebar endpoints (persist station order + hidden)
         @app.get("/api/mheard/sidebar")
-        async def get_mheard_sidebar():
+        async def get_mheard_sidebar() -> dict[str, Any]:
             """Get mheard sidebar state."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
@@ -572,7 +572,7 @@ class SSEManager:
             return result or {"order": [], "hidden": []}
 
         @app.post("/api/mheard/sidebar")
-        async def set_mheard_sidebar(request: Request):
+        async def set_mheard_sidebar(request: Request) -> dict[str, str]:
             """Set mheard sidebar state."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
@@ -587,7 +587,7 @@ class SSEManager:
 
         # WX sidebar endpoints (persist station order + hidden)
         @app.get("/api/wx/sidebar")
-        async def get_wx_sidebar():
+        async def get_wx_sidebar() -> dict[str, Any]:
             """Get WX sidebar state."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
@@ -598,7 +598,7 @@ class SSEManager:
             return result or {"order": [], "hidden": []}
 
         @app.post("/api/wx/sidebar")
-        async def set_wx_sidebar(request: Request):
+        async def set_wx_sidebar(request: Request) -> dict[str, str]:
             """Set WX sidebar state."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
@@ -612,7 +612,7 @@ class SSEManager:
             return {"status": "ok"}
 
         @app.get("/api/filter_prefs")
-        async def get_filter_prefs():
+        async def get_filter_prefs() -> Any:
             storage = (
                 self.message_router.storage_handler if self.message_router else None
             )
@@ -621,7 +621,7 @@ class SSEManager:
             return await storage.get_filter_prefs()
 
         @app.post("/api/filter_prefs")
-        async def set_filter_prefs(request: Request):
+        async def set_filter_prefs(request: Request) -> dict[str, str]:
             storage = (
                 self.message_router.storage_handler if self.message_router else None
             )
@@ -633,13 +633,13 @@ class SSEManager:
 
         # Health check endpoint
         @app.get("/health")
-        async def health_check():
+        async def health_check() -> dict[str, str]:
             """Health check endpoint for load balancers."""
             return {"status": "healthy"}
 
         # Weather data endpoint
         @app.get("/api/weather")
-        async def get_weather():
+        async def get_weather() -> Any:
             """Get current weather data from the meteo service."""
             if not self.weather_service:
                 raise HTTPException(status_code=503, detail="Weather service not available")
@@ -663,7 +663,7 @@ class SSEManager:
             return data
 
         @app.get("/api/weather/preview")
-        async def get_weather_preview(text: str = ""):
+        async def get_weather_preview(text: str = "") -> dict[str, str]:
             """Return the formatted WX message as it would appear on the mesh."""
             if not self.weather_service:
                 raise HTTPException(status_code=503, detail="Weather service not available")
@@ -680,7 +680,7 @@ class SSEManager:
 
         # Server time endpoint (for frontend clock sync)
         @app.get("/api/time")
-        async def get_time():
+        async def get_time() -> dict[str, int | str]:
             """Return server time for frontend clock sync."""
             return {
                 "server_time_ms": int(time.time() * 1000),
@@ -689,7 +689,7 @@ class SSEManager:
 
         # Telemetry data endpoint (for WX charts)
         @app.get("/api/telemetry")
-        async def get_telemetry(hours: int = 48):
+        async def get_telemetry(hours: int = 48) -> Any:
             """Get telemetry data for weather charts."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
@@ -701,7 +701,7 @@ class SSEManager:
             return await storage.get_telemetry_chart_data(hours=min(hours, 744))
 
         @app.get("/api/telemetry/yearly")
-        async def get_telemetry_yearly():
+        async def get_telemetry_yearly() -> Any:
             """Get telemetry data aggregated into 4h buckets for yearly charts."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
@@ -713,7 +713,7 @@ class SSEManager:
             return await storage.get_telemetry_chart_data_bucketed()
 
         @app.get("/api/timezone")
-        async def get_timezone(lat: float, lon: float):
+        async def get_timezone(lat: float, lon: float) -> dict[str, str | float]:
             """Return UTC offset for given coordinates using timezonefinder."""
             import zoneinfo
             from datetime import datetime
@@ -724,7 +724,12 @@ class SSEManager:
                     status_code=400, detail="No timezone found for coordinates"
                 )
             zone = zoneinfo.ZoneInfo(tz_name)
-            offset_seconds = datetime.now(zone).utcoffset().total_seconds()
+            offset = datetime.now(zone).utcoffset()
+            if offset is None:
+                raise HTTPException(
+                    status_code=500, detail="Unable to calculate UTC offset"
+                )
+            offset_seconds = offset.total_seconds()
             offset_hours = offset_seconds / 3600
             abbreviation = datetime.now(zone).strftime("%Z")
             return {"timezone": tz_name, "abbreviation": abbreviation, "utc_offset": offset_hours}
@@ -732,37 +737,37 @@ class SSEManager:
         # ── Update / Deployment Endpoints ──────────────────────────
 
         @app.post("/api/update/start")
-        async def start_update(request: Request):
+        async def start_update(request: Request) -> dict[str, str]:
             """Launch the update runner process."""
             body = await request.json() if request.headers.get("content-length") else {}
             dev = body.get("dev", False)
             return await self._launch_update_runner("update", dev=dev)
 
         @app.post("/api/update/rollback")
-        async def start_rollback():
+        async def start_rollback() -> dict[str, str]:
             """Launch the update runner in rollback mode."""
             return await self._launch_update_runner("rollback")
 
         @app.get("/api/update/slots")
-        async def get_slots():
+        async def get_slots() -> dict[str, Any]:
             """Get slot metadata (versions, active slot, rollback target)."""
             return await asyncio.to_thread(self._read_slot_info)
 
         # ── Classifier REST surface ──────────────────────────────────
 
-        def _storage():
+        def _storage() -> Any:
             s = self.message_router.storage_handler if self.message_router else None
             if not s:
                 raise HTTPException(status_code=503, detail="Storage not available")
             return s
 
-        def _classifier():
+        def _classifier() -> Any:
             if self.classifier is None:
                 raise HTTPException(status_code=503, detail="Classifier not available")
             return self.classifier
 
         @app.get("/api/classifier/rules")
-        async def get_classifier_rules():
+        async def get_classifier_rules() -> Any:
             storage = _storage()
             return await storage._execute(
                 "SELECT id, name, pattern, scope, category, extra_tags, priority, "
@@ -771,7 +776,7 @@ class SSEManager:
             )
 
         @app.post("/api/classifier/rules")
-        async def create_classifier_rule(request: Request):
+        async def create_classifier_rule(request: Request) -> dict[str, int | str]:
             storage = _storage()
             classifier = _classifier()
             body = await request.json()
@@ -811,7 +816,7 @@ class SSEManager:
             return {"status": "ok", "classifier_version": new_ver}
 
         @app.patch("/api/classifier/rules/{rule_id}")
-        async def patch_classifier_rule(rule_id: int, request: Request):
+        async def patch_classifier_rule(rule_id: int, request: Request) -> dict[str, int | str]:
             storage = _storage()
             classifier = _classifier()
             body = await request.json()
@@ -861,7 +866,7 @@ class SSEManager:
             return {"status": "ok", "classifier_version": new_ver}
 
         @app.delete("/api/classifier/rules/{rule_id}")
-        async def delete_classifier_rule(rule_id: int):
+        async def delete_classifier_rule(rule_id: int) -> dict[str, int | str]:
             storage = _storage()
             classifier = _classifier()
             row = await storage._execute(
@@ -889,7 +894,7 @@ class SSEManager:
             return {"status": "ok", "classifier_version": new_ver}
 
         @app.post("/api/classifier/rules/test")
-        async def test_classifier_rule(request: Request):
+        async def test_classifier_rule(request: Request) -> dict[str, Any]:
             import re as _re
             storage = _storage()
             body = await request.json()
@@ -939,7 +944,7 @@ class SSEManager:
             min_count: int = 0,
             auto_only: bool = False,
             limit: int = 100,
-        ):
+        ) -> Any:
             storage = _storage()
             where: list[str] = []
             params: list[Any] = []
@@ -959,7 +964,7 @@ class SSEManager:
             )
 
         @app.patch("/api/classifier/templates/{template_hash}")
-        async def patch_classifier_template(template_hash: str, request: Request):
+        async def patch_classifier_template(template_hash: str, request: Request) -> dict[str, Any]:
             storage = _storage()
             body = await request.json()
             action = body.get("user_action")
@@ -982,7 +987,7 @@ class SSEManager:
             return {"status": "ok", "user_action": action}
 
         @app.post("/api/classifier/templates/{template_hash}/preview")
-        async def preview_classifier_template(template_hash: str):
+        async def preview_classifier_template(template_hash: str) -> dict[str, Any]:
             storage = _storage()
             rows = await storage._execute(
                 "SELECT id, msg_id, src, dst, msg, type, timestamp, category, tags, "
@@ -993,7 +998,7 @@ class SSEManager:
             return {"template_hash": template_hash, "messages": rows}
 
         @app.post("/api/classifier/reclassify")
-        async def post_classifier_reclassify(request: Request):
+        async def post_classifier_reclassify(request: Request) -> dict[str, Any]:
             classifier = _classifier()
             body = await request.json() if request.headers.get("content-length") else {}
             since = body.get("since")
@@ -1016,7 +1021,7 @@ class SSEManager:
             return {"job_id": job.job_id, "estimated_rows": job.total}
 
         @app.get("/api/classifier/status")
-        async def get_classifier_status():
+        async def get_classifier_status() -> dict[str, Any]:
             classifier = _classifier()
             return {
                 "classifier_version": classifier.version,

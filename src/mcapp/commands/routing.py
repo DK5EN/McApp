@@ -1,6 +1,9 @@
 """RoutingMixin: message handling, command parsing, execution routing."""
 
+from typing import Any, cast
+
 from ..logging_setup import get_logger
+from ._base import CommandHandlerBase
 from .constants import (
     COMMAND_THROTTLING,
     DEFAULT_THROTTLE_TIMEOUT,
@@ -10,10 +13,10 @@ from .parsing import extract_target_callsign, is_group, normalize_unified, parse
 logger = get_logger(__name__)
 
 
-class RoutingMixin:
+class RoutingMixin(CommandHandlerBase):
     """Mixin providing message routing, command parsing, and execution logic."""
 
-    async def _message_handler(self, routed_message):
+    async def _message_handler(self, routed_message: dict[str, Any]) -> None:
         """Handle incoming messages: dispatch echoes/ACKs, then parse and execute commands."""
         message_data = routed_message["data"]
         src_type = message_data.get("src_type")
@@ -57,7 +60,7 @@ class RoutingMixin:
             return
 
         should_execute, target_type = self._should_execute_command(src, dst, msg_text)
-        if not should_execute:
+        if not should_execute or target_type is None:
             logger.debug("Command execution denied: src=%s dst=%s", src, dst)
             return
 
@@ -100,8 +103,14 @@ class RoutingMixin:
         return dst  # group → reply to group
 
     async def _parse_and_execute(
-        self, msg_text, msg_id, content_hash, response_target, src, src_type,
-    ):
+        self,
+        msg_text: str,
+        msg_id: Any,
+        content_hash: str,
+        response_target: str,
+        src: str,
+        src_type: str,
+    ) -> None:
         """Parse a !command, check per-command throttle, execute, and send response."""
         try:
             cmd_result = parse_command(msg_text)
@@ -144,11 +153,11 @@ class RoutingMixin:
             return "❌ Weather service temporarily unavailable"
         return f"❌ Command failed: {str(error)[:50]}"
 
-    def normalize_command_data(self, message_data):
+    def normalize_command_data(self, message_data: dict[str, Any]) -> dict[str, Any]:
         """Normalize command data with uppercase conversion."""
         return normalize_unified(message_data, context="command")
 
-    def _should_execute_command(self, src, dst, msg):
+    def _should_execute_command(self, src: str, dst: str, msg: str) -> tuple[bool, str | None]:
         """Flat routing logic with early returns."""
         src = src.upper()
         dst = dst.upper()
@@ -156,7 +165,7 @@ class RoutingMixin:
         target = self.extract_target_callsign(msg)
         is_own = src == self.my_callsign
 
-        def _target_type(dst_val):
+        def _target_type(dst_val: str) -> str:
             """Return 'group' for group destinations, 'direct' otherwise."""
             return "group" if self.is_group(dst_val) else "direct"
 
@@ -191,29 +200,29 @@ class RoutingMixin:
         # --- No match ---
         return False, None
 
-    def extract_target_callsign(self, msg):
+    def extract_target_callsign(self, msg: str) -> str | None:
         """Delegate to shared pure function."""
         return extract_target_callsign(msg)
 
-    def is_group(self, dst):
+    def is_group(self, dst: str) -> bool:
         """Delegate to shared pure function."""
         return is_group(dst)
 
-    def _is_admin(self, callsign):
+    def _is_admin(self, callsign: str | None) -> bool:
         """Check if callsign is admin (DK5EN with any SID)"""
         if not callsign:
             return False
         base_call = callsign.split("-")[0] if "-" in callsign else callsign
         return base_call.upper() == self.admin_callsign_base.upper()
 
-    async def execute_command(self, cmd, kwargs, requester):
+    async def execute_command(self, cmd: str, kwargs: dict[str, Any], requester: str) -> Any:
         """Execute a command and return response"""
         from .handler import COMMANDS
 
         if cmd not in COMMANDS:
             return "❌ Unknown command"
 
-        handler_name = COMMANDS[cmd]["handler"]
+        handler_name = cast(str, COMMANDS[cmd]["handler"])
         handler = getattr(self, handler_name, None)
 
         if not handler:

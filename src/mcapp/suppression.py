@@ -8,7 +8,7 @@ The MessageValidator class in main.py delegates to these functions.
 from __future__ import annotations
 
 import re
-from typing import Callable
+from typing import Any, Callable
 
 
 def is_command(msg: str) -> bool:
@@ -33,7 +33,7 @@ def is_valid_destination(dst: str, is_group_func: Callable[[str], bool]) -> bool
 
 
 def should_suppress_outbound(
-    message_data: dict,
+    message_data: dict[str, Any],
     my_callsign: str,
     is_group_func: Callable[[str], bool],
 ) -> bool:
@@ -76,7 +76,7 @@ def should_suppress_outbound(
 
 
 def get_suppression_reason(
-    message_data: dict,
+    message_data: dict[str, Any],
     my_callsign: str,
     is_group_func: Callable[[str], bool],
 ) -> str:

@@ -44,6 +44,11 @@ from .sqlite_storage import SQLiteStorage, create_sqlite_storage
 
 VERSION = f"v{__version__}"
 
+# Global state
+cfg: Config
+has_console: bool = False
+is_dev: bool = False
+
 # BLE Register Query Timing Constants (seconds)
 BLE_HELLO_WAIT = 1.0                    # Wait after hello handshake before queries
 BLE_QUERY_DELAY_STANDARD = 0.8         # Delay between standard register queries
@@ -54,7 +59,7 @@ BLE_RETRY_BASE_DELAY = 0.5             # Base delay for exponential backoff retr
 logger = get_logger(__name__)
 
 
-def debug_signal_handler(signum, frame):
+def debug_signal_handler(signum: int, frame: Any) -> None:
     """Print stack trace when USR1 signal received"""
     logger.info("=" * 60)
     logger.info("DEBUG: Stack trace at hang point:")
@@ -69,13 +74,15 @@ block_list = [
 ]
 
 class MessageRouter:
-    def __init__(self, message_storage_handler=None):
-        self._subscribers = defaultdict(list)
-        self._protocols = {}
+    def __init__(self, message_storage_handler: Any = None) -> None:
+        self._subscribers: dict[str, list[Any]] = defaultdict(list)
+        self._protocols: dict[str, Any] = {}
         self.storage_handler = message_storage_handler
-        self.my_callsign = None
-        self.validator = None
+        self.my_callsign: str | None = None
+        self.validator: MessageValidator | None = None
         self._logger = get_logger(f"{__name__}.MessageRouter")
+        self.cached_gps: dict[str, float] | None = None
+        self.cached_ble_registers: dict[str, Any] = {}
 
         if message_storage_handler:
             self.subscribe('mesh_message', self._storage_handler)
@@ -84,14 +91,14 @@ class MessageRouter:
         self.subscribe('ble_message', self._ble_message_handler)
         self.subscribe('udp_message', self._udp_message_handler)
 
-    def set_callsign(self, callsign):
+    def set_callsign(self, callsign: str) -> None:
         """Set the callsign from config"""
         self.my_callsign = callsign.upper()
         self.validator = MessageValidator(self.my_callsign)
         self._logger.info("Callsign set to '%s', validator initialized", self.my_callsign)
 
     # --- Publish Helper Methods ---
-    async def publish_ble_status(self, command: str, result: str, msg: str):
+    async def publish_ble_status(self, command: str, result: str, msg: str) -> None:
         """Standardized BLE status publishing"""
         await self.publish('ble', 'ble_status', {
             'src_type': 'BLE',
@@ -102,7 +109,7 @@ class MessageRouter:
             'timestamp': int(time.time() * 1000)
         })
 
-    async def publish_system_message(self, msg: str, msg_type: str = 'info'):
+    async def publish_system_message(self, msg: str, msg_type: str = 'info') -> None:
         """Publish system message to websocket clients"""
         await self.publish('system', 'websocket_message', {
             'src_type': 'system',
@@ -111,7 +118,7 @@ class MessageRouter:
             'timestamp': int(time.time() * 1000)
         })
 
-    async def publish_error(self, msg: str, source: str = 'system'):
+    async def publish_error(self, msg: str, source: str = 'system') -> None:
         """Publish error message to websocket clients"""
         await self.publish(source, 'websocket_message', {
             'src_type': 'system',
@@ -121,12 +128,12 @@ class MessageRouter:
         })
 
 
-    def test_suppression_logic(self):
+    def test_suppression_logic(self) -> bool:
         """Test suppression logic based on the table scenarios"""
         self._logger.info("Testing Suppression Logic:")
         self._logger.info("=" * 50)
 
-        test_cases = [
+        test_cases: list[tuple[str | None, str, str, bool, str]] = [
             # (src, dst, msg, expected_suppression, description)
             (self.my_callsign, "20", "!WX", True, "Group ohne Target → lokal"),
             (self.my_callsign, "20", "!WX OE5HWN-12", False, "Group mit anderem Target → senden"),
@@ -147,19 +154,24 @@ class MessageRouter:
             ("OE5HWN-12", "20", "!WX", False, "Nicht unsere Message → nicht suppessen"),
         ]
 
-        results = []
-        for src, dst, msg, expected, description in test_cases:
-            test_data = {'src': src, 'dst': dst, 'msg': msg}
+        results: list[tuple[str, str, bool, bool, str]] = []
+        for src_or_none, dst, msg, expected, description in test_cases:
+            test_data: dict[str, str | None] = {'src': src_or_none, 'dst': dst, 'msg': msg}
+            assert self.validator is not None
             normalized = self.validator.normalize_message_data(test_data)
             actual = self.validator.should_suppress_outbound(normalized)
 
             status = "✅ PASS" if actual == expected else "❌ FAIL"
+            assert self.validator is not None
             reason = self.validator.get_suppression_reason(normalized)
 
             results.append((status, description, actual, expected, reason))
 
             logger.info("%s | %s", status, description)
-            logger.info("     %s→%s '%s' → %s (expected: %s)", src, dst, msg, actual, expected)
+            logger.info(
+                "     %s→%s '%s' → %s (expected: %s)",
+                src_or_none, dst, msg, actual, expected
+            )
             logger.info("     Reason: %s", reason)
 
         # Summary
@@ -174,7 +186,9 @@ class MessageRouter:
 
         return passed == total
 
-    def log_message_routing_decision(self, message_data, decision_type, action, reason):
+    def log_message_routing_decision(
+        self, message_data: dict[str, Any], decision_type: str, action: str, reason: str
+    ) -> None:
         """Centralized logging for message routing decisions"""
         src = message_data.get('src', 'unknown')
         dst = message_data.get('dst', 'unknown')
@@ -183,7 +197,7 @@ class MessageRouter:
 
         self._logger.debug("%s: %s→%s '%s' → %s (%s)", decision_type, src, dst, msg, action, reason)
 
-    async def _storage_handler(self, routed_message):
+    async def _storage_handler(self, routed_message: dict[str, Any]) -> None:
         """Handle message storage for all routed messages"""
         if self.storage_handler:
             message_data = routed_message['data']
@@ -196,7 +210,7 @@ class MessageRouter:
             raw_json = json.dumps(message_data)
             await self.storage_handler.store_message(message_data, raw_json)
 
-    def _is_callsign_blocked(self, callsign):
+    def _is_callsign_blocked(self, callsign: str) -> bool:
         """Check if callsign is blocked"""
         # Get blocked list from CommandHandler
         command_handler = self.get_protocol('commands')
@@ -204,20 +218,20 @@ class MessageRouter:
             return callsign in command_handler.blocked_callsigns
         return False
 
-    def register_protocol(self, name: str, handler):
+    def register_protocol(self, name: str, handler: Any) -> None:
         """Register a protocol handler (UDP, BLE, WebSocket)"""
         self._protocols[name] = handler
         self._logger.info("Registered protocol '%s'", name)
 
-    def subscribe(self, message_type: str, handler_func):
+    def subscribe(self, message_type: str, handler_func: Any) -> None:
         """Subscribe to specific message types"""
         self._subscribers[message_type].append(handler_func)
         self._logger.debug("'%s' subscribed to '%s'", handler_func.__name__, message_type)
 
-    async def publish(self, source: str, message_type: str, data: dict):
+    async def publish(self, source: str, message_type: str, data: dict[str, Any]) -> None:
         """Publish message from one protocol to all subscribers"""
         # Add routing metadata
-        routed_message = {
+        routed_message: dict[str, Any] = {
             'source': source,
             'type': message_type,
             'data': data,
@@ -235,11 +249,11 @@ class MessageRouter:
                     message_type, handler.__name__, e, exc_info=True
                 )
 
-    def get_protocol(self, name: str):
+    def get_protocol(self, name: str) -> Any:
         """Get a registered protocol handler"""
         return self._protocols.get(name)
 
-    def list_subscriptions(self):
+    def list_subscriptions(self) -> None:
         """Debug: List all current subscriptions"""
         self._logger.debug("MessageRouter subscriptions:")
         for msg_type, handlers in self._subscribers.items():
@@ -247,9 +261,9 @@ class MessageRouter:
             self._logger.debug("  %s: %s", msg_type, handler_names)
 
     async def route_command(
-        self, command: str, websocket=None, MAC=None,
-        BLE_Pin=None, data=None, **kwargs
-    ):
+        self, command: str, websocket: Any = None, MAC: str | None = None,
+        BLE_Pin: str | None = None, data: dict[str, Any] | None = None, **kwargs: Any
+    ) -> None:
       """Route commands to appropriate protocol handlers"""
       self._logger.debug("Routing command '%s'", command)
 
@@ -285,10 +299,12 @@ class MessageRouter:
             await self._handle_ble_info_command(websocket)
 
         elif command == "pair BLE":
-            await self._handle_ble_pair_command(MAC, BLE_Pin)
+            if MAC is not None and BLE_Pin is not None:
+                await self._handle_ble_pair_command(MAC, BLE_Pin)
 
         elif command == "unpair BLE":
-            await self._handle_ble_unpair_command(MAC)
+            if MAC is not None:
+                await self._handle_ble_unpair_command(MAC)
 
         elif command == "disconnect BLE":
             await self._handle_ble_disconnect_command()
@@ -297,10 +313,12 @@ class MessageRouter:
             await self._handle_ble_cancel_reconnect_command()
 
         elif command == "connect BLE":
-            await self._handle_ble_connect_command(MAC, websocket)
+            if MAC is not None:
+                await self._handle_ble_connect_command(MAC, websocket)
 
         elif command == "resolve-ip":
-            await self._handle_resolve_ip_command(MAC)
+            if MAC is not None:
+                await self._handle_resolve_ip_command(MAC)
 
         # Device commands (--commands)
         elif command.startswith("--setboostedgain"):
@@ -334,7 +352,7 @@ class MessageRouter:
             }
             await self.publish('router', 'websocket_message', error_msg)
 
-    async def _handle_smart_initial_command(self, websocket):
+    async def _handle_smart_initial_command(self, websocket: Any) -> None:
         """Handle smart initial payload - sends only last N messages per dst + summary."""
         if hasattr(self.storage_handler, 'get_smart_initial_with_summary'):
             initial_data, summary = (
@@ -442,10 +460,10 @@ class MessageRouter:
             else:
                 await self.publish('router', 'websocket_message', fp_payload)
 
-    async def _handle_summary_command(self, websocket):
+    async def _handle_summary_command(self, websocket: Any) -> None:
         """Handle summary command - sends message counts per destination."""
         summary = await self.storage_handler.get_summary()
-        payload = {
+        payload: dict[str, Any] = {
             "type": "response",
             "msg": "summary",
             "data": summary,
@@ -457,7 +475,7 @@ class MessageRouter:
         else:
             await self.publish('router', 'websocket_message', payload)
 
-    async def _handle_messages_page_command(self, websocket, params):
+    async def _handle_messages_page_command(self, websocket: Any, params: dict[str, Any]) -> None:
         """Handle paginated message fetch."""
         dst = params.get('dst', '*')
         before = params.get('before', int(time.time() * 1000))
@@ -479,11 +497,11 @@ class MessageRouter:
         else:
             await self.publish('router', 'websocket_message', payload)
 
-    async def _handle_mheard_dump_command(self, websocket):
+    async def _handle_mheard_dump_command(self, websocket: Any) -> None:
         """Handle mheard dump command"""
         # Create progress callback that sends updates to the requesting client
-        async def progress_callback(stage, detail, callsign=None):
-            progress_msg = {
+        async def progress_callback(stage: str, detail: str, callsign: str | None = None) -> None:
+            progress_msg: dict[str, Any] = {
                 "type": "progress",
                 "msg": "mheard progress",
                 "stage": stage,
@@ -503,7 +521,7 @@ class MessageRouter:
         mheard = await self.storage_handler.process_mheard_store_parallel(
             progress_callback=progress_callback
         )
-        payload = {
+        payload: dict[str, Any] = {
             "type": "response",
             "msg": "mheard stats",
             "data": mheard
@@ -517,10 +535,10 @@ class MessageRouter:
             # SSE client — broadcast to all connected clients
             await self.publish('router', 'websocket_message', payload)
 
-    async def _handle_mheard_dump_monthly_command(self, websocket):
+    async def _handle_mheard_dump_monthly_command(self, websocket: Any) -> None:
         """Handle mheard dump monthly command — queries buckets for 30 days."""
-        async def progress_callback(stage, detail, callsign=None):
-            progress_msg = {
+        async def progress_callback(stage: str, detail: str, callsign: str | None = None) -> None:
+            progress_msg: dict[str, Any] = {
                 "type": "progress",
                 "msg": "mheard progress monthly",
                 "stage": stage,
@@ -539,7 +557,7 @@ class MessageRouter:
         mheard = await self.storage_handler.process_mheard_monthly(
             progress_callback=progress_callback
         )
-        payload = {
+        payload: dict[str, Any] = {
             "type": "response",
             "msg": "mheard stats monthly",
             "data": mheard
@@ -552,10 +570,10 @@ class MessageRouter:
         else:
             await self.publish('router', 'websocket_message', payload)
 
-    async def _handle_mheard_dump_yearly_command(self, websocket):
+    async def _handle_mheard_dump_yearly_command(self, websocket: Any) -> None:
         """Handle mheard dump yearly command — queries 1-hour buckets for 365 days."""
-        async def progress_callback(stage, detail, callsign=None):
-            progress_msg = {
+        async def progress_callback(stage: str, detail: str, callsign: str | None = None) -> None:
+            progress_msg: dict[str, Any] = {
                 "type": "progress",
                 "msg": "mheard progress yearly",
                 "stage": stage,
@@ -574,7 +592,7 @@ class MessageRouter:
         mheard = await self.storage_handler.process_mheard_yearly(
             progress_callback=progress_callback
         )
-        payload = {
+        payload: dict[str, Any] = {
             "type": "response",
             "msg": "mheard stats yearly",
             "data": mheard
@@ -588,13 +606,13 @@ class MessageRouter:
             await self.publish('router', 'websocket_message', payload)
 
     # BLE command handlers - route through ble_client abstraction
-    def _get_ble_client(self):
+    def _get_ble_client(self) -> Any:
         """Get the BLE client from registered protocols"""
         return self.get_protocol('ble_client')
 
     async def _send_ble_command_with_retry(
         self,
-        client,
+        client: Any,
         cmd: str,
         max_retries: int = 3,
         base_delay: float = BLE_RETRY_BASE_DELAY
@@ -645,7 +663,9 @@ class MessageRouter:
 
         return False  # All attempts exhausted
 
-    async def _query_ble_registers(self, wait_for_hello: bool = True, sync_time: bool = True):
+    async def _query_ble_registers(
+        self, wait_for_hello: bool = True, sync_time: bool = True
+    ) -> None:
         """
         Query BLE device registers NOT auto-sent by the device on connect.
 
@@ -698,7 +718,7 @@ class MessageRouter:
 
         logger.debug("Register queries complete (IO + TM)")
 
-    async def _handle_ble_scan_command(self):
+    async def _handle_ble_scan_command(self) -> None:
         """Handle BLE scan command"""
         client = self._get_ble_client()
         if client:
@@ -708,7 +728,7 @@ class MessageRouter:
             paired = [d for d in devices if d.known]
             unpaired = [d for d in devices if not d.known]
 
-            known_msg = {'src_type': 'BLE', 'TYP': 'blueZknown', 'timestamp': ts}
+            known_msg: dict[str, Any] = {'src_type': 'BLE', 'TYP': 'blueZknown', 'timestamp': ts}
             for d in paired:
                 path = f"/org/bluez/hci0/dev_{d.address.replace(':', '_')}"
                 known_msg[path] = {
@@ -722,7 +742,9 @@ class MessageRouter:
                 }
             await self.publish('ble', 'ble_status', known_msg)
 
-            unknown_msg = {'src_type': 'BLE', 'TYP': 'blueZunKnown', 'timestamp': ts}
+            unknown_msg: dict[str, Any] = {
+                'src_type': 'BLE', 'TYP': 'blueZunKnown', 'timestamp': ts
+            }
             for d in unpaired:
                 path = f"/org/bluez/hci0/dev_{d.address.replace(':', '_')}"
                 unknown_msg[path] = [d.name, d.address, d.rssi]
@@ -730,7 +752,7 @@ class MessageRouter:
         else:
             logger.warning("BLE client not available for scan")
 
-    async def _handle_ble_pair_command(self, MAC, BLE_Pin):
+    async def _handle_ble_pair_command(self, MAC: str, BLE_Pin: str) -> None:
         """Handle BLE pair command"""
         client = self._get_ble_client()
         if client:
@@ -738,7 +760,7 @@ class MessageRouter:
         else:
             logger.warning("BLE client not available for pair")
 
-    async def _handle_ble_unpair_command(self, MAC):
+    async def _handle_ble_unpair_command(self, MAC: str) -> None:
         """Handle BLE unpair command"""
         client = self._get_ble_client()
         if client:
@@ -746,7 +768,7 @@ class MessageRouter:
         else:
             logger.warning("BLE client not available for unpair")
 
-    async def _handle_ble_connect_command(self, MAC, websocket=None):
+    async def _handle_ble_connect_command(self, MAC: str, websocket: Any | None = None) -> None:
         """Handle BLE connect command"""
         client = self._get_ble_client()
         if not client:
@@ -778,7 +800,7 @@ class MessageRouter:
             # Don't query registers again - we just did it above
             await self._handle_ble_info_command(websocket, query_registers=False)
 
-    async def _handle_ble_disconnect_command(self):
+    async def _handle_ble_disconnect_command(self) -> None:
         """Handle BLE disconnect command"""
         client = self._get_ble_client()
         if client:
@@ -786,7 +808,7 @@ class MessageRouter:
         else:
             logger.warning("BLE client not available for disconnect")
 
-    async def _handle_ble_cancel_reconnect_command(self):
+    async def _handle_ble_cancel_reconnect_command(self) -> None:
         """Handle BLE cancel reconnect command"""
         client = self._get_ble_client()
         if client and hasattr(client, 'cancel_reconnect'):
@@ -794,7 +816,9 @@ class MessageRouter:
         else:
             logger.warning("BLE client not available for cancel reconnect")
 
-    async def _handle_ble_info_command(self, websocket, query_registers: bool = True):
+    async def _handle_ble_info_command(
+        self, websocket: Any | None, query_registers: bool = True
+    ) -> None:
         """
         Handle BLE info command - send current BLE status to requesting client.
 
@@ -879,12 +903,12 @@ class MessageRouter:
                 'timestamp': int(time.time() * 1000)
             })
 
-    async def _handle_resolve_ip_command(self, hostname):
+    async def _handle_resolve_ip_command(self, hostname: str) -> None:
         """Handle resolve IP command"""
         await self._backend_resolve_ip(hostname)
 
     # Device command handlers - route through ble_client abstraction
-    async def _handle_device_a0_command(self, command):
+    async def _handle_device_a0_command(self, command: str) -> None:
         """Handle device A0 commands (--pos, --reboot, etc.)"""
         client = self._get_ble_client()
         if client:
@@ -892,7 +916,7 @@ class MessageRouter:
         else:
             logger.warning("BLE client not available for A0 command")
 
-    async def _handle_device_set_command(self, command):
+    async def _handle_device_set_command(self, command: str) -> None:
         """Handle device set commands (--settime, --setCALL, etc.)"""
         client = self._get_ble_client()
         if client:
@@ -900,7 +924,7 @@ class MessageRouter:
         else:
             logger.warning("BLE client not available for set command")
 
-    def _should_suppress_outbound(self, message_data):
+    def _should_suppress_outbound(self, message_data: dict[str, Any]) -> tuple[bool, str]:
         """Check if outbound message should be suppressed using validator.
 
         Returns (suppress: bool, reason: str).
@@ -917,7 +941,7 @@ class MessageRouter:
 
         return suppress, reason
 
-    async def _udp_message_handler(self, routed_message):
+    async def _udp_message_handler(self, routed_message: dict[str, Any]) -> None:
         """Handle UDP messages from WebSocket and route to UDP handler"""
         message_data = routed_message['data']
 
@@ -928,6 +952,7 @@ class MessageRouter:
         )
 
         # EARLY NORMALIZATION - ab hier alles uppercase
+        assert self.validator is not None
         normalized_data = self.validator.normalize_message_data(message_data)
 
         # Add our callsign if missing
@@ -1003,12 +1028,13 @@ class MessageRouter:
             })
 
 
-    async def _ble_message_handler(self, routed_message):
+    async def _ble_message_handler(self, routed_message: dict[str, Any]) -> None:
         """Handle BLE messages from WebSocket and route to BLE client"""
 
         message_data = routed_message['data']
 
         # EARLY NORMALIZATION - ab hier alles uppercase
+        assert self.validator is not None
         normalized_data = self.validator.normalize_message_data(message_data)
 
         # Add our callsign if missing
@@ -1054,14 +1080,16 @@ class MessageRouter:
         else:
             logger.warning("BLE client not available, cannot send message")
 
-    def _is_message_to_self(self, message_data):
+    def _is_message_to_self(self, message_data: dict[str, Any]) -> bool:
         """Check if message is addressed to our own callsign (assumes normalized data)"""
         if not self.my_callsign:
             return False
         dst = message_data.get('dst', '')
-        return dst == self.my_callsign
+        return bool(dst == self.my_callsign)
 
-    def _create_synthetic_message(self, original_message, protocol_type='udp'):
+    def _create_synthetic_message(
+        self, original_message: dict[str, Any], protocol_type: str = 'udp'
+    ) -> dict[str, Any]:
         """Create a synthetic message that looks like it came from LoRa (uses normalized data)"""
         current_time = int(time.time())
         msg_id = f"{current_time:08X}"
@@ -1076,7 +1104,9 @@ class MessageRouter:
             'timestamp': current_time * 1000
         }
 
-    async def _handle_outgoing_message(self, message_data, protocol_type='udp'):
+    async def _handle_outgoing_message(
+        self, message_data: dict[str, Any], protocol_type: str = 'udp'
+    ) -> bool:
         """Unified handler for outgoing messages - handles self-message detection"""
 
         if self._is_message_to_self(message_data):
@@ -1090,11 +1120,11 @@ class MessageRouter:
 
         return False  # Indicates message should be sent to external protocol
 
-    async def _route_to_command_handler(self, synthetic_message):
+    async def _route_to_command_handler(self, synthetic_message: dict[str, Any]) -> None:
         """Route synthetic message to CommandHandler"""
         self._logger.debug("Creating synthetic message: %s", synthetic_message)
 
-        routed_message = {
+        routed_message: dict[str, Any] = {
             'source': 'self',
             'type': 'ble_notification',
             'data': synthetic_message,
@@ -1122,23 +1152,23 @@ class MessageValidator:
     keeping this class as a thin stateful wrapper.
     """
 
-    def __init__(self, my_callsign):
+    def __init__(self, my_callsign: str) -> None:
         self.my_callsign = my_callsign.upper()
         self._logger = get_logger(f"{__name__}.MessageValidator")
 
-    def normalize_message_data(self, message_data):
+    def normalize_message_data(self, message_data: dict[str, Any]) -> dict[str, Any]:
         """Normalize message data - uppercase and validate early."""
         return normalize_unified(message_data, context="message")
 
-    def is_group(self, dst):
+    def is_group(self, dst: str) -> bool:
         """Delegate to shared pure function."""
         return is_group(dst)
 
-    def is_self_message(self, src, dst):
+    def is_self_message(self, src: str, dst: str) -> bool:
         """Check if message is from us to us"""
         return src == self.my_callsign and dst == self.my_callsign
 
-    def should_suppress_outbound(self, message_data: dict) -> bool:
+    def should_suppress_outbound(self, message_data: dict[str, Any]) -> bool:
         """Return True if this outbound message should be executed locally.
 
         Delegates to suppression.should_suppress_outbound().
@@ -1151,13 +1181,13 @@ class MessageValidator:
         )
         return result
 
-    def get_suppression_reason(self, message_data: dict) -> str:
+    def get_suppression_reason(self, message_data: dict[str, Any]) -> str:
         """Return a human-readable reason for the suppression decision."""
         from .suppression import get_suppression_reason
         return get_suppression_reason(message_data, self.my_callsign, self.is_group)
 
 
-async def main():
+async def main() -> None:
     # Initialize SQLite storage backend
     logger.info("Database: %s", cfg.storage.db_path)
     storage_handler = await create_sqlite_storage(cfg.storage.db_path)
@@ -1192,7 +1222,7 @@ async def main():
     message_router.cached_gps = None  # {lat, lon} — set when BLE device sends TYP="G"
     message_router.cached_ble_registers = {}  # {TYP: dict} — cached on ble_notification
 
-    async def _cache_ble_register(routed_message):
+    async def _cache_ble_register(routed_message: dict[str, Any]) -> None:
         """Cache BLE register notifications for serving on SSE reconnect."""
         data = routed_message['data']
         typ = data.get("TYP")
@@ -1201,7 +1231,7 @@ async def main():
 
     message_router.subscribe("ble_notification", _cache_ble_register)
 
-    async def _clear_ble_cache_on_disconnect(routed_message):
+    async def _clear_ble_cache_on_disconnect(routed_message: dict[str, Any]) -> None:
         """Clear BLE register cache when device disconnects."""
         data = routed_message['data']
         cmd = data.get("command", "")
@@ -1211,7 +1241,7 @@ async def main():
 
     message_router.subscribe("ble_status", _clear_ble_cache_on_disconnect)
 
-    async def _cache_gps(routed_message):
+    async def _cache_gps(routed_message: dict[str, Any]) -> None:
         """Cache GPS from BLE device and update weather service."""
         data = routed_message['data']
         if data.get("TYP") != "G":
@@ -1324,7 +1354,7 @@ async def main():
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
 
-    def stdin_reader():
+    def stdin_reader() -> None:
         while True:
             line = sys.stdin.readline()
             if not line:
@@ -1334,9 +1364,9 @@ async def main():
                 break
 
     # Signal handling with fallback
-    _first_signal_time = None
+    _first_signal_time: float | None = None
 
-    def handle_shutdown(signum=None, frame=None):
+    def handle_shutdown(signum: int | None = None, frame: Any = None) -> None:
         nonlocal _first_signal_time
         logger.info("Signal %s received, stopping proxy service ..", signum or 'SIGINT')
         if stop_event.is_set():
@@ -1384,8 +1414,6 @@ async def main():
     # Log BLE configuration
     if ble_mode == BLEMode.REMOTE:
         logger.info("BLE: remote mode -> %s", os.getenv("MCAPP_BLE_URL", BLE_SERVICE_URL))
-    elif ble_mode == BLEMode.LOCAL:
-        logger.info("BLE: local mode (D-Bus/BlueZ)")
     else:
         logger.info("BLE: disabled")
 
@@ -1407,7 +1435,7 @@ async def main():
 ### unit tests
 
     # Nightly pruning task — runs at 04:00 local time
-    async def _nightly_prune():
+    async def _nightly_prune() -> None:
         """Background task: prune old messages daily at 04:00."""
         while not stop_event.is_set():
             now = datetime.now()
@@ -1481,7 +1509,7 @@ async def main():
     asyncio.create_task(_maybe_backfill_classifier())
 
     # Classifier stats broadcaster — pushes proxy:classifier_stats every 60 s.
-    async def _classifier_stats_broadcast():
+    async def _classifier_stats_broadcast() -> None:
         """Emit aggregate classifier stats every 60 seconds."""
         while not stop_event.is_set():
             try:
@@ -1567,7 +1595,7 @@ async def main():
     os._exit(0)
 
 
-def run():
+def run() -> None:
     """Entry point for mcapp CLI."""
     global cfg, has_console, is_dev
 

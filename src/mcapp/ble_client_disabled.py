@@ -7,7 +7,7 @@ useful for testing non-BLE features or running without Bluetooth hardware.
 
 import logging
 import time
-from typing import Callable
+from typing import Any, Callable
 
 from .ble_client import BLEClientBase, BLEDevice, BLEMode, ConnectionState
 
@@ -26,15 +26,17 @@ class BLEClientDisabled(BLEClientBase):
 
     def __init__(
         self,
-        notification_callback: Callable[[dict], None] | None = None,
-        message_router=None,
-    ):
+        notification_callback: Callable[[dict[str, Any]], None] | None = None,
+        message_router: Any = None,
+    ) -> None:
         super().__init__(notification_callback)
         self.message_router = message_router
         self._status.mode = BLEMode.DISABLED
         self._status.state = ConnectionState.DISCONNECTED
 
-    async def _publish_status(self, command: str, result: str, msg: str):
+    async def _publish_status(
+        self, command: str, result: str, msg: str
+    ) -> None:
         """Publish BLE status through message router"""
         if self.message_router:
             await self.message_router.publish('ble', 'ble_status', {

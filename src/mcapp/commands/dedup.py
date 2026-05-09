@@ -3,8 +3,10 @@
 import asyncio
 import hashlib
 import time
+from typing import Any
 
 from ..logging_setup import get_logger
+from ._base import CommandHandlerBase
 from .constants import COMMAND_THROTTLING, DEFAULT_THROTTLE_TIMEOUT
 
 logger = get_logger(__name__)
@@ -14,10 +16,10 @@ logger = get_logger(__name__)
 CLEANUP_INTERVAL_SECONDS = 3600
 
 
-class DedupMixin:
+class DedupMixin(CommandHandlerBase):
     """Mixin providing dedup/throttle/abuse protection methods."""
 
-    def _init_dedup(self):
+    def _init_dedup(self) -> None:
         """Initialize dedup/throttle state. Called from CommandHandler.__init__."""
         # Primary deduplication (msg_id based)
         self.processed_msg_ids = {}  # {msg_id: timestamp}
@@ -35,7 +37,7 @@ class DedupMixin:
         self.blocked_users = {}  # {src: block_timestamp}
         self.block_notifications_sent = set()
 
-        self._dedup_cleanup_task: asyncio.Task | None = None
+        self._dedup_cleanup_task: asyncio.Task[None] | None = None
 
     def start_dedup_cleanup(self) -> None:
         """Start the periodic cleanup task. Idempotent."""
@@ -82,7 +84,7 @@ class DedupMixin:
         for src in empty_srcs:
             del self.failed_attempts[src]
 
-    def _get_content_hash(self, src, msg_text, dst=None):
+    def _get_content_hash(self, src: str, msg_text: str, dst: str | None = None) -> str:
         """Create hash from source + command (without arguments for command-specific throttling)"""
         # Extract command for specific throttling
         if msg_text.startswith("!"):
@@ -110,33 +112,33 @@ class DedupMixin:
 
         return hash_value
 
-    def _is_duplicate_msg_id(self, msg_id):
+    def _is_duplicate_msg_id(self, msg_id: Any) -> bool:
         """Check msg_id cache and cleanup expired entries"""
         current_time = time.time()
         self._cleanup_msg_id_cache(current_time)
         return msg_id in self.processed_msg_ids
 
-    def _is_throttled(self, content_hash, command=None):
+    def _is_throttled(self, content_hash: str, command: str | None = None) -> bool:
         """Check throttle cache and cleanup expired entries"""
         current_time = time.time()
         self._cleanup_throttle_cache(current_time)
         return content_hash in self.command_throttle
 
-    def _is_user_blocked(self, src):
+    def _is_user_blocked(self, src: str) -> bool:
         """Check if user is blocked and cleanup expired blocks"""
         current_time = time.time()
         self._cleanup_blocked_users(current_time)
         return src in self.blocked_users
 
-    def _mark_msg_id_processed(self, msg_id):
+    def _mark_msg_id_processed(self, msg_id: Any) -> None:
         """Mark msg_id as processed"""
         self.processed_msg_ids[msg_id] = time.time()
 
-    def _mark_content_processed(self, content_hash, command=None):
+    def _mark_content_processed(self, content_hash: str, command: str | None = None) -> None:
         """Mark content hash as processed with command-aware timestamp"""
         self.command_throttle[content_hash] = {"timestamp": time.time(), "command": command}
 
-    def _track_failed_attempt(self, src):
+    def _track_failed_attempt(self, src: str) -> None:
         """Track failed command attempt and block if necessary"""
         current_time = time.time()
 
@@ -161,14 +163,14 @@ class DedupMixin:
                 src, self.block_duration / 60, len(self.failed_attempts[src]),
             )
 
-    def _cleanup_msg_id_cache(self, current_time):
+    def _cleanup_msg_id_cache(self, current_time: float) -> None:
         """Remove old entries from msg_id cache"""
         cutoff = current_time - self.msg_id_timeout
         expired = [mid for mid, timestamp in self.processed_msg_ids.items() if timestamp < cutoff]
         for mid in expired:
             del self.processed_msg_ids[mid]
 
-    def _cleanup_blocked_users(self, current_time):
+    def _cleanup_blocked_users(self, current_time: float) -> None:
         """Remove old entries from blocked users"""
         cutoff = current_time - self.block_duration
         expired = [src for src, timestamp in self.blocked_users.items() if timestamp < cutoff]
@@ -177,7 +179,7 @@ class DedupMixin:
             self.block_notifications_sent.discard(src)
             logger.info("UNBLOCKED user %s", src)
 
-    def _cleanup_throttle_cache(self, current_time, timeout=None):
+    def _cleanup_throttle_cache(self, current_time: float, timeout: float | None = None) -> None:
         """Remove old entries from throttle cache with specific timeout"""
         expired = []
 

@@ -11,6 +11,8 @@ This module provides:
 - Dispatcher for routing messages to appropriate transformer
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import time
@@ -52,7 +54,8 @@ def decode_json_message(byte_msg: bytes) -> dict[str, Any] | None:
     """Decode JSON message from BLE notification"""
     try:
         json_str = byte_msg.rstrip(b'\x00').decode("utf-8")[1:]
-        return json.loads(json_str)
+        result: dict[str, Any] = json.loads(json_str)
+        return result
 
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
         logger.error("Error decoding JSON message: %s", e)
@@ -286,7 +289,7 @@ def parse_aprs_telemetry(message: str) -> dict[str, Any] | None:
 
     seq, v1, v2, v3, v4, v5, _bits = match.groups()
 
-    result = {"tele_seq": int(seq)}
+    result: dict[str, Any] = {"tele_seq": int(seq)}
     try:
         result["qfe"] = float(v1)
         result["temp1"] = float(v2)
@@ -320,11 +323,12 @@ def split_path(path: str, own_callsign: str = "") -> tuple[str, str]:
 def transform_common_fields(input_dict: dict[str, Any], own_callsign: str = "") -> dict[str, Any]:
     """Extract common fields for BLE message transformers"""
     _, via = split_path(input_dict.get("path", ""), own_callsign)
+    fw_sub_val: int | None = input_dict.get("fw_sub")
     return {
         "transformer1": "common_fields",
         "src_type": "ble",
         "firmware": input_dict.get("fw", ""),
-        "fw_sub": ascii_char(input_dict.get("fw_sub")) if input_dict.get("fw_sub") else None,
+        "fw_sub": ascii_char(fw_sub_val) if fw_sub_val is not None else None,
         "via": via,
         "max_hop": input_dict.get("max_hop"),
         "mesh_info": input_dict.get("mesh_info"),

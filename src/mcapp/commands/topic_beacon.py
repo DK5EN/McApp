@@ -1,20 +1,24 @@
 """TopicBeaconMixin: topic command and beacon lifecycle management."""
 
+from __future__ import annotations
+
 import asyncio
 from datetime import datetime
+from typing import Any
 
+from ._base import CommandHandlerBase
 from .constants import has_console
 
 
-class TopicBeaconMixin:
+class TopicBeaconMixin(CommandHandlerBase):
     """Mixin providing topic/beacon management."""
 
-    def _init_topic_beacon(self):
+    def _init_topic_beacon(self) -> None:
         """Initialize topic/beacon state. Called from CommandHandler.__init__."""
-        self.active_topics = {}  # {group: {'text': str, 'interval': int, 'task': asyncio.Task}}
-        self.topic_tasks = set()
+        self.active_topics: dict[str, dict[str, Any]] = {}
+        self.topic_tasks: set[asyncio.Task[Any]] = set()
 
-    async def handle_topic(self, kwargs, requester):
+    async def handle_topic(self, kwargs: dict[str, Any], requester: str) -> str:
         """Manage group beacon messages"""
         if not self._is_admin(requester):
             return "❌ Admin access required"
@@ -34,47 +38,47 @@ class TopicBeaconMixin:
 
         # !topic delete GROUP
         if kwargs.get("action") == "delete":
-            group = kwargs.get("group")
+            group = kwargs.get("group", "")
             if not group:
                 return "❌ Group required for delete"
 
-            if not self.is_group(group):
+            if not self.is_group(str(group)):
                 return "❌ Invalid group format"
 
-            if group not in self.active_topics:
+            if str(group) not in self.active_topics:
                 return f"ℹ️ No beacon active for group {group}"
 
-            await self._stop_topic_beacon(group)
+            await self._stop_topic_beacon(str(group))
             return f"✅ Beacon stopped for group {group}"
 
         # !topic GROUP TEXT [interval]
-        group = kwargs.get("group")
+        group = kwargs.get("group", "")
         text = kwargs.get("text", "")
         interval = kwargs.get("interval", 30)
 
         if not group:
             return "❌ Group required"
 
-        if not self.is_group(group):
+        if not self.is_group(str(group)):
             return "❌ Invalid group format (use digits 1-99999 or TEST)"
 
         if not text:
             return "❌ Beacon text required"
 
-        if len(text) > 120:
+        if len(str(text)) > 120:
             return "❌ Beacon text too long (max 120 chars)"
 
         try:
-            interval = int(interval)
-            if interval < 1 or interval > 1440:
+            interval_int = int(interval)
+            if interval_int < 1 or interval_int > 1440:
                 return "❌ Interval must be between 1 and 1440 minutes"
         except (ValueError, TypeError):
             return "❌ Invalid interval format"
 
-        if group in self.active_topics:
-            await self._stop_topic_beacon(group)
+        if str(group) in self.active_topics:
+            await self._stop_topic_beacon(str(group))
 
-        success = await self._start_topic_beacon(group, text, interval)
+        success = await self._start_topic_beacon(str(group), str(text), interval_int)
 
         if success:
             return (
@@ -87,7 +91,7 @@ class TopicBeaconMixin:
         else:
             return "❌ Failed to start beacon"
 
-    async def _start_topic_beacon(self, group, text, interval_minutes):
+    async def _start_topic_beacon(self, group: str, text: str, interval_minutes: int) -> bool:
         """Start a beacon task for a group"""
         try:
             interval_seconds = (interval_minutes * 60) - 10
@@ -117,7 +121,7 @@ class TopicBeaconMixin:
                 print(f"❌ Failed to start beacon for group {group}: {e}")
             return False
 
-    async def _stop_topic_beacon(self, group):
+    async def _stop_topic_beacon(self, group: str) -> bool:
         """Stop a beacon task for a group"""
         if group not in self.active_topics:
             return False
@@ -145,7 +149,7 @@ class TopicBeaconMixin:
                 print(f"❌ Failed to stop beacon for group {group}: {e}")
             return False
 
-    async def _beacon_loop(self, group, text, interval_seconds):
+    async def _beacon_loop(self, group: str, text: str, interval_seconds: int) -> None:
         """Beacon loop - sends periodic messages to a group"""
         try:
             while True:
@@ -171,7 +175,7 @@ class TopicBeaconMixin:
             if group in self.active_topics:
                 del self.active_topics[group]
 
-    async def _send_beacon_message(self, group, text):
+    async def _send_beacon_message(self, group: str, text: str) -> None:
         """Send a beacon message to a group"""
         try:
             if self.message_router:
@@ -188,7 +192,7 @@ class TopicBeaconMixin:
             if has_console:
                 print(f"❌ Failed to send beacon message to group {group}: {e}")
 
-    async def cleanup_topic_beacons(self):
+    async def cleanup_topic_beacons(self) -> None:
         """Clean up all running beacon tasks"""
         if has_console:
             print(f"🧹 Cleaning up {len(self.active_topics)} beacon tasks...")

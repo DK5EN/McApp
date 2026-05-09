@@ -1,14 +1,18 @@
 """AdminCommandsMixin: group control and kickban commands."""
 
 import re
+from typing import Any
 
+from ._base import CommandHandlerBase
 from .constants import has_console
 
 
-class AdminCommandsMixin:
+class AdminCommandsMixin(CommandHandlerBase):
     """Mixin providing admin command handlers."""
 
-    async def handle_group_control(self, kwargs, requester):
+    async def handle_group_control(
+        self, kwargs: dict[str, Any], requester: str
+    ) -> str:
         """Control group response mode (admin only)"""
         if has_console:
             print(f"🔍 handle_group_control called with kwargs={kwargs}, requester='{requester}'")
@@ -38,7 +42,9 @@ class AdminCommandsMixin:
                 print(f"🔍 No valid state, current setting: {current}")
             return f"🔧 Group responses: {current}. Use !group on|off"
 
-    async def handle_kickban(self, kwargs, requester):
+    async def handle_kickban(
+        self, kwargs: dict[str, Any], requester: str
+    ) -> str:
         """Manage blocked callsigns"""
         if not self._is_admin(requester):
             return "❌ Admin access required"

@@ -1,5 +1,9 @@
 """CommandHandler assembly and COMMANDS registry."""
 
+from __future__ import annotations
+
+from typing import Any
+
 from .admin_commands import AdminCommandsMixin
 from .constants import has_console
 from .ctcping import CTCPingMixin
@@ -125,14 +129,14 @@ class CommandHandler(
 ):
     def __init__(
         self,
-        message_router=None,
-        storage_handler=None,
-        my_callsign="DK0XXX",
-        lat=None,
-        lon=None,
-        stat_name="",
-        user_info_text=None,
-    ):
+        message_router: Any = None,
+        storage_handler: Any = None,
+        my_callsign: str = "DK0XXX",
+        lat: float | None = None,
+        lon: float | None = None,
+        stat_name: str = "",
+        user_info_text: str | None = None,
+    ) -> None:
         self.blocked_callsigns = set()
 
         self.message_router = message_router
@@ -165,7 +169,7 @@ class CommandHandler(
             print(f"🐛 CommandHandler: Listening for commands to '{self.my_callsign}'")
             print(f"🐛 CommandHandler: Weather service initialized for {self.lat}/{self.lon}")
 
-    async def run_all_tests(self):
+    async def run_all_tests(self) -> bool:
         """Run complete test suite for CommandHandler"""
         from .tests import run_all_tests
 
@@ -173,14 +177,14 @@ class CommandHandler(
 
 
 def create_command_handler(
-    message_router,
-    storage_handler,
-    call_sign,
-    lat=None,
-    lon=None,
-    stat_name="",
-    user_info_text=None,
-):
+    message_router: Any,
+    storage_handler: Any,
+    call_sign: str,
+    lat: float | None = None,
+    lon: float | None = None,
+    stat_name: str = "",
+    user_info_text: str | None = None,
+) -> CommandHandler:
     """Factory function to create and integrate CommandHandler"""
     return CommandHandler(
         message_router, storage_handler, call_sign, lat, lon, stat_name, user_info_text

@@ -86,7 +86,7 @@ class Config:
     location: LocationConfig = field(default_factory=LocationConfig)
 
     # Raw config for backward compatibility
-    _raw: dict = field(default_factory=dict, repr=False)
+    _raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "Config":

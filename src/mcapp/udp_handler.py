@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import asyncio
 import json
 import socket
 import time
 import unicodedata
+from typing import Any
 
 from .logging_setup import get_logger
 
@@ -12,7 +15,7 @@ logger = get_logger(__name__)
 VERSION = "v0.48.0"
 
 
-def _normalize_altitude_to_meters(message: dict) -> None:
+def _normalize_altitude_to_meters(message: dict[str, Any]) -> None:
     """Convert APRS altitude from feet to meters in-place."""
     if message.get("alt"):
         message["alt"] = round(message["alt"] * 0.3048)
@@ -80,11 +83,12 @@ def strip_invalid_utf8(data: bytes) -> str:
     return valid_text
 
 
-def try_repair_json(text: str) -> dict:
+def try_repair_json(text: str) -> dict[str, Any]:
     """Try to repair malformed JSON by removing invalid characters"""
     for i in range(len(text)):
         try:
-            return json.loads(text)
+            result: dict[str, Any] = json.loads(text)
+            return result
         except json.JSONDecodeError as e:
             pos = e.pos if hasattr(e, 'pos') else i
             if pos >= len(text):
@@ -98,9 +102,9 @@ def try_repair_json(text: str) -> dict:
 
 class UDPHandler:
     def __init__(
-        self, listen_port, target_host, target_port,
-        message_callback=None, message_router=None,
-    ):
+        self, listen_port: int, target_host: str, target_port: int,
+        message_callback: Any = None, message_router: Any = None,
+    ) -> None:
         self.listen_port = listen_port
         self.target_host = target_host
         self.target_port = target_port
@@ -108,11 +112,11 @@ class UDPHandler:
         self.message_callback = message_callback
         self.message_router = message_router
 
-        self.listen_socket = None
+        self.listen_socket: socket.socket | None = None
         self._running = False
-        self._listen_task = None
+        self._listen_task: asyncio.Task[None] | None = None
 
-    async def start_listening(self):
+    async def start_listening(self) -> None:
         if self._running:
             print("UDP listener already running")
             return
@@ -125,7 +129,7 @@ class UDPHandler:
         self._listen_task = asyncio.create_task(self._listen_loop())
         #print(f"UDP listener started on port {self.listen_port}")
 
-    async def stop_listening(self):
+    async def stop_listening(self) -> None:
         if not self._running:
             return
 
@@ -143,10 +147,11 @@ class UDPHandler:
 
         print("UDP listener stopped")
 
-    async def _listen_loop(self):
+    async def _listen_loop(self) -> None:
         loop = asyncio.get_running_loop()
         try:
             while self._running:
+                assert self.listen_socket is not None
                 data, addr = await loop.sock_recvfrom(self.listen_socket, 1024)
                 await self._process_received_message(data, addr)
 
@@ -160,9 +165,9 @@ class UDPHandler:
             if self.listen_socket:
                 self.listen_socket.close()
 
-    async def _process_received_message(self, data, addr):
+    async def _process_received_message(self, data: bytes, addr: tuple[str, int]) -> None:
         text = strip_invalid_utf8(data)
-        message = try_repair_json(text)
+        message: dict[str, Any] = try_repair_json(text)
 
         if not message:
             return
@@ -235,7 +240,7 @@ class UDPHandler:
             #if has_console:
             #    print(f"{readable} {message['src_type']} von {addr[0]}: {message}")
 
-    async def send_message(self, message_data):
+    async def send_message(self, message_data: dict[str, Any]) -> None:
         try:
             udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             loop = asyncio.get_running_loop()
@@ -253,5 +258,5 @@ class UDPHandler:
         finally:
             udp_sock.close()
 
-    def is_running(self):
+    def is_running(self) -> bool:
         return self._running
