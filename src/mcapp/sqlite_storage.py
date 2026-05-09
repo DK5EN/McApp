@@ -1370,6 +1370,21 @@ class SQLiteStorage:
             data["acked"] = 1
         if row.get("send_success"):
             data["send_success"] = 1
+        # Classifier fields
+        if row.get("category") is not None:
+            data["category"] = row["category"]
+        tags_raw = row.get("tags")
+        if tags_raw:
+            try:
+                data["tags"] = json.loads(tags_raw) if isinstance(tags_raw, str) else tags_raw
+            except (ValueError, TypeError):
+                pass
+        if row.get("info_score") is not None:
+            data["info_score"] = row["info_score"]
+        if row.get("template_hash"):
+            data["template_hash"] = row["template_hash"]
+        if row.get("classifier_ver") is not None:
+            data["classifier_ver"] = row["classifier_ver"]
         return data
 
     # Keys in telemetry dicts that are NOT sensor readings (used for extras extraction)
