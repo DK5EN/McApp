@@ -1025,7 +1025,16 @@ class SSEManager:
             classifier = _classifier()
             return {
                 "classifier_version": classifier.version,
-                "jobs": classifier.get_all_jobs(),
+                "jobs": [
+                    {
+                        "job_id": j.job_id,
+                        "total": j.total,
+                        "processed": j.processed,
+                        "done": j.done,
+                        "error": j.error,
+                    }
+                    for j in classifier.get_all_jobs()
+                ],
             }
 
         return app
