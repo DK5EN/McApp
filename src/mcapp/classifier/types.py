@@ -10,8 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Literal
-from typing import Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 # ── Category vocabulary ─────────────────────────────────────────────────
 # Kept as a tuple so it can be used as a frozen set of legal values.
@@ -98,7 +97,9 @@ class StorageProtocol(Protocol):
         enabled: bool = True,
         builtin: bool = False,
     ) -> dict[str, Any]: ...
-    async def update_classifier_rule(self, rule_id: int, **updates: object) -> dict[str, Any] | None: ...
+    async def update_classifier_rule(
+        self, rule_id: int, **updates: object
+    ) -> dict[str, Any] | None: ...
 
     # Templates
     async def get_beacon_template(self, template_hash: str) -> dict[str, Any] | None: ...

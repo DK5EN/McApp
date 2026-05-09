@@ -96,7 +96,10 @@ DEFAULT_RULES: list[dict[str, Any]] = [
         "priority": 24,
         "name": "WX Italian",
         "scope": "msg",
-        "pattern": r"(?is)\b(meteo|temp(?:eratura)?)\b.*\b(umid(?:it[àa])?|pioggia|pressione|vento)\b",
+        "pattern": (
+            r"(?is)\b(meteo|temp(?:eratura)?)\b"
+            r".*\b(umid(?:it[àa])?|pioggia|pressione|vento)\b"
+        ),
         "category": "wx_beacon",
         "extra_tags": ["beacon"],
     },
@@ -104,7 +107,11 @@ DEFAULT_RULES: list[dict[str, Any]] = [
         "priority": 25,
         "name": "WX key=value",
         "scope": "msg",
-        "pattern": r"(?i)\bT\s*=\s*-?\d+(\.\d+)?\s*C?\b.*\bH\s*=\s*\d+%?\b.*\bP\s*=\s*\d+(\.\d+)?\s*(hpa|mb)\b",
+        "pattern": (
+            r"(?i)\bT\s*=\s*-?\d+(\.\d+)?\s*C?\b"
+            r".*\bH\s*=\s*\d+%?\b"
+            r".*\bP\s*=\s*\d+(\.\d+)?\s*(hpa|mb)\b"
+        ),
         "category": "wx_beacon",
         "extra_tags": ["beacon"],
     },
@@ -112,7 +119,10 @@ DEFAULT_RULES: list[dict[str, Any]] = [
         "priority": 26,
         "name": "WX APRS/CWOP",
         "scope": "msg",
-        "pattern": r"(?i)\b(APRS|CWOP)[ -/]?wetter\b|\bCWOP\b.*\b(temperatur|luftdruck|feuchtigkeit)\b",
+        "pattern": (
+            r"(?i)\b(APRS|CWOP)[ -/]?wetter\b"
+            r"|\bCWOP\b.*\b(temperatur|luftdruck|feuchtigkeit)\b"
+        ),
         "category": "wx_beacon",
         "extra_tags": ["beacon"],
     },
