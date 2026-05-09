@@ -206,7 +206,7 @@ class Classifier:
         *,
         since_ms: int | None = None,
         category_filter: str | None = None,
-        target_version: int | None = None,
+        force: bool = False,
         batch_size: int = 500,
         progress_cb: ProgressCallback | None = None,
     ) -> ReclassifyJob:
@@ -215,9 +215,17 @@ class Classifier:
         Creates a new ``ReclassifyJob`` with a fresh uuid4 ``job_id`` and
         registers it in ``self._jobs``.  Returns immediately after
         creating the asyncio task.
+
+        When ``force=True`` the classifier version is bumped first so that
+        every existing row matches the ``classifier_ver < self.version``
+        filter and gets reprocessed. Rule-change flows that already bumped
+        the version externally should leave ``force=False``.
         """
-        if target_version is None:
-            target_version = self.version
+        if force:
+            await self.storage.bump_classifier_version()
+            await self.load()
+
+        target_version = self.version
 
         total = await self.storage.count_messages_to_classify(
             classifier_ver_below=target_version
