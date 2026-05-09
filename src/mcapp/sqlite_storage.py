@@ -14,7 +14,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from statistics import mean
-from typing import Any
+from typing import Any, cast
 
 from .logging_setup import get_logger
 
@@ -23,7 +23,7 @@ VERSION = "v0.50.0"
 logger = get_logger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 17
 
 # Constants matching message_storage.py
 BUCKET_SECONDS = 5 * 60
@@ -42,8 +42,12 @@ MIN_DATAPOINTS_FOR_STATS = 10
 _MSG_SELECT = (
     "msg_id, src, dst, msg, type, timestamp, rssi, snr, src_type,"
     " via, hw_id, lora_mod, max_hop, mesh_info, firmware, fw_sub,"
-    " last_hw_id, last_sending, transformer, echo_id, acked, send_success"
+    " last_hw_id, last_sending, transformer, echo_id, acked, send_success,"
+    " category, tags, info_score, template_hash, classifier_ver"
 )
+
+# Type alias for signal bucket tuples
+BucketTuple = tuple[str, int, int, float, float | int, float | int, float, float, float, int]
 
 
 def compute_conversation_key(src: str, dst: str) -> str | None:
@@ -180,7 +184,7 @@ class SQLiteStorage:
         self._initialized = False
 
         # In-memory bucket accumulators: {(callsign, bucket_start_ms): {"rssi": [], "snr": []}}
-        self._bucket_accumulators: dict[tuple[str, int], dict[str, list]] = {}
+        self._bucket_accumulators: dict[tuple[str, int], dict[str, list[float | int]]] = {}
 
         # Persistent read-only connection (opened in initialize())
         self._read_conn: sqlite3.Connection | None = None
@@ -188,14 +192,21 @@ class SQLiteStorage:
         # Reference to message router (set via set_message_router after construction)
         self._message_router = None
 
+        # Reference to classifier (set via set_classifier after construction)
+        self._classifier = None
+
         # Ensure parent directory exists
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
         logger.info("SQLite storage initialized at %s", self.db_path)
 
-    def set_message_router(self, router) -> None:
+    def set_message_router(self, router: Any) -> None:
         """Allow storage to publish events (e.g. ACK status updates)."""
         self._message_router = router
+
+    def set_classifier(self, classifier: Any) -> None:
+        """Wire the classifier so store_message() annotates new rows inline."""
+        self._classifier = classifier
 
     async def initialize(self) -> None:
         """Initialize database schema."""
@@ -355,8 +366,8 @@ class SQLiteStorage:
                 if current_version < 14:
                     try:
                         conn.execute("ALTER TABLE telemetry ADD COLUMN batt INTEGER")
-                    except Exception:
-                        pass  # Column may already exist
+                    except sqlite3.OperationalError:
+                        logger.debug("Column batt already exists in telemetry, skipping")
                     logger.info(
                         "Migration v%d → v14: added batt column to telemetry",
                         current_version,
@@ -373,13 +384,102 @@ class SQLiteStorage:
                                 conn.execute(
                                     f"ALTER TABLE {tbl} ADD COLUMN {col} {typedef}"
                                 )
-                            except Exception:
-                                pass  # Column may already exist
+                            except sqlite3.OperationalError:
+                                logger.debug(
+                                    "Column %s already exists in %s, skipping", col, tbl
+                                )
                     logger.info(
                         "Migration v%d → v15: added hum2, extras columns",
                         current_version,
                     )
                     _set_schema_version(conn, 15)
+
+                if current_version < 16:
+                    for col, typedef in [
+                        ("category", "TEXT"),
+                        ("tags", "TEXT"),
+                        ("info_score", "REAL"),
+                        ("template_hash", "TEXT"),
+                        ("classifier_ver", "INTEGER"),
+                    ]:
+                        try:
+                            conn.execute(
+                                f"ALTER TABLE messages ADD COLUMN {col} {typedef}"
+                            )
+                        except sqlite3.OperationalError:
+                            logger.debug(
+                                "Column %s already exists in messages, skipping", col
+                            )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_messages_category "
+                        "ON messages(category)"
+                    )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_messages_template_hash "
+                        "ON messages(template_hash)"
+                    )
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS classifier_rules (
+                            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                            name       TEXT NOT NULL,
+                            pattern    TEXT NOT NULL,
+                            scope      TEXT NOT NULL DEFAULT 'msg',
+                            category   TEXT NOT NULL,
+                            extra_tags TEXT,
+                            priority   INTEGER NOT NULL DEFAULT 100,
+                            enabled    INTEGER NOT NULL DEFAULT 1,
+                            builtin    INTEGER NOT NULL DEFAULT 0,
+                            created_at TEXT NOT NULL,
+                            updated_at TEXT NOT NULL
+                        );
+                    """)
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS beacon_templates (
+                            template_hash TEXT PRIMARY KEY,
+                            example_msg   TEXT NOT NULL,
+                            example_src   TEXT NOT NULL,
+                            srcs          TEXT NOT NULL,
+                            count         INTEGER NOT NULL DEFAULT 0,
+                            first_seen    TEXT NOT NULL,
+                            last_seen     TEXT NOT NULL,
+                            auto_beacon   INTEGER NOT NULL DEFAULT 0,
+                            user_action   TEXT
+                        );
+                    """)
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_beacon_templates_count "
+                        "ON beacon_templates(count DESC)"
+                    )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_beacon_templates_last_seen "
+                        "ON beacon_templates(last_seen DESC)"
+                    )
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS classifier_meta (
+                            key   TEXT PRIMARY KEY,
+                            value TEXT NOT NULL
+                        );
+                    """)
+                    logger.info(
+                        "Migration v%d → v16: added classifier columns + "
+                        "classifier_rules/beacon_templates/classifier_meta tables",
+                        current_version,
+                    )
+                    _set_schema_version(conn, 16)
+
+                if current_version < 17:
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS filter_prefs (
+                            id INTEGER PRIMARY KEY CHECK (id = 1),
+                            prefs TEXT NOT NULL DEFAULT '{}',
+                            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                        );
+                    """)
+                    logger.info(
+                        "Migration v%d → v17: added filter_prefs table",
+                        current_version,
+                    )
+                    _set_schema_version(conn, 17)
 
         await asyncio.to_thread(_init_db)
 
@@ -501,22 +601,29 @@ class SQLiteStorage:
 
         # 5. Pre-aggregate signal_buckets from signal_log
         bucket_ms = BUCKET_SECONDS * 1000
-        conn.execute(f"""
+        conn.execute(
+            """
             INSERT OR REPLACE INTO signal_buckets
                 (callsign, bucket_ts, bucket_size, rssi_avg, rssi_min, rssi_max,
                  snr_avg, snr_min, snr_max, count)
             SELECT
                 callsign,
-                (timestamp / {bucket_ms}) * {bucket_ms} AS bucket_ts,
-                {bucket_ms},
+                (timestamp / ?) * ? AS bucket_ts,
+                ?,
                 AVG(rssi), MIN(rssi), MAX(rssi),
                 AVG(snr), MIN(snr), MAX(snr),
                 COUNT(*)
             FROM signal_log
-            WHERE rssi BETWEEN {VALID_RSSI_RANGE[0]} AND {VALID_RSSI_RANGE[1]}
-              AND snr BETWEEN {VALID_SNR_RANGE[0]} AND {VALID_SNR_RANGE[1]}
+            WHERE rssi BETWEEN ? AND ?
+              AND snr BETWEEN ? AND ?
             GROUP BY callsign, bucket_ts
-        """)
+            """,
+            (
+                bucket_ms, bucket_ms, bucket_ms,
+                VALID_RSSI_RANGE[0], VALID_RSSI_RANGE[1],
+                VALID_SNR_RANGE[0], VALID_SNR_RANGE[1],
+            ),
+        )
         bucket_count = conn.execute("SELECT changes()").fetchone()[0]
         logger.info("Pre-aggregated %d signal_buckets entries", bucket_count)
 
@@ -592,7 +699,7 @@ class SQLiteStorage:
             try:
                 conn.execute(f"ALTER TABLE messages ADD COLUMN {col} {typedef}")
             except sqlite3.OperationalError:
-                pass  # Column already exists
+                logger.debug("Column %s already exists in messages, skipping", col)
 
         # --- 2. Telemetry columns on station_positions ---
         for col, typedef in [
@@ -612,7 +719,7 @@ class SQLiteStorage:
                     f"ALTER TABLE station_positions ADD COLUMN {col} {typedef}"
                 )
             except sqlite3.OperationalError:
-                pass
+                logger.debug("Column %s already exists in station_positions, skipping", col)
 
         # --- 3. Telemetry table ---
         conn.executescript("""
@@ -750,7 +857,7 @@ class SQLiteStorage:
         try:
             conn.execute("ALTER TABLE telemetry ADD COLUMN alt REAL")
         except sqlite3.OperationalError:
-            pass  # Column already exists (idempotent)
+            logger.debug("Column alt already exists in telemetry, skipping")
 
     async def _init_bucket_accumulators(self) -> None:
         """Load current partial buckets from signal_log into memory."""
@@ -758,7 +865,7 @@ class SQLiteStorage:
         now_ms = int(time.time() * 1000)
         # Load signal_log entries from the current (partial) bucket period
         current_bucket_start = (now_ms // bucket_ms) * bucket_ms
-        rows = await self._execute(
+        rows_result = await self._execute(
             "SELECT callsign, timestamp, rssi, snr FROM signal_log"
             " WHERE timestamp >= ?"
             " AND rssi BETWEEN ? AND ? AND snr BETWEEN ? AND ?",
@@ -766,6 +873,7 @@ class SQLiteStorage:
              VALID_RSSI_RANGE[0], VALID_RSSI_RANGE[1],
              VALID_SNR_RANGE[0], VALID_SNR_RANGE[1]),
         )
+        rows = cast(list[dict[str, Any]], rows_result)
         for row in rows:
             key = (row["callsign"], current_bucket_start)
             if key not in self._bucket_accumulators:
@@ -778,8 +886,9 @@ class SQLiteStorage:
                 len(rows), len(self._bucket_accumulators),
             )
 
-    def _accumulate_signal(self, callsign: str, timestamp_ms: int,
-                           rssi: int, snr: float) -> list[tuple]:
+    def _accumulate_signal(
+        self, callsign: str, timestamp_ms: int, rssi: int, snr: float
+    ) -> list[BucketTuple]:
         """Accumulate a signal measurement into the in-memory bucket.
 
         Returns a list of (callsign, bucket_ts, bucket_size, rssi_avg, rssi_min,
@@ -817,7 +926,7 @@ class SQLiteStorage:
 
         return completed
 
-    async def _flush_completed_buckets(self, completed: list[tuple]) -> None:
+    async def _flush_completed_buckets(self, completed: list[BucketTuple]) -> None:
         """Write completed buckets to signal_buckets table."""
         if not completed:
             return
@@ -924,7 +1033,7 @@ class SQLiteStorage:
     async def _execute(
         self,
         query: str,
-        params: tuple = (),
+        params: tuple[Any, ...] = (),
         fetch: bool = True,
     ) -> list[dict[str, Any]] | int:
         """Execute a query in thread pool. Returns rows if fetch=True, rowcount otherwise."""
@@ -940,7 +1049,7 @@ class SQLiteStorage:
 
         return await asyncio.to_thread(_run)
 
-    async def _execute_many(self, query: str, params_list: list[tuple]) -> None:
+    async def _execute_many(self, query: str, params_list: list[tuple[Any, ...]]) -> None:
         """Execute many queries in thread pool."""
 
         def _run() -> None:
@@ -1049,11 +1158,12 @@ class SQLiteStorage:
                 )
                 if rows == 0:
                     # Show nearby msg_ids to help diagnose ACK correlation
-                    recent = await self._execute(
+                    recent_result = await self._execute(
                         "SELECT msg_id, src, type FROM messages "
                         "WHERE timestamp > ? ORDER BY timestamp DESC LIMIT 5",
                         (timestamp - 300_000,),
                     )
+                    recent = cast(list[dict[str, Any]], recent_result)
                     nearby = (
                         ", ".join(
                             f"{r['src']}:{r['msg_id']}" for r in recent
@@ -1172,17 +1282,18 @@ class SQLiteStorage:
                 " ORDER BY timestamp DESC LIMIT 1",
                 (src, timestamp - throttle_ms),
             )
-            if existing:
+            existing_list = cast(list[dict[str, Any]], existing)
+            if existing_list:
                 await self._execute(
                     "UPDATE messages"
                     " SET rssi = ?, snr = ?, timestamp = ?, raw_json = ?"
                     " WHERE id = ?",
-                    (rssi, snr, timestamp, raw, existing[0]["id"]),
+                    (rssi, snr, timestamp, raw, existing_list[0]["id"]),
                     fetch=False,
                 )
                 return
 
-        # Time-windowed dedup: reject only if same msg_id was seen within 20 minutes.
+        # Time-windowed dedup: reject only if same msg_id was seen within DEDUP_WINDOW_MS.
         # MHeard beacons (msg_id=None) skip this check — they have their own throttle.
         if msg_id is not None:
             existing = await self._execute(
@@ -1192,17 +1303,41 @@ class SQLiteStorage:
             if existing:
                 return
 
+        # Inline classification (before INSERT so columns land in the same row).
+        # Classifier.classify() has its own fallback; NULL columns mean "no
+        # classifier wired yet" and will be picked up by a later reclassify run.
+        if self._classifier is not None:
+            cls = await self._classifier.classify({
+                "msg": msg,
+                "src": callsign,
+                "dst": dst,
+                "type": msg_type,
+                "timestamp": timestamp,
+            })
+            cls_cols = (
+                cls.category,
+                json.dumps(list(cls.tags)),
+                cls.info_score,
+                cls.template_hash,
+                cls.classifier_version,
+            )
+        else:
+            cls_cols = (None, None, None, None, None)
+
         params = (
             msg_id, src, dst, msg, msg_type, timestamp, rssi, snr, src_type, raw,
             msg_via, hw_id, lora_mod, max_hop, mesh_info, firmware, fw_sub,
             last_hw_id, last_sending, transformer, echo_id, conversation_key,
+            *cls_cols,
         )
         await self._execute(
             "INSERT INTO messages"
             " (msg_id, src, dst, msg, type, timestamp, rssi, snr, src_type, raw_json,"
             "  via, hw_id, lora_mod, max_hop, mesh_info, firmware, fw_sub,"
-            "  last_hw_id, last_sending, transformer, echo_id, conversation_key)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "  last_hw_id, last_sending, transformer, echo_id, conversation_key,"
+            "  category, tags, info_score, template_hash, classifier_ver)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
+            "         ?, ?, ?, ?, ?)",
             params,
             fetch=False,
         )
@@ -1301,8 +1436,9 @@ class SQLiteStorage:
             " FROM telemetry WHERE callsign = ? AND timestamp > ?",
             (callsign, timestamp - 60_000),
         )
-        if recent:
-            existing = recent[0]
+        recent_list = cast(list[dict[str, Any]], recent)
+        if recent_list:
+            existing = recent_list[0]
             existing_qfe = existing.get("qfe", 0) or 0
             new_has_qfe = qfe is not None and qfe != 0
 
@@ -1345,10 +1481,11 @@ class SQLiteStorage:
 
         # For T# telemetry packets (no altitude), look up from station_positions
         if alt is None:
-            rows = await self._execute(
+            rows_result = await self._execute(
                 "SELECT alt FROM station_positions WHERE callsign = ?",
                 (callsign,),
             )
+            rows = cast(list[dict[str, Any]], rows_result)
             if rows:
                 alt = rows[0].get("alt")
 
@@ -1418,7 +1555,8 @@ class SQLiteStorage:
 
     async def get_message_count(self) -> int:
         """Get current message count."""
-        result = await self._execute("SELECT COUNT(*) as count FROM messages")
+        result_raw = await self._execute("SELECT COUNT(*) as count FROM messages")
+        result = cast(list[dict[str, Any]], result_raw)
         return result[0]["count"] if result else 0
 
     async def get_storage_size_mb(self) -> float:
@@ -1545,7 +1683,8 @@ class SQLiteStorage:
                 ("signal_buckets", "bucket_ts"),
                 ("messages", "timestamp"),
             ]:
-                result = await self._execute(f"SELECT COUNT(*) as c FROM {table}")
+                result_raw = await self._execute(f"SELECT COUNT(*) as c FROM {table}")
+                result = cast(list[dict[str, Any]], result_raw)
                 table_count = result[0]["c"] if result else 0
                 to_delete = min(table_count, rows_to_free)
                 if to_delete > 0:
@@ -1587,7 +1726,7 @@ class SQLiteStorage:
         bucket_5min_ms = BUCKET_SECONDS * 1000
 
         await self._execute(
-            f"""
+            """
             INSERT OR REPLACE INTO signal_buckets
                 (callsign, bucket_ts, bucket_size, rssi_avg, rssi_min, rssi_max,
                  snr_avg, snr_min, snr_max, count)
@@ -1601,19 +1740,18 @@ class SQLiteStorage:
                 MIN(snr_min), MAX(snr_max),
                 SUM(count)
             FROM signal_buckets
-            WHERE bucket_size = {bucket_5min_ms}
+            WHERE bucket_size = ?
               AND bucket_ts < ?
             GROUP BY callsign, hour_ts
             """,
-            (cutoff_ms,),
+            (bucket_5min_ms, cutoff_ms),
             fetch=False,
         )
 
         # Remove the aggregated 5-min buckets
         await self._execute(
-            f"DELETE FROM signal_buckets WHERE bucket_size = {bucket_5min_ms}"
-            " AND bucket_ts < ?",
-            (cutoff_ms,),
+            "DELETE FROM signal_buckets WHERE bucket_size = ? AND bucket_ts < ?",
+            (bucket_5min_ms, cutoff_ms),
             fetch=False,
         )
 
@@ -1628,7 +1766,8 @@ class SQLiteStorage:
             ORDER BY timestamp DESC
             LIMIT 1000
         """
-        msg_rows = await self._execute(msgs_query)
+        msg_rows_raw = await self._execute(msgs_query)
+        msg_rows = cast(list[dict[str, Any]], msg_rows_raw)
 
         pos_query = f"""
             SELECT {_MSG_SELECT} FROM messages
@@ -1636,7 +1775,8 @@ class SQLiteStorage:
             ORDER BY timestamp DESC
             LIMIT 500
         """
-        pos_rows = await self._execute(pos_query)
+        pos_rows_raw = await self._execute(pos_query)
+        pos_rows = cast(list[dict[str, Any]], pos_rows_raw)
 
         msgs_per_dst: dict[str, list[str]] = defaultdict(list)
         pos_per_src: dict[str, list[str]] = defaultdict(list)
@@ -1653,11 +1793,11 @@ class SQLiteStorage:
             if src and len(pos_per_src[src]) < 50:
                 pos_per_src[src].append(json.dumps(data, ensure_ascii=False))
 
-        msg_msgs = []
+        msg_msgs: list[str] = []
         for msg_list in msgs_per_dst.values():
             msg_msgs.extend(reversed(msg_list))
 
-        pos_msgs = []
+        pos_msgs: list[str] = []
         for pos_list in pos_per_src.values():
             pos_msgs.extend(pos_list)
 
@@ -1721,7 +1861,7 @@ class SQLiteStorage:
 
     async def get_smart_initial_with_summary(
         self, limit_per_dst: int = 20,
-    ) -> tuple[dict, dict]:
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Get smart initial payload + summary in a single thread call.
 
         Uses a ROW_NUMBER() window function partitioned by conversation_key
@@ -1732,7 +1872,7 @@ class SQLiteStorage:
         build_msg = self._build_message_dict
         build_pos = self._build_position_dict
 
-        def _run() -> tuple[dict, dict]:
+        def _run() -> tuple[dict[str, Any], dict[str, Any]]:
             conn = sqlite3.connect(self.db_path)
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL")
@@ -1799,12 +1939,12 @@ class SQLiteStorage:
         )
         return initial, summary
 
-    async def get_smart_initial(self, limit_per_dst: int = 20) -> dict:
+    async def get_smart_initial(self, limit_per_dst: int = 20) -> dict[str, Any]:
         """Get smart initial payload (wrapper around get_smart_initial_with_summary)."""
         initial, _ = await self.get_smart_initial_with_summary(limit_per_dst)
         return initial
 
-    async def get_summary(self) -> dict:
+    async def get_summary(self) -> dict[str, Any]:
         """Get message count per destination (wrapper around combined method)."""
         _, summary = await self.get_smart_initial_with_summary()
         return summary
@@ -1812,7 +1952,7 @@ class SQLiteStorage:
     async def get_messages_page(
         self, dst: str, before_timestamp: int | None = None, limit: int = 20,
         src: str | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Get a page of messages for a destination, cursor-based.
 
         For personal DMs (dst is a callsign, not a group number), pass src
@@ -1823,9 +1963,10 @@ class SQLiteStorage:
 
         is_dm = dst and src and not dst.isdigit() and dst != '*'
 
+        params: tuple[Any, ...] = ()
         if is_dm:
             # DM: compute conversation_key and use idx_messages_convkey_ts
-            conv_key = compute_conversation_key(src, dst)
+            conv_key = compute_conversation_key(src or "", dst)
             query = (
                 f"SELECT {_MSG_SELECT} FROM messages"
                 " WHERE type = 'msg' AND conversation_key = ?"
@@ -1849,7 +1990,8 @@ class SQLiteStorage:
             )
             params = (before_timestamp, limit + 1)
 
-        rows = await self._execute(query, params)
+        rows_raw = await self._execute(query, params)
+        rows = cast(list[dict[str, Any]], rows_raw)
 
         has_more = len(rows) > limit
         result = [
@@ -1865,13 +2007,16 @@ class SQLiteStorage:
             f"SELECT {_MSG_SELECT} FROM messages WHERE type = 'msg'"
             " ORDER BY timestamp"
         )
-        rows = await self._execute(query)
+        rows_raw = await self._execute(query)
+        rows = cast(list[dict[str, Any]], rows_raw)
         return [
             json.dumps(self._build_message_dict(row), ensure_ascii=False)
             for row in rows
         ]
 
-    async def process_mheard_store_parallel(self, progress_callback=None) -> list[dict[str, Any]]:
+    async def process_mheard_store_parallel(
+        self, progress_callback: Any = None
+    ) -> list[dict[str, Any]]:
         """Process messages for MHeard statistics.
 
         Reads from pre-aggregated signal_buckets table instead of scanning
@@ -1885,13 +2030,14 @@ class SQLiteStorage:
             await progress_callback("start", "Querying database...")
 
         # Try reading from pre-aggregated signal_buckets first
-        bucket_rows = await self._execute(
+        bucket_rows_raw = await self._execute(
             "SELECT callsign, bucket_ts, rssi_avg, rssi_min, rssi_max,"
             "       snr_avg, snr_min, snr_max, count"
             " FROM signal_buckets"
             " WHERE bucket_size = ? AND bucket_ts >= ?",
             (bucket_5min_ms, cutoff_ms),
         )
+        bucket_rows = cast(list[dict[str, Any]], bucket_rows_raw)
 
         if bucket_rows:
             # Use pre-aggregated data — much faster
@@ -1904,7 +2050,7 @@ class SQLiteStorage:
             gap_threshold = GAP_THRESHOLD_MULTIPLIER * BUCKET_SECONDS
 
             # Group by callsign and filter to qualified stations
-            callsign_data: dict[str, list[dict]] = defaultdict(list)
+            callsign_data: dict[str, list[dict[str, Any]]] = defaultdict(list)
             for row in bucket_rows:
                 callsign_data[row["callsign"]].append(row)
             qualified = {
@@ -1998,13 +2144,14 @@ class SQLiteStorage:
             VALID_SNR_RANGE[0], VALID_SNR_RANGE[1],
         )
 
-        rows = await self._execute(query, params)
+        rows_raw = await self._execute(query, params)
+        rows = cast(list[dict[str, Any]], rows_raw)
         logger.info("Processing %d rows for mheard statistics (legacy)", len(rows))
 
         if progress_callback:
             await progress_callback("bucketing", f"Processing {len(rows)} rows...")
 
-        buckets: dict[tuple[int, str], dict[str, list]] = defaultdict(
+        buckets: dict[tuple[int, str], dict[str, list[float | int]]] = defaultdict(
             lambda: {"rssi": [], "snr": []}
         )
 
@@ -2037,7 +2184,7 @@ class SQLiteStorage:
 
         return result
 
-    async def process_mheard_yearly(self, progress_callback=None) -> list[dict[str, Any]]:
+    async def process_mheard_yearly(self, progress_callback: Any = None) -> list[dict[str, Any]]:
         """Process 1-hour signal buckets for yearly mHeard statistics."""
         now_ms = int(time.time() * 1000)
         cutoff_ms = now_ms - ONE_YEAR_MS
@@ -2046,7 +2193,7 @@ class SQLiteStorage:
             await progress_callback("start", "Querying yearly data...")
 
         bucket_5min_ms = BUCKET_SECONDS * 1000
-        bucket_rows = await self._execute(
+        bucket_rows_raw = await self._execute(
             "SELECT callsign, bucket_ts, rssi_avg, rssi_min, rssi_max,"
             "       snr_avg, snr_min, snr_max, count"
             " FROM signal_buckets"
@@ -2064,6 +2211,7 @@ class SQLiteStorage:
             " GROUP BY callsign, (bucket_ts / 3600000) * 3600000",
             (HOURLY_BUCKET_MS, cutoff_ms, bucket_5min_ms, cutoff_ms),
         )
+        bucket_rows = cast(list[dict[str, Any]], bucket_rows_raw)
 
         if not bucket_rows:
             if progress_callback:
@@ -2072,7 +2220,7 @@ class SQLiteStorage:
 
         logger.debug("Using %d hourly signal_buckets for yearly report", len(bucket_rows))
 
-        callsign_data: dict[str, list[dict]] = defaultdict(list)
+        callsign_data: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in bucket_rows:
             callsign_data[row["callsign"]].append(row)
         qualified = {
@@ -2148,7 +2296,7 @@ class SQLiteStorage:
             )
         return result
 
-    async def process_mheard_monthly(self, progress_callback=None) -> list[dict[str, Any]]:
+    async def process_mheard_monthly(self, progress_callback: Any = None) -> list[dict[str, Any]]:
         """Process signal buckets for 30-day mHeard statistics."""
         now_ms = int(time.time() * 1000)
         cutoff_ms = now_ms - ONE_MONTH_MS
@@ -2157,7 +2305,7 @@ class SQLiteStorage:
             await progress_callback("start", "Querying monthly data...")
 
         bucket_5min_ms = BUCKET_SECONDS * 1000
-        bucket_rows = await self._execute(
+        bucket_rows_raw = await self._execute(
             "SELECT callsign, bucket_ts, rssi_avg, rssi_min, rssi_max,"
             "       snr_avg, snr_min, snr_max, count"
             " FROM signal_buckets"
@@ -2175,6 +2323,7 @@ class SQLiteStorage:
             " GROUP BY callsign, (bucket_ts / 3600000) * 3600000",
             (HOURLY_BUCKET_MS, cutoff_ms, bucket_5min_ms, cutoff_ms),
         )
+        bucket_rows = cast(list[dict[str, Any]], bucket_rows_raw)
 
         if not bucket_rows:
             if progress_callback:
@@ -2183,7 +2332,7 @@ class SQLiteStorage:
 
         logger.debug("Using %d signal_buckets for monthly report", len(bucket_rows))
 
-        callsign_data: dict[str, list[dict]] = defaultdict(list)
+        callsign_data: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in bucket_rows:
             callsign_data[row["callsign"]].append(row)
         qualified = {
@@ -2286,13 +2435,13 @@ class SQLiteStorage:
 
     def _build_stats_with_gaps(
         self,
-        buckets: dict[tuple[int, str], dict[str, list]],
+        buckets: dict[tuple[int, str], dict[str, list[float | int]]],
     ) -> list[dict[str, Any]]:
         """Build statistics with gap markers for Chart.js."""
         gap_threshold = GAP_THRESHOLD_MULTIPLIER * BUCKET_SECONDS
 
         # Group by callsign
-        callsign_data: dict[str, list[tuple[int, dict]]] = defaultdict(list)
+        callsign_data: dict[str, list[tuple[int, dict[str, list[float | int]]]]] = defaultdict(list)
         for (bucket_time, callsign), values in buckets.items():
             callsign_data[callsign].append((bucket_time, values))
 
@@ -2356,13 +2505,13 @@ class SQLiteStorage:
 
     async def _build_stats_with_gaps_async(
         self,
-        buckets: dict[tuple[int, str], dict[str, list]],
-        progress_callback,
+        buckets: dict[tuple[int, str], dict[str, list[float | int]]],
+        progress_callback: Any,
     ) -> list[dict[str, Any]]:
         """Async version with per-callsign progress."""
         gap_threshold = GAP_THRESHOLD_MULTIPLIER * BUCKET_SECONDS
 
-        callsign_data: dict[str, list[tuple[int, dict]]] = defaultdict(list)
+        callsign_data: dict[str, list[tuple[int, dict[str, list[float | int]]]]] = defaultdict(list)
         for (bucket_time, callsign), values in buckets.items():
             callsign_data[callsign].append((bucket_time, values))
 
@@ -2428,14 +2577,15 @@ class SQLiteStorage:
         logger.info("Generated %d statistics entries", len(final_result))
         return sorted(final_result, key=lambda x: (x["callsign"], x["timestamp"]))
 
-    async def get_stats(self, hours: int) -> dict:
+    async def get_stats(self, hours: int) -> dict[str, Any]:
         """Get message statistics for the given time window."""
         cutoff_ms = int((time.time() - hours * 3600) * 1000)
 
-        rows = await self._execute(
+        rows_raw = await self._execute(
             "SELECT type, src FROM messages WHERE timestamp >= ?",
             (cutoff_ms,),
         )
+        rows = cast(list[dict[str, Any]], rows_raw)
 
         msg_count = 0
         pos_count = 0
@@ -2457,15 +2607,16 @@ class SQLiteStorage:
             "users": users,
         }
 
-    async def get_mheard_stations(self, limit: int, msg_type: str) -> dict:
+    async def get_mheard_stations(self, limit: int, msg_type: str) -> dict[str, Any]:
         """Get recently heard stations aggregated by callsign."""
-        rows = await self._execute(
+        rows_raw = await self._execute(
             "SELECT src, type, timestamp FROM messages"
             " WHERE type IN ('msg', 'pos') AND src != ''"
             " ORDER BY timestamp DESC LIMIT 4000",
         )
+        rows = cast(list[dict[str, Any]], rows_raw)
 
-        stations: dict[str, dict] = defaultdict(
+        stations: dict[str, dict[str, int]] = defaultdict(
             lambda: {"last_msg": 0, "msg_count": 0, "last_pos": 0, "pos_count": 0}
         )
 
@@ -2497,9 +2648,10 @@ class SQLiteStorage:
         cutoff_ms = int((time.time() - days * 86400) * 1000)
 
         # Build src filter based on search type
+        params: tuple[Any, ...] = ()
         if search_type == "prefix":
             src_filter = " AND UPPER(src) LIKE ?"
-            params: tuple = (cutoff_ms, f"%{callsign.upper()}-%" )
+            params = (cutoff_ms, f"%{callsign.upper()}-%" )
         elif search_type == "exact":
             src_filter = " AND UPPER(src) LIKE ?"
             params = (cutoff_ms, f"%{callsign.upper()}%")
@@ -2508,12 +2660,13 @@ class SQLiteStorage:
             params = (cutoff_ms,)
 
         # Query 1: counts and last timestamps by type
-        rows = await self._execute(
+        rows_raw = await self._execute(
             "SELECT type, COUNT(*) as cnt, MAX(timestamp) as last_ts"
             f" FROM messages WHERE timestamp >= ?{src_filter}"
             " GROUP BY type",
             params,
         )
+        rows = cast(list[dict[str, Any]], rows_raw)
         result: dict[str, Any] = {
             "msg_count": 0, "pos_count": 0,
             "last_msg": None, "last_pos": None,
@@ -2528,22 +2681,24 @@ class SQLiteStorage:
                 result["last_pos"] = row["last_ts"]
 
         # Query 2: distinct numeric destinations
-        dest_rows = await self._execute(
+        dest_rows_raw = await self._execute(
             "SELECT DISTINCT dst FROM messages"
             f" WHERE timestamp >= ? AND type = 'msg'{src_filter}"
             " AND dst GLOB '[0-9]*'",
             params,
         )
+        dest_rows = cast(list[dict[str, Any]], dest_rows_raw)
         result["destinations"] = sorted([r["dst"] for r in dest_rows], key=int)
 
         # Query 3: SID activity (prefix search only)
         if search_type == "prefix":
-            sid_rows = await self._execute(
+            sid_rows_raw = await self._execute(
                 "SELECT src, MAX(timestamp) as last_ts FROM messages"
                 f" WHERE timestamp >= ?{src_filter}"
                 " GROUP BY src",
                 params,
             )
+            sid_rows = cast(list[dict[str, Any]], sid_rows_raw)
             sids: dict[str, int] = {}
             pattern = callsign.upper() + "-"
             for row in sid_rows:
@@ -2557,19 +2712,20 @@ class SQLiteStorage:
 
         return result
 
-    async def get_positions(self, callsign: str, days: int) -> list[dict]:
+    async def get_positions(self, callsign: str, days: int) -> list[dict[str, Any]]:
         """Get position data for a callsign."""
         cutoff_ms = int((time.time() - days * 86400) * 1000)
 
-        rows = await self._execute(
+        rows_raw = await self._execute(
             "SELECT raw_json FROM messages"
             " WHERE type = 'pos' AND timestamp >= ?"
             " AND UPPER(src) LIKE ?"
             " ORDER BY timestamp DESC",
             (cutoff_ms, f"%{callsign}%"),
         )
+        rows = cast(list[dict[str, Any]], rows_raw)
 
-        positions = []
+        positions: list[dict[str, Any]] = []
         for row in rows:
             try:
                 raw_data = json.loads(row["raw_json"])
@@ -2593,9 +2749,9 @@ class SQLiteStorage:
             logger.info("Dump file not found: %s", filename)
             return 0
 
-        def _load() -> list[dict]:
+        def _load() -> list[dict[str, Any]]:
             with open(path, encoding="utf-8") as f:
-                return json.load(f)
+                return cast(list[dict[str, Any]], json.load(f))
 
         data = await asyncio.to_thread(_load)
 
@@ -2644,7 +2800,8 @@ class SQLiteStorage:
     async def save_dump(self, filename: str) -> int:
         """Save messages to JSON dump file (for compatibility)."""
         query = "SELECT raw_json, created_at FROM messages ORDER BY timestamp"
-        rows = await self._execute(query)
+        rows_raw = await self._execute(query)
+        rows = cast(list[dict[str, Any]], rows_raw)
 
         data = [{"raw": row["raw_json"], "timestamp": row["created_at"]} for row in rows]
 
@@ -2659,12 +2816,13 @@ class SQLiteStorage:
     async def get_telemetry_chart_data(self, hours: int = 48) -> list[dict[str, Any]]:
         """Return telemetry data for chart display, limited to recent data."""
         cutoff = int((time.time() - hours * 3600) * 1000)
-        return await self._execute(
+        result = await self._execute(
             "SELECT callsign, timestamp, temp1, temp2, hum, hum2,"
             " qfe, qnh, gas, co2, alt, batt, extras"
             " FROM telemetry WHERE timestamp > ? ORDER BY callsign, timestamp",
             (cutoff,),
         )
+        return cast(list[dict[str, Any]], result)
 
     async def get_telemetry_chart_data_bucketed(
         self, hours: int = 8760
@@ -2672,7 +2830,7 @@ class SQLiteStorage:
         """Return telemetry aggregated into 4-hour buckets with min/max."""
         cutoff = int((time.time() - hours * 3600) * 1000)
         bucket_ms = 4 * 3600 * 1000  # 4 hours
-        return await self._execute(
+        result = await self._execute(
             f"""
             SELECT
                 callsign,
@@ -2692,10 +2850,12 @@ class SQLiteStorage:
             """,
             (cutoff,),
         )
+        return cast(list[dict[str, Any]], result)
 
     async def get_read_counts(self) -> dict[str, int]:
         """Get all read counts for frontend unread badge sync."""
-        rows = await self._execute("SELECT dst, count FROM read_counts")
+        rows_raw = await self._execute("SELECT dst, count FROM read_counts")
+        rows = cast(list[dict[str, Any]], rows_raw)
         return {row["dst"]: row["count"] for row in rows}
 
     async def set_read_count(self, dst: str, count: int) -> None:
@@ -2747,7 +2907,8 @@ class SQLiteStorage:
 
     async def get_hidden_destinations(self) -> list[str]:
         """Get all hidden destination identifiers."""
-        rows = await self._execute("SELECT dst FROM hidden_destinations")
+        rows_raw = await self._execute("SELECT dst FROM hidden_destinations")
+        rows = cast(list[dict[str, Any]], rows_raw)
         return [row["dst"] for row in rows]
 
     async def set_hidden_destinations(self, destinations: list[str]) -> None:
@@ -2781,7 +2942,8 @@ class SQLiteStorage:
 
     async def get_blocked_texts(self) -> list[str]:
         """Get all blocked text patterns."""
-        rows = await self._execute("SELECT text FROM blocked_texts")
+        rows_raw = await self._execute("SELECT text FROM blocked_texts")
+        rows = cast(list[dict[str, Any]], rows_raw)
         return [row["text"] for row in rows]
 
     async def set_blocked_texts(self, texts: list[str]) -> None:
@@ -2813,11 +2975,12 @@ class SQLiteStorage:
                 fetch=False,
             )
 
-    async def get_mheard_sidebar(self) -> dict | None:
+    async def get_mheard_sidebar(self) -> dict[str, Any] | None:
         """Get mheard sidebar state (station order + hidden stations)."""
-        rows = await self._execute(
+        rows_raw = await self._execute(
             "SELECT station_order, hidden_stations FROM mheard_sidebar WHERE id = 1"
         )
+        rows = cast(list[dict[str, Any]], rows_raw)
         if not rows:
             return None
         row = rows[0]
@@ -2839,11 +3002,12 @@ class SQLiteStorage:
             fetch=False,
         )
 
-    async def get_wx_sidebar(self) -> dict | None:
+    async def get_wx_sidebar(self) -> dict[str, Any] | None:
         """Get WX sidebar state (station order + hidden stations)."""
-        rows = await self._execute(
+        rows_raw = await self._execute(
             "SELECT station_order, hidden_stations FROM wx_sidebar WHERE id = 1"
         )
+        rows = cast(list[dict[str, Any]], rows_raw)
         if not rows:
             return None
         row = rows[0]
@@ -2865,9 +3029,374 @@ class SQLiteStorage:
             fetch=False,
         )
 
+    async def get_filter_prefs(self) -> dict[str, Any]:
+        """Get persisted spam filter preferences."""
+        rows_raw = await self._execute("SELECT prefs FROM filter_prefs WHERE id = 1")
+        rows = cast(list[dict[str, Any]], rows_raw)
+        if not rows:
+            return {}
+        return cast(dict[str, Any], json.loads(rows[0]["prefs"]))
+
+    async def set_filter_prefs(self, prefs: dict[str, Any]) -> None:
+        """Upsert spam filter preferences."""
+        await self._execute(
+            """INSERT INTO filter_prefs (id, prefs, updated_at)
+               VALUES (1, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(id) DO UPDATE SET
+                 prefs = excluded.prefs,
+                 updated_at = CURRENT_TIMESTAMP""",
+            (json.dumps(prefs),),
+            fetch=False,
+        )
+
+    # ── Classifier Storage API ─────────────────────────────────────────────
+    # These methods satisfy the StorageProtocol defined in
+    # classifier/types.py, allowing the shared classifier subtree to run
+    # in MCProxy without any meshcom_mock imports.
+
+    async def get_classifier_rules(self, enabled_only: bool = False) -> list[dict[str, Any]]:
+        where = "WHERE enabled = 1" if enabled_only else ""
+        rows_raw = await self._execute(
+            f"SELECT * FROM classifier_rules {where} ORDER BY priority ASC, id ASC"  # noqa: S608
+        )
+        rows = cast(list[dict[str, Any]], rows_raw)
+        for r in rows:
+            try:
+                r["extra_tags"] = json.loads(r["extra_tags"]) if r.get("extra_tags") else []
+            except (json.JSONDecodeError, TypeError):
+                r["extra_tags"] = []
+            r["enabled"] = bool(r["enabled"])
+            r["builtin"] = bool(r["builtin"])
+        return rows
+
+    async def insert_classifier_rule(
+        self,
+        *,
+        name: str,
+        pattern: str,
+        category: str,
+        scope: str = "msg",
+        extra_tags: list[str] | None = None,
+        priority: int = 100,
+        enabled: bool = True,
+        builtin: bool = False,
+    ) -> dict[str, Any]:
+        now_zulu = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
+        tags_json = json.dumps(extra_tags) if extra_tags else None
+
+        def _run() -> int:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.execute(
+                    "INSERT INTO classifier_rules "
+                    "(name, pattern, scope, category, extra_tags, priority, "
+                    " enabled, builtin, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (name, pattern, scope, category, tags_json, priority,
+                     int(enabled), int(builtin), now_zulu, now_zulu),
+                )
+                conn.commit()
+                return cursor.lastrowid  # type: ignore[return-value]
+
+        rule_id = await asyncio.to_thread(_run)
+        rows_raw = await self._execute(
+            "SELECT * FROM classifier_rules WHERE id = ?", (rule_id,)
+        )
+        rows = cast(list[dict[str, Any]], rows_raw)
+        row = rows[0]
+        row["extra_tags"] = json.loads(row["extra_tags"]) if row.get("extra_tags") else []
+        row["enabled"] = bool(row["enabled"])
+        row["builtin"] = bool(row["builtin"])
+        return row
+
+    async def update_classifier_rule(
+        self, rule_id: int, **updates: object
+    ) -> dict[str, Any] | None:
+        allowed = {"name", "pattern", "scope", "category", "extra_tags", "priority", "enabled"}
+        set_parts: list[str] = []
+        params: list[object] = []
+        for key, value in updates.items():
+            if key not in allowed:
+                continue
+            if key == "extra_tags":
+                params.append(json.dumps(value) if value else None)
+            elif key == "enabled":
+                params.append(int(bool(value)))
+            else:
+                params.append(value)
+            set_parts.append(f"{key} = ?")
+        if not set_parts:
+            rows = await self._execute(
+                "SELECT * FROM classifier_rules WHERE id = ?", (rule_id,)
+            )
+            assert isinstance(rows, list)
+            return rows[0] if rows else None
+        now_zulu = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
+        set_parts.append("updated_at = ?")
+        params.extend([now_zulu, rule_id])
+        await self._execute(
+            f"UPDATE classifier_rules SET {', '.join(set_parts)} WHERE id = ?",  # noqa: S608
+            tuple(params),
+            fetch=False,
+        )
+        rows = await self._execute(
+            "SELECT * FROM classifier_rules WHERE id = ?", (rule_id,)
+        )
+        assert isinstance(rows, list)
+        if not rows:
+            return None
+        row = rows[0]
+        row["extra_tags"] = json.loads(row["extra_tags"]) if row.get("extra_tags") else []
+        row["enabled"] = bool(row["enabled"])
+        row["builtin"] = bool(row["builtin"])
+        return row
+
+    async def get_beacon_template(self, template_hash: str) -> dict[str, Any] | None:
+        rows_raw = await self._execute(
+            "SELECT * FROM beacon_templates WHERE template_hash = ?",
+            (template_hash,),
+        )
+        rows = cast(list[dict[str, Any]], rows_raw)
+        if not rows:
+            return None
+        row = rows[0]
+        try:
+            row["srcs"] = json.loads(row["srcs"]) if row.get("srcs") else []
+        except (json.JSONDecodeError, TypeError):
+            row["srcs"] = []
+        row["auto_beacon"] = bool(row["auto_beacon"])
+        return row
+
+    async def upsert_beacon_template(
+        self, hash_: str, msg: str, src: str, now_ms: int
+    ) -> dict[str, Any]:
+        from .classifier.types import _ms_to_zulu  # avoid top-level circular
+        now_zulu = _ms_to_zulu(now_ms)
+
+        def _run() -> None:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO beacon_templates "
+                    "(template_hash, example_msg, example_src, srcs, count, "
+                    " first_seen, last_seen) "
+                    "VALUES (?, ?, ?, ?, 0, ?, ?)",
+                    (hash_, msg, src, json.dumps([src]), now_zulu, now_zulu),
+                )
+                # Load current srcs and merge
+                row = conn.execute(
+                    "SELECT srcs FROM beacon_templates WHERE template_hash = ?",
+                    (hash_,),
+                ).fetchone()
+                srcs: list[str] = []
+                if row and row[0]:
+                    try:
+                        srcs = json.loads(row[0])
+                    except (json.JSONDecodeError, TypeError):
+                        srcs = []
+                if src not in srcs:
+                    srcs.append(src)
+                conn.execute(
+                    "UPDATE beacon_templates "
+                    "SET count = count + 1, example_msg = ?, example_src = ?, "
+                    "    srcs = ?, last_seen = ? "
+                    "WHERE template_hash = ?",
+                    (msg, src, json.dumps(srcs), now_zulu, hash_),
+                )
+                conn.commit()
+
+        await asyncio.to_thread(_run)
+        result = await self.get_beacon_template(hash_)
+        assert result is not None
+        return result
+
+    async def set_template_auto_beacon(
+        self, template_hash: str, auto_beacon: bool
+    ) -> dict[str, Any] | None:
+        await self._execute(
+            "UPDATE beacon_templates SET auto_beacon = ? WHERE template_hash = ?",
+            (int(auto_beacon), template_hash),
+            fetch=False,
+        )
+        return await self.get_beacon_template(template_hash)
+
+    async def count_recent_messages_by_template_src(
+        self, hash_: str, src: str, since_ms: int
+    ) -> int:
+        # MCProxy stores timestamp as INTEGER ms (not ISO string)
+        rows = await self._execute(
+            "SELECT COUNT(*) AS n FROM messages "
+            "WHERE template_hash = ? AND src = ? AND timestamp >= ?",
+            (hash_, src, since_ms),
+        )
+        assert isinstance(rows, list)
+        return int(rows[0]["n"]) if rows else 0
+
+    async def clear_stale_auto_beacons(
+        self, human_categories: frozenset[str], min_tokens: int
+    ) -> int:
+        from .classifier.template import _tokenize_normalized
+        cleared = 0
+        placeholders = ",".join("?" * len(human_categories))
+
+        def _clear_by_category() -> int:
+            with sqlite3.connect(self.db_path) as conn:
+                cur = conn.execute(
+                    f"UPDATE beacon_templates SET auto_beacon = 0 "  # noqa: S608
+                    f"WHERE user_action IS NULL AND auto_beacon = 1 "
+                    f"AND EXISTS ("
+                    f"  SELECT 1 FROM messages m "
+                    f"  WHERE m.template_hash = beacon_templates.template_hash "
+                    f"  AND m.category IN ({placeholders}) LIMIT 1"
+                    f")",
+                    tuple(human_categories),
+                )
+                conn.commit()
+                return cur.rowcount
+
+        cleared += await asyncio.to_thread(_clear_by_category)
+
+        rows = await self._execute(
+            "SELECT template_hash, example_msg FROM beacon_templates "
+            "WHERE auto_beacon = 1 AND user_action IS NULL"
+        )
+        assert isinstance(rows, list)
+        for row in rows:
+            tokens = _tokenize_normalized(row["example_msg"] or "")
+            if len(tokens) <= min_tokens:
+                await self._execute(
+                    "UPDATE beacon_templates SET auto_beacon = 0 WHERE template_hash = ?",
+                    (row["template_hash"],),
+                    fetch=False,
+                )
+                cleared += 1
+        return cleared
+
+    async def get_classifier_version(self) -> int:
+        ver_str = await self.get_meta("classifier_version")
+        try:
+            return int(ver_str) if ver_str is not None else 0
+        except (ValueError, TypeError):
+            return 0
+
+    async def count_messages_to_classify(
+        self, *, classifier_ver_below: int | None = None
+    ) -> int:
+        if classifier_ver_below is None:
+            rows = await self._execute("SELECT COUNT(*) AS n FROM messages")
+        else:
+            rows = await self._execute(
+                "SELECT COUNT(*) AS n FROM messages "
+                "WHERE classifier_ver IS NULL OR classifier_ver < ?",
+                (classifier_ver_below,),
+            )
+        assert isinstance(rows, list)
+        return int(rows[0]["n"]) if rows else 0
+
+    async def get_messages_to_classify(
+        self,
+        *,
+        classifier_ver_below: int | None = None,
+        category: str | None = None,
+        since_ms: int | None = None,
+        limit: int = 500,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        conditions: list[str] = []
+        params: list[object] = []
+        if classifier_ver_below is not None:
+            conditions.append("(classifier_ver IS NULL OR classifier_ver < ?)")
+            params.append(classifier_ver_below)
+        if category is not None:
+            conditions.append("category = ?")
+            params.append(category)
+        if since_ms is not None:
+            conditions.append("timestamp >= ?")
+            params.append(since_ms)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        rows_raw = await self._execute(
+            f"SELECT id, {_MSG_SELECT} FROM messages {where} "  # noqa: S608
+            f"ORDER BY id ASC LIMIT ? OFFSET ?",
+            (*params, limit, offset),
+        )
+        rows = cast(list[dict[str, Any]], rows_raw)
+        return rows
+
+    async def update_message_classification(
+        self,
+        row_id: Any,
+        *,
+        category: str,
+        tags: list[str],
+        info_score: float,
+        template_hash: str,
+        classifier_ver: int,
+    ) -> None:
+        await self._execute(
+            "UPDATE messages SET category = ?, tags = ?, info_score = ?, "
+            "template_hash = ?, classifier_ver = ? WHERE id = ?",
+            (category, json.dumps(tags), info_score, template_hash, classifier_ver, row_id),
+            fetch=False,
+        )
+
+    async def get_meta(self, key: str) -> str | None:
+        rows = await self._execute(
+            "SELECT value FROM classifier_meta WHERE key = ?", (key,)
+        )
+        assert isinstance(rows, list)
+        return rows[0]["value"] if rows else None
+
+    async def set_meta(self, key: str, value: str) -> None:
+        await self._execute(
+            "INSERT INTO classifier_meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+            fetch=False,
+        )
+
+    async def count_messages_by_category(self, since_ms: int) -> dict[str, int]:
+        # MCProxy timestamp is INTEGER ms
+        rows = await self._execute(
+            "SELECT category, COUNT(*) AS n FROM messages "
+            "WHERE category IS NOT NULL AND timestamp >= ? GROUP BY category",
+            (since_ms,),
+        )
+        assert isinstance(rows, list)
+        return {r["category"]: r["n"] for r in rows}
+
+    async def get_top_beacon_templates(
+        self, since_ms: int, limit: int = 10
+    ) -> list[dict[str, Any]]:
+        from .classifier.types import _ms_to_zulu
+        cutoff = _ms_to_zulu(since_ms)
+        rows_raw = await self._execute(
+            "SELECT template_hash, example_msg, count, auto_beacon "
+            "FROM beacon_templates WHERE last_seen >= ? "
+            "ORDER BY count DESC LIMIT ?",
+            (cutoff, limit),
+        )
+        rows = cast(list[dict[str, Any]], rows_raw)
+        for r in rows:
+            r["auto_beacon"] = bool(r["auto_beacon"])
+        return rows
+
+    async def count_auto_beacon_templates(self) -> int:
+        rows = await self._execute(
+            "SELECT COUNT(*) AS n FROM beacon_templates WHERE auto_beacon = 1"
+        )
+        assert isinstance(rows, list)
+        return int(rows[0]["n"]) if rows else 0
+
+    def get_heartbeat_window_size(self) -> int:
+        return 0
+
+    async def bump_classifier_version(self) -> int:
+        current = await self.get_classifier_version()
+        new_ver = current + 1
+        await self.set_meta("classifier_version", str(new_ver))
+        return new_ver
+
     async def close(self) -> None:
         """Close the persistent read connection."""
-        def _close():
+        def _close() -> None:
             if self._read_conn is not None:
                 self._read_conn.close()
                 self._read_conn = None

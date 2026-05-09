@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from .ble_adapter import BLEAdapter, ConnectionState
+from .ble_adapter import BLEAdapter, ConnectionState, build_hello_bytes
 
 # Configure logging
 logging.basicConfig(
@@ -35,9 +35,11 @@ CORS_ORIGINS = os.getenv("BLE_SERVICE_CORS_ORIGINS", "*").split(",")
 BLE_STATE_FILE = os.getenv("BLE_STATE_FILE", "/var/lib/mcapp/ble_state.json")
 BLE_AUTO_CONNECT = os.getenv("BLE_AUTO_CONNECT", "true").lower() != "false"
 AUTO_CONNECT_DELAY = int(os.getenv("BLE_AUTO_CONNECT_DELAY", "8"))
+_BLE_PIN_ENV = int(os.getenv("BLE_SERVICE_BLE_PIN", "0"))  # startup default from env
 
 # Global state
 ble_adapter: BLEAdapter | None = None
+_ble_pin: int = 0  # active PIN; 0 = disabled
 notification_queue: deque[dict] = deque(maxlen=1000)
 notification_event = asyncio.Event()
 _reconnect_task: asyncio.Task | None = None
@@ -121,10 +123,13 @@ def notification_callback(data: bytes):
 def _save_ble_state(mac: str, name: str | None = None) -> None:
     """Persist last-connected device to disk for restart recovery."""
     try:
+        # Preserve ble_pin if already stored
+        existing_pin = _load_ble_pin()
         state = {
             "device_mac": mac,
             "device_name": name,
             "connected_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "ble_pin": existing_pin,
         }
         tmp = BLE_STATE_FILE + ".tmp"
         with open(tmp, "w") as f:
@@ -156,6 +161,34 @@ def _clear_ble_state() -> None:
         logger.info("Cleared BLE state file")
     except FileNotFoundError:
         pass
+
+
+def _load_ble_pin() -> int:
+    """Load persisted BLE PIN from state file. Returns 0 if not set."""
+    try:
+        with open(BLE_STATE_FILE) as f:
+            state = json.load(f)
+        return int(state.get("ble_pin", 0))
+    except (FileNotFoundError, json.JSONDecodeError, ValueError):
+        return 0
+
+
+def _save_ble_pin(pin: int) -> None:
+    """Persist BLE PIN to state file (atomic write, preserves other fields)."""
+    try:
+        try:
+            with open(BLE_STATE_FILE) as f:
+                state = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            state = {}
+        state["ble_pin"] = pin
+        tmp = BLE_STATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(state, f)
+        os.replace(tmp, BLE_STATE_FILE)
+        logger.info("Saved BLE PIN: %s", "disabled" if pin == 0 else "set")
+    except Exception as e:
+        logger.warning("Failed to save BLE PIN: %s", e)
 
 
 # --- Connect + initialize helper ---
@@ -420,7 +453,15 @@ async def lifespan(app: FastAPI):
     logger.info("Starting BLE Service")
     if not API_KEY:
         logger.warning("No API key configured — BLE service is unauthenticated")
-    ble_adapter = BLEAdapter(notification_callback=notification_callback)
+
+    # PIN: persisted state takes priority over env var default
+    _ble_pin = _load_ble_pin() or _BLE_PIN_ENV
+    logger.info("BLE PIN: %s", "disabled" if _ble_pin == 0 else "set")
+
+    ble_adapter = BLEAdapter(
+        notification_callback=notification_callback,
+        hello_bytes=build_hello_bytes(_ble_pin),
+    )
     ble_adapter._disconnect_callback = _on_adapter_disconnect
 
     # Auto-connect to last-known device if enabled
@@ -524,6 +565,10 @@ class ResultResponse(BaseModel):
     """Generic result response"""
     success: bool
     message: str
+
+
+class SetPinRequest(BaseModel):
+    pin: int
 
 
 # --- API Endpoints ---
@@ -919,6 +964,29 @@ async def set_aprs_symbols(
     except Exception as e:
         logger.error("Set APRS symbols error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/ble/pin")
+async def set_ble_pin(request: SetPinRequest, _: bool = Depends(verify_api_key)):
+    """
+    Update the BLE app-layer PIN used by the proxy when authenticating to the device.
+
+    pin=0 disables authentication (open hello).
+    pin 100000-999999 enables SHA-256 hash authentication.
+
+    This does NOT change the PIN on the device itself — use --btcode <value> for that.
+    Call this endpoint after the device has accepted the PIN change to keep them in sync.
+    """
+    global _ble_pin
+    pin = request.pin
+    if pin != 0 and not (100000 <= pin <= 999999):
+        raise HTTPException(status_code=400, detail="PIN must be 0 or 100000–999999")
+    _ble_pin = pin
+    _save_ble_pin(pin)
+    if ble_adapter is not None:
+        ble_adapter.hello_bytes = build_hello_bytes(pin)
+    logger.info("BLE PIN updated: %s", "disabled" if pin == 0 else "set")
+    return {"ok": True}
 
 
 @app.post("/api/ble/config/save", response_model=ResultResponse)

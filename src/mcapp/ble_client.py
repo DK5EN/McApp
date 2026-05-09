@@ -24,11 +24,13 @@ Usage:
     await client.send_message("Hello!", "20")
 """
 
+from __future__ import annotations
+
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +80,7 @@ class BLEClientBase(ABC):
     backends to be swapped transparently.
     """
 
-    def __init__(self, notification_callback: Callable[[dict], None] | None = None):
+    def __init__(self, notification_callback: Callable[[dict[str, Any]], None] | None = None):
         """
         Initialize BLE client.
 
@@ -260,14 +262,11 @@ class BLEClientBase(ABC):
 
 async def create_ble_client(
     mode: BLEMode = BLEMode.DISABLED,
-    notification_callback: Callable[[dict], None] | None = None,
-    # Local mode options
+    notification_callback: Callable[[dict[str, Any]], None] | None = None,
     device_mac: str | None = None,
-    # Remote mode options
     remote_url: str | None = None,
     api_key: str | None = None,
-    # Message router for publishing
-    message_router=None,
+    message_router: Any | None = None,
 ) -> BLEClientBase:
     """
     Factory function to create appropriate BLE client based on mode.
@@ -283,6 +282,7 @@ async def create_ble_client(
     Returns:
         Configured BLE client instance
     """
+    client: BLEClientBase
     if mode == BLEMode.REMOTE:
         if not remote_url:
             raise ValueError("remote_url required for remote mode")

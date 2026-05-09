@@ -1,14 +1,19 @@
 """DataCommandsMixin: search, stats, mheard commands."""
 
 import time
+from typing import Any
 
 from mcapp import __version__
 
+from ._base import CommandHandlerBase
 
-class DataCommandsMixin:
+
+class DataCommandsMixin(CommandHandlerBase):
     """Mixin providing data query command handlers."""
 
-    async def handle_search(self, kwargs, requester):
+    async def handle_search(
+        self, kwargs: dict[str, Any], requester: str
+    ) -> str:
         """Search messages by user and timeframe - show
         summary with counts, last seen, and destinations"""
         user = kwargs.get("call", "*")
@@ -61,7 +66,9 @@ class DataCommandsMixin:
 
         return response
 
-    async def handle_stats(self, kwargs, requester):
+    async def handle_stats(
+        self, kwargs: dict[str, Any], requester: str
+    ) -> str:
         """Show message statistics"""
         hours = int(kwargs.get("hours", 24))
 
@@ -85,7 +92,9 @@ class DataCommandsMixin:
 
         return response
 
-    async def handle_mheard(self, kwargs, requester):
+    async def handle_mheard(
+        self, kwargs: dict[str, Any], requester: str
+    ) -> str:
         """Show recently heard stations with optional type filtering"""
         limit = int(kwargs.get("limit", 5))
         msg_type = kwargs.get("type", "all").lower()

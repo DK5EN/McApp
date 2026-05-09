@@ -351,6 +351,18 @@ checkout_development() {
   log_info "Both repos back on development"
 }
 
+merge_main_back() {
+  local version="$1"
+  log_info "Merging main back into development in both repos..."
+
+  for repo_dir in "$PROJECT_DIR" "$WEBAPP_DIR"; do
+    local repo_name
+    repo_name=$(basename "$repo_dir")
+    git -C "$repo_dir" merge main --no-ff -m "[chore] Merge main back into development after ${version}"
+    log_info "  ${repo_name}: merged main → development"
+  done
+}
+
 #──────────────────────────────────────────────────────────────────
 # TAGGING (both repos)
 #──────────────────────────────────────────────────────────────────
@@ -700,9 +712,10 @@ main() {
     # Step 10: Cleanup artifacts
     cleanup_artifacts "$tarball" "$checksum"
 
-    # Step 11: Back to development, prep next version
+    # Step 11: Back to development, merge main in, prep next version
     checkout_development
     _CLEANUP_SWITCHED_MAIN=false
+    merge_main_back "$version"
     post_release_prep "$current"
 
     _RELEASE_SUCCESS=true

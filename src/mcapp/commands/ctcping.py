@@ -3,17 +3,18 @@
 import asyncio
 import re
 import time
-from typing import Optional
+from typing import Any
 
 from ..logging_setup import get_logger
+from ._base import CommandHandlerBase
 
 logger = get_logger(__name__)
 
 
-class CTCPingMixin:
+class CTCPingMixin(CommandHandlerBase):
     """Mixin providing CTC ping test functionality."""
 
-    def _init_ctcping(self):
+    def _init_ctcping(self) -> None:
         """Initialize CTC ping state. Called from CommandHandler.__init__."""
         self.active_pings = {}  # {ping_id: PingTest}
         self.ping_tests = {}
@@ -53,7 +54,7 @@ class CTCPingMixin:
 
         return has_sequence and has_measurement
 
-    def _extract_sequence_info(self, msg: str) -> Optional[str]:
+    def _extract_sequence_info(self, msg: str) -> str | None:
         """Extract sequence info from ping message"""
         match = re.search(r"ping test (\d+)/(\d+)", msg.lower())
         if match:
@@ -62,7 +63,7 @@ class CTCPingMixin:
             return f"{current}/{total}"
         return None
 
-    def _find_test_id_for_target(self, target: str) -> Optional[str]:
+    def _find_test_id_for_target(self, target: str) -> str | None:
         """Find active test ID for target"""
         logger.debug("Looking for test with target='%s'", target)
         for tid, info in self.ping_tests.items():
@@ -92,7 +93,7 @@ class CTCPingMixin:
 
         return f"Active pings: {' | '.join(ping_info)}"
 
-    async def _handle_echo_message(self, message_data: dict):
+    async def _handle_echo_message(self, message_data: dict[str, Any]) -> None:
         """Handle echo message and start tracking for ACK"""
         try:
             src = message_data.get("src", "").upper()
@@ -155,7 +156,7 @@ class CTCPingMixin:
         except Exception as e:
             logger.error("Error handling echo message: %s", e)
 
-    async def _handle_ack_message(self, message_data: dict):
+    async def _handle_ack_message(self, message_data: dict[str, Any]) -> None:
         """Handle ACK message and calculate RTT with idempotent processing"""
         try:
             src_raw = message_data.get("src", "").upper()
@@ -214,10 +215,10 @@ class CTCPingMixin:
         self,
         ack_id: str,
         test_id: str,
-        ping_info: dict,
-        result: dict,
+        ping_info: dict[str, Any],
+        result: dict[str, Any],
         rtt: float,
-    ):
+    ) -> None:
         """Validate ACK result against test state and delegate to _record_ping_result."""
         test_summary = self.ping_tests[test_id]
 
@@ -263,7 +264,7 @@ class CTCPingMixin:
         asyncio.create_task(self._complete_test_with_cleanup(test_id, completion_event_key))
         return True
 
-    async def _complete_test(self, test_id: str):
+    async def _complete_test(self, test_id: str) -> None:
         """Complete a test: cancel monitor, send summary,
         cleanup (idempotent with event coordination)"""
         try:
@@ -296,14 +297,14 @@ class CTCPingMixin:
         except Exception as e:
             logger.error("Error completing test %s: %s", test_id, e)
 
-    async def _complete_test_with_cleanup(self, test_id: str, completion_event_key: str):
+    async def _complete_test_with_cleanup(self, test_id: str, completion_event_key: str) -> None:
         """Complete test and cleanup completion event"""
         try:
             await self._complete_test(test_id)
         finally:
             self._completion_events.pop(completion_event_key, None)
 
-    async def _record_ping_result(self, test_id: str, result: dict) -> bool:
+    async def _record_ping_result(self, test_id: str, result: dict[str, Any]) -> bool:
         """Record ping result and check for test completion (updated for idempotent design)"""
         if test_id not in self.ping_tests:
             return False
@@ -354,7 +355,7 @@ class CTCPingMixin:
                 test_summary["timeouts"] -= excess
             total_completed = expected_total
 
-        is_complete = total_completed >= expected_total
+        is_complete: bool = total_completed >= expected_total
 
         if is_complete:
             logger.debug(
@@ -365,7 +366,7 @@ class CTCPingMixin:
 
         return is_complete
 
-    async def _ping_timeout_task(self, message_id: str):
+    async def _ping_timeout_task(self, message_id: str) -> None:
         """Handle ping timeout after 30 seconds"""
         try:
             await asyncio.sleep(self.ping_timeout)
@@ -413,7 +414,7 @@ class CTCPingMixin:
         except Exception as e:
             logger.error("Error in ping timeout task: %s", e)
 
-    async def handle_ctcping(self, kwargs, requester):
+    async def handle_ctcping(self, kwargs: dict[str, Any], requester: str) -> str:
         """Handle CTC ping test with roundtrip time measurement"""
         ping_target = kwargs.get("call", "").upper()
         payload_size = kwargs.get("payload", 25)
@@ -457,7 +458,7 @@ class CTCPingMixin:
 
     async def _start_ping_test(
         self, target: str, payload_size: int, repeat_count: int, requester: str
-    ):
+    ) -> None:
         """Start the ping test sequence"""
         test_id = f"{target}_{int(time.time())}"
 
@@ -510,7 +511,7 @@ class CTCPingMixin:
 
     async def _send_ping_message(
         self, target: str, message: str, sequence: int, total: int, requester: str, test_id: str
-    ):
+    ) -> None:
         """Send a single ping message and track it"""
         try:
             if self.message_router:
@@ -531,7 +532,7 @@ class CTCPingMixin:
         except Exception as e:
             logger.error("Failed to send ping to %s: %s", target, e)
 
-    async def _monitor_test_completion(self, test_id: str):
+    async def _monitor_test_completion(self, test_id: str) -> None:
         """Monitor test completion and send summary when done"""
         try:
             start_time = time.time()
@@ -562,7 +563,7 @@ class CTCPingMixin:
         except Exception as e:
             logger.error("Error monitoring test completion: %s", e)
 
-    async def _send_test_summary(self, test_id: str, error_msg: str = None):
+    async def _send_test_summary(self, test_id: str, error_msg: str | None = None) -> None:
         """Send complete test summary to requester"""
         try:
             if test_id not in self.ping_tests:
@@ -638,7 +639,9 @@ class CTCPingMixin:
         except Exception as e:
             logger.error("Error sending test summary: %s", e, exc_info=True)
 
-    async def _send_ping_result(self, requester: str, result_message: str, target: str = ""):
+    async def _send_ping_result(
+        self, requester: str, result_message: str, target: str = ""
+    ) -> None:
         """Send ping result to requester"""
         try:
             if self.message_router:
@@ -666,7 +669,7 @@ class CTCPingMixin:
         except Exception as e:
             logger.error("Failed to send ping result: %s", e)
 
-    async def cleanup_ping_tests(self):
+    async def cleanup_ping_tests(self) -> None:
         """Clean up all active ping tests"""
         logger.debug("Cleaning up %d active pings...", len(self.active_pings))
 

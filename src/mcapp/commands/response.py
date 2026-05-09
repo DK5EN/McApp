@@ -1,18 +1,21 @@
 """ResponseMixin: sending responses and chunking logic."""
 
+from __future__ import annotations
+
 import asyncio
 import time
 
 from ..logging_setup import get_logger
+from ._base import CommandHandlerBase
 from .constants import MAX_CHUNKS, MAX_RESPONSE_LENGTH, has_console
 
 logger = get_logger(__name__)
 
 
-class ResponseMixin:
+class ResponseMixin(CommandHandlerBase):
     """Mixin providing response sending and chunking methods."""
 
-    async def send_response(self, response, recipient, src_type="udp"):
+    async def send_response(self, response: str, recipient: str, src_type: str = "udp") -> None:
         """Send response back to requester, chunking if necessary"""
         if not response:
             return
@@ -100,9 +103,10 @@ class ResponseMixin:
                                 src_type, recipient, chunk[:40],
                             )
                     except Exception as ble_error:
-                        if has_console:
-                            print(f"⚠️  CommandHandler: send failed to {recipient}: {ble_error}")
-                            continue
+                        logger.warning(
+                            "CommandHandler: send failed to %s: %s", recipient, ble_error,
+                        )
+                        continue
 
             # Small delay between chunks
             if i < len(chunks) - 1:
@@ -111,7 +115,7 @@ class ResponseMixin:
             if has_console:
                 print(f"📋 CommandHandler: Sent response chunk {i + 1} to {recipient}")
 
-    def _chunk_response(self, response):
+    def _chunk_response(self, response: str) -> list[str]:
         """Split response into chunks - simple and robust"""
         max_bytes = MAX_RESPONSE_LENGTH
 
@@ -147,7 +151,7 @@ class ResponseMixin:
 
         return chunks[:MAX_CHUNKS]
 
-    def _pad_for_chunk_break(self, text, target_length=MAX_RESPONSE_LENGTH - 2):
+    def _pad_for_chunk_break(self, text: str, target_length: int = MAX_RESPONSE_LENGTH - 2) -> str:
         """Pad text to force clean chunk boundary using byte-aware calculation"""
         text_bytes = text.encode("utf-8")
 

@@ -3,6 +3,7 @@
 import asyncio
 import re
 from pathlib import Path
+from typing import Any
 
 from .constants import has_console
 from .parsing import parse_command
@@ -12,7 +13,7 @@ from .parsing import parse_command
 _TEST_DB_PATH = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "messages.db"
 
 
-async def _ensure_storage(handler):
+async def _ensure_storage(handler: Any) -> None:
     """Attach a read-only test storage if handler has none and fixture DB exists."""
     if handler.storage_handler:
         return
@@ -27,7 +28,7 @@ async def _ensure_storage(handler):
         print(f"    Loaded test DB: {_TEST_DB_PATH}")
 
 
-async def run_all_tests(handler):
+async def run_all_tests(handler: Any) -> bool:
     """Run complete test suite for CommandHandler"""
     if has_console:
         print("\n" + "=" * 60)
@@ -73,7 +74,7 @@ async def run_all_tests(handler):
     return total_passed
 
 
-def test_reception_logic(handler):
+def test_reception_logic(handler: Any) -> bool:
     """Test reception logic based on the table scenarios"""
     if has_console:
         print("\n🧪 Testing Reception Logic:")
@@ -479,7 +480,7 @@ def test_reception_logic(handler):
     return passed == total
 
 
-def test_intent_based_reception_logic(handler):
+def test_intent_based_reception_logic(handler: Any) -> bool:
     """Test reception logic understanding local vs remote intent"""
     if has_console:
         print("\n🧪 Testing Intent-Based Reception Logic:")
@@ -594,7 +595,7 @@ def test_intent_based_reception_logic(handler):
     return passed == total
 
 
-async def test_reception_edge_cases(handler):
+async def test_reception_edge_cases(handler: Any) -> bool:
     """Test edge cases and boundary conditions"""
     if has_console:
         print("\n🧪 Testing Reception Edge Cases:")
@@ -652,7 +653,7 @@ async def test_reception_edge_cases(handler):
     return passed == total
 
 
-async def test_kickban_logic(handler):
+async def test_kickban_logic(handler: Any) -> bool:
     """Test kick-ban functionality"""
     if has_console:
         print("\n🧪 Testing Kick-Ban Logic:")
@@ -750,7 +751,7 @@ async def test_kickban_logic(handler):
     return passed == total
 
 
-def test_message_blocking_integration(handler):
+def test_message_blocking_integration(handler: Any) -> bool:
     """Test message blocking integration logic"""
     if has_console:
         print("\n🧪 Testing Message Blocking Integration:")
@@ -765,7 +766,7 @@ def test_message_blocking_integration(handler):
 
     results = []
 
-    old_blocked = getattr(handler, "blocked_callsigns", set())
+    old_blocked: Any = getattr(handler, "blocked_callsigns", set())
     handler.blocked_callsigns = {"OE1ABC-5"}
 
     try:
@@ -823,7 +824,7 @@ def test_message_blocking_integration(handler):
     return passed == total
 
 
-async def test_topic_logic(handler):
+async def test_topic_logic(handler: Any) -> bool:
     """Test topic/beacon functionality"""
     if has_console:
         print("\n🧪 Testing Topic Logic:")
@@ -863,7 +864,7 @@ async def test_topic_logic(handler):
     results = []
 
     # Cleanup helper
-    async def _cleanup_test_beacons():
+    async def _cleanup_test_beacons() -> None:
         test_groups = ["50", "51", "52", "99", "TEST", "20"]
         for group in test_groups:
             if group in handler.active_topics:
@@ -949,7 +950,7 @@ async def test_topic_logic(handler):
     return passed == total
 
 
-async def test_ctcping_logic(handler):
+async def test_ctcping_logic(handler: Any) -> bool:
     """Test CTC ping functionality with complex scenarios"""
     if has_console:
         print("\n🧪 Testing CTC Ping Logic:")
@@ -1105,7 +1106,7 @@ async def test_ctcping_logic(handler):
     return passed == total
 
 
-async def _test_simulated_ping_flows(handler, results):
+async def _test_simulated_ping_flows(handler: Any, results: list[Any]) -> None:
     """Test simulated ping flows with mock echo/ACK responses"""
     if has_console:
         print("\n🔄 Testing Simulated Ping Flows:")
@@ -1205,7 +1206,7 @@ async def _test_simulated_ping_flows(handler, results):
                 print(f"{status} | {description} - Exception: {e}")
 
 
-async def test_self_command_execution(handler):
+async def test_self_command_execution(handler: Any) -> bool:
     """Test that all self-commands (src=dst=my_callsign) execute locally"""
     if has_console:
         print("\n🧪 Testing Self-Command Execution:")
@@ -1303,7 +1304,7 @@ async def test_self_command_execution(handler):
     return passed == total
 
 
-async def test_self_command_suppression_logic(handler):
+async def test_self_command_suppression_logic(handler: Any) -> bool:
     """Test that self-commands are properly suppressed (not sent to mesh)"""
     if has_console:
         print("\n🧪 Testing Self-Command Suppression Logic:")
@@ -1410,7 +1411,7 @@ async def test_self_command_suppression_logic(handler):
     return passed == total
 
 
-async def test_remote_command_execution(handler):
+async def test_remote_command_execution(handler: Any) -> bool:
     """Test that remote commands are properly forwarded to mesh"""
     if has_console:
         print("\n🧪 Testing Remote Command Execution:")
@@ -1515,7 +1516,7 @@ async def test_remote_command_execution(handler):
     return passed == total
 
 
-async def test_incoming_personal_commands(handler):
+async def test_incoming_personal_commands(handler: Any) -> bool:
     """Test incoming personal commands from other
     stations and outgoing commands to chat partners"""
     if has_console:

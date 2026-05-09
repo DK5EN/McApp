@@ -10,9 +10,9 @@ import math
 import sys
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any
 
-import requests
+import httpx
 
 VERSION = "v0.46.0"
 
@@ -39,7 +39,13 @@ class WeatherService:
     Optimale Datenqualität durch intelligente Fusion
     """
 
-    def __init__(self, lat=None, lon=None, stat_name="", max_age_minutes: int = 30):
+    def __init__(
+        self,
+        lat: float | None = None,
+        lon: float | None = None,
+        stat_name: str = "",
+        max_age_minutes: int = 30,
+    ) -> None:
         self.lat = lat
         self.lon = lon
         self.stat_name = stat_name
@@ -56,14 +62,14 @@ class WeatherService:
             self.stat_name, self.lat, self.lon,
         )
 
-    def update_location(self, lat: float, lon: float, stat_name: str | None = None):
+    def update_location(self, lat: float, lon: float, stat_name: str | None = None) -> None:
         """Update location from GPS device data"""
         self.lat = lat
         self.lon = lon
         if stat_name:
             self.stat_name = stat_name
 
-    def get_weather_data(self) -> Dict[str, Any]:
+    def get_weather_data(self) -> dict[str, Any]:
         """
         Hybrid-Methode: DWD primär, OpenMeteo für fehlende Parameter
         """
@@ -123,25 +129,28 @@ class WeatherService:
                 "location": f"{self.lat}/{self.lon}"
             }
         elif dwd_data is None:
-            # Nur OpenMeteo verfügbar
+            # Nur OpenMeteo verfügbar (openmeteo_data is not None at this point)
             logger.debug("🔄 Nutze ausschließlich OpenMeteo")
+            assert openmeteo_data is not None
             openmeteo_data["data_source"] = "OpenMeteo (Fallback)"
             openmeteo_data["timestamp"] = datetime.now(timezone.utc).isoformat()
             return openmeteo_data
         elif openmeteo_data is None:
-            # Nur DWD verfügbar
+            # Nur DWD verfügbar (dwd_data is not None at this point)
             logger.debug("🔄 Nutze ausschließlich DWD (OpenMeteo nicht verfügbar)")
+            assert dwd_data is not None
             dwd_data["data_source"] = "DWD_BrightSky (ohne Ergänzung)"
             dwd_data["timestamp"] = datetime.now(timezone.utc).isoformat()
             return dwd_data
         else:
             # Beide verfügbar - FUSION!
             logger.debug("🔄 Führe Daten-Fusion durch: DWD primär + OpenMeteo Ergänzung")
+            assert dwd_data is not None and openmeteo_data is not None
             fused_data = self._fuse_weather_data(dwd_data, openmeteo_data)
             fused_data["timestamp"] = datetime.now(timezone.utc).isoformat()
             return fused_data
 
-    def _has_valid_core_data(self, weather_data: Dict[str, Any]) -> bool:
+    def _has_valid_core_data(self, weather_data: dict[str, Any]) -> bool:
         """
         Prüfe ob die wichtigsten Wetterdaten verfügbar sind
         Wenn DWD None für Kernparameter liefert → Fallback auf OpenMeteo
@@ -175,8 +184,8 @@ class WeatherService:
 
 
     def _fuse_weather_data(
-        self, dwd_data: Dict[str, Any], openmeteo_data: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        self, dwd_data: dict[str, Any], openmeteo_data: dict[str, Any],
+    ) -> dict[str, Any]:
         """
         Intelligente Daten-Fusion: DWD hat Priorität, OpenMeteo ergänzt fehlende Werte
         """
@@ -235,7 +244,7 @@ class WeatherService:
 
         return fused
 
-    def _assess_data_quality(self, weather_data: Dict[str, Any]) -> str:
+    def _assess_data_quality(self, weather_data: dict[str, Any]) -> str:
         """
         Bewerte die Qualität der fusionierten Daten
         """
@@ -264,7 +273,7 @@ class WeatherService:
         else:
             return "Unvollständig (kritische Parameter fehlen)"
 
-    def _validate_data_age(self, weather_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _validate_data_age(self, weather_data: dict[str, Any]) -> dict[str, Any]:
         """Validierung des Datenalters"""
         messzeitpunkt_str = weather_data.get("messzeitpunkt")
 
@@ -314,7 +323,7 @@ class WeatherService:
 
     def _calculate_humidity_from_dewpoint(
         self, temperature_c: float, dewpoint_c: float,
-    ) -> Optional[int]:
+    ) -> int | None:
         """Berechne relative Luftfeuchtigkeit aus Temperatur und Taupunkt"""
         try:
             a, b = 17.27, 237.7
@@ -327,9 +336,9 @@ class WeatherService:
         except (ValueError, ZeroDivisionError, OverflowError):
             return None
 
-    def _get_brightsky_weather(self) -> Dict[str, Any]:
+    def _get_brightsky_weather(self) -> dict[str, Any]:
         """DWD Bright Sky API"""
-        urls_to_try = [
+        urls_to_try: list[dict[str, Any]] = [
             {
                 "url": "https://api.brightsky.dev/current_weather",
                 "params": {"lat": self.lat, "lon": self.lon},
@@ -349,7 +358,7 @@ class WeatherService:
 
         for endpoint in urls_to_try:
             try:
-                response = self._make_request(endpoint["url"], endpoint["params"])
+                response = self._make_request(str(endpoint["url"]), dict(endpoint["params"]))
                 data = response.json()
 
                 if not isinstance(data, dict) or "weather" not in data:
@@ -357,6 +366,7 @@ class WeatherService:
 
                 weather_records = data["weather"]
 
+                current: dict[str, Any] | None
                 if isinstance(weather_records, dict):
                     current = weather_records
                 elif isinstance(weather_records, list) and len(weather_records) > 0:
@@ -377,13 +387,15 @@ class WeatherService:
 
         raise WeatherServiceError("Alle BrightSky Endpunkte fehlgeschlagen")
 
-    def _find_most_recent_record(self, weather_records: list) -> Optional[Dict]:
+    def _find_most_recent_record(
+        self, weather_records: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
         """Finde den aktuellsten Datensatz"""
         if not weather_records:
             return None
 
         try:
-            def parse_timestamp(record):
+            def parse_timestamp(record: dict[str, Any]) -> datetime:
                 ts_str = record.get("timestamp", "")
                 if ts_str:
                     return datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
@@ -400,11 +412,13 @@ class WeatherService:
                 except Exception:
                     continue
 
-            return sorted_records[0]
+            return sorted_records[0] if sorted_records else None
         except Exception:
-            return weather_records[0]
+            return weather_records[0] if weather_records else None
 
-    def _process_brightsky_record(self, current: Dict, full_data: Dict) -> Optional[Dict[str, Any]]:
+    def _process_brightsky_record(
+        self, current: dict[str, Any], full_data: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """Verarbeite einen BrightSky Wetter-Record"""
         # Station Info
         station_name = "unbekannt"
@@ -442,10 +456,10 @@ class WeatherService:
 
         return result
 
-    def _get_openmeteo_weather(self) -> Dict[str, Any]:
+    def _get_openmeteo_weather(self) -> dict[str, Any]:
         """Open-Meteo API"""
         url = "https://api.open-meteo.com/v1/forecast"
-        params = {
+        params: dict[str, Any] = {
             "latitude": self.lat,
             "longitude": self.lon,
             "current": (
@@ -482,38 +496,39 @@ class WeatherService:
             "messzeitpunkt": current.get("time", "unbekannt")
         }
 
-    def _make_request(self, url: str, params: Dict) -> requests.Response:
+    def _make_request(self, url: str, params: dict[str, Any]) -> httpx.Response:
         """Robuste HTTP-Request mit Retry-Logic"""
         for attempt in range(self.max_retries + 1):
             try:
-                response = requests.get(url, params=params, timeout=self.timeout,
+                response = httpx.get(url, params=params, timeout=self.timeout,
                                      headers={"User-Agent": "HamRadio-WeatherService/1.0"})
                 response.raise_for_status()
                 return response
-            except requests.exceptions.Timeout:
+            except httpx.TimeoutException:
                 if attempt == self.max_retries:
                     raise WeatherServiceError("Request Timeout")
                 time.sleep(1)
-            except requests.exceptions.RequestException as e:
+            except httpx.HTTPError as e:
                 if attempt == self.max_retries:
                     raise WeatherServiceError(f"HTTP-Fehler: {e}")
                 time.sleep(1)
+        raise WeatherServiceError("Request failed after retries")
 
-    def _safe_float(self, value: Any) -> Optional[float]:
+    def _safe_float(self, value: Any) -> float | None:
         """Sichere Float-Konvertierung"""
         try:
             return float(value) if value is not None else None
         except (ValueError, TypeError):
             return None
 
-    def _safe_int(self, value: Any) -> Optional[int]:
+    def _safe_int(self, value: Any) -> int | None:
         """Sichere Int-Konvertierung"""
         try:
             return int(float(value)) if value is not None else None
         except (ValueError, TypeError):
             return None
 
-    def _is_daytime(self, timestamp_str: Optional[str]) -> bool:
+    def _is_daytime(self, timestamp_str: str | None) -> bool:
         """Bestimme ob es Tag oder Nacht ist anhand des Messzeitpunkts"""
         if not timestamp_str or timestamp_str == "unbekannt":
             # Default: Tag annehmen
@@ -527,8 +542,8 @@ class WeatherService:
             return True
 
     def _calculate_cloud_coverage_description(
-        self, cloud_percent: Optional[int],
-        timestamp_str: Optional[str] = None,
+        self, cloud_percent: int | None,
+        timestamp_str: str | None = None,
     ) -> str:
         """Berechne Wolkenbedeckung in Achteln (/8) und Beschreibung"""
         if cloud_percent is None:
@@ -549,7 +564,7 @@ class WeatherService:
         else:
             return "bewölkt"
 
-    def format_for_lora(self, weather_data: Dict[str, Any], prefix_text: str = "") -> str:
+    def format_for_lora(self, weather_data: dict[str, Any], prefix_text: str = "") -> str:
         """Ham Radio optimiertes LoRa-Format"""
         if "error" in weather_data:
             return f"WX ERR: {weather_data['error'][:25]}"
@@ -607,7 +622,7 @@ class WeatherService:
 
         return lora_msg
 
-    def _wind_direction_to_compass(self, degrees: Optional[int]) -> str:
+    def _wind_direction_to_compass(self, degrees: int | None) -> str:
         """
         Konvertiere Windrichtung von Grad zu Himmelsrichtung
         232° → SW
@@ -632,7 +647,7 @@ class WeatherService:
 
         return directions[index]
 
-    def get_verbose_report(self, weather_data: Dict[str, Any]) -> str:
+    def get_verbose_report(self, weather_data: dict[str, Any]) -> str:
         """Ausführlicher Wetterbericht mit Fusion-Details"""
         if "error" in weather_data:
             return f"❌ FEHLER: {weather_data['error']}"
@@ -702,7 +717,7 @@ class WeatherService:
         """
         return report.strip()
 
-def main():
+def main() -> None:
     """Produktions-Version"""
     #Freising
     stat_name="Freising"

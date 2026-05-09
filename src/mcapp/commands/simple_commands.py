@@ -1,13 +1,18 @@
 """SimpleCommandsMixin: dice, time, help, userinfo, position commands."""
 
+from __future__ import annotations
+
 import random
 from datetime import datetime
+from typing import Any
+
+from ._base import CommandHandlerBase
 
 
-class SimpleCommandsMixin:
+class SimpleCommandsMixin(CommandHandlerBase):
     """Mixin providing simple command handlers."""
 
-    async def handle_dice(self, kwargs, requester):
+    async def handle_dice(self, kwargs: dict[str, Any], requester: str) -> str:
         """Roll two dice with Mäxchen rules"""
         die1 = random.randint(1, 6)
         die2 = random.randint(1, 6)
@@ -16,18 +21,16 @@ class SimpleCommandsMixin:
 
         return f"🎲 {requester}: [{die1}][{die2}] → {sorted_value} {description}"
 
-    def _calculate_maexchen_value(self, die1, die2):
+    def _calculate_maexchen_value(self, die1: int, die2: int) -> tuple[str, str]:
         """Calculate Mäxchen value and description according to rules"""
         dice = sorted([die1, die2], reverse=True)
         higher, lower = dice[0], dice[1]
 
-        # Special case: Mäxchen (2,1)
         if set([die1, die2]) == {2, 1}:
             return "21", "(Mäxchen! 🏆)"
 
-        # Double values (Pasch)
         if die1 == die2:
-            pasch_names = {
+            pasch_names: dict[int, str] = {
                 6: "Sechser-Pasch",
                 5: "Fünfer-Pasch",
                 4: "Vierer-Pasch",
@@ -37,11 +40,10 @@ class SimpleCommandsMixin:
             }
             return f"{die1}{die2}", f"({pasch_names[die1]})"
 
-        # Regular values (higher die first)
         value = f"{higher}{lower}"
         return value, ""
 
-    async def handle_time(self, kwargs, requester):
+    async def handle_time(self, kwargs: dict[str, Any], requester: str) -> str:
         """Show current time and date"""
         now = datetime.now()
 
@@ -49,7 +51,7 @@ class SimpleCommandsMixin:
         time_str = now.strftime("%H:%M:%S")
         weekday = now.strftime("%A")
 
-        weekday_german = {
+        weekday_german: dict[str, str] = {
             "Monday": "Montag",
             "Tuesday": "Dienstag",
             "Wednesday": "Mittwoch",
@@ -63,7 +65,7 @@ class SimpleCommandsMixin:
 
         return f"🕐 {time_str} Uhr, {weekday_de}, {date_str}"
 
-    async def handle_help(self, kwargs, requester):
+    async def handle_help(self, kwargs: dict[str, Any], requester: str) -> str:
         """Show available commands"""
         response = "📋 Available commands: "
 
@@ -79,7 +81,7 @@ class SimpleCommandsMixin:
 
         return response
 
-    async def handle_userinfo(self, kwargs, requester):
+    async def handle_userinfo(self, kwargs: dict[str, Any], requester: str) -> str:
         """Show user information from config"""
         try:
             user_info = getattr(self, "user_info_text", None)
@@ -92,7 +94,7 @@ class SimpleCommandsMixin:
         except Exception as e:
             return f"❌ Error retrieving user info: {str(e)[:30]}"
 
-    async def handle_position(self, kwargs, requester):
+    async def handle_position(self, kwargs: dict[str, Any], requester: str) -> str:
         """Show position data for callsign"""
         callsign = kwargs.get("call", "").upper()
         days = int(kwargs.get("days", 7))

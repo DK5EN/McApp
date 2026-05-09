@@ -1,28 +1,38 @@
 """WeatherCommandMixin: weather command handler."""
 
+from typing import Any
+
+from ._base import CommandHandlerBase
 from .constants import has_console
 
 
-class WeatherCommandMixin:
+class WeatherCommandMixin(CommandHandlerBase):
     """Mixin providing the weather command handler."""
 
-    def _init_weather(self):
+    def _init_weather(self) -> None:
         """Initialize weather service. Called from CommandHandler.__init__."""
         from ..meteo import WeatherService
 
+        weather_service: WeatherService | None
         try:
-            self.weather_service = WeatherService(
+            weather_service = WeatherService(
                 self.lat, self.lon, self.stat_name, max_age_minutes=30
             )
             if has_console:
                 print("🌤️  CommandHandler: Weather service initialized (location from GPS)")
         except ImportError as e:
-            self.weather_service = None
+            weather_service = None
             if has_console:
                 print(f"❌ CommandHandler: Weather service unavailable: {e}")
+        self.weather_service = weather_service
 
-    async def handle_weather(self, kwargs, requester):
+    async def handle_weather(
+        self, kwargs: dict[str, Any], requester: str
+    ) -> str:
         try:
+            if self.weather_service is None:
+                return "❌ Weather service unavailable"
+
             if has_console:
                 print(f"🌤️  CommandHandler: Getting weather data for {requester}")
 

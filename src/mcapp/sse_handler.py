@@ -10,9 +10,22 @@ import json
 import time
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any
 
 from .logging_setup import get_logger
+
+# Module-level TimezoneFinder singleton: the constructor loads a ~100 KB dataset
+# into memory, so we instantiate once on first use and reuse across requests.
+_tz_finder: Any = None
+
+
+def _get_tz_finder() -> Any:
+    global _tz_finder
+    if _tz_finder is None:
+        from timezonefinder import TimezoneFinder
+        _tz_finder = TimezoneFinder()
+    return _tz_finder
 
 VERSION = "v0.50.0"
 
@@ -58,14 +71,16 @@ class SSEClient:
 
     def __init__(self, client_id: str):
         self.client_id = client_id
-        self.queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        # Queue stores pre-formatted SSE event strings so broadcast payloads are
+        # serialized once and shared across all clients instead of re-formatted N times.
+        self.queue: asyncio.Queue[str] = asyncio.Queue()
         self.connected = True
         self.connected_at = time.time()
 
-    async def send(self, data: dict[str, Any]) -> None:
-        """Queue a message for this client."""
+    async def send(self, event: str) -> None:
+        """Queue a pre-formatted SSE event string for this client."""
         if self.connected:
-            await self.queue.put(data)
+            await self.queue.put(event)
 
     def disconnect(self) -> None:
         """Mark client as disconnected."""
@@ -87,11 +102,12 @@ class SSEManager:
         self.port = port
         self.message_router = message_router
         self.weather_service = weather_service
+        self.classifier: Any = None
         self.clients: dict[str, SSEClient] = {}
         self.clients_lock = asyncio.Lock()
         self.app: FastAPI | None = None
         self.server: Any = None
-        self._server_task: asyncio.Task | None = None
+        self._server_task: asyncio.Task[None] | None = None
         self._shutdown_event = asyncio.Event()
 
         # Subscribe to messages from the router
@@ -105,11 +121,15 @@ class SSEManager:
 
         logger.info("SSEManager initialized for %s:%d", host, port)
 
+    def set_classifier(self, classifier: Any) -> None:
+        """Wire the classifier so REST routes can access rules/templates/reclassify."""
+        self.classifier = classifier
+
     def _create_app(self) -> FastAPI:
         """Create and configure the FastAPI application."""
 
         @asynccontextmanager
-        async def lifespan(app: FastAPI):
+        async def lifespan(app: FastAPI) -> Any:
             """Handle startup and shutdown."""
             logger.info("SSE server starting up")
             yield
@@ -134,7 +154,7 @@ class SSEManager:
 
         # SSE endpoint
         @app.get("/events")
-        async def sse_endpoint(request: Request):
+        async def sse_endpoint(request: Request) -> StreamingResponse:
             """
             Server-Sent Events endpoint.
 
@@ -148,7 +168,7 @@ class SSEManager:
 
             logger.debug("SSE client connected: %s", client_id)
 
-            async def event_generator():
+            async def event_generator() -> Any:
                 try:
                     # Send initial connection confirmation
                     yield self._format_sse_event(
@@ -156,7 +176,8 @@ class SSEManager:
                             "type": "connected",
                             "client_id": client_id,
                             "timestamp": int(time.time() * 1000),
-                        }
+                        },
+                        "system:connected",
                     )
 
                     # Send initial data (messages, positions, BLE status)
@@ -185,12 +206,12 @@ class SSEManager:
                                 "type": "response",
                                 "msg": "smart_initial",
                                 "data": initial_data,
-                            })
+                            }, "proxy:initial")
                             yield self._format_sse_event({
                                 "type": "response",
                                 "msg": "summary",
                                 "data": summary,
-                            })
+                            }, "proxy:summary")
                             # Send persisted read counts for unread badge sync
                             if hasattr(storage, 'get_read_counts'):
                                 read_counts = await storage.get_read_counts()
@@ -199,7 +220,7 @@ class SSEManager:
                                         "type": "response",
                                         "msg": "read_counts",
                                         "data": read_counts,
-                                    })
+                                    }, "proxy:read_counts")
                             if hasattr(storage, 'get_hidden_destinations'):
                                 hidden_dsts = await storage.get_hidden_destinations()
                                 if hidden_dsts:
@@ -207,7 +228,7 @@ class SSEManager:
                                         "type": "response",
                                         "msg": "hidden_destinations",
                                         "data": hidden_dsts,
-                                    })
+                                    }, "proxy:hidden_destinations")
                             if hasattr(storage, 'get_blocked_texts'):
                                 blocked_texts = await storage.get_blocked_texts()
                                 if blocked_texts:
@@ -215,7 +236,7 @@ class SSEManager:
                                         "type": "response",
                                         "msg": "blocked_texts",
                                         "data": blocked_texts,
-                                    })
+                                    }, "proxy:blocked_texts")
                             if hasattr(storage, 'get_mheard_sidebar'):
                                 sidebar = await storage.get_mheard_sidebar()
                                 if sidebar:
@@ -223,7 +244,7 @@ class SSEManager:
                                         "type": "response",
                                         "msg": "mheard_sidebar",
                                         "data": sidebar,
-                                    })
+                                    }, "proxy:mheard_sidebar")
                             if hasattr(storage, 'get_wx_sidebar'):
                                 wx_sidebar = await storage.get_wx_sidebar()
                                 if wx_sidebar:
@@ -231,7 +252,34 @@ class SSEManager:
                                         "type": "response",
                                         "msg": "wx_sidebar",
                                         "data": wx_sidebar,
-                                    })
+                                    }, "proxy:wx_sidebar")
+                            # Classifier rules snapshot — webapp hydrates its rule editor without
+                            # a round-trip.
+                            if self.classifier is not None and storage is not None:
+                                try:
+                                    rule_rows = await storage._execute(
+                                        "SELECT id, name, pattern, scope, category, extra_tags, "
+                                        "priority, enabled, builtin, created_at, updated_at "
+                                        "FROM classifier_rules ORDER BY priority ASC, id ASC"
+                                    )
+                                    yield self._format_sse_event(
+                                        {"rules": rule_rows},
+                                        "proxy:classifier_rules",
+                                    )
+                                except Exception as exc:
+                                    logger.warning("classifier rules snapshot failed: %s", exc)
+                            if self.classifier is not None:
+                                try:
+                                    stats = await self.classifier.collect_stats()
+                                    yield self._format_sse_event(stats, "proxy:classifier_stats")
+                                except Exception as exc:
+                                    logger.warning("classifier stats snapshot failed: %s", exc)
+                            if hasattr(storage, "get_filter_prefs"):
+                                try:
+                                    fp = await storage.get_filter_prefs()
+                                    yield self._format_sse_event(fp, "proxy:filter_prefs")
+                                except Exception as exc:
+                                    logger.warning("filter_prefs snapshot failed: %s", exc)
                         else:
                             logger.warning(
                                 "SSE client %s: no storage handler available",
@@ -274,7 +322,7 @@ class SSEManager:
                                     "msg": "BLE not connected",
                                     "timestamp": int(time.time() * 1000),
                                 }
-                            yield self._format_sse_event(ble_info)
+                            yield self._format_sse_event(ble_info, "ble:status")
 
                             # If BLE is connected, serve cached registers instantly
                             # instead of re-querying the device.
@@ -285,7 +333,9 @@ class SSEManager:
                                 )
                                 if cached_regs:
                                     for reg_data in cached_regs.values():
-                                        yield self._format_sse_event(reg_data)
+                                        yield self._format_sse_event(
+                                            reg_data, self._get_event_type(reg_data)
+                                        )
                                     logger.debug(
                                         "SSE client %s: sent %d cached BLE"
                                         " registers",
@@ -299,22 +349,23 @@ class SSEManager:
                             client_id, e, exc_info=True,
                         )
 
-                    while client.connected:
+                    while client.connected and not self._shutdown_event.is_set():
                         # Check if client disconnected
                         if await request.is_disconnected():
                             break
 
                         try:
-                            # Wait for message with timeout (for keepalive)
-                            data = await asyncio.wait_for(client.queue.get(), timeout=30.0)
-                            yield self._format_sse_event(data)
+                            # Wait for pre-formatted event with timeout (for keepalive)
+                            event = await asyncio.wait_for(client.queue.get(), timeout=30.0)
+                            yield event
                         except asyncio.TimeoutError:
                             # Send keepalive ping
                             yield self._format_sse_event(
                                 {
                                     "type": "ping",
                                     "timestamp": int(time.time() * 1000),
-                                }
+                                },
+                                "system:ping",
                             )
 
                 except asyncio.CancelledError:
@@ -337,7 +388,7 @@ class SSEManager:
 
         # Message sending endpoint
         @app.post("/api/send")
-        async def send_message(request: SendMessageRequest):
+        async def send_message(request: SendMessageRequest) -> dict[str, str]:
             """
             Send a message through the mesh network.
 
@@ -395,10 +446,12 @@ class SSEManager:
                 logger.error("Failed to send message via SSE API: %s", e)
                 raise HTTPException(status_code=500, detail=str(e))
 
-        # Status endpoint
+        # Status endpoint — intentional health/observability endpoint.
+        # Returns version, connected client count, and uptime.
+        # Not called by the frontend UI, but useful for ops monitoring and debugging.
         @app.get("/api/status")
-        async def get_status():
-            """Get SSE server status."""
+        async def get_status() -> dict[str, int | str]:
+            """Get SSE server status (version, client count, uptime). Health endpoint."""
             async with self.clients_lock:
                 client_count = len(self.clients)
 
@@ -411,7 +464,7 @@ class SSEManager:
 
         # Read counts endpoints (unread badge persistence)
         @app.get("/api/read_counts")
-        async def get_read_counts():
+        async def get_read_counts() -> Any:
             """Get persisted read counts for unread badge sync."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
@@ -421,7 +474,7 @@ class SSEManager:
             return await storage.get_read_counts()
 
         @app.post("/api/read_counts")
-        async def set_read_count(request: Request):
+        async def set_read_count(request: Request) -> dict[str, str]:
             """Persist a read count for a destination."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
@@ -438,7 +491,7 @@ class SSEManager:
 
         # Hidden destinations endpoints (persist hidden groups)
         @app.get("/api/hidden_destinations")
-        async def get_hidden_destinations():
+        async def get_hidden_destinations() -> Any:
             """Get list of hidden destination identifiers."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
@@ -448,29 +501,23 @@ class SSEManager:
             return await storage.get_hidden_destinations()
 
         @app.post("/api/hidden_destinations")
-        async def set_hidden_destinations(request: Request):
-            """Show/hide destinations. Single: {dst, hidden}. Bulk: {destinations: [...]}."""
+        async def set_hidden_destinations(request: Request) -> dict[str, str]:
+            """Update hidden destinations. Bulk: {destinations: [...]}."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
             )
-            if not storage or not hasattr(storage, "update_hidden_destination"):
+            if not storage or not hasattr(storage, "set_hidden_destinations"):
                 raise HTTPException(status_code=503, detail="Storage not available")
             body = await request.json()
-            if "destinations" in body:
-                await storage.set_hidden_destinations(
-                    [str(d) for d in body["destinations"]]
-                )
-            else:
-                dst = body.get("dst")
-                hidden = body.get("hidden", True)
-                if not dst:
-                    raise HTTPException(status_code=400, detail="Missing dst")
-                await storage.update_hidden_destination(str(dst), bool(hidden))
+            destinations = body.get("destinations")
+            if destinations is None:
+                raise HTTPException(status_code=400, detail="Missing destinations")
+            await storage.set_hidden_destinations([str(d) for d in destinations])
             return {"status": "ok"}
 
         # Blocked texts endpoints (persist blocked message patterns)
         @app.get("/api/blocked_texts")
-        async def get_blocked_texts():
+        async def get_blocked_texts() -> Any:
             """Get list of blocked text patterns."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
@@ -480,29 +527,24 @@ class SSEManager:
             return await storage.get_blocked_texts()
 
         @app.post("/api/blocked_texts")
-        async def set_blocked_texts(request: Request):
-            """Add/remove blocked texts. Single: {text, blocked}. Bulk: {texts: [...]}."""
+        async def set_blocked_texts(request: Request) -> dict[str, str]:
+            """Add/remove a blocked text pattern. Single: {text, blocked}."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
             )
             if not storage or not hasattr(storage, "update_blocked_text"):
                 raise HTTPException(status_code=503, detail="Storage not available")
             body = await request.json()
-            if "texts" in body:
-                await storage.set_blocked_texts(
-                    [str(t) for t in body["texts"]]
-                )
-            else:
-                text = body.get("text")
-                blocked = body.get("blocked", True)
-                if not text:
-                    raise HTTPException(status_code=400, detail="Missing text")
-                await storage.update_blocked_text(str(text), bool(blocked))
+            text = body.get("text")
+            blocked = body.get("blocked", True)
+            if not text:
+                raise HTTPException(status_code=400, detail="Missing text")
+            await storage.update_blocked_text(str(text), bool(blocked))
             return {"status": "ok"}
 
         # Delete messages by destination
         @app.post("/api/delete_messages")
-        async def delete_messages(request: Request):
+        async def delete_messages(request: Request) -> dict[str, int | str]:
             """Delete all messages for a destination from the database."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
@@ -519,7 +561,7 @@ class SSEManager:
 
         # mHeard sidebar endpoints (persist station order + hidden)
         @app.get("/api/mheard/sidebar")
-        async def get_mheard_sidebar():
+        async def get_mheard_sidebar() -> dict[str, Any]:
             """Get mheard sidebar state."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
@@ -530,7 +572,7 @@ class SSEManager:
             return result or {"order": [], "hidden": []}
 
         @app.post("/api/mheard/sidebar")
-        async def set_mheard_sidebar(request: Request):
+        async def set_mheard_sidebar(request: Request) -> dict[str, str]:
             """Set mheard sidebar state."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
@@ -545,7 +587,7 @@ class SSEManager:
 
         # WX sidebar endpoints (persist station order + hidden)
         @app.get("/api/wx/sidebar")
-        async def get_wx_sidebar():
+        async def get_wx_sidebar() -> dict[str, Any]:
             """Get WX sidebar state."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
@@ -556,7 +598,7 @@ class SSEManager:
             return result or {"order": [], "hidden": []}
 
         @app.post("/api/wx/sidebar")
-        async def set_wx_sidebar(request: Request):
+        async def set_wx_sidebar(request: Request) -> dict[str, str]:
             """Set WX sidebar state."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
@@ -569,15 +611,35 @@ class SSEManager:
             await storage.set_wx_sidebar(order, hidden)
             return {"status": "ok"}
 
+        @app.get("/api/filter_prefs")
+        async def get_filter_prefs() -> Any:
+            storage = (
+                self.message_router.storage_handler if self.message_router else None
+            )
+            if not storage or not hasattr(storage, "get_filter_prefs"):
+                raise HTTPException(status_code=503, detail="Storage not available")
+            return await storage.get_filter_prefs()
+
+        @app.post("/api/filter_prefs")
+        async def set_filter_prefs(request: Request) -> dict[str, str]:
+            storage = (
+                self.message_router.storage_handler if self.message_router else None
+            )
+            if not storage or not hasattr(storage, "set_filter_prefs"):
+                raise HTTPException(status_code=503, detail="Storage not available")
+            body = await request.json()
+            await storage.set_filter_prefs(body)
+            return {"status": "ok"}
+
         # Health check endpoint
         @app.get("/health")
-        async def health_check():
+        async def health_check() -> dict[str, str]:
             """Health check endpoint for load balancers."""
             return {"status": "healthy"}
 
         # Weather data endpoint
         @app.get("/api/weather")
-        async def get_weather():
+        async def get_weather() -> Any:
             """Get current weather data from the meteo service."""
             if not self.weather_service:
                 raise HTTPException(status_code=503, detail="Weather service not available")
@@ -601,7 +663,7 @@ class SSEManager:
             return data
 
         @app.get("/api/weather/preview")
-        async def get_weather_preview(text: str = ""):
+        async def get_weather_preview(text: str = "") -> dict[str, str]:
             """Return the formatted WX message as it would appear on the mesh."""
             if not self.weather_service:
                 raise HTTPException(status_code=503, detail="Weather service not available")
@@ -618,7 +680,7 @@ class SSEManager:
 
         # Server time endpoint (for frontend clock sync)
         @app.get("/api/time")
-        async def get_time():
+        async def get_time() -> dict[str, int | str]:
             """Return server time for frontend clock sync."""
             return {
                 "server_time_ms": int(time.time() * 1000),
@@ -627,7 +689,7 @@ class SSEManager:
 
         # Telemetry data endpoint (for WX charts)
         @app.get("/api/telemetry")
-        async def get_telemetry(hours: int = 48):
+        async def get_telemetry(hours: int = 48) -> Any:
             """Get telemetry data for weather charts."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
@@ -639,7 +701,7 @@ class SSEManager:
             return await storage.get_telemetry_chart_data(hours=min(hours, 744))
 
         @app.get("/api/telemetry/yearly")
-        async def get_telemetry_yearly():
+        async def get_telemetry_yearly() -> Any:
             """Get telemetry data aggregated into 4h buckets for yearly charts."""
             storage = (
                 self.message_router.storage_handler if self.message_router else None
@@ -651,89 +713,324 @@ class SSEManager:
             return await storage.get_telemetry_chart_data_bucketed()
 
         @app.get("/api/timezone")
-        async def get_timezone(lat: float, lon: float):
+        async def get_timezone(lat: float, lon: float) -> dict[str, str | float]:
             """Return UTC offset for given coordinates using timezonefinder."""
             import zoneinfo
             from datetime import datetime
 
-            from timezonefinder import TimezoneFinder
-
-            tf = TimezoneFinder()
-            tz_name = tf.timezone_at(lat=lat, lng=lon)
+            tz_name = _get_tz_finder().timezone_at(lat=lat, lng=lon)
             if not tz_name:
                 raise HTTPException(
                     status_code=400, detail="No timezone found for coordinates"
                 )
             zone = zoneinfo.ZoneInfo(tz_name)
-            offset_seconds = datetime.now(zone).utcoffset().total_seconds()
+            offset = datetime.now(zone).utcoffset()
+            if offset is None:
+                raise HTTPException(
+                    status_code=500, detail="Unable to calculate UTC offset"
+                )
+            offset_seconds = offset.total_seconds()
             offset_hours = offset_seconds / 3600
             abbreviation = datetime.now(zone).strftime("%Z")
             return {"timezone": tz_name, "abbreviation": abbreviation, "utc_offset": offset_hours}
 
         # ── Update / Deployment Endpoints ──────────────────────────
 
-        @app.get("/api/update/check")
-        async def check_update():
-            """Check GitHub for available version updates (cached 5 min)."""
-            return await self._check_update_version()
-
         @app.post("/api/update/start")
-        async def start_update(request: Request):
+        async def start_update(request: Request) -> dict[str, str]:
             """Launch the update runner process."""
             body = await request.json() if request.headers.get("content-length") else {}
             dev = body.get("dev", False)
             return await self._launch_update_runner("update", dev=dev)
 
         @app.post("/api/update/rollback")
-        async def start_rollback():
+        async def start_rollback() -> dict[str, str]:
             """Launch the update runner in rollback mode."""
             return await self._launch_update_runner("rollback")
 
         @app.get("/api/update/slots")
-        async def get_slots():
+        async def get_slots() -> dict[str, Any]:
             """Get slot metadata (versions, active slot, rollback target)."""
             return await asyncio.to_thread(self._read_slot_info)
+
+        # ── Classifier REST surface ──────────────────────────────────
+
+        def _storage() -> Any:
+            s = self.message_router.storage_handler if self.message_router else None
+            if not s:
+                raise HTTPException(status_code=503, detail="Storage not available")
+            return s
+
+        def _classifier() -> Any:
+            if self.classifier is None:
+                raise HTTPException(status_code=503, detail="Classifier not available")
+            return self.classifier
+
+        @app.get("/api/classifier/rules")
+        async def get_classifier_rules() -> Any:
+            storage = _storage()
+            return await storage._execute(
+                "SELECT id, name, pattern, scope, category, extra_tags, priority, "
+                "enabled, builtin, created_at, updated_at "
+                "FROM classifier_rules ORDER BY priority ASC, id ASC"
+            )
+
+        @app.post("/api/classifier/rules")
+        async def create_classifier_rule(request: Request) -> dict[str, int | str]:
+            storage = _storage()
+            classifier = _classifier()
+            body = await request.json()
+            required = ("name", "pattern", "category")
+            if not all(body.get(k) for k in required):
+                raise HTTPException(status_code=400, detail="Missing name/pattern/category")
+            now = datetime.now(timezone.utc).isoformat()
+            extra_tags = body.get("extra_tags") or []
+            await storage._execute(
+                "INSERT INTO classifier_rules "
+                "(name, pattern, scope, category, extra_tags, priority, enabled, "
+                " builtin, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
+                (
+                    str(body["name"]),
+                    str(body["pattern"]),
+                    str(body.get("scope") or "msg"),
+                    str(body["category"]),
+                    json.dumps(list(extra_tags)),
+                    int(body.get("priority", 100)),
+                    1 if body.get("enabled", True) else 0,
+                    now, now,
+                ),
+                fetch=False,
+            )
+            new_ver = await storage.bump_classifier_version()
+            await classifier.load()
+            rules = await storage._execute(
+                "SELECT id, name, pattern, scope, category, extra_tags, priority, "
+                "enabled, builtin, created_at, updated_at "
+                "FROM classifier_rules ORDER BY priority ASC, id ASC"
+            )
+            await self.broadcast_event(
+                "proxy:classifier_rules",
+                {"rules": rules, "classifier_version": new_ver},
+            )
+            return {"status": "ok", "classifier_version": new_ver}
+
+        @app.patch("/api/classifier/rules/{rule_id}")
+        async def patch_classifier_rule(rule_id: int, request: Request) -> dict[str, int | str]:
+            storage = _storage()
+            classifier = _classifier()
+            body = await request.json()
+            existing = await storage._execute(
+                "SELECT id FROM classifier_rules WHERE id = ?", (rule_id,),
+            )
+            if not existing:
+                raise HTTPException(status_code=404, detail="Rule not found")
+            updatable = {"name", "pattern", "scope", "category", "priority", "enabled"}
+            assignments: list[str] = []
+            params: list[Any] = []
+            for key in updatable:
+                if key in body:
+                    if key == "enabled":
+                        assignments.append("enabled = ?")
+                        params.append(1 if body[key] else 0)
+                    elif key == "priority":
+                        assignments.append("priority = ?")
+                        params.append(int(body[key]))
+                    else:
+                        assignments.append(f"{key} = ?")
+                        params.append(str(body[key]))
+            if "extra_tags" in body:
+                assignments.append("extra_tags = ?")
+                params.append(json.dumps(list(body["extra_tags"])))
+            if not assignments:
+                return {"status": "noop"}
+            assignments.append("updated_at = ?")
+            params.append(datetime.now(timezone.utc).isoformat())
+            params.append(rule_id)
+            await storage._execute(
+                f"UPDATE classifier_rules SET {', '.join(assignments)} WHERE id = ?",
+                tuple(params),
+                fetch=False,
+            )
+            new_ver = await storage.bump_classifier_version()
+            await classifier.load()
+            rules = await storage._execute(
+                "SELECT id, name, pattern, scope, category, extra_tags, priority, "
+                "enabled, builtin, created_at, updated_at "
+                "FROM classifier_rules ORDER BY priority ASC, id ASC"
+            )
+            await self.broadcast_event(
+                "proxy:classifier_rules",
+                {"rules": rules, "classifier_version": new_ver},
+            )
+            return {"status": "ok", "classifier_version": new_ver}
+
+        @app.delete("/api/classifier/rules/{rule_id}")
+        async def delete_classifier_rule(rule_id: int) -> dict[str, int | str]:
+            storage = _storage()
+            classifier = _classifier()
+            row = await storage._execute(
+                "SELECT builtin FROM classifier_rules WHERE id = ?", (rule_id,),
+            )
+            if not row:
+                raise HTTPException(status_code=404, detail="Rule not found")
+            if row[0]["builtin"]:
+                raise HTTPException(status_code=404, detail="Builtin rules cannot be deleted")
+            await storage._execute(
+                "DELETE FROM classifier_rules WHERE id = ?", (rule_id,),
+                fetch=False,
+            )
+            new_ver = await storage.bump_classifier_version()
+            await classifier.load()
+            rules = await storage._execute(
+                "SELECT id, name, pattern, scope, category, extra_tags, priority, "
+                "enabled, builtin, created_at, updated_at "
+                "FROM classifier_rules ORDER BY priority ASC, id ASC"
+            )
+            await self.broadcast_event(
+                "proxy:classifier_rules",
+                {"rules": rules, "classifier_version": new_ver},
+            )
+            return {"status": "ok", "classifier_version": new_ver}
+
+        @app.post("/api/classifier/rules/test")
+        async def test_classifier_rule(request: Request) -> dict[str, Any]:
+            import re as _re
+            storage = _storage()
+            body = await request.json()
+            pattern = body.get("pattern")
+            if not pattern:
+                raise HTTPException(status_code=400, detail="Missing pattern")
+            scope = body.get("scope", "msg")
+            sample_msg = body.get("sample_msg")
+            try:
+                regex = _re.compile(str(pattern))
+            except _re.error as exc:
+                raise HTTPException(status_code=400, detail=f"Invalid regex: {exc}")
+
+            sample_match: bool | None = None
+            if sample_msg is not None:
+                sample_match = bool(regex.search(str(sample_msg)))
+
+            rows = await storage._execute(
+                "SELECT id, msg_id, src, dst, msg, type, timestamp FROM messages "
+                "ORDER BY id DESC LIMIT 500"
+            )
+            matches: list[dict[str, Any]] = []
+            for row in rows:
+                if scope == "src":
+                    target = row.get("src") or ""
+                elif scope == "dst":
+                    target = row.get("dst") or ""
+                elif scope == "combined":
+                    target = (
+                        f"{row.get('src') or ''}|{row.get('dst') or ''}|{row.get('msg') or ''}"
+                    )
+                else:
+                    target = row.get("msg") or ""
+                if regex.search(target):
+                    matches.append(row)
+                    if len(matches) >= 10:
+                        break
+            return {
+                "matches": sample_match if sample_match is not None else bool(matches),
+                "sample_match": sample_match,
+                "sample_matches": matches,
+                "scanned": len(rows),
+            }
+
+        @app.get("/api/classifier/templates")
+        async def get_classifier_templates(
+            min_count: int = 0,
+            auto_only: bool = False,
+            limit: int = 100,
+        ) -> Any:
+            storage = _storage()
+            where: list[str] = []
+            params: list[Any] = []
+            if min_count > 0:
+                where.append("count >= ?")
+                params.append(min_count)
+            if auto_only:
+                where.append("auto_beacon = 1")
+            where_sql = f" WHERE {' AND '.join(where)}" if where else ""
+            params.append(max(1, min(limit, 500)))
+            return await storage._execute(
+                f"SELECT template_hash, example_msg, example_src, srcs, count, "
+                f"first_seen, last_seen, auto_beacon, user_action "
+                f"FROM beacon_templates{where_sql} "
+                f"ORDER BY count DESC LIMIT ?",
+                tuple(params),
+            )
+
+        @app.patch("/api/classifier/templates/{template_hash}")
+        async def patch_classifier_template(template_hash: str, request: Request) -> dict[str, Any]:
+            storage = _storage()
+            body = await request.json()
+            action = body.get("user_action")
+            if action not in (None, "promote", "demote"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="user_action must be 'promote', 'demote', or null",
+                )
+            existing = await storage._execute(
+                "SELECT template_hash FROM beacon_templates WHERE template_hash = ?",
+                (template_hash,),
+            )
+            if not existing:
+                raise HTTPException(status_code=404, detail="Template not found")
+            await storage._execute(
+                "UPDATE beacon_templates SET user_action = ? WHERE template_hash = ?",
+                (action, template_hash),
+                fetch=False,
+            )
+            return {"status": "ok", "user_action": action}
+
+        @app.post("/api/classifier/templates/{template_hash}/preview")
+        async def preview_classifier_template(template_hash: str) -> dict[str, Any]:
+            storage = _storage()
+            rows = await storage._execute(
+                "SELECT id, msg_id, src, dst, msg, type, timestamp, category, tags, "
+                "info_score FROM messages WHERE template_hash = ? "
+                "ORDER BY timestamp DESC LIMIT 20",
+                (template_hash,),
+            )
+            return {"template_hash": template_hash, "messages": rows}
+
+        @app.post("/api/classifier/reclassify")
+        async def post_classifier_reclassify(request: Request) -> dict[str, Any]:
+            classifier = _classifier()
+            body = await request.json() if request.headers.get("content-length") else {}
+            since = body.get("since")
+            category = body.get("category")
+
+            async def _progress(job: Any) -> None:
+                await self.broadcast_event(
+                    "proxy:reclassify_progress",
+                    {
+                        "job_id": job.job_id, "processed": job.processed,
+                        "total": job.total, "done": job.done,
+                    },
+                )
+
+            job = await classifier.reclassify(
+                since_ms=int(since) if since is not None else None,
+                category_filter=str(category) if category else None,
+                progress_cb=_progress,
+            )
+            return {"job_id": job.job_id, "estimated_rows": job.total}
+
+        @app.get("/api/classifier/status")
+        async def get_classifier_status() -> dict[str, Any]:
+            classifier = _classifier()
+            return {
+                "classifier_version": classifier.version,
+                "jobs": classifier.get_all_jobs(),
+            }
 
         return app
 
     # ── Update / Deployment Helpers ─────────────────────────────
-
-    _update_check_cache: dict[str, Any] = {}
-    _update_check_time: float = 0.0
-
-    async def _check_update_version(self) -> dict[str, Any]:
-        """Check GitHub releases for available version (cached 5 min)."""
-        now = time.time()
-        if now - self._update_check_time < 300 and self._update_check_cache:
-            return self._update_check_cache
-
-        import urllib.error
-        import urllib.request
-
-        installed = self._get_installed_version()
-        available = "unknown"
-
-        try:
-            url = "https://api.github.com/repos/DK5EN/McApp/releases/latest"
-            req = urllib.request.Request(url, headers={"User-Agent": "McApp"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = json.loads(resp.read().decode())
-                available = data.get("tag_name", "unknown")
-        except (urllib.error.URLError, OSError, json.JSONDecodeError):
-            pass
-
-        result = {
-            "installed": installed,
-            "available": available,
-            "update_available": (
-                available != "unknown"
-                and installed != "not_installed"
-                and available.lstrip("v") != installed.lstrip("v")
-            ),
-        }
-        self._update_check_cache = result
-        self._update_check_time = now
-        return result
 
     def _get_installed_version(self) -> str:
         """Read installed version from version.html."""
@@ -773,8 +1070,10 @@ class SSEManager:
         args_file = pathlib.Path("/var/lib/mcapp/update-args.json")
         trigger_file = pathlib.Path("/var/lib/mcapp/update-trigger")
 
-        args_file.write_text(json.dumps({"mode": mode, "dev": dev}))
-        trigger_file.write_text("")
+        await asyncio.to_thread(
+            args_file.write_text, json.dumps({"mode": mode, "dev": dev}),
+        )
+        await asyncio.to_thread(trigger_file.write_text, "")
         logger.info("Update trigger file written")
 
         # Frontend will retry stream connection until runner is ready
@@ -841,6 +1140,54 @@ class SSEManager:
             "rollback_target": rollback_target,
         }
 
+    # Mapping (type, msg) pairs → SSE event name for response messages
+    _RESPONSE_EVENT_MAP: dict[str, str] = {
+        "smart_initial": "proxy:initial",
+        "summary": "proxy:summary",
+        "read_counts": "proxy:read_counts",
+        "hidden_destinations": "proxy:hidden_destinations",
+        "blocked_texts": "proxy:blocked_texts",
+        "mheard_sidebar": "proxy:mheard_sidebar",
+        "wx_sidebar": "proxy:wx_sidebar",
+        "messages_page": "proxy:messages_page",
+    }
+
+    # Mapping simple type → SSE event name
+    _SIMPLE_TYPE_MAP: dict[str, str] = {
+        "connected": "system:connected",
+        "ping": "system:ping",
+        "msg_status": "msg:status",
+    }
+
+    # Mapping mheard msg strings → SSE event name
+    _MHEARD_MSG_MAP: dict[str, str] = {
+        "mheard progress": "mheard:progress",
+        "mheard stats": "mheard:stats",
+        "mheard progress monthly": "mheard:progress-monthly",
+        "mheard stats monthly": "mheard:stats-monthly",
+        "mheard progress yearly": "mheard:progress-yearly",
+        "mheard stats yearly": "mheard:stats-yearly",
+    }
+
+    @staticmethod
+    def _get_event_type(data: dict[str, Any]) -> str:
+        """Derive the SSE event: name from message data."""
+        type_ = data.get("type", "")
+        msg = data.get("msg", "")
+        src_type = data.get("src_type", "")
+
+        if mapped := SSEManager._SIMPLE_TYPE_MAP.get(type_):
+            return mapped
+        if type_ == "response":
+            return SSEManager._RESPONSE_EVENT_MAP.get(msg, "mesh:message")
+        if msg in SSEManager._MHEARD_MSG_MAP:
+            return SSEManager._MHEARD_MSG_MAP[msg]
+        if src_type in ("BLE", "ble_remote") and data.get("TYP"):
+            return "ble:status"
+        if data.get("command") == "resolve-ip":
+            return "proxy:resolve_ip"
+        return "mesh:message"
+
     @staticmethod
     def _format_sse_event(data: dict[str, Any], event_type: str | None = None) -> str:
         """Format data as SSE event."""
@@ -878,12 +1225,38 @@ class SSEManager:
         if not clients:
             return
 
-        # Queue message for all clients
-        for client in clients:
-            try:
-                await client.send(message)
-            except Exception as e:
-                logger.warning("Failed to queue message for SSE client %s: %s", client.client_id, e)
+        # Serialize once, fan out in parallel so one slow client doesn't stall the rest.
+        event = self._format_sse_event(message, self._get_event_type(message))
+        results = await asyncio.gather(
+            *(client.send(event) for client in clients),
+            return_exceptions=True,
+        )
+        for client, result in zip(clients, results):
+            if isinstance(result, Exception):
+                logger.warning(
+                    "Failed to queue message for SSE client %s: %s",
+                    client.client_id, result,
+                )
+
+    async def broadcast_event(self, event_type: str, payload: dict[str, Any]) -> None:
+        """Fan out a pre-typed SSE event. Classifier events use this path so the
+        inference in _get_event_type() stays limited to mesh-payload heuristics.
+        """
+        async with self.clients_lock:
+            clients = list(self.clients.values())
+        if not clients:
+            return
+        event = self._format_sse_event(payload, event_type)
+        results = await asyncio.gather(
+            *(client.send(event) for client in clients),
+            return_exceptions=True,
+        )
+        for client, result in zip(clients, results):
+            if isinstance(result, Exception):
+                logger.warning(
+                    "Failed to queue %s for SSE client %s: %s",
+                    event_type, client.client_id, result,
+                )
 
     async def _disconnect_all_clients(self) -> None:
         """Disconnect all SSE clients."""
@@ -926,6 +1299,8 @@ class SSEManager:
 
     async def stop_server(self) -> None:
         """Stop the SSE/FastAPI server."""
+        # Tell every active event_generator loop to wind down on the next tick.
+        self._shutdown_event.set()
         if self.server:
             self.server.should_exit = True
 
