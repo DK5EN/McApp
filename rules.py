@@ -9,6 +9,10 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .types import StorageProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +29,7 @@ class CompiledRule:
     regex: re.Pattern[str]
 
 
-async def load_rules(storage) -> list[CompiledRule]:
+async def load_rules(storage: "StorageProtocol") -> list[CompiledRule]:
     """Load enabled rules from storage, compile each regex, sort by (priority, id).
 
     On regex compile error log a warning and skip that rule.
@@ -62,19 +66,19 @@ async def load_rules(storage) -> list[CompiledRule]:
     return compiled
 
 
-def _target(msg: dict, scope: str) -> str:
+def _target(msg: dict[str, Any], scope: str) -> str:
     """Return the string to match for a given scope."""
     if scope == "msg":
-        return msg.get("msg", "")
+        return str(msg.get("msg", ""))
     if scope == "src":
-        return msg.get("src", "")
+        return str(msg.get("src", ""))
     if scope == "dst":
-        return msg.get("dst", "")
+        return str(msg.get("dst", ""))
     # combined
     return f"{msg.get('src', '')}|{msg.get('dst', '')}|{msg.get('msg', '')}"
 
 
-def match_rules(msg: dict, rules: list[CompiledRule]) -> tuple[str, list[str]]:
+def match_rules(msg: dict[str, Any], rules: list[CompiledRule]) -> tuple[str, list[str]]:
     """Return (category, extra_tags_sorted_deduped).
 
     First matching rule sets category; ALL matching rules contribute extra_tags.

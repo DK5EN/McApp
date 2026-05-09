@@ -9,7 +9,10 @@ are never touched.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .types import StorageProtocol
 
 # Each entry mirrors the kwargs accepted by Storage.insert_classifier_rule.
 # All builtins are enabled=True, builtin=True.
@@ -360,7 +363,7 @@ def _needs_update(existing: dict[str, Any], default: dict[str, Any]) -> bool:
     return existing_tags != default_tags
 
 
-async def seed_defaults(storage) -> tuple[int, int]:
+async def seed_defaults(storage: "StorageProtocol") -> tuple[int, int]:
     """Upsert DEFAULT_RULES by name.
 
     Returns ``(inserted, updated)``.  User-created rules (``builtin=0``)

@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from .types import StorageProtocol as Storage
 
@@ -117,7 +118,7 @@ class BeaconResult:
 
 async def update_and_check(
     storage: Storage,
-    msg: dict,
+    msg: dict[str, Any],
     now_ms: int,
     category: str = "",
 ) -> BeaconResult:
