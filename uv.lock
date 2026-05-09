@@ -300,7 +300,7 @@ wheels = [
 
 [[package]]
 name = "mcapp"
-version = "1.6.4"
+version = "1.6.6"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -323,7 +323,7 @@ requires-dist = [
 
 [[package]]
 name = "mcapp-ble-service"
-version = "1.6.4"
+version = "1.6.6"
 source = { editable = "ble_service" }
 dependencies = [
     { name = "dbus-next" },
