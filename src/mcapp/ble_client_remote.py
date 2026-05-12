@@ -404,6 +404,18 @@ class BLEClientRemote(BLEClientBase):
         """Save settings and reboot device (0xF0 message)"""
         return await self.set_command("--savereboot")
 
+    async def set_ble_pin(self, pin: int) -> bool:
+        """
+        Update the BLE app-layer PIN stored by the remote service.
+
+        pin=0 disables hash authentication (open hello).
+        100000–999999 enables SHA-256 hash authentication.
+
+        Does NOT change the PIN on the device — use `--btcode <pin>` for that.
+        """
+        response = await self._request('PATCH', '/api/ble/pin', data={'pin': pin})
+        return cast(bool, response.get('ok', False))
+
     async def start(self) -> None:
         """Start the remote BLE client and SSE notification stream"""
         logger.info("Starting remote BLE client -> %s", self.remote_url)

@@ -734,6 +734,30 @@ class SSEManager:
             abbreviation = datetime.now(zone).strftime("%Z")
             return {"timezone": tz_name, "abbreviation": abbreviation, "utc_offset": offset_hours}
 
+        # ── BLE Service Forwards ───────────────────────────────────
+
+        @app.patch("/api/ble/pin")
+        async def set_ble_pin(request: Request) -> dict[str, bool]:
+            """Forward PIN update to the BLE service so it can authenticate on reconnect."""
+            body = await request.json()
+            pin = body.get("pin")
+            if not isinstance(pin, int) or (pin != 0 and not 100000 <= pin <= 999999):
+                raise HTTPException(
+                    status_code=400, detail="pin must be 0 or 100000–999999"
+                )
+            ble = (
+                self.message_router.get_protocol("ble_client")
+                if self.message_router else None
+            )
+            if not ble or not hasattr(ble, "set_ble_pin"):
+                raise HTTPException(status_code=503, detail="BLE client not available")
+            try:
+                ok = await ble.set_ble_pin(pin)
+            except Exception as e:
+                logger.error("set_ble_pin forward failed: %s", e)
+                raise HTTPException(status_code=502, detail=str(e))
+            return {"ok": ok}
+
         # ── Update / Deployment Endpoints ──────────────────────────
 
         @app.post("/api/update/start")
