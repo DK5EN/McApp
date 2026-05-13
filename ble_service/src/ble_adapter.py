@@ -108,11 +108,19 @@ class BLEStatus:
     last_activity: float = field(default_factory=time.time)
 
 
-class NoInputNoOutputAgent(ServiceInterface):
-    """BlueZ pairing agent for headless operation"""
+class MeshComPairingAgent(ServiceInterface):
+    """BlueZ pairing agent that supplies the configured BLE PIN as the NimBLE passkey.
 
-    def __init__(self):
+    The MeshCom firmware uses the same bt_code value as both the BLE pairing
+    passkey (via NimBLE passkey entry) and the key for the app-layer hello
+    hash. This agent reads the current PIN from the BLEAdapter at call time,
+    so PATCH /api/ble/pin takes effect on the next pair attempt without
+    needing to re-register the agent on the D-Bus.
+    """
+
+    def __init__(self, pin_getter: Callable[[], int]):
         super().__init__('org.bluez.Agent1')
+        self._pin_getter = pin_getter
 
     @method()
     def Release(self):
@@ -120,17 +128,30 @@ class NoInputNoOutputAgent(ServiceInterface):
 
     @method()
     def RequestPasskey(self, device: 'o') -> 'u':  # noqa: F821
-        logger.info("Passkey requested for %s", device)
-        return 0
+        pin = self._pin_getter()
+        logger.info(
+            "Passkey requested for %s: returning %s",
+            device, "<configured>" if pin > 0 else "0",
+        )
+        return pin
 
     @method()
     def RequestPinCode(self, device: 'o') -> 's':  # noqa: F821
-        logger.info("PIN requested for %s", device)
-        return "000000"
+        pin = self._pin_getter()
+        result = f"{pin:06d}" if pin > 0 else "000000"
+        logger.info(
+            "PIN requested for %s: returning %s",
+            device, "<configured>" if pin > 0 else "000000",
+        )
+        return result
 
     @method()
     def DisplayPinCode(self, device: 'o', pincode: 's'):  # noqa: F821
         logger.info("DisplayPinCode for %s: %s", device, pincode)
+
+    @method()
+    def DisplayPasskey(self, device: 'o', passkey: 'u', entered: 'q'):  # noqa: F821
+        logger.info("DisplayPasskey for %s: %s (%s entered)", device, passkey, entered)
 
     @method()
     def RequestConfirmation(self, device: 'o', passkey: 'u'):  # noqa: F821
@@ -166,6 +187,10 @@ class BLEAdapter:
         self.write_uuid = write_uuid
         self.hello_bytes = hello_bytes
         self.notification_callback = notification_callback
+        # NimBLE pairing passkey returned by the BlueZ agent during pair().
+        # 0 means open pairing (firmware bt_code == 0). 100000-999999 means
+        # the firmware will require this exact value via RequestPasskey.
+        self.pairing_passkey: int = 0
 
         # D-Bus objects
         self.bus: MessageBus | None = None
@@ -1046,9 +1071,12 @@ class BLEAdapter:
 
             path = self._mac_to_dbus_path(mac)
 
-            # Register agent (once per bus lifetime)
+            # Register agent (once per bus lifetime). The agent reads
+            # self.pairing_passkey at call time, so changes via
+            # PATCH /api/ble/pin take effect on the next pair attempt
+            # without re-registering.
             if not self._agent_registered:
-                agent = NoInputNoOutputAgent()
+                agent = MeshComPairingAgent(lambda: self.pairing_passkey)
                 self.bus.export(AGENT_PATH, agent)
 
                 manager_obj = self.bus.get_proxy_object(
