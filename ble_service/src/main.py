@@ -462,6 +462,7 @@ async def lifespan(app: FastAPI):
         notification_callback=notification_callback,
         hello_bytes=build_hello_bytes(_ble_pin),
     )
+    ble_adapter.pairing_passkey = _ble_pin
     ble_adapter._disconnect_callback = _on_adapter_disconnect
 
     # Auto-connect to last-known device if enabled
@@ -985,6 +986,7 @@ async def set_ble_pin(request: SetPinRequest, _: bool = Depends(verify_api_key))
     _save_ble_pin(pin)
     if ble_adapter is not None:
         ble_adapter.hello_bytes = build_hello_bytes(pin)
+        ble_adapter.pairing_passkey = pin
     logger.info("BLE PIN updated: %s", "disabled" if pin == 0 else "set")
     return {"ok": True}
 
