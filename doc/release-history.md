@@ -1,5 +1,15 @@
 # Release History
 
+## v1.6.11 (2026-05-15)
+
+Fixes an iOS Safari scroll regression introduced in v1.6.10.
+
+### Frontend (webapp)
+
+- **[fix]** Reduced chat scroll jank on iOS Safari caused by a CSS regression from 2026-05-10. Restores smooth scrolling behaviour in the chat view.
+
+---
+
 ## v1.6.10 (2026-05-13)
 
 Adds end-to-end support for the firmware's BLE PIN (`bt_code`) feature. Devices with a PIN set can now be paired and connected from the webapp without disabling the PIN first.
