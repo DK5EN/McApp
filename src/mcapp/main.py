@@ -1457,12 +1457,16 @@ async def main() -> None:
 
             logger.info("Starting nightly DB prune...")
             try:
+                # Roll up 5-min buckets into 1-hour buckets BEFORE pruning. prune_messages
+                # deletes 5-min buckets older than the retention window, so if it runs first
+                # the rollup finds them already gone and only ~2h/day survive into 1-hour
+                # buckets (corrupting the 30d/1y charts). See doc/charts-wrong.md §13.
+                await storage_handler.aggregate_hourly_buckets()
                 remaining = await storage_handler.prune_messages(
                     cfg.storage.prune_hours, block_list,
                     prune_hours_pos=cfg.storage.prune_hours_pos,
                     prune_hours_ack=cfg.storage.prune_hours_ack,
                 )
-                await storage_handler.aggregate_hourly_buckets()
                 logger.info("Nightly prune complete: %d messages remaining", remaining)
             except Exception as e:
                 logger.error("Nightly prune failed: %s", e)
