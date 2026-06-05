@@ -564,3 +564,47 @@ Charts:
   in 1h-Buckets; danach `SELECT strftime('%H',bucket_ts/1000,'unixepoch'),COUNT(*) FROM signal_buckets
   WHERE bucket_size=3600000 GROUP BY 1` → muss alle 24 Stunden zeigen.
 - **Deploy:** ausstehend via `./scripts/release.sh` nach mcapp.local.
+
+### 13.7 Deployed (2026-06-05 22:25) + Verifikations-Checkliste
+
+Deployed nach mcapp.local (slot-2, Service-Restart 22:25). Verifiziert: `main.py:1464`
+`aggregate_hourly_buckets()` **vor** `prune_messages()`; `sqlite_storage.py:1606`
+`datetime.now(timezone.utc)`. „Next DB prune scheduled … 04:00". Aktueller DB-Stand:
+**1h-Buckets = 0**, 5min-Buckets 2026-05-28 20:30 → jetzt (ältester genau 8.0 Tage alt).
+
+**Wichtiger Kontext für die Erwartung:** Der alte (buggy) Job am 5. Juni 04:00 hat die früheren
+5min-Buckets des 28. Mai bereits geprunt; jetzt beginnt die 5min-Historie erst **28. Mai 20:30**.
+Daher rollt der **erste** Lauf unter neuem Code (6. Juni 04:00 CEST = 02:00 UTC, Cutoff = 29. Mai
+02:00 UTC) nur ~5,5 h auf → 1h-Buckets für die Stunden **20–23 (28.5.) + 00–01 (29.5.)**. Ein
+**voller 24-h-Tag** entsteht erst ab dem Lauf am **7. Juni** (rollt 29. Mai 02:00 → 30. Mai 02:00).
+
+**Check 1 — nach 6. Juni 04:00 CEST (erstes Lebenszeichen):**
+```sql
+SELECT strftime('%H',bucket_ts/1000,'unixepoch') h, COUNT(*), SUM(count)
+FROM signal_buckets WHERE bucket_size=3600000 GROUP BY h ORDER BY h;
+```
+→ **Erwartung:** Stunden **außerhalb 00–02** vorhanden (v. a. 20–23). Schon das beweist den Fix —
+der alte Bug hätte **nur** 00–02 erzeugt. (Noch nicht 24 h, siehe Kontext oben.)
+
+**Check 2 — nach 7. Juni 04:00 CEST (definitiv):** gleiche Query → **alle 24 Stunden 00–23**, je
+Station grob gleichverteilt. Plus Gegenprobe der Rate (sollte der 5min-Rate eines sauberen Tages
+entsprechen, z. B. DB0ED-99 ~90/h):
+```sql
+SELECT callsign, strftime('%H',bucket_ts/1000,'unixepoch') h, count
+FROM signal_buckets WHERE bucket_size=3600000 AND callsign='DB0ED-99' ORDER BY bucket_ts;
+```
+
+**Check 3 — journalctl (Reihenfolge):** `sudo journalctl -u mcapp.service --since "2026-06-06 03:59"`
+→ „Aggregated old 5-min buckets into hourly buckets" muss **vor** „Nightly prune complete" stehen.
+
+**Check 4 — Charts (Frontend):** 24h/7d unverändert dicht; 30d/1y dicht für die letzten ~8 Tage,
+davor leer (ehrlich, Altdaten gelöscht). Ab dem 6./7. Juni keine **neuen** 2-h-Streifen-Tage mehr.
+
+**Rote Flaggen:**
+- Neue 1h-Buckets **wieder nur 00–02** → Fix nicht aktiv (falscher Slot / kein Restart) → Code im
+  aktiven Slot + Restart prüfen.
+- **Gar keine** 1h-Buckets nach dem Lauf → aggregate fand nichts / prune zu aggressiv → 5min-Alter
+  vs. Cutoff prüfen, journalctl auf „Nightly prune failed".
+
+**Heilung:** 30d-Chart füllt sich täglich um einen vollen Tag, ~vollständig in 3–4 Wochen; 1y über
+das Jahr. Altdaten >8 Tage bleiben verloren (Roh-5min geprunt), aber die Verlustursache ist behoben.
