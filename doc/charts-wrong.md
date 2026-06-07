@@ -608,3 +608,39 @@ davor leer (ehrlich, Altdaten gelöscht). Ab dem 6./7. Juni keine **neuen** 2-h-
 
 **Heilung:** 30d-Chart füllt sich täglich um einen vollen Tag, ~vollständig in 3–4 Wochen; 1y über
 das Jahr. Altdaten >8 Tage bleiben verloren (Roh-5min geprunt), aber die Verlustursache ist behoben.
+
+### 13.8 Check 1 BESTANDEN (2026-06-06, Lauf 04:00 CEST)
+
+Erster Nightly-Lauf unter neuem Code. **Fix wirkt.**
+
+```
+1h-Buckets Stunden-Verteilung (UTC):  00→316  01→334  02→22  20→167  21→305  22→299  23→319
+1h-Buckets Range: 2026-05-28 20:00 → 2026-05-29 02:00 (40 Zeilen, ~5,5 h wie vorhergesagt)
+DB0ED-99:  20:00→39  21:00→94  22:00→70  23:00→74  00:00→63  01:00→82  02:00→6   (normale Rate, ~90/h)
+journalctl 04:00: "Aggregated old 5-min buckets…" VOR "Nightly prune complete"  ✓ Reihenfolge korrekt
+5min-Range jetzt: 2026-05-29 02:05 → jetzt (aufgerollte < 29.5. 02:00 wurden gelöscht)
+```
+
+- **Stunden 20–23 vorhanden** = außerhalb des alten 00–02-Streifens → der alte Bug ist weg.
+- **Counts normal** (nicht gestaucht). Kein 2-h-Streifen mehr.
+- Noch nicht 24 h — erwartet (Quellfenster durch alten Prune auf 28.5. 20:30 verkürzt).
+
+**Check 2 (definitiv) — nach 7. Juni 04:00 CEST:** Lauf rollt 5min 29.5. 02:05 → 30.5. 02:00 (voller
+Tag, intakt) → 1h-Buckets müssen **alle 24 Stunden 00–23** zeigen.
+
+### 13.9 Check 2 BESTANDEN — Bug endgültig behoben (2026-06-07, Lauf 04:00 CEST)
+
+```
+1h-Buckets Stunden-Verteilung (UTC):  ALLE 24 (00–23) vorhanden, je ~300–700 Counts/Stunde
+1h-Buckets Range: 2026-05-28 20:00 → 2026-05-30 02:00 (177 Zeilen)
+DB0ED-99 am 29.5. (voller Tag): 24/24 Stunden, 61–103/h, gleichmäßig — wie ein sauberer Tag
+journalctl 04:00: "Aggregated…" VOR "Nightly prune complete"  ✓
+```
+
+**Verdict:** Der Nightly-Rollup produziert jetzt **vollständige Tage** (00–23) mit normalen Counts.
+Kein 2-h-Streifen, keine Stauchung, keine Datenverlust-Lücke mehr. **Pipeline end-to-end verifiziert.**
+Frühere Tage (≤28.5.) bleiben unvollständig (Quellfenster vom alten Bug verkürzt); jeder neue Tag
+ab 29.5. ist vollständig. 30d-Chart vervollständigt sich täglich, ~komplett in 3–4 Wochen.
+
+**Saga abgeschlossen.** Ursache war §13 (Nightly-Job: prune vor aggregate + `utcnow().timestamp()`-TZ),
+nicht Firmware/Node-Zeit (§2/§10 überholt). Fix: Reihenfolge + `datetime.now(timezone.utc)`.
