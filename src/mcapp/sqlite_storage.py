@@ -11,7 +11,7 @@ import re
 import sqlite3
 import time
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import mean
 from typing import Any, cast
@@ -1599,7 +1599,11 @@ class SQLiteStorage:
             prune_hours_pos: Retention for position data (type='pos'), default 8 days.
             prune_hours_ack: Retention for ACKs (type='ack'), default 8 days.
         """
-        now = datetime.utcnow()
+        # NOTE: datetime.now(timezone.utc), not datetime.utcnow(). The latter returns a
+        # naive datetime whose .timestamp() is interpreted as LOCAL time, shifting every
+        # cutoff below by the local UTC offset (2h in CEST). That used to leave only a
+        # ~2h/day sliver of 5-min buckets for the rollup. See doc/charts-wrong.md §13.
+        now = datetime.now(timezone.utc)
         cutoff_msg_ms = int((now - timedelta(hours=prune_hours)).timestamp() * 1000)
         cutoff_pos_ms = int((now - timedelta(hours=prune_hours_pos)).timestamp() * 1000)
         cutoff_ack_ms = int((now - timedelta(hours=prune_hours_ack)).timestamp() * 1000)
