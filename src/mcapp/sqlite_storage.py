@@ -1144,7 +1144,7 @@ class SQLiteStorage:
             ack_type = message.get("ack_type")
             ack_type_text = message.get("ack_type_text", "Unknown")
             if ack_for_msg_id:
-                logger.info(
+                logger.debug(
                     "ACK received: original_msg=%s ack_type=%s (%s)",
                     ack_for_msg_id, ack_type, ack_type_text,
                 )
