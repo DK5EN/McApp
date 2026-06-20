@@ -210,7 +210,7 @@ class UDPHandler:
                         return
 
                 # Log final message with src field
-                logger.info("UDP telemetry (src=%s): %s", message.get("src", "UNKNOWN"), message)
+                logger.debug("UDP telemetry (src=%s): %s", message.get("src", "UNKNOWN"), message)
 
                 if self.message_router:
                     await self.message_router.publish('udp', 'mesh_message', message)
@@ -246,12 +246,11 @@ class UDPHandler:
             loop = asyncio.get_running_loop()
 
             json_data = json.dumps(message_data).encode("utf-8")
-            logger.info(
+            logger.debug(
                 "UDP_SEND to %s (%d bytes): %.200s",
                 self.target_address, len(json_data), json_data.decode("utf-8"),
             )
             await loop.run_in_executor(None, udp_sock.sendto, json_data, self.target_address)
-            logger.info("UDP_SEND success")
 
         except Exception as e:
             logger.error("UDP_SEND failed: %s", e, exc_info=True)
