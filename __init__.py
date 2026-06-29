@@ -18,7 +18,8 @@ Public surface: ``Classification``, ``CATEGORIES``, ``CLASSIFIER_SCHEMA_VERSION`
 
 from __future__ import annotations
 
-from meshcom_mock.classifier.types import (
+from .classify import Classifier
+from .types import (
     CATEGORIES,
     CLASSIFIER_SCHEMA_VERSION,
     Classification,
@@ -30,4 +31,5 @@ __all__ = [
     "CLASSIFIER_SCHEMA_VERSION",
     "Classification",
     "MessageCategory",
+    "Classifier",
 ]
