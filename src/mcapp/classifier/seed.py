@@ -135,6 +135,22 @@ DEFAULT_RULES: list[dict[str, Any]] = [
         "extra_tags": ["beacon"],
     },
     {
+        # Matches DWD pollen beacons: "Roggen: keine [2/2]", "Gräser: gering",
+        # "Birke: mittel bis hoch". The generic "WX pollen" rule only matches
+        # the word "pollenwetter/pollenvorhersage", not these species:level
+        # lines, so they previously fell through to "other".
+        "priority": 27,
+        "name": "WX pollen species",
+        "scope": "msg",
+        "pattern": (
+            r"(?i)\b(Roggen|Gr(ä|ae)ser|Beifu(ß|ss)|Ambrosia|Birke|Erle|"
+            r"Esche|Hasel|Ulme|Pappel|Weide|Eiche|Linde)\s*:\s*"
+            r"(keine|gering|mittel|hoch)(\s+bis\s+(gering|mittel|hoch))?\b"
+        ),
+        "category": "wx_beacon",
+        "extra_tags": ["beacon"],
+    },
+    {
         # Matches: "🌙WX nördl.🌲¼ ▫️Temp.: 8.3 °C ▫️Feuchte: 57 % ▫️Wind: 3 km/h"
         # No hPa/QNH — uses Feuchte/Regen/Wind/Solar instead.
         "priority": 28,
