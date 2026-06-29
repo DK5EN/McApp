@@ -273,6 +273,12 @@ class SSEManager:
                             if self.classifier is not None:
                                 try:
                                     stats = await self.classifier.collect_stats()
+                                    if storage is not None and hasattr(
+                                        storage, "count_blocked_text_hits_24h"
+                                    ):
+                                        stats["blocked_text_hits_24h"] = (
+                                            await storage.count_blocked_text_hits_24h()
+                                        )
                                     yield self._format_sse_event(stats, "proxy:classifier_stats")
                                 except Exception as exc:
                                     logger.warning("classifier stats snapshot failed: %s", exc)
@@ -1010,8 +1016,15 @@ class SSEManager:
         @app.get("/api/classifier/status")
         async def get_classifier_status() -> dict[str, Any]:
             classifier = _classifier()
+            storage = _storage()
+            total = await storage.count_messages_to_classify()
+            pending = await storage.count_messages_to_classify(
+                classifier_ver_below=classifier.version
+            )
             return {
                 "classifier_version": classifier.version,
+                "rows_classified": total - pending,
+                "rows_unclassified": pending,
                 "jobs": [
                     {
                         "job_id": j.job_id,

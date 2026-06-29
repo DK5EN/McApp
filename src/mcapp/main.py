@@ -1519,6 +1519,10 @@ async def main() -> None:
             try:
                 if sse_manager is not None:
                     stats = await classifier.collect_stats()
+                    if hasattr(storage_handler, "count_blocked_text_hits_24h"):
+                        stats["blocked_text_hits_24h"] = (
+                            await storage_handler.count_blocked_text_hits_24h()
+                        )
                     await sse_manager.broadcast_event(
                         "proxy:classifier_stats", stats,
                     )

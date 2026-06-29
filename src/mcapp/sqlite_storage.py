@@ -3381,6 +3381,30 @@ class SQLiteStorage:
         assert isinstance(rows, list)
         return {r["category"]: r["n"] for r in rows}
 
+    async def count_blocked_text_hits_24h(self) -> dict[str, int]:
+        """Per blocked-text substring-match count over the last 24h.
+
+        Mirrors the frontend ``isTextBlocked()`` semantics: case-insensitive
+        substring match. Returns ``{text: count}`` for every blocked text.
+        """
+        texts = await self.get_blocked_texts()
+        if not texts:
+            return {}
+        since_ms = int(time.time() * 1000) - 24 * 3600 * 1000
+        rows = await self._execute(
+            "SELECT msg FROM messages WHERE timestamp >= ? AND msg IS NOT NULL",
+            (since_ms,),
+        )
+        assert isinstance(rows, list)
+        lowered = [(t, t.lower()) for t in texts]
+        counts = {t: 0 for t in texts}
+        for r in rows:
+            m = (r["msg"] or "").lower()
+            for orig, tl in lowered:
+                if tl in m:
+                    counts[orig] += 1
+        return counts
+
     async def get_top_beacon_templates(
         self, since_ms: int, limit: int = 10
     ) -> list[dict[str, Any]]:
