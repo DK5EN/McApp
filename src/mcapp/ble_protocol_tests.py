@@ -416,6 +416,66 @@ def _test_decode_msg_frame(results: list[tuple[str, bool]]) -> None:
     _check(results, "msg fcs_ok True on a golden valid frame", decoded["fcs_ok"] is True)
 
 
+# A grapheme cluster held together by a zero-width joiner (see text_decode.py's
+# filter_unsafe docstring): person-raising-hand + ZWJ + male-sign. Renders as
+# two glyphs if the joiner is dropped.
+_EMOJI_WITH_ZWJ = "\U0001f64b\u200d\u2642"
+
+
+def _decode_msg_body(body: bytes) -> str | None:
+    """Build a golden @: frame with `body` as path+dest+message and decode it,
+    returning the decoded message text (or None if the frame was rejected)."""
+    frame = _build_data_frame(
+        MSG_TYPE_BYTE,
+        MSG_MSG_ID,
+        MSG_MAX_HOP_RAW,
+        MSG_PATH.encode() + MSG_DEST.encode() + body,
+        (
+            MSG_HARDWARE_ID,
+            MSG_LORA_MOD,
+            MSG_FW,
+            MSG_LASTHW,
+            MSG_FW_SUB_BYTE,
+            MSG_ENDING,
+            MSG_TIME_MS,
+        ),
+    )
+    decoded = decode_binary_message(frame)
+    return None if decoded is None else decoded["message"]
+
+
+def _test_decode_msg_frame_charset(results: list[tuple[str, bool]]) -> None:
+    """The message text in an @: data frame runs through the shared
+    `text_decode.decode_and_filter` policy, not a bare
+    `.decode("utf-8", errors="ignore")`. Every case here fails against that
+    old line."""
+    _check(
+        results,
+        "msg message: raw CP1252 byte 0xFC decodes to 'ü' (was silently dropped)",
+        _decode_msg_body(b":\xfc") == ":\xfc",
+    )
+    _check(
+        results,
+        "msg message: mixed valid-UTF-8 + CP1252 byte keeps both halves",
+        _decode_msg_body(b":\xc3\xbcber \xfcber") == ":\xfcber \xfcber",
+    )
+    _check(
+        results,
+        "msg message: a C0 control byte is dropped (BLE path never filtered before)",
+        _decode_msg_body(b":Hi\x01there") == ":Hithere",
+    )
+    _check(
+        results,
+        "msg message: valid UTF-8 multi-byte character round-trips untouched",
+        _decode_msg_body(b":Gr\xc3\xbc\xc3\x9fe") == ":Gr\xfc\xdfe",
+    )
+    _check(
+        results,
+        "msg message: emoji + zero-width joiner survives intact",
+        _decode_msg_body(b":" + _EMOJI_WITH_ZWJ.encode("utf-8")) == ":" + _EMOJI_WITH_ZWJ,
+    )
+
+
 def _test_decode_pos_frame(results: list[tuple[str, bool]]) -> None:
     decoded = decode_binary_message(POS_FRAME)
     if decoded is None:
@@ -1248,6 +1308,7 @@ def run_ble_protocol_tests() -> bool:
     results: list[tuple[str, bool]] = []
 
     _test_decode_msg_frame(results)
+    _test_decode_msg_frame_charset(results)
     _test_decode_pos_frame(results)
     _test_decode_malformed(results)
     _test_fcs(results)

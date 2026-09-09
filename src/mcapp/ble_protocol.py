@@ -21,6 +21,7 @@ from struct import unpack
 from typing import Any
 
 from .hey_path import parse_hey_chain
+from .text_decode import decode_and_filter
 from .util import FEET_TO_METERS, is_placeholder_callsign, now_ms
 
 PAYLOAD_TYPE_MSG = 58  # ":" text message frame
@@ -232,7 +233,7 @@ def _decode_data_frame(  # noqa: PLR0913 - all fields are needed from the shared
     dest = remaining_msg[:split_idx].decode("utf-8", errors="ignore")
 
     raw = remaining_msg[split_idx : remaining_msg.find(b"\00")]
-    message = raw.decode("utf-8", errors="ignore").strip()
+    message = decode_and_filter(raw).strip()
 
     # Extract binary footer (fixed structure at end of message)
     [_zero, hardware_id, lora_mod, fcs, fw, lasthw, fw_sub, _ending, _time_ms] = unpack(

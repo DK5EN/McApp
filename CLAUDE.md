@@ -342,6 +342,42 @@ Web Push to browser / iOS-PWA clients, sharing one wire contract with mc-chat so
 `/etc/mcapp/config.json` (dev: `/etc/mcapp/config.dev.json`, auto-selected via `MCAPP_ENV=dev`).
 BLE mode: `remote` or `disabled` (`MCAPP_BLE_MODE` env override). See `ble_service/README.md` for the BLE service API.
 
+## Inbound Charset (`text_decode.py`)
+
+One policy, one module, both ingest routes. Firmware background: CHR-03
+(`MeshCom-Firmware` fork-main `16670de9` + `094636b2`), `docs/BACKLOG.md` there.
+
+- **The payload is no longer guaranteed valid UTF-8, by firmware design.** Senders like
+  PinPoint put umlauts on the wire as single CP1252 bytes (`ü` = `0xFC`, not `C3 BC`); since
+  CHR-03 the firmware relays them unchanged instead of dropping them, so the deciding is ours.
+  `decode_text` re-reads every UTF-8-rejected byte as CP1252. `errors="ignore"` — what both
+  paths used before — deletes the character silently. Only the five bytes undefined in CP1252
+  (`0x81 0x8D 0x8F 0x90 0x9D`) become `U+FFFD`.
+- **The filter is a BLACKLIST and must stay one.** It rejects Unicode categories
+  `Cc Cf Cs Co Cn` and nothing else. Its predecessor, `is_allowed_char`, was a whitelist that
+  had to be extended by hand for every legitimate character nobody had enumerated, and it lost
+  that race repeatedly: joined emoji sequences (2026-08-30), `Ç` and `Ñ` while `ç` and `ñ` were
+  listed, the entire Nordic/Icelandic set, and every decomposed accent (`u` + `U+0308`, a mark,
+  therefore neither symbol nor punctuation). Adding characters back to an allow-list is the
+  wrong repair for the next report of this shape.
+- **`U+200D` and the tag range `U+E0020..U+E007F` are the only `Cf` exceptions.** They carry no
+  glyph and only bind neighbours into ONE grapheme, so dropping one SPLITS a sequence rather
+  than removing a character. The variation selectors (`Mn`) and the enclosing keycap (`Me`) need
+  no exception — marks are not a rejected category.
+- **`Cn` is judged against the RUNNING Python's Unicode tables.** A codepoint assigned after that
+  release reads as unassigned and is dropped. It is the one way this filter can still be wrong
+  about a legitimate character, and it self-heals on a Python upgrade.
+- **Both transports must use it, and that is the point.** The UDP path ran the whitelist over the
+  whole datagram; the BLE path ran no character filter at all. The same message arrives on both
+  (~100 ms apart) and `_claim_recent_ingest` keeps whichever copy lands FIRST, so the stored text
+  of any message with an unusual character was decided by a transport race. In `ble_protocol.py`
+  this applies to the message BODY only — `path` and `dest` are callsign fields and stay ASCII.
+- **`ble_service/src/main.py`'s `D{` decode stays strict on purpose.** There the
+  `UnicodeDecodeError` IS the evidence of the firmware's 244-byte register clamp cutting
+  mid-codepoint. A CP1252 fallback there would destroy the truncation detector.
+- mc-chat carries the same `decode_text` semantics in `meshcom_mock/decoder.py`. Ported, never
+  imported — separate repos.
+
 ## Key Gotchas
 
 - **A `#TAG` destination is a hashtag channel, not a callsign — and `is_group()` stays numeric.** The MeshCom FW 4.36 RfC puts a `#OE-SOTA` token in the destination field. All three repos independently misclassified it as a personal DM, which sent it into `compute_conversation_key`'s DM branch where it was **split on its first hyphen** (`"#OE-SOTA"` → key `"#OE<>DK5EN"`), collapsing distinct tags and fragmenting one tag per sender. Fixed in `ea15511` by adding **sibling** predicates `is_hashtag()` / `dst_kind()` / `resolve_dst_target()` beside `is_group()` in `commands/parsing.py` — `is_group` was deliberately NOT widened, because it is pinned by a corpus mirrored in mc-chat and the webapp. Two invariants look like oversights and are load-bearing: classification is **case-insensitive** and **NOT length-bounded** — a tag failing either would fall straight back into the DM branch, which is the defect. The RfC's 9-char cap is send-side grammar, enforced at the API boundary, never in classification. `dst_kind` returns `"unknown"` (never `"direct"`) for a `#`-prefixed value that fails the tag charset: it addresses nobody, and is the shape most likely to arrive from a buggy or hostile sender. Contract: `commands/hashtag_dst_vectors.json` (32 vectors, sha256-pinned by `commands/hashtag_dst_tests.py`). **No prefix/subscription matching exists** (RfC US-3) — its stated rule contradicts its own worked examples, so implementing it would encode a guess. Background: `MeshCom-Hashtag-prep.md`.
