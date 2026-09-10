@@ -90,7 +90,7 @@ _CONTRACT_PATH = pathlib.Path(__file__).parent / "contract" / "push_contract.jso
 # payload_vectors (replayed automatically by the existing payload_vectors
 # loop) plus a dedicated ordering regression here
 # (`_test_ack_suffix_stripped_after_gates`).
-_EXPECTED_SHA256 = "e74d3a6138279f440c8f1925c532221d17d73a84490da9c4e7c97a64413334f3"
+_EXPECTED_SHA256 = "ae068385abade174677f84ce915bbff7c2177fe28bb8f97bab0ecdc2ae2d8169"
 
 # The VAPID keyfile holds a raw P-256 private scalar, so load_or_create_vapid chmods it
 # owner-only. At the default 0644 any local account could forge VAPID JWTs as this node.
@@ -877,6 +877,22 @@ def _test_node_local_noise_filter(record: _RecordFn) -> None:
     record(
         "noise filter: {CET} must be a PREFIX, not a substring",
         not _is_node_local_noise({"type": "msg", "msg": "time was {CET}12:00"}),
+    )
+    # Contract v8: firmware command replies. `--ackinfo on` is what every BLE
+    # reconnect used to push to broadcast subscribers.
+    record(
+        "noise filter: a firmware command reply from 'response' is not pushed",
+        _is_node_local_noise({"type": "msg", "src": "response", "dst": "*", "msg": "--ackinfo on"}),
+    )
+    record(
+        "noise filter: the 'response' rule is on the RAW src — a via-routed src is not it",
+        not _is_node_local_noise(
+            {"type": "msg", "src": "response,OE1KBC-12", "dst": "*", "msg": "--ackinfo on"}
+        ),
+    )
+    record(
+        "noise filter: a real callsign spelling RESPONSE IS pushed (exact, case-sensitive)",
+        not _is_node_local_noise({"type": "msg", "src": "RESPONSE-1", "dst": "*", "msg": "hi"}),
     )
     # Clause (c) reached through the public predicate: an ACK from another station,
     # addressed to us, with a filter that would otherwise match it.
