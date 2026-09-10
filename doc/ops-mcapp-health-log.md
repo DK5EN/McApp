@@ -624,3 +624,53 @@ notAfter Sep 2 00:38:16 GMT`, read at 17:06 GMT = mid-life on a 12 h leaf.
 > swap under zram**, and the directory-swap window in `install_webapp_tree` is **W6**, which is an
 > accepted residual risk and stays open. Swap is measured above and carries forward. The
 > `mcapp-ble.service` `0600` change closes **§6 finding 5**, not W5.
+
+## 8. 2026-09-10 21:05 CEST — pre-release sweep before promoting v2.0.5-dev.2
+
+Sign-off sweep for promoting `v2.0.5-dev.2` to **v2.0.5**. Verdict: **green on the box, short
+soak by decision.** dev.1 ran 40 min and dev.2 about 25 min before this sweep; the operator chose
+to promote rather than wait. Both dev tags were watched against live rows, not just health checks.
+
+### Box
+
+| Check                        | Result                                                                                                                 |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Active slot                  | **slot-1**, `v2.0.5-dev.2`, started 2026-09-10 20:50:20 CEST                                                           |
+| `NRestarts` mcapp / ble      | 0 / 0                                                                                                                  |
+| Journal warnings since 20:50 | 1: `mcapp-ble.service: Failed with result 'exit-code'` at 20:50:10 — the deploy's own stop before the new slot started |
+| Tracebacks since 20:50       | 0                                                                                                                      |
+| BLE                          | connected 20:50, notifications flowing                                                                                 |
+
+### Field verification of the release content
+
+- **RX-01 trailer timestamp:** three foreign BLE rows after Extern-UDP was switched off carried
+  the node clock as the stored timestamp, within seconds of the Pi's wall clock.
+- **RX-04 flag bits:** DL5RAS-2 arrived with `mesh_info` 9 and the booleans read server+mesh,
+  consistent with the nibble.
+- **Duplicate enrichment:** first message after Extern-UDP came back (DL1RHS-14 → 9, 18:55:50
+  UTC) is one UDP-won row with RSSI -120 / SNR -8 **and** hw 12 / mod 8 / mesh_info 1 /
+  fcs_ok 1 from the BLE copy. Zero duplicate message ids in the window.
+- **Not verified on air:** the 300 ms `0xA0` write gap (needs two back-to-back sends under the
+  operator's callsign; not done on his behalf).
+
+### Repos
+
+| Check                             | MCProxy                                     | webapp                                   |
+| --------------------------------- | ------------------------------------------- | ---------------------------------------- |
+| HEAD == dev.2 tag before dep bump | yes (`4a7aebe`)                             | yes (`1a214ed`)                          |
+| `development..origin/main`        | 0                                           | 0                                        |
+| Contract subtree vs mc-chat       | identical                                   | —                                        |
+| Classifier subtree vs mc-chat     | identical (pycache only)                    | —                                        |
+| Four hand-copied corpora          | equal hashes across all three repos         |
+| Local gate after dependency bump  | green                                       | green (1 pre-existing warning)           |
+| **CI**                            | **`tests` workflow is `disabled_manually`** | **`CI` workflow is `disabled_manually`** |
+
+### Watch points
+
+- **W9 — CI is switched off in both repos.** `gh workflow list --all` shows `tests` (MCProxy)
+  and `CI` (webapp) as `disabled_manually`; the last run on `development` was 2026-08-31.
+  Every push since, including this release, has only the local gate behind it. Not changed by
+  this sweep; the operator decides whether to re-enable.
+- **W10 — `@lucide/vue` pinned at 1.41.0** in the webapp. 1.44.0 breaks the lint gate (45
+  unsafe-assignment errors from its type declarations). Re-test on the next dependency pass.
+- **W1, W2, W3, W6, W7** carry forward unchanged.

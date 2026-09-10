@@ -1,5 +1,96 @@
 # Release History
 
+## v2.0.5 (2026-09-10)
+
+Patch release from a three-way audit of the BLE protocol against the firmware source and the
+official mobile app. Fixes what the proxy was throwing away or mangling on the BLE link,
+makes a duplicate transport copy enrich a message instead of being discarded, shows the
+frame facts in the message popover, and refreshes dependencies. No schema change (stays at
+**v30**). Push contract **v7 → v9**.
+
+### Highlights
+
+- **Messages received while the BLE link was down now carry their real time.** The node
+  appends its own reception clock to every BLE frame and buffers up to 20 text frames while no
+  phone is attached. The proxy discarded that clock and stamped arrival time, so after a BLE
+  outage the whole backlog landed on the reconnect second, breaking ordering, unread cursors and
+  the dedup window. The trailer is now decoded (big-endian, range-checked, arrival time as
+  fallback) and used as the stored timestamp.
+
+- **One message, one row, both halves.** The same inbound message reaches the proxy twice, as
+  an Extern-UDP datagram and as the BLE frame, 40-170 ms apart, and the two copies carry
+  complementary data: UDP has RSSI/SNR, BLE has hardware type, modulation, hop budget, flag
+  bits and checksum result. The dedup gate kept the first copy and dropped the second whole, so
+  every stored message lacked one half (one week on mcapp.local: 827 BLE-won rows without
+  RSSI, 1230 UDP-won rows without hardware fields). The second copy now fills the winning row's
+  empty columns and contributes its signal to the station record. Rows written before this
+  release stay as they were.
+
+- **No more phantom notifications after a reconnect.** Two classes of frame reached Web Push
+  that no conversation view ever shows: the firmware's replies to `--` commands (`--ackinfo
+on` after every reconnect, `--wrong command` for a typo) and catch-up replays flagged by the
+  node's `app_offline` bit. Both are excluded now, in the shared push contract, so mc-chat and
+  the browser's foreground sound behave the same.
+
+- **Two chat messages sent quickly no longer lose the first.** The firmware drains its BLE
+  receive queue into a single buffer once per main-loop pass, so two text writes in one pass
+  keep only the last, silently. The BLE service now spaces consecutive text writes by 300 ms.
+  Binary config frames are not delayed.
+
+- **A failed BLE send is reported like a failed UDP send.** The bubble no longer stays on
+  "Sending..." forever when the link is down or the BLE service refuses the frame.
+
+- **The message popover shows the frame.** Path (via server, mesh, track, replayed offline),
+  max hops, hardware type, modulation, firmware and signal, each only when the frame carried
+  it. The path flags are decoded from a field history rows already have, so old messages show
+  them too.
+
+### Backend (MCProxy)
+
+- **[fix]** BLE frame trailer decoded as the node's reception timestamp (`node_rx_ts_ms`);
+  footer struct reduced to its eight real fields, FCS coverage unchanged.
+- **[fix]** Byte-5 flag bits decoded as `msg_server`, `msg_track`, `app_offline`, `mesh`
+  alongside the unchanged `mesh_info`; ACK frames untouched.
+- **[fix]** Duplicate transport copies enrich the stored row (NULL columns only, never an
+  overwrite) and feed their signal to `signal_log`; the losing concurrent copy re-checks for
+  the winner's row for at most 200 ms.
+- **[fix]** Web Push excludes command replies from the `response` pseudo-callsign (contract
+  v8) and frames with `app_offline` true (contract v9). Contract subtree synced from mc-chat,
+  corpus hash re-pinned.
+- **[fix]** `0xA0` text writes to the node are spaced by `A0_MIN_GAP_S = 0.3`; marker reset
+  on connect and disconnect.
+- **[fix]** Command replies over the 140-byte chunk budget are split on encoded length, never
+  by character count; a multi-byte weather reply could exceed the firmware's 160-byte limit
+  and vanish without feedback.
+- **[fix]** `_send_via_ble` publishes the error toast and the per-message `send_failed` status
+  on a `False` return, an exception, or a missing client.
+- **[fix]** Inbound text that is not valid UTF-8 is re-read as CP1252 instead of dropping the
+  character; one charset filter (Unicode category blacklist) on both transports.
+- **[docs]** `doc/2026-09-10_1900-ble-protocol-parity-audit.md`: the full audit with every
+  finding, its evidence in all three code bases, and the ones that did not survive
+  verification. CLAUDE.md corrected: the MHeard `SRC`/`GW`/`PP` fields were reverted upstream
+  on 2026-08-28; the parser is retained and inert.
+- **[chore]** Dependencies: multidict 6.8.0, numpy 2.5.3, ruff 0.16.7, websockets 17.1
+  (standalone BLE service lock).
+
+### Frontend (webapp)
+
+- **[feat]** Message detail popover: Path, Max hops, Hardware, Signal rows. `processMessage`
+  now copies firmware, RSSI, SNR and `app_offline` onto chat messages.
+- **[fix]** Push contract re-synced to v9; the foreground-sound predicate mirrors the command
+  reply and `app_offline` exclusions.
+- **[chore]** npm update (45 packages). `@lucide/vue` pinned at 1.41.0: 1.44.0 ships type
+  declarations that make every icon reference an unsafe-assignment lint error.
+
+### Upgrade notes
+
+- No schema migration. The enrichment only affects rows written from this release on.
+- BLE-only boxes: chat rows now get the node's timestamp instead of arrival time. A node
+  whose clock is unsynced (before the proxy's time sync after a reboot) falls back to arrival
+  time; the accepted range is 2024-02-01 to 60 s in the future.
+- Accepted as-is: the webapp's `--` command pass-through to the node remains unbounded (audit
+  item TX-01).
+
 ## v2.0.4 (2026-09-06)
 
 Patch release. Replaces the unread-badge bookkeeping with **server-side read cursors**, so the
