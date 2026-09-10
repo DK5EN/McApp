@@ -84,6 +84,12 @@ ERROR_CODE_BUSY = "busy"
 # register dump.
 _UNDECODABLE_EXCERPT_MAX_BYTES = 64
 
+# RX-01: how far behind ble_service's arrival time a frame's node_rx_ts_ms may
+# be before it's worth a DEBUG log — evidence of the firmware's 20-entry text
+# ring delivering a post-outage backlog in a burst, all stamped at the
+# reconnect second by arrival time but each carrying its own true node clock.
+_BACKLOG_LOG_THRESHOLD_MS = 5000
+
 # Module-level tally of dropped, undecodable BLE notifications, keyed by a
 # short human-readable reason string (e.g. "binary decode raised ValueError",
 # "unrecognized format 'raw'"). Never published, never blocks anything — it
@@ -1004,8 +1010,29 @@ class BLEClientRemote(BLEClientBase):
         """Stamp timestamp + src_type onto a dispatcher() result, shared by the
         JSON and binary-decoded branches of _transform_notification.
         generic_ble/mh transformers already set their own src_type — don't override it.
+
+        RX-01: when the transformer found a valid node-clock trailer
+        (`node_rx_ts_ms`), `output["timestamp"]` is already that value and is
+        kept as-is — overwriting it with ble_service's arrival time is exactly
+        what stamped a post-outage backlog burst with the reconnect second
+        instead of each message's real time. Only the fallback case (no
+        trailer: ACK/MH/generic_ble frames, or a data frame whose trailer
+        failed the range check) still uses arrival time.
         """
-        output["timestamp"] = notification.get("timestamp", now_ms())
+        arrival_ms = notification.get("timestamp", now_ms())
+        node_rx_ts_ms = output.get("node_rx_ts_ms")
+        if isinstance(node_rx_ts_ms, int) and node_rx_ts_ms:
+            lag_ms = arrival_ms - node_rx_ts_ms
+            if lag_ms > _BACKLOG_LOG_THRESHOLD_MS:
+                logger.debug(
+                    "BLE backlog: node_rx_ts_ms=%d is %.1fs behind arrival=%d (msg_id=%s)",
+                    node_rx_ts_ms,
+                    lag_ms / 1000,
+                    arrival_ms,
+                    output.get("msg_id"),
+                )
+        else:
+            output["timestamp"] = arrival_ms
         if output.get("transformer") not in ("generic_ble", "mh"):
             output["src_type"] = "ble_remote"
         return output

@@ -10,7 +10,6 @@ import socket
 import sys
 import tempfile
 import time
-import unicodedata
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
@@ -19,6 +18,7 @@ from .ble_protocol import ACK_KIND_BY_TYPE, ack_type_text, normalise_ack_callsig
 from .commands.parsing import strip_relay_path
 from .logging_setup import get_logger
 from .runtime_state import save_runtime_state
+from .text_decode import decode_and_filter
 from .util import (
     FEET_TO_METERS,
     now_ms,
@@ -161,81 +161,6 @@ def _strip_non_scalar_fields(message: dict[str, Any]) -> list[str]:
     for key in dropped:
         del message[key]
     return dropped
-
-
-# Codepoints that join other codepoints into a single emoji grapheme. Whitelisted
-# wholesale in `is_allowed_char` because none of them survives its category test:
-#   U+200D  ZERO WIDTH JOINER      (Cf) — 🙋‍♂️, 👨‍👩‍👧, ⛹️‍♀️
-#   U+FE0E  VARIATION SELECTOR-15  (Mn) — text presentation
-#   U+FE0F  VARIATION SELECTOR-16  (Mn) — emoji presentation, full colour
-#   U+20E3  COMBINING ENCLOSING KEYCAP (Me) — 1️⃣
-# The tag range U+E0020..U+E007F (Cf, subdivision-flag sequences such as 🏴󠁧󠁢󠁳󠁣󠁴󠁿) is a
-# contiguous range and is tested separately.
-_EMOJI_SEQUENCE_GLUE = frozenset({0x200D, 0xFE0E, 0xFE0F, 0x20E3})
-
-
-def is_allowed_char(ch: str) -> bool:  # noqa: PLR0911 - complex handler kept intact
-    """Check if character is allowed in our charset"""
-    codepoint = ord(ch)
-
-    # Explicit whitelist European Umlaut
-    if ch in "äöüÄÖÜßäàáâãåāéèêëėîïíīìôòóõōûùúūÀÁÂÃÅĀÉÈÊËĖÎÏÍĪÌÔÒÓÕŌÜÛÙÚŪśšŚŠÿçćčñń":
-        return True
-
-    if ch == "⁰":
-        return True
-
-    # ASCII 0x20 to 0x5C inclusive
-    if 0x20 <= codepoint <= 0x5C:  # noqa: PLR2004 - Unicode range boundary
-        return True
-
-    # Allow up to 0x7E?
-    if 0x5D <= codepoint <= 0x7E:  # noqa: PLR2004 - Unicode range boundary
-        return True
-
-    # Allow the emoji-sequence glue. These carry no glyph of their own — they only
-    # bind neighbouring codepoints into ONE grapheme — so the category test below
-    # rejects every one of them (ZWJ and the tag characters are Cf, the variation
-    # selectors Mn, the keycap Me). Dropping one does not remove a character, it
-    # SPLITS a sequence the sender composed: `🙋\u200d♂\ufe0f` renders as two
-    # glyphs `🙋 ♂` once the ZWJ is gone (observed 2026-08-30 on the Extern-UDP copy
-    # of an outgoing message whose BLE copy — this filter's only bypass — was
-    # intact). U+FE0F alone was whitelisted here, which fixed the symptom for
-    # single-codepoint emoji and left every joined sequence broken.
-    if codepoint in _EMOJI_SEQUENCE_GLUE or 0xE0020 <= codepoint <= 0xE007F:  # noqa: PLR2004 - Unicode range boundary
-        return True
-
-    # Reject surrogates, noncharacters
-    if 0xD800 <= codepoint <= 0xDFFF:  # noqa: PLR2004 - Unicode range boundary
-        return False
-
-    if codepoint & 0xFFFF in [0xFFFE, 0xFFFF]:
-        return False
-
-    # Reject private use areas
-    if (
-        (0xE000 <= codepoint <= 0xF8FF)  # noqa: PLR2004 - Unicode range boundary
-        or (0xF0000 <= codepoint <= 0xFFFFD)  # noqa: PLR2004 - Unicode range boundary
-        or (0x100000 <= codepoint <= 0x10FFFD)  # noqa: PLR2004 - Unicode range boundary
-    ):
-        return False
-
-    # Accept emojis and standard symbols
-    category = unicodedata.category(ch)
-    if category.startswith(("S", "P")) or "EMOJI" in unicodedata.name(ch, ""):
-        return True
-
-    # Routine noise from a lossy RF link, not a real error — DEBUG only.
-    logger.debug("Invalid character: %r (U+%04X, %s)", ch, ord(ch), unicodedata.name(ch, "UNKNOWN"))
-    return False
-
-
-def strip_invalid_utf8(data: bytes) -> str:
-    """Strip invalid UTF-8 characters from byte data"""
-    # Step 1: decode as much as possible in one go
-    text = data.decode("utf-8", errors="ignore")
-    # is_allowed_char() already logs each rejected character at DEBUG — don't double-report.
-    return "".join(ch for ch in text if is_allowed_char(ch))
 
 
 def try_repair_json(text: str) -> dict[str, Any]:
@@ -540,7 +465,7 @@ class UDPHandler:
                 self.listen_socket.close()
 
     async def _process_received_message(self, data: bytes, addr: tuple[str, int]) -> None:
-        text = strip_invalid_utf8(data)
+        text = decode_and_filter(data)
         message: dict[str, Any] = try_repair_json(text)
 
         await self._learn_target_from_source(addr, message.get("src") if message else None)

@@ -15,6 +15,30 @@ from .constants import CHUNK_SEND_DELAY_SECONDS, MAX_CHUNKS, MAX_RESPONSE_LENGTH
 
 logger = get_logger(__name__)
 
+
+def _split_utf8_chunks(text: str, max_bytes: int) -> list[str]:
+    """Split text into pieces whose UTF-8 encoding is <= max_bytes each.
+
+    Walks character by character (never splitting inside a codepoint) and
+    greedily packs each piece as full as the byte budget allows.
+    """
+    chunks: list[str] = []
+    current = ""
+    current_bytes = 0
+    for ch in text:
+        ch_bytes = len(ch.encode("utf-8"))
+        if current and current_bytes + ch_bytes > max_bytes:
+            chunks.append(current)
+            current = ch
+            current_bytes = ch_bytes
+        else:
+            current += ch
+            current_bytes += ch_bytes
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 # Shutdown drain budget for in-flight chunk sends: one inter-chunk gap
 # (CHUNK_SEND_DELAY_SECONDS = 12 s) plus margin for the final publish, so a
 # response caught mid-gap can still deliver its next chunk. main.py's shutdown
@@ -219,12 +243,18 @@ class ResponseMixin(CommandHandlerBase):
                 else:
                     if current:
                         chunks.append(current)
-                    current = part
+                        current = ""
+                    # A single part over budget on its own must be split
+                    # further, never appended whole (would blow past max_bytes).
+                    if len(part.encode("utf-8")) > max_bytes:
+                        chunks.extend(_split_utf8_chunks(part, max_bytes))
+                    else:
+                        current = part
 
             if current:
                 chunks.append(current)
         else:
-            # Fallback: character-wise split
-            chunks = [response[i : i + max_bytes] for i in range(0, len(response), max_bytes)]
+            # Fallback: byte-safe split (never cuts inside a UTF-8 codepoint)
+            chunks = _split_utf8_chunks(response, max_bytes)
 
         return chunks[:MAX_CHUNKS]

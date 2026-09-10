@@ -6,7 +6,8 @@ loop's exception recovery and signal writing). This suite exercises the
 standalone parsing helpers that had no coverage before:
 
 * ``try_repair_json`` — bounded malformed-JSON repair (CO-08 cap).
-* ``strip_invalid_utf8`` — the character whitelist path.
+* ``decode_and_filter`` (``mcapp.text_decode``) — the inbound charset policy:
+  UTF-8 with a per-byte CP1252 fallback, then a narrow unsafe-codepoint filter.
 * ``_normalize_altitude_to_meters`` — APRS feet → meters conversion.
 * ``_undouble_aprs_symbol_escapes`` — the MeshCom firmware's double-escaped
   backslash on the alternate APRS symbol table (see ``aprs-escape-bug.md``),
@@ -41,6 +42,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from .text_decode import decode_and_filter
 from .udp_handler import (
     MAX_JSON_REPAIR_ATTEMPTS,
     UDPHandler,
@@ -49,7 +51,6 @@ from .udp_handler import (
     _undouble_aprs_symbol_escapes,
     _unescape_firmware_msg_body,
     normalize_extudp_ack,
-    strip_invalid_utf8,
     try_repair_json,
 )
 from .udp_handler import (
@@ -226,41 +227,55 @@ def _test_try_repair_json() -> list[tuple[str, bool]]:
     return results
 
 
-def _test_strip_invalid_utf8() -> list[tuple[str, bool]]:
+def _test_decode_and_filter() -> list[tuple[str, bool]]:
+    """``decode_and_filter`` (``mcapp.text_decode``) is the CP1252-tolerant
+    replacement for the old UTF-8-only, whitelist-filtered ``strip_invalid_utf8``.
+    Some assertions below change BY DESIGN now that invalid UTF-8 is recovered
+    as CP1252 instead of being dropped -- each says so at the point it differs.
+    The rest are unchanged: they pin behaviour the new policy still needs
+    (rejecting Cc/Cf/Cs/Co/Cn, keeping the emoji-sequence glue).
+    """
     results: list[tuple[str, bool]] = []
 
-    # Whitelisted umlauts and ß survive intact.
+    # Valid UTF-8 with real umlauts and ß survives intact -- untouched, not merely
+    # whitelisted.
     kept = "Grüße äöüÄÖÜ ß"
     results.append(
-        ("strip_invalid_utf8: umlauts and ß kept", strip_invalid_utf8(kept.encode()) == kept)
+        ("decode_and_filter: umlauts and ß kept", decode_and_filter(kept.encode()) == kept)
     )
 
-    # A private-use codepoint decodes fine but is rejected by the whitelist.
+    # A private-use codepoint decodes fine but is rejected (Co is a rejected category).
     results.append(
         (
-            "strip_invalid_utf8: private-use char dropped",
-            strip_invalid_utf8("AB".encode()) == "AB",
+            "decode_and_filter: private-use char dropped",
+            decode_and_filter("AB".encode()) == "AB",
         )
     )
 
-    # Raw bytes that are not valid UTF-8 are dropped at decode time.
+    # CHANGED BY DESIGN: bytes invalid as UTF-8 are no longer dropped -- each is
+    # recovered per-byte as CP1252. 0xFF -> ÿ, 0xFE -> þ.
     results.append(
         (
-            "strip_invalid_utf8: invalid raw bytes dropped",
-            strip_invalid_utf8(b"ok\xff\xfe!") == "ok!",
+            "decode_and_filter: invalid UTF-8 bytes recovered as CP1252, not dropped",
+            decode_and_filter(b"ok\xff\xfe!") == "okÿþ!",
         )
     )
 
-    # A lone surrogate (encoded via surrogatepass) is invalid UTF-8 and dropped.
+    # CHANGED BY DESIGN: a lone surrogate (encoded via surrogatepass) is still
+    # rejected by UTF-8, but each of its 3 bytes is now re-read as CP1252
+    # individually rather than deleted wholesale.
     surrogate_bytes = b"ok" + "\ud83d".encode("utf-8", "surrogatepass")
     results.append(
-        ("strip_invalid_utf8: surrogate bytes dropped", strip_invalid_utf8(surrogate_bytes) == "ok")
+        (
+            "decode_and_filter: undecodable surrogate bytes recovered per-byte as CP1252",
+            decode_and_filter(surrogate_bytes) == "okí ½",
+        )
     )
 
     # The emoji-sequence glue survives. Regression for 2026-08-30: only U+FE0F was
-    # whitelisted, so the Extern-UDP copy of an outgoing 🙋\u200d♂\ufe0f arrived as
-    # two separate glyphs while the BLE copy of the same msg_id — which never passes
-    # through this filter — was intact. Each of these joins its neighbours into one
+    # whitelisted, so the Extern-UDP copy of an outgoing 🙋‍♂️ arrived as
+    # two separate glyphs while the BLE copy of the same msg_id -- which never passes
+    # through this filter -- was intact. Each of these joins its neighbours into one
     # grapheme; dropping it splits a sequence rather than removing a character.
     glue_cases = [
         ("ZWJ sequence", "\U0001f64b\u200d\u2642\ufe0f Medium Rare"),
@@ -274,19 +289,126 @@ def _test_strip_invalid_utf8() -> list[tuple[str, bool]]:
     for label, text in glue_cases:
         results.append(
             (
-                f"strip_invalid_utf8: {label} kept intact",
-                strip_invalid_utf8(text.encode()) == text,
+                f"decode_and_filter: {label} kept intact",
+                decode_and_filter(text.encode()) == text,
             )
         )
 
-    # The whitelist stays a whitelist: an unrelated Cf format character is still
-    # dropped, so the fix above did not widen it to every invisible codepoint.
+    # An unrelated Cf format character is still dropped: the blacklist stays
+    # narrow, not widened to every invisible codepoint.
     results.append(
         (
-            "strip_invalid_utf8: unrelated format char still dropped",
-            strip_invalid_utf8("a\u200bb".encode()) == "ab",
+            "decode_and_filter: unrelated format char still dropped",
+            decode_and_filter("a\u200bb".encode()) == "ab",
         )
     )
+
+    # --- new coverage for the CP1252 fallback and the widened charset --------
+
+    # NEW: single CP1252/Latin-1 bytes on the wire (PinPoint et al. send "über"
+    # as b"\xfc") are recovered instead of being silently deleted.
+    results.append(
+        (
+            "decode_and_filter: CP1252 single-byte umlauts recovered (Grüße)",
+            decode_and_filter(b"Gr\xfc\xdfe") == "Grüße",
+        )
+    )
+
+    # NEW: valid UTF-8 round-trips unchanged -- the CP1252 fallback only ever
+    # fires on bytes UTF-8 itself rejects.
+    results.append(
+        (
+            "decode_and_filter: valid UTF-8 round-trips untouched",
+            decode_and_filter("Grüße".encode()) == "Grüße",
+        )
+    )
+
+    # NEW: a mixed payload keeps BOTH halves -- a valid UTF-8 "ü" and a raw
+    # CP1252 "ü" byte in the same datagram must both survive.
+    results.append(
+        (
+            "decode_and_filter: mixed valid-UTF-8 + raw-CP1252 payload keeps both halves",
+            decode_and_filter(b"\xc3\xbcber \xfcber") == "über über",
+        )
+    )
+
+    # NEW: the five bytes undefined in CP1252 become U+FFFD (the registered
+    # error handler's own "replace" fallback), never a silent deletion.
+    results.extend(
+        (
+            (
+                f"decode_and_filter: CP1252-undefined byte 0x{undefined_byte:02X} -> "
+                "U+FFFD, not dropped"
+            ),
+            decode_and_filter(bytes([undefined_byte])) == "�",
+        )
+        for undefined_byte in (0x81, 0x8D, 0x8F, 0x90, 0x9D)
+    )
+
+    # NEW: characters the OLD whitelist silently deleted now survive -- it never
+    # enumerated Ç/Ñ/ø/æ/þ/ý (Nordic/Icelandic/French letters), nor a combining
+    # accent from a decomposed (NFD) string.
+    kept_chars = "Ç Ñ ø æ þ ý"
+    results.append(
+        (
+            "decode_and_filter: characters the old whitelist dropped now survive",
+            decode_and_filter(kept_chars.encode()) == kept_chars,
+        )
+    )
+    decomposed_u = "ü"  # "ü" as NFD: 'u' + COMBINING DIAERESIS
+    results.append(
+        (
+            "decode_and_filter: a decomposed (NFD) combining accent survives",
+            decode_and_filter(decomposed_u.encode()) == decomposed_u,
+        )
+    )
+
+    # NEW: C0 control characters are still dropped (Cc is a rejected category).
+    results.append(
+        (
+            "decode_and_filter: C0 control characters still dropped",
+            decode_and_filter(b"a\x01\x02b") == "ab",
+        )
+    )
+    return results
+
+
+async def _test_decode_and_filter_end_to_end() -> list[tuple[str, bool]]:
+    """Datagram-level regression: the helper-level cases above only prove
+    ``decode_and_filter`` itself is correct, not that the wire path actually
+    calls it. Drives raw bytes through ``UDPHandler._process_received_message``
+    and asserts on what reached the fake router, mirroring
+    ``_test_aprs_escape_end_to_end`` / ``_test_msg_escape_end_to_end``. A
+    datagram whose ``msg`` value carries a raw CP1252 0xFC byte must arrive as
+    "ü" in the published message.
+    """
+    results: list[tuple[str, bool]] = []
+
+    # Built by hand (not json.dumps) because 0xFC is not valid UTF-8 on its own
+    # and json.dumps can only emit valid UTF-8 -- this is exactly the byte
+    # sequence a raw firmware datagram puts on the wire.
+    datagram = b'{"src_type":"node","type":"msg","src":"DK5EN-98","dst":"20","msg":"Gr\xfc\xdfe"}'
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        router = _CaptureRouter()
+        handler = UDPHandler(
+            listen_port=0,
+            target_host="127.0.0.1",
+            target_port=0,
+            message_router=router,
+            runtime_state_path=Path(tmp_dir) / "runtime.json",
+        )
+        try:
+            await handler._process_received_message(datagram, (_CAPTURE_SENDER_IP, _SENDER_PORT))
+        finally:
+            handler.send_socket.close()
+
+    published: dict[str, Any] = router.calls[-1][2] if router.calls else {}
+    label = (
+        "decode_and_filter e2e: a raw CP1252 byte in the wire datagram's msg field "
+        "arrives as the recovered character, not deleted"
+    )
+    results.append((label, bool(router.calls) and published.get("msg") == "Grüße"))
     return results
 
 
@@ -1220,7 +1342,8 @@ async def run_udp_parsing_tests() -> bool:
     """Run the pure-parsing helper tests; return True iff all pass."""
     results: list[tuple[str, bool]] = []
     results.extend(_test_try_repair_json())
-    results.extend(_test_strip_invalid_utf8())
+    results.extend(_test_decode_and_filter())
+    results.extend(await _test_decode_and_filter_end_to_end())
     results.extend(_test_normalize_altitude())
     results.extend(_test_undouble_aprs_symbol_escapes())
     results.extend(_test_unescape_firmware_msg_body())

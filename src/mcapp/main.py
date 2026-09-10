@@ -2095,10 +2095,55 @@ class MessageRouter:
         """Transmit a normalized outbound message over BLE to the paired device."""
         self._logger.debug("BLE Handler: Sending external message to BLE device")
         client = self._get_ble_client()
-        if client:
-            await client.send_message(normalized_data.get("msg"), normalized_data.get("dst"))
-        else:
-            logger.warning("BLE client not available, cannot send message")
+
+        if not client:
+            self._logger.warning("BLE client not available, can't send message")
+            await self.publish(
+                "system",
+                "websocket_message",
+                {
+                    "src_type": "system",
+                    "type": "error",
+                    "msg": "Failed to send BLE message: BLE client not available",
+                    "timestamp": now_ms(),
+                },
+            )
+            await self._publish_send_failed(normalized_data, "BLE client not available")
+            return
+
+        try:
+            sent = await client.send_message(normalized_data.get("msg"), normalized_data.get("dst"))
+        except Exception as e:
+            self._logger.warning("BLE message send failed: %s", e)
+            await self.publish(
+                "system",
+                "websocket_message",
+                {
+                    "src_type": "system",
+                    "type": "error",
+                    "msg": f"Failed to send BLE message: {e}",
+                    "timestamp": now_ms(),
+                },
+            )
+            await self._publish_send_failed(normalized_data, str(e))
+            return
+
+        if not sent:
+            reason = (
+                "BLE not connected" if not client.is_connected else "BLE service rejected the frame"
+            )
+            self._logger.warning("BLE message send failed: %s", reason)
+            await self.publish(
+                "system",
+                "websocket_message",
+                {
+                    "src_type": "system",
+                    "type": "error",
+                    "msg": f"Failed to send BLE message: {reason}",
+                    "timestamp": now_ms(),
+                },
+            )
+            await self._publish_send_failed(normalized_data, reason)
 
     def _is_message_to_self(self, message_data: dict[str, Any]) -> bool:
         """Check if message is addressed to our own callsign (assumes normalized data)"""

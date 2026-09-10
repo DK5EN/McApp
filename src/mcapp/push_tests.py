@@ -90,7 +90,7 @@ _CONTRACT_PATH = pathlib.Path(__file__).parent / "contract" / "push_contract.jso
 # payload_vectors (replayed automatically by the existing payload_vectors
 # loop) plus a dedicated ordering regression here
 # (`_test_ack_suffix_stripped_after_gates`).
-_EXPECTED_SHA256 = "e74d3a6138279f440c8f1925c532221d17d73a84490da9c4e7c97a64413334f3"
+_EXPECTED_SHA256 = "95c42c95b2f165c3c550213175ae9b9fda1c8eac49607989c71f6ccae73fbb68"
 
 # The VAPID keyfile holds a raw P-256 private scalar, so load_or_create_vapid chmods it
 # owner-only. At the default 0644 any local account could forge VAPID JWTs as this node.
@@ -877,6 +877,42 @@ def _test_node_local_noise_filter(record: _RecordFn) -> None:
     record(
         "noise filter: {CET} must be a PREFIX, not a substring",
         not _is_node_local_noise({"type": "msg", "msg": "time was {CET}12:00"}),
+    )
+    # Contract v8: firmware command replies. `--ackinfo on` is what every BLE
+    # reconnect used to push to broadcast subscribers.
+    record(
+        "noise filter: a firmware command reply from 'response' is not pushed",
+        _is_node_local_noise({"type": "msg", "src": "response", "dst": "*", "msg": "--ackinfo on"}),
+    )
+    record(
+        "noise filter: the 'response' rule is on the RAW src — a via-routed src is not it",
+        not _is_node_local_noise(
+            {"type": "msg", "src": "response,OE1KBC-12", "dst": "*", "msg": "--ackinfo on"}
+        ),
+    )
+    record(
+        "noise filter: a real callsign spelling RESPONSE IS pushed (exact, case-sensitive)",
+        not _is_node_local_noise({"type": "msg", "src": "RESPONSE-1", "dst": "*", "msg": "hi"}),
+    )
+    # Contract v9 clause (e): the byte-5 app_offline bit marks a catch-up
+    # replay. Lives in is_eligible, not the noise predicate, because it is a
+    # decoded frame flag rather than a text shape.
+    base = {"type": "msg", "src": "OE1ABC-1", "dst": "DK5EN-99", "msg": "sent while link was down"}
+    record(
+        "eligibility (e): an app_offline replay is not pushed",
+        not is_eligible({**base, "app_offline": True}, "DK5EN-99"),
+    )
+    record(
+        "eligibility (e): app_offline False is pushed",
+        is_eligible({**base, "app_offline": False}, "DK5EN-99"),
+    )
+    record(
+        "eligibility (e): a UDP frame without the key is pushed",
+        is_eligible(base, "DK5EN-99"),
+    )
+    record(
+        "eligibility (e): the flag must be boolean True, a truthy string is not it",
+        is_eligible({**base, "app_offline": "yes"}, "DK5EN-99"),
     )
     # Clause (c) reached through the public predicate: an ACK from another station,
     # addressed to us, with a filter that would otherwise match it.

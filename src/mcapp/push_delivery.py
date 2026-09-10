@@ -209,9 +209,22 @@ def _push_text(payload: dict[str, Any]) -> str:
     return str(payload.get("text") or payload.get("msg") or "")
 
 
+# Contract v8: the firmware answers every `--` command with an ordinary text
+# frame from this literal pseudo-callsign (lower-case, no SSID, never
+# via-routed), dst "*". `storage/ingest._should_filter_message` refuses to
+# persist it with the same exact comparison; the push dispatcher subscribes to
+# the raw router topics, not to storage, so without this rule every
+# broadcast:true subscriber got a notification reading "--ackinfo on" after
+# each BLE reconnect (RX-03, doc/2026-09-10_1900-ble-protocol-parity-audit.md).
+# Compared against the RAW src, exact and case-sensitive: "RESPONSE-1" is a
+# valid amateur callsign and stays eligible.
+_COMMAND_REPLY_PSEUDO_CALL = "response"
+
+
 def _is_node_local_noise(payload: dict[str, Any]) -> bool:
     """Contract `eligibility` (c) / `eligibility_noise_semantics`: True iff the
-    message is a text ACK or a `{CET}` time broadcast.
+    message is a text ACK, a `{CET}` time broadcast, or (contract v8) a firmware
+    command reply from the `response` pseudo-callsign.
 
     Both arrive as ordinary `type:"msg"` text frames, so clause (a) passes them.
     Without this, the mesh's `"<CALL>  :ackNNN"` reply to every outbound message
@@ -230,6 +243,8 @@ def _is_node_local_noise(payload: dict[str, Any]) -> bool:
     (this one visible-but-silent case) is the accepted cost. See the
     contract's `eligibility_noise_semantics` for the accepted false positive.
     """
+    if payload.get("src") == _COMMAND_REPLY_PSEUDO_CALL:
+        return True
     text = _push_text(payload)
     return ":ack" in text or text.startswith("{CET}")
 
@@ -256,12 +271,23 @@ def is_eligible(payload: dict[str, Any], own_callsign: str) -> bool:
         the router topics, not to storage, so without this clause it
         announced raw `{pong}{451010884}` frames that no conversation
         view will ever show.
+    (e) must not carry the firmware's `app_offline` flag (contract v9,
+        `eligibility_app_offline_semantics`). Byte 5 of a BLE data frame
+        is a bitfield; the firmware sets 0x20 on every frame it replays
+        from its catch-up ring after a reconnect, on command replies and
+        on back-pressure notices, and the official app suppresses the
+        notification for it. `ble_protocol.decode_binary_message` emits it
+        as the boolean `app_offline`; a UDP datagram has no such byte and
+        never sets the key. Boolean True only, never merely truthy (RX-04,
+        doc/2026-09-10_1900-ble-protocol-parity-audit.md).
     """
     if payload.get("type") != "msg" or not _push_text(payload):
         return False
     if _is_node_local_noise(payload):
         return False
     if is_link_check_payload(_push_text(payload)):
+        return False
+    if payload.get("app_offline") is True:
         return False
     resolved_src = _resolve_source(str(payload.get("src") or ""))
     return resolved_src != own_callsign

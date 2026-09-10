@@ -2661,6 +2661,128 @@ async def _test_log_negotiated_mtu(record: Any) -> None:
         restore_logs()
 
 
+class _FakeA0TimingIface:
+    """Minimal `write_char_iface` stand-in for `A0_MIN_GAP_S` timing tests:
+    records `time.monotonic()` at each `call_write_value` and returns
+    immediately -- no real D-Bus, no BlueZ, no `WRITE_TIMEOUT_S` involved.
+    """
+
+    def __init__(self) -> None:
+        self.write_times: list[float] = []
+
+    async def call_write_value(self, _data: bytes, _options: dict[str, Any]) -> None:
+        self.write_times.append(time.monotonic())
+
+
+def _connected_adapter_for_write_timing() -> tuple[BLEAdapter, _FakeA0TimingIface]:
+    """A `BLEAdapter` with just enough state for `write()` to proceed --
+    `is_connected` True and a fake `write_char_iface` -- with no real D-Bus/
+    BlueZ. `write()` only checks `self.is_connected`/`self.write_char_iface`
+    before taking `_write_lock`; nothing else in the connect plumbing is
+    touched by these cases.
+    """
+    adapter = BLEAdapter()
+    adapter._status.state = ConnectionState.CONNECTED
+    fake_iface = _FakeA0TimingIface()
+    adapter.write_char_iface = cast("Any", fake_iface)
+    return adapter, fake_iface
+
+
+async def _test_a0_min_gap_between_consecutive_a0_writes(record: Any) -> None:
+    """Two 0xA0 TEXT_COMMAND writes landing in the same firmware main-loop
+    pass silently lose all but the last (see `A0_MIN_GAP_S`'s comment on
+    `textbuff_phone`). `write()` must enforce a minimum gap between
+    consecutive TEXT_COMMAND frames so two quick `send_message` calls do not
+    collide in the same firmware pass.
+
+    Discriminating: against `write()` before this gap logic existed, the two
+    recorded timestamps are ~0s apart, failing the assertion below. Verified
+    by hand during development (reverted `write()`'s gap block, ran this
+    suite, saw this case fail with a near-zero gap, then restored) per the
+    no-git-stash brief constraint.
+    """
+    adapter, fake_iface = _connected_adapter_for_write_timing()
+    ok1 = await adapter.send_message("hi", "*")
+    ok2 = await adapter.send_message("there", "*")
+    record("send_message x2: both writes report success", ok1 and ok2)
+    record(
+        "send_message x2: two A0 writes were actually recorded",
+        len(fake_iface.write_times) == 2,
+    )
+    if len(fake_iface.write_times) == 2:
+        gap = fake_iface.write_times[1] - fake_iface.write_times[0]
+        record(
+            "send_message x2: consecutive TEXT_COMMAND writes are >= A0_MIN_GAP_S apart "
+            f"(got {gap:.4f}s, need >= {ble_adapter.A0_MIN_GAP_S - 0.01:.4f}s)",
+            gap >= ble_adapter.A0_MIN_GAP_S - 0.01,
+        )
+
+
+async def _test_a0_min_gap_does_not_delay_non_a0_frame(record: Any) -> None:
+    """Only TEXT_COMMAND (0xA0) shares the firmware's single `textbuff_phone`
+    buffer; the binary config frames (0x20/0x50/0x55/0x70/0x80/0x90/0x95/0xF0)
+    use different firmware state and must never wait on `A0_MIN_GAP_S`, even
+    right after an A0 write.
+
+    Builds a raw TIME_SYNC (0x20) frame and calls `write()` directly rather
+    than going through `set_time()`: that helper sends its own `--utcoff` A0
+    command first, then an unrelated hardcoded 0.3s settle sleep, before the
+    0x20 write -- both would confound a timing assertion taken from the top
+    of `set_time()`, with nothing to do with `A0_MIN_GAP_S`.
+    """
+    adapter, _fake_iface = _connected_adapter_for_write_timing()
+    await adapter.send_message("hi", "*")
+    time_sync_frame = ble_adapter._frame(
+        ble_adapter.MsgType.TIME_SYNC, int(time.time()).to_bytes(4, byteorder="little")
+    )
+    start = time.monotonic()
+    ok = await adapter.write(time_sync_frame)
+    elapsed = time.monotonic() - start
+    record("raw TIME_SYNC write right after send_message: reports success", ok)
+    record(
+        f"raw TIME_SYNC (0x20) write right after send_message is not delayed by "
+        f"A0_MIN_GAP_S (got {elapsed:.4f}s)",
+        elapsed < 0.1,
+    )
+
+
+async def _test_a0_min_gap_applies_to_send_command_too(record: Any) -> None:
+    """`send_command` builds the identical TEXT_COMMAND frame `send_message`
+    does, so a `send_message` immediately followed by `send_command` must be
+    gapped exactly like two `send_message` calls -- the gap is keyed on the
+    frame's type byte, not on which method built the frame.
+    """
+    adapter, fake_iface = _connected_adapter_for_write_timing()
+    await adapter.send_message("hi", "*")
+    await adapter.send_command("--pos")
+    record(
+        "send_message then send_command: both are A0, both writes recorded",
+        len(fake_iface.write_times) == 2,
+    )
+    if len(fake_iface.write_times) == 2:
+        gap = fake_iface.write_times[1] - fake_iface.write_times[0]
+        record(
+            "send_message then send_command: gap enforced across different A0-sending "
+            f"methods (got {gap:.4f}s, need >= {ble_adapter.A0_MIN_GAP_S - 0.01:.4f}s)",
+            gap >= ble_adapter.A0_MIN_GAP_S - 0.01,
+        )
+
+
+async def _test_a0_min_gap_no_delay_for_first_write(record: Any) -> None:
+    """A fresh session's very first TEXT_COMMAND write has no predecessor
+    marker (`_last_a0_write_monotonic` is `None`) and must not wait at all.
+    """
+    adapter, _fake_iface = _connected_adapter_for_write_timing()
+    start = time.monotonic()
+    ok = await adapter.send_message("hi", "*")
+    elapsed = time.monotonic() - start
+    record("send_message with no prior A0 write: reports success", ok)
+    record(
+        f"send_message with no prior A0 write: not delayed (got {elapsed:.4f}s)",
+        elapsed < 0.1,
+    )
+
+
 def _test_finalize_connection_logs_mtu(record: Any) -> None:
     """`_finalize_successful_connection` -- the ONE place both `connect()`'s
     retry ladder and `ensure_connected()`'s composite converge on success --
@@ -5819,6 +5941,14 @@ async def run_ble_service_tests() -> bool:
     _test_finalize_connection_logs_mtu(_record)
     await _test_send_command_oversized_raises_clear_error(_record)
     await _test_log_negotiated_mtu(_record)
+    # A0_MIN_GAP_S (TEXT_COMMAND inter-write spacing) -- ble_adapter.py write().
+    for case in (
+        _test_a0_min_gap_between_consecutive_a0_writes,
+        _test_a0_min_gap_does_not_delay_non_a0_frame,
+        _test_a0_min_gap_applies_to_send_command_too,
+        _test_a0_min_gap_no_delay_for_first_write,
+    ):
+        await case(_record)
     for case in (
         _test_set_callsign_golden_bytes,
         _test_set_callsign_length_validation,

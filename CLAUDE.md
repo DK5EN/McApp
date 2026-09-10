@@ -172,8 +172,17 @@ webapp's Gateway Availability card in Settings. Design and the on-air measuremen
 
 ## MHeard Register (`SRC` / `GW` / `PP`)
 
-The BLE `TYP: "MH"` register, extended by firmware 2026-08-27. Adoption plan and the field
-evidence: `doc/2026-08-28_0900-firmware-4.35p.08.28-adoption.md`.
+The BLE `TYP: "MH"` register. **`SRC`, `GW` and `PP` were added upstream on 2026-08-27 and
+REVERTED on 2026-08-28** (fork-main `dc7d56d7` for `SRC`/`GW`, `17d1796e` for `PP`; the dead
+clamp code went on 2026-09-01). The live builder emits exactly 13 keys: `TYP CALL DATE TIME PLT
+HW MOD RSSI SNR DIST PL MESH NCNT`. The parser is deliberately RETAINED and inert: all three are
+read with `.get()`, every coercer is `None`-safe, so a firmware that re-adds them is picked up
+without a code change. Against current firmware `hey_path.py`, the `"heard"` upsert and the
+BLE-path `gw` write never fire, and on a BLE-only box `station_positions.gw` is not set from
+MHeard. Do not chase a missing `SRC`/`GW`/`PP` as a bug. The rules below describe the reverted
+wire contract and stay authoritative for the parser (audit: RX-07 in
+`doc/2026-09-10_1900-ble-protocol-parity-audit.md`; adoption plan and field evidence:
+`doc/2026-08-28_0900-firmware-4.35p.08.28-adoption.md`).
 
 - **`CALL` is the LAST HOP, `SRC` is the ORIGINATOR, and they are different claims.** `CALL` is the
   station whose transmission the frame's own `RSSI`/`SNR` measured; roughly two thirds of HEY
@@ -341,6 +350,42 @@ Web Push to browser / iOS-PWA clients, sharing one wire contract with mc-chat so
 
 `/etc/mcapp/config.json` (dev: `/etc/mcapp/config.dev.json`, auto-selected via `MCAPP_ENV=dev`).
 BLE mode: `remote` or `disabled` (`MCAPP_BLE_MODE` env override). See `ble_service/README.md` for the BLE service API.
+
+## Inbound Charset (`text_decode.py`)
+
+One policy, one module, both ingest routes. Firmware background: CHR-03
+(`MeshCom-Firmware` fork-main `16670de9` + `094636b2`), `docs/BACKLOG.md` there.
+
+- **The payload is no longer guaranteed valid UTF-8, by firmware design.** Senders like
+  PinPoint put umlauts on the wire as single CP1252 bytes (`ü` = `0xFC`, not `C3 BC`); since
+  CHR-03 the firmware relays them unchanged instead of dropping them, so the deciding is ours.
+  `decode_text` re-reads every UTF-8-rejected byte as CP1252. `errors="ignore"` — what both
+  paths used before — deletes the character silently. Only the five bytes undefined in CP1252
+  (`0x81 0x8D 0x8F 0x90 0x9D`) become `U+FFFD`.
+- **The filter is a BLACKLIST and must stay one.** It rejects Unicode categories
+  `Cc Cf Cs Co Cn` and nothing else. Its predecessor, `is_allowed_char`, was a whitelist that
+  had to be extended by hand for every legitimate character nobody had enumerated, and it lost
+  that race repeatedly: joined emoji sequences (2026-08-30), `Ç` and `Ñ` while `ç` and `ñ` were
+  listed, the entire Nordic/Icelandic set, and every decomposed accent (`u` + `U+0308`, a mark,
+  therefore neither symbol nor punctuation). Adding characters back to an allow-list is the
+  wrong repair for the next report of this shape.
+- **`U+200D` and the tag range `U+E0020..U+E007F` are the only `Cf` exceptions.** They carry no
+  glyph and only bind neighbours into ONE grapheme, so dropping one SPLITS a sequence rather
+  than removing a character. The variation selectors (`Mn`) and the enclosing keycap (`Me`) need
+  no exception — marks are not a rejected category.
+- **`Cn` is judged against the RUNNING Python's Unicode tables.** A codepoint assigned after that
+  release reads as unassigned and is dropped. It is the one way this filter can still be wrong
+  about a legitimate character, and it self-heals on a Python upgrade.
+- **Both transports must use it, and that is the point.** The UDP path ran the whitelist over the
+  whole datagram; the BLE path ran no character filter at all. The same message arrives on both
+  (~100 ms apart) and `_claim_recent_ingest` keeps whichever copy lands FIRST, so the stored text
+  of any message with an unusual character was decided by a transport race. In `ble_protocol.py`
+  this applies to the message BODY only — `path` and `dest` are callsign fields and stay ASCII.
+- **`ble_service/src/main.py`'s `D{` decode stays strict on purpose.** There the
+  `UnicodeDecodeError` IS the evidence of the firmware's 244-byte register clamp cutting
+  mid-codepoint. A CP1252 fallback there would destroy the truncation detector.
+- mc-chat carries the same `decode_text` semantics in `meshcom_mock/decoder.py`. Ported, never
+  imported — separate repos.
 
 ## Key Gotchas
 

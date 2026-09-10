@@ -21,6 +21,7 @@ from struct import unpack
 from typing import Any
 
 from .hey_path import parse_hey_chain
+from .text_decode import decode_and_filter
 from .util import FEET_TO_METERS, is_placeholder_callsign, now_ms
 
 PAYLOAD_TYPE_MSG = 58  # ":" text message frame
@@ -29,8 +30,10 @@ PAYLOAD_TYPE_ACK = 65  # acknowledgement frame
 
 # MH register `PLT` value for a HEY beacon — mheard_functions.cpp:335:
 # `mhdoc["PLT"] = (uint8_t)mheardLine.mh_payload_type`. `GW` (destination-path
-# gateway flag) is only meaningful on this payload type; see `_coerce_gw`'s
-# call site in `transform_mh`.
+# gateway flag) would only be meaningful on this payload type; see
+# `_coerce_gw`'s call site in `transform_mh`. `GW` itself was reverted
+# upstream 2026-08-28 and the current fork-main firmware never emits it —
+# RX-07, doc/2026-09-10_1900-ble-protocol-parity-audit.md.
 _MH_PAYLOAD_TYPE_HEY = 0x40  # '@'
 
 # --- ACK attribution appendix (firmware proposal `docs/ack-wer-hat-quittiert.md`) ---
@@ -137,8 +140,15 @@ def strip_prefix(msg: str, prefix: str = ":") -> str:
 #   [0]        '@' (already checked by caller / the [:2] checks below)
 #   [1:1+_HEADER_LEN]   _HEADER_FORMAT: payload_type(B) msg_id(I,LE) max_hop_raw(B)
 #   [1+_HEADER_LEN:-_FOOTER_LEN]   variable-length routing path + dest + message text
-#   [-_FOOTER_LEN:-1]   _FOOTER_FORMAT: zero(B) hardware_id(B) lora_mod(B) fcs(H)
-#                       fw(B) lasthw(B) fw_sub(B) ending(B) time_ms(I)
+#   [-_FOOTER_LEN:-5]   _FOOTER_FORMAT: zero(B) hardware_id(B) lora_mod(B) fcs(H)
+#                       fw(B) lasthw(B) fw_sub(B) ending(B)
+#   [-5:-1]    node_rx_ts (uint32, BIG-endian) — the NODE's own reception clock
+#              (`getUnixClock()`, UTC seconds), appended by `addBLEOutBuffer()`
+#              on every non-`D{` frame (firmware loop_functions.cpp:601-609).
+#              Every other field in this layout is little-endian; this one is
+#              not, because it is the node's, not ours. See
+#              `_decode_node_rx_ts_ms` (RX-01, doc/2026-09-10_1900-ble-protocol-
+#              parity-audit.md).
 #   [-1]       trailing terminator byte (not unpacked)
 #
 # The FCS (footer offset 3, 2 bytes) covers byte_msg[1:-_FCS_EXCLUDED_TRAILER_LEN] —
@@ -146,10 +156,33 @@ def strip_prefix(msg: str, prefix: str = ":") -> str:
 # explicitly excluding the FCS field itself and everything after it.
 _HEADER_FORMAT = "<BIB"  # payload_type, msg_id, max_hop_raw
 _HEADER_LEN = 6  # bytes covered by _HEADER_FORMAT
-# zero, hardware_id, lora_mod, fcs, fw, lasthw, fw_sub, ending, time_ms
-_FOOTER_FORMAT = "<BBBHBBBBI"
-_FOOTER_LEN = 14  # total trailing footer width, incl. the 1 terminator byte
+# zero, hardware_id, lora_mod, fcs, fw, lasthw, fw_sub, ending — all little-endian.
+# The node_rx_ts trailer that follows is BIG-endian and decoded separately by
+# _decode_node_rx_ts_ms; it is deliberately NOT part of this struct.
+_FOOTER_FORMAT = "<BBBHBBBB"
+_FOOTER_STRUCT_LEN = 9  # bytes covered by _FOOTER_FORMAT
+_FOOTER_LEN = 14  # total trailing footer width: struct(9) + node_rx_ts(4) + terminator(1)
 _FCS_EXCLUDED_TRAILER_LEN = 11  # FCS covers byte_msg[1 : -_FCS_EXCLUDED_TRAILER_LEN]
+
+# RX-04: max_hop_raw (header byte 5) is a bitfield, not just a hop count —
+# aprs_functions.cpp:1094-1114 ORs the hop count with three status bits and a
+# mesh bit, high nibble. The low nibble (0x0F) is max_hop, decoded separately
+# above/below; these four are the individual high-nibble bits. `app_offline`
+# marks a frame the node buffered while no phone was attached (catch-up
+# replay), or a command reply / back-pressure notice — the app treats it as
+# do-not-announce. See RX-04, doc/2026-09-10_1900-ble-protocol-parity-audit.md.
+_FLAG_MSG_SERVER = 0x80
+_FLAG_MSG_TRACK = 0x40
+_FLAG_APP_OFFLINE = 0x20
+_FLAG_MESH = 0x10
+
+# RX-01 bounds for the node_rx_ts trailer. Below MIN: the node's own clock has
+# not synced yet (reads near zero right after a reboot, before NTP/GPS fix) —
+# not a real reception time. More than MAX_SKEW_S ahead of our own clock:
+# nothing legitimate is from the future, so either the node's clock or ours is
+# wrong and the value is not trustworthy either way.
+_NODE_RX_TS_MIN_S = 1706745600  # 2024-02-01T00:00:00Z
+_NODE_RX_TS_MAX_SKEW_S = 60
 
 
 def _decode_ack_frame(
@@ -191,6 +224,25 @@ def _decode_ack_frame(
     return result
 
 
+def _decode_node_rx_ts_ms(byte_msg: bytes) -> int | None:
+    """Decode the firmware's 4-byte reception-timestamp trailer (RX-01).
+
+    UTC seconds, BIG-endian, at `byte_msg[-5:-1]` — appended by
+    `addBLEOutBuffer()` after the footer struct and before the terminator
+    (loop_functions.cpp:601-609). This is the NODE's clock, not ours, so an
+    out-of-range value (unsynced after a reboot; anything from the future)
+    is reported as `None` rather than trusted — callers then fall back to
+    arrival time. Zero is not a valid case: it fails the MIN bound.
+    """
+    raw_seconds: int
+    (raw_seconds,) = unpack(">I", byte_msg[-5:-1])
+    if raw_seconds < _NODE_RX_TS_MIN_S:
+        return None
+    if raw_seconds > now_ms() // 1000 + _NODE_RX_TS_MAX_SKEW_S:
+        return None
+    return raw_seconds * 1000
+
+
 def _decode_data_frame(  # noqa: PLR0913 - all fields are needed from the shared header/fcs computation
     byte_msg: bytes,
     payload_type: int,
@@ -198,6 +250,10 @@ def _decode_data_frame(  # noqa: PLR0913 - all fields are needed from the shared
     *,
     max_hop: int,
     mesh_info: int,
+    msg_server: bool,
+    msg_track: bool,
+    app_offline: bool,
+    mesh: bool,
     remaining_msg: bytes,
     calced_fcs: int,
 ) -> dict[str, Any] | None:
@@ -232,12 +288,13 @@ def _decode_data_frame(  # noqa: PLR0913 - all fields are needed from the shared
     dest = remaining_msg[:split_idx].decode("utf-8", errors="ignore")
 
     raw = remaining_msg[split_idx : remaining_msg.find(b"\00")]
-    message = raw.decode("utf-8", errors="ignore").strip()
+    message = decode_and_filter(raw).strip()
 
     # Extract binary footer (fixed structure at end of message)
-    [_zero, hardware_id, lora_mod, fcs, fw, lasthw, fw_sub, _ending, _time_ms] = unpack(
-        _FOOTER_FORMAT, byte_msg[-_FOOTER_LEN:-1]
+    [_zero, hardware_id, lora_mod, fcs, fw, lasthw, fw_sub, _ending] = unpack(
+        _FOOTER_FORMAT, byte_msg[-_FOOTER_LEN:-5]
     )
+    node_rx_ts_ms = _decode_node_rx_ts_ms(byte_msg)
 
     # Split lasthw byte into hardware ID and last sending flag
     last_hw_id = lasthw & 0x7F  # Bits 0-6: Hardware-Typ (0-127)
@@ -263,6 +320,10 @@ def _decode_data_frame(  # noqa: PLR0913 - all fields are needed from the shared
         "msg_id": msg_id,
         "max_hop": max_hop,
         "mesh_info": mesh_info,
+        "msg_server": msg_server,
+        "msg_track": msg_track,
+        "app_offline": app_offline,
+        "mesh": mesh,
         "path": path,
         "dest": dest,
         "message": message,
@@ -273,6 +334,7 @@ def _decode_data_frame(  # noqa: PLR0913 - all fields are needed from the shared
         "last_hw_id": last_hw_id,
         "last_sending": last_sending,
         "fcs_ok": fcs_ok,
+        "node_rx_ts_ms": node_rx_ts_ms,
     }
 
 
@@ -289,6 +351,14 @@ def decode_binary_message(byte_msg: bytes) -> dict[str, Any] | None:
     max_hop = max_hop_raw & 0x0F
     mesh_info = max_hop_raw >> 4
 
+    # RX-04: individual high-nibble flag bits (byte 5 is ack_type on ACK
+    # frames, so these are only meaningful — and only computed for use — on
+    # the data-frame path below).
+    msg_server = bool(max_hop_raw & _FLAG_MSG_SERVER)
+    msg_track = bool(max_hop_raw & _FLAG_MSG_TRACK)
+    app_offline = bool(max_hop_raw & _FLAG_APP_OFFLINE)
+    mesh = bool(max_hop_raw & _FLAG_MESH)
+
     # Calculate frame checksum
     calced_fcs = calc_fcs(byte_msg[1:-_FCS_EXCLUDED_TRAILER_LEN])
 
@@ -304,6 +374,10 @@ def decode_binary_message(byte_msg: bytes) -> dict[str, Any] | None:
             msg_id,
             max_hop=max_hop,
             mesh_info=mesh_info,
+            msg_server=msg_server,
+            msg_track=msg_track,
+            app_offline=app_offline,
+            mesh=mesh,
             remaining_msg=remaining_msg,
             calced_fcs=calced_fcs,
         )
@@ -588,6 +662,12 @@ def transform_common_fields(input_dict: dict[str, Any], own_callsign: str = "") 
         "via": via,
         "max_hop": input_dict.get("max_hop"),
         "mesh_info": input_dict.get("mesh_info"),
+        # RX-04: the individual byte-5 flag bits, `None`-safe passthrough
+        # (absent on non-data frames, same shape as max_hop/mesh_info above).
+        "msg_server": input_dict.get("msg_server"),
+        "msg_track": input_dict.get("msg_track"),
+        "app_offline": input_dict.get("app_offline"),
+        "mesh": input_dict.get("mesh"),
         "lora_mod": input_dict.get("lora_mod"),
         "last_hw_id": input_dict.get("last_hw_id"),
         "last_sending": input_dict.get("last_sending"),
@@ -596,7 +676,13 @@ def transform_common_fields(input_dict: dict[str, Any], own_callsign: str = "") 
         # only, never a filtering/acceptance signal. Absent on non-data frames
         # (MHeard/telemetry/generic BLE), so this key is None there, same as UDP.
         "fcs_ok": input_dict.get("fcs_ok"),
-        "timestamp": now_ms(),
+        # RX-01: the node's own reception clock (trailer, big-endian UTC
+        # seconds) when the frame carried a valid one; `None` on non-data
+        # frames or an out-of-range trailer. Passed through unconditionally
+        # so the next layer (ble_client_remote._finalize_transformed_output)
+        # can tell a trustworthy trailer timestamp from a fallback.
+        "node_rx_ts_ms": input_dict.get("node_rx_ts_ms"),
+        "timestamp": input_dict.get("node_rx_ts_ms") or now_ms(),
     }
 
 
@@ -700,7 +786,11 @@ def _coerce_gw(value: Any) -> int | None:
     """Coerce the MH register's `GW` flag to a strict `0`/`1` `int`, never a
     `bool` (which would round-trip through `json.dumps` as `true`/`false`
     and land in the `station_positions.gw` INTEGER column as something
-    unexpected). `None` when the field is absent.
+    unexpected). `None` when the field is absent — which, against the
+    current fork-main firmware, is unconditionally the case: `GW` was
+    reverted upstream 2026-08-28 (RX-07, doc/2026-09-10_1900-ble-protocol-
+    parity-audit.md). This coercer is retained and inert for that reason, so
+    a firmware build that re-adds the field needs no code change here.
 
     The string forms `"0"`/`"1"` are handled explicitly because plain
     truthiness gets `"0"` wrong (a non-empty string is always truthy in
@@ -770,16 +860,23 @@ def _coerce_mh_origin(value: Any) -> str | None:
     """`SRC` -> uppercased, stripped callsign, or `None` if absent, blank,
     not a string, or an unconfigured-node placeholder.
 
-    The placeholder filter is load-bearing, not tidiness. A factory-fresh or
-    reset node beacons as `XX0XXX-00` (esp32_flash.h's `node_call` default),
-    and that is a valid callsign SHAPE, so nothing else rejects it. Observed
-    live on 2026-08-28: one in four HEY beacons carrying an originator named a
-    placeholder. Recording it would create a station row that is not a station
-    — and every unconfigured node in the field collapses onto that single row,
-    so its `last_seen` and `gw` would be a meaningless mixture of them all.
-    `_detect_node_identity` refuses the same set for the same reason (it will
-    not ADOPT a placeholder as our identity); this refuses to RECORD one as a
-    heard station.
+    `SRC` was added upstream 2026-08-27 and REVERTED the next day, 2026-08-28
+    (RX-07, doc/2026-09-10_1900-ble-protocol-parity-audit.md); the current
+    fork-main firmware's live MH builder never emits it, so this coercer is
+    retained and inert — it always sees `None` today — purely so a firmware
+    build that re-adds `SRC` is picked up with no code change here.
+
+    The placeholder filter is load-bearing, not tidiness, for whenever `SRC`
+    is live. A factory-fresh or reset node beacons as `XX0XXX-00`
+    (esp32_flash.h's `node_call` default), and that is a valid callsign
+    SHAPE, so nothing else rejects it. Observed on 2026-08-28, while `SRC`
+    was still live: one in four HEY beacons carrying an originator named a
+    placeholder. Recording it would create a station row that is not a
+    station — and every unconfigured node in the field collapses onto that
+    single row, so its `last_seen` and `gw` would be a meaningless mixture of
+    them all. `_detect_node_identity` refuses the same set for the same
+    reason (it will not ADOPT a placeholder as our identity); this refuses to
+    RECORD one as a heard station.
     """
     if not isinstance(value, str):
         return None
@@ -815,40 +912,59 @@ def _coerce_mh_payload_type(value: Any) -> int | None:
 def transform_mh(input_dict: dict[str, Any]) -> dict[str, Any]:
     """Transform a BLE MHeard beacon.
 
-    Two schemas share `TYP: "MH"`: the live builder
-    (`mheard_functions.cpp:331`) sends `SRC`/`GW`, and `PP` when present; the
-    `--mheard` table dump (`mheard_functions.cpp:651`) sends none of the
-    three, reconstructing from a stored `|`-separated string that never held
-    them. All three are therefore OPTIONAL here — never subscript them.
+    RX-07 (doc/2026-09-10_1900-ble-protocol-parity-audit.md): `SRC`/`GW`/`PP`
+    were added to the live MH builder upstream on 2026-08-27 (`SRC`/`GW`:
+    commit `c04ed7b0`; `PP`: `fff4010e`) and REVERTED the very next day,
+    2026-08-28 (`SRC`/`GW`: `dc7d56d7`; `PP`: `17d1796e`). The current
+    fork-main firmware's live MH builder emits exactly 13 keys — `TYP CALL
+    DATE TIME PLT HW MOD RSSI SNR DIST PL MESH NCNT`
+    (`mheard_functions.cpp:400-414`) — none of `SRC`/`GW`/`PP` among them; the
+    `--mheard` table dump (`mheard_functions.cpp:651`) never sent any of the
+    three either, reconstructing from a stored `|`-separated string that
+    never held them.
+
+    The parsing below is DELIBERATELY RETAINED, not dead code: every access
+    is `.get()` and every coercer (`_coerce_mh_origin`, `_coerce_gw`,
+    `parse_hey_chain`) is `None`-safe, so a firmware build that re-adds the
+    fields is picked up here with no code change. Against the current
+    firmware `mh_origin` is always `None`, `gw` is always `None`, and
+    `hey_chain`/`hey_chain_raw` are always `None` — which means the
+    `hey_path` parser, the `"heard"` upsert keyed on `mh_origin`, and every
+    BLE-path write to `station_positions.gw` are INERT against this
+    firmware, not merely quiet.
 
     `CALL` is the LAST HOP: the station whose transmission this frame's own
     `RSSI`/`SNR` actually measured, and it stays keyed to `src` exactly as
     before (migration v22 exists because that attribution was once wrong —
-    do not rekey it). `SRC` is the ORIGINATING station: it owns identity
-    (`mh_origin`) and, on a HEY frame only, gateway status (`gw`, derived
-    from the destination path the originator sets and relays never modify).
-    `GW` is `0` on every non-HEY payload because the destination path is
+    do not rekey it). This is unaffected by the revert. Were `SRC`/`GW` to
+    return: `SRC` is the ORIGINATING station, owning identity (`mh_origin`)
+    and, on a HEY frame only, gateway status (`gw`, derived from the
+    destination path the originator sets and relays never modify). `GW`
+    would be `0` on every non-HEY payload because the destination path is
     something else entirely, so `gw` is emitted only when `PLT ==
     _MH_PAYLOAD_TYPE_HEY` (`0x40`) — otherwise `None`, fail-closed, rather
-    than asserting a claim the frame never made. `mh_origin` stays
-    ungated: `SRC` is set unconditionally on every frame type
-    (`mheard_functions.cpp:350`). On a typical site roughly two thirds of
-    HEY observations are relayed, so `SRC != CALL` is the common case, and
-    `gw` describes `SRC`, never `CALL` — attributing it to `CALL` would be
-    wrong for every relayed beacon.
+    than asserting a claim the frame never made. `mh_origin` stays ungated:
+    `SRC` was set unconditionally on every frame type
+    (`mheard_functions.cpp:350`, before the revert). On a typical site
+    roughly two thirds of HEY observations were relayed, so `SRC != CALL`
+    was the common case, and `gw` describes `SRC`, never `CALL` —
+    attributing it to `CALL` would be wrong for every relayed beacon.
 
-    `PP`'s absence carries no information: as of firmware 2026-08-28 the
-    register drops `PP` (then `DIST`) whenever the JSON would exceed 244
-    chars, which starts at roughly 5 relay hops. A missing `hey_chain` on a
-    deep path is therefore the NORM, not a sign of a direct link — do not
-    read "no chain" as "no relays".
+    `PP` carried a hop-by-hop signal-report chain while it existed; its
+    absence carried no information even then, because the register dropped
+    `PP` (then `DIST`) whenever the JSON would exceed 244 chars — starting at
+    roughly 5 relay hops, precisely the deep chains where it would have been
+    most interesting. Against the current, fully-reverted firmware `PP` is
+    simply never sent at all, full stop; a missing `hey_chain` says nothing
+    about hop count either way.
 
     `NCNT` and `DIST` each carry a firmware sentinel that this transformer
     normalises to `None` at this wire boundary (`_coerce_mh_ncnt`,
     `_coerce_mh_dist`) — `0` and any negative value respectively are "not
     set", not real measurements. The chain's own `origin_ncnt`/`hops[].ncnt`
     are unaffected: those are fresh transmit-time values, and a `0` there is
-    real.
+    real. Both `NCNT`/`DIST` and this sentinel handling are independent of
+    the `SRC`/`GW`/`PP` revert and stay live today.
     """
     node_timestamp = timestamp_from_date_time(input_dict["DATE"], input_dict["TIME"])
     pp_raw = input_dict.get("PP")
