@@ -1436,6 +1436,121 @@ def _test_lora_mod_mask(results: list[tuple[str, bool]]) -> None:
     )
 
 
+FLAG_ALL_SET_RAW = 0xF7  # max_hop 7, mesh_info 15, all four flag bits set
+FLAG_NONE_SET_RAW = 0x03  # max_hop 3, mesh_info 0, no flag bits set
+
+
+def _test_flag_bits(results: list[tuple[str, bool]]) -> None:
+    """RX-04: byte 5 (max_hop_raw) is a bitfield, not just a hop count —
+    aprs_functions.cpp:1094-1114: `max_hop | (msg_server<<7) | (msg_track<<6)
+    | (msg_app_offline<<5) | (bMESH<<4)`. decode_binary_message must surface
+    the four high bits as named booleans alongside the UNCHANGED `max_hop`/
+    `mesh_info`. Pre-fix, `app_offline`/`msg_server`/`msg_track`/`mesh` do not
+    exist in the decoded dict at all (confirmed by hand against the
+    unmodified decoder before this fix — a direct subscript below raises
+    KeyError)."""
+    # Golden MSG frame: MSG_MAX_HOP_RAW == 0x23 -> 0x20 (app_offline) set only.
+    msg_decoded = decode_binary_message(MSG_FRAME)
+    if msg_decoded is None:
+        _check(results, "flag bits: golden MSG frame decodes", False)
+        return
+    _check(results, "golden MSG mesh_info unchanged", msg_decoded["mesh_info"] == MSG_MESH_INFO)
+    _check(results, "golden MSG (0x23) app_offline True", msg_decoded["app_offline"] is True)
+    _check(results, "golden MSG (0x23) msg_server False", msg_decoded["msg_server"] is False)
+    _check(results, "golden MSG (0x23) msg_track False", msg_decoded["msg_track"] is False)
+    _check(results, "golden MSG (0x23) mesh False", msg_decoded["mesh"] is False)
+
+    # Golden POS frame: POS_MAX_HOP_RAW == 0x12 -> 0x10 (mesh) set only.
+    pos_decoded = decode_binary_message(POS_FRAME)
+    if pos_decoded is None:
+        _check(results, "flag bits: golden POS frame decodes", False)
+        return
+    _check(results, "golden POS mesh_info unchanged", pos_decoded["mesh_info"] == POS_MESH_INFO)
+    _check(results, "golden POS (0x12) mesh True", pos_decoded["mesh"] is True)
+    _check(results, "golden POS (0x12) app_offline False", pos_decoded["app_offline"] is False)
+    _check(results, "golden POS (0x12) msg_server False", pos_decoded["msg_server"] is False)
+    _check(results, "golden POS (0x12) msg_track False", pos_decoded["msg_track"] is False)
+
+    # All bits set: max_hop 7, mesh_info 15, all four booleans True.
+    all_set_frame = _build_data_frame(
+        MSG_TYPE_BYTE,
+        MSG_MSG_ID,
+        FLAG_ALL_SET_RAW,
+        MSG_PATH.encode() + MSG_DEST.encode() + MSG_MESSAGE.encode(),
+        (
+            MSG_HARDWARE_ID,
+            MSG_LORA_MOD,
+            MSG_FW,
+            MSG_LASTHW,
+            MSG_FW_SUB_BYTE,
+            MSG_ENDING,
+            MSG_TIME_MS,
+        ),
+    )
+    all_set = decode_binary_message(all_set_frame)
+    if all_set is None:
+        _check(results, "flag bits: 0xF7 frame decodes", False)
+        return
+    _check(results, "0xF7 max_hop == 7", all_set["max_hop"] == 0x07)
+    _check(results, "0xF7 mesh_info == 15", all_set["mesh_info"] == 0x0F)
+    _check(
+        results,
+        "0xF7 all four flags True",
+        all_set["msg_server"] is True
+        and all_set["msg_track"] is True
+        and all_set["app_offline"] is True
+        and all_set["mesh"] is True,
+    )
+
+    # No bits set: max_hop 3, mesh_info 0, all four booleans False.
+    none_set_frame = _build_data_frame(
+        MSG_TYPE_BYTE,
+        MSG_MSG_ID,
+        FLAG_NONE_SET_RAW,
+        MSG_PATH.encode() + MSG_DEST.encode() + MSG_MESSAGE.encode(),
+        (
+            MSG_HARDWARE_ID,
+            MSG_LORA_MOD,
+            MSG_FW,
+            MSG_LASTHW,
+            MSG_FW_SUB_BYTE,
+            MSG_ENDING,
+            MSG_TIME_MS,
+        ),
+    )
+    none_set = decode_binary_message(none_set_frame)
+    if none_set is None:
+        _check(results, "flag bits: 0x03 frame decodes", False)
+        return
+    _check(
+        results,
+        "0x03 all four flags False",
+        none_set["msg_server"] is False
+        and none_set["msg_track"] is False
+        and none_set["app_offline"] is False
+        and none_set["mesh"] is False,
+    )
+
+    # transform_msg must carry the four booleans through unchanged.
+    out = transform_msg(msg_decoded, "")
+    _check(
+        results,
+        "transform_msg carries the four flag booleans through",
+        out.get("app_offline") is True
+        and out.get("msg_server") is False
+        and out.get("msg_track") is False
+        and out.get("mesh") is False,
+    )
+
+    # ACK frames: byte 5 is ack_type there, never flags — app_offline must be absent.
+    ack_decoded = decode_binary_message(_build_ack_frame(ACK_MSG_ID, ACK_TYPE_NODE))
+    _check(
+        results,
+        "ACK decode output has no app_offline key",
+        ack_decoded is not None and "app_offline" not in ack_decoded,
+    )
+
+
 def _test_i_register_fwdate_passthrough(results: list[tuple[str, bool]]) -> None:
     """A `TYP: "I"` frame's `FWDATE` passes through dispatcher() unchanged and
     stays an int — the webapp depends on this; it briefly shipped as a string
@@ -1547,6 +1662,7 @@ def run_ble_protocol_tests() -> bool:
     _test_mh_sentinel_coercion(results)
     _test_mh_plt_gate(results)
     _test_lora_mod_mask(results)
+    _test_flag_bits(results)
     _test_i_register_fwdate_passthrough(results)
 
     for label, ok in results:
