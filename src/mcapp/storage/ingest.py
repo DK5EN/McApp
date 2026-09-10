@@ -8,6 +8,7 @@ backfill_aprs_symbol_escapes repair job for the firmware's double-escaped APRS
 symbol table id.
 """
 
+import asyncio
 import contextlib
 import json
 import re
@@ -105,6 +106,41 @@ _WEATHER_BEACON_FIELDS = ("temp1", "temp2", "hum", "hum2", "qfe", "qnh", "gas", 
 # so the set never reaches this in normal operation; it is a bound, not a tuning.
 _RECENT_INGEST_PRUNE_AT = 4096
 
+# 2026-09-10 BLE audit follow-up: the UDP and BLE copies of one frame carry
+# COMPLEMENTARY halves (UDP: rssi/snr; BLE: hw_id/lora_mod/max_hop/mesh_info/
+# fcs_ok/last_hw_id/last_sending, plus firmware/fw_sub which UDP also has) —
+# these are the columns `_enrich_duplicate_row` fills, NULL-only, on the
+# already-stored row instead of discarding the duplicate whole.
+_ENRICH_COLUMNS: tuple[str, ...] = (
+    "rssi",
+    "snr",
+    "hw_id",
+    "lora_mod",
+    "max_hop",
+    "mesh_info",
+    "fcs_ok",
+    "last_hw_id",
+    "last_sending",
+    "firmware",
+    "fw_sub",
+)
+
+# Bounded poll for the one case where the SECOND copy of a duplicate frame
+# detects the collision (via the in-memory claim in `_claim_recent_ingest`)
+# before the FIRST copy's own INSERT has committed. The two are separate
+# asyncio tasks; under the synthetic `asyncio.gather` shape the test suite
+# uses to reproduce the production race deterministically, the loser's
+# synchronous prefix can finish (claim fails -> immediately "duplicate",
+# no await needed to know that) before the winner's own first real DB await
+# (its backstop SELECT) has even resolved, i.e. before the winner has
+# INSERTed anything to enrich. In production the two copies are genuinely
+# separate real-time events 40-170 ms apart, so the winner is already
+# committed well before the loser's store_message call starts and this loop
+# exits on its first check. 40 x 5 ms = 200 ms is comfortably above any local
+# SQLite round-trip.
+_ENRICH_RACE_POLL_ATTEMPTS = 40
+_ENRICH_RACE_POLL_INTERVAL_S = 0.005
+
 # --- APRS symbol double-escape (firmware bug, see backfill_aprs_symbol_escapes) --
 # `FIRMWARE_DOUBLED_BACKSLASH` (TWO 0x5C characters, what the firmware sends),
 # `APRS_ALTERNATE_TABLE` (ONE, the real symbol table id) and the normalizer that
@@ -159,6 +195,133 @@ class IngestMixin(StorageBase):
                 del self._recent_ingest[k]
         self._recent_ingest[key] = timestamp
         return True
+
+    async def _find_duplicate_row_id(
+        self, msg_id: Any, callsign: str, timestamp: int
+    ) -> int | None:
+        """Locate the row a duplicate frame belongs to, with EXACTLY the same
+        predicate the dedup backstop SELECT uses (msg_id + window + resolved
+        sender base) — see the comment at store_message's dedup gate. Shared
+        by that backstop check and by the enrichment path below so the two
+        can never drift apart; drifting would let a relay copy an hour later
+        touch the wrong message.
+        """
+        rows = await self._query(
+            "SELECT id FROM messages WHERE msg_id = ? AND timestamp > ?"
+            " AND UPPER(TRIM(CASE WHEN instr(src, ',') > 0"
+            "   THEN substr(src, 1, instr(src, ',') - 1) ELSE src END)) = ?"
+            " ORDER BY timestamp ASC, id ASC LIMIT 1",
+            (msg_id, timestamp - DEDUP_WINDOW_MS, callsign.upper()),
+        )
+        return int(rows[0]["id"]) if rows else None
+
+    async def _enrich_duplicate_row(  # noqa: PLR0913 - one arg per enrichable column, mirrors store_message's own locals
+        self,
+        row_id: int,
+        msg_id: Any,
+        src_type: str,
+        *,
+        rssi: int | None,
+        snr: int | None,
+        hw_id: Any,
+        lora_mod: Any,
+        max_hop: Any,
+        mesh_info: Any,
+        fcs_ok: int | None,
+        last_hw_id: Any,
+        last_sending: Any,
+        firmware: Any,
+        fw_sub: Any,
+    ) -> frozenset[str]:
+        """Fill NULL-only columns of an already-stored row from a duplicate
+        transport copy of the same frame (UDP/BLE carry complementary halves
+        — see `_ENRICH_COLUMNS` and the dedup-gate comment at the call site
+        in store_message). Every column uses `COALESCE(col, ?)`, so a value
+        the winning copy already stored is NEVER overwritten; the winning
+        row's own timestamp/src_type/raw_json/via/msg/conversation_key are
+        untouched. Callers pass the same locals — and the same coercions
+        (`fcs_ok` as 0/1, `lora_mod` from `_coerce_lora_mod` upstream in
+        `ble_protocol.py`) — that `store_message`'s own INSERT `params` tuple
+        uses, so an enriched row ends up byte-identical to one written
+        directly with both halves.
+
+        Returns the set of columns that were actually NULL before this call
+        and got filled. The caller uses `{"rssi", "snr"} <= filled` to decide
+        whether the duplicate's own signal may also be ingested into
+        signal_log/station_positions (store_message) — `_ingest_signal` has
+        no dedup of its own, so calling it for a genuine repeated datagram
+        that carries the SAME signal the winning copy already recorded would
+        double-count it; filling both columns from NULL is exactly the
+        signature of a real complementary copy, never a plain repeat.
+        """
+        incoming = {
+            "rssi": rssi,
+            "snr": snr,
+            "hw_id": hw_id,
+            "lora_mod": lora_mod,
+            "max_hop": max_hop,
+            "mesh_info": mesh_info,
+            "fcs_ok": fcs_ok,
+            "last_hw_id": last_hw_id,
+            "last_sending": last_sending,
+            "firmware": firmware,
+            "fw_sub": fw_sub,
+        }
+        if all(val is None for val in incoming.values()):
+            return frozenset()
+
+        existing_rows = await self._query(
+            "SELECT rssi, snr, hw_id, lora_mod, max_hop, mesh_info, fcs_ok,"
+            " last_hw_id, last_sending, firmware, fw_sub FROM messages WHERE id = ?",
+            (row_id,),
+        )
+        if not existing_rows:
+            return frozenset()
+        existing = existing_rows[0]
+        filled = frozenset(
+            col
+            for col in _ENRICH_COLUMNS
+            if incoming[col] is not None and existing.get(col) is None
+        )
+        if not filled:
+            return frozenset()
+
+        await self._mutate(
+            "UPDATE messages SET"
+            " rssi = COALESCE(rssi, ?),"
+            " snr = COALESCE(snr, ?),"
+            " hw_id = COALESCE(hw_id, ?),"
+            " lora_mod = COALESCE(lora_mod, ?),"
+            " max_hop = COALESCE(max_hop, ?),"
+            " mesh_info = COALESCE(mesh_info, ?),"
+            " fcs_ok = COALESCE(fcs_ok, ?),"
+            " last_hw_id = COALESCE(last_hw_id, ?),"
+            " last_sending = COALESCE(last_sending, ?),"
+            " firmware = COALESCE(firmware, ?),"
+            " fw_sub = COALESCE(fw_sub, ?)"
+            " WHERE id = ?",
+            (
+                rssi,
+                snr,
+                hw_id,
+                lora_mod,
+                max_hop,
+                mesh_info,
+                fcs_ok,
+                last_hw_id,
+                last_sending,
+                firmware,
+                fw_sub,
+                row_id,
+            ),
+        )
+        logger.debug(
+            "Duplicate enrichment: msg_id=%s src_type=%s filled columns=%s",
+            msg_id,
+            src_type,
+            sorted(filled),
+        )
+        return filled
 
     async def _init_bucket_accumulators(self) -> None:
         """Load current partial buckets from signal_log into memory."""
@@ -1269,16 +1432,27 @@ class IngestMixin(StorageBase):
         # duplicate (a LoRa relay copy seconds later) was caught by the SELECT.
         # storage/ingest_dedup_tests.py replays both shapes.
         if msg_id is not None:
-            duplicate = not self._claim_recent_ingest(callsign, str(msg_id), timestamp)
-            if not duplicate:
-                existing = await self._query(
-                    "SELECT 1 FROM messages WHERE msg_id = ? AND timestamp > ?"
-                    " AND UPPER(TRIM(CASE WHEN instr(src, ',') > 0"
-                    "   THEN substr(src, 1, instr(src, ',') - 1) ELSE src END)) = ?"
-                    " LIMIT 1",
-                    (msg_id, timestamp - DEDUP_WINDOW_MS, callsign.upper()),
-                )
-                duplicate = bool(existing)
+            claimed = self._claim_recent_ingest(callsign, str(msg_id), timestamp)
+            duplicate = not claimed
+            existing_row_id: int | None = None
+            if claimed:
+                # Backstop across a restart (empty in-memory set): even a
+                # freshly claimed key may already be on disk from a previous
+                # process.
+                existing_row_id = await self._find_duplicate_row_id(msg_id, callsign, timestamp)
+                duplicate = existing_row_id is not None
+            else:
+                # Concurrent race: our claim lost to a copy being processed by
+                # a SEPARATE, still-suspended asyncio task — it may not have
+                # committed its INSERT yet. Bounded poll rather than an
+                # unbounded wait; see _ENRICH_RACE_POLL_ATTEMPTS.
+                existing_row_id = await self._find_duplicate_row_id(msg_id, callsign, timestamp)
+                for _ in range(_ENRICH_RACE_POLL_ATTEMPTS):
+                    if existing_row_id is not None:
+                        break
+                    await asyncio.sleep(_ENRICH_RACE_POLL_INTERVAL_S)
+                    existing_row_id = await self._find_duplicate_row_id(msg_id, callsign, timestamp)
+
             if duplicate:
                 # Presence, not truthiness — see the identical note in
                 # `_store_position`; a genuine all-zero beacon must still reach
@@ -1287,6 +1461,49 @@ class IngestMixin(StorageBase):
                     message.get(f) is not None for f in _WEATHER_BEACON_FIELDS
                 ):
                     await self.store_telemetry(callsign, {**message, "via": relay_via})
+
+                if existing_row_id is not None:
+                    filled = await self._enrich_duplicate_row(
+                        existing_row_id,
+                        msg_id,
+                        src_type,
+                        rssi=rssi,
+                        snr=snr,
+                        hw_id=hw_id,
+                        lora_mod=lora_mod,
+                        max_hop=max_hop,
+                        mesh_info=mesh_info,
+                        fcs_ok=fcs_ok,
+                        last_hw_id=last_hw_id,
+                        last_sending=last_sending,
+                        firmware=firmware,
+                        fw_sub=fw_sub,
+                    )
+                    # The duplicate's own signal reaches signal_log/
+                    # station_positions only when it genuinely fills a gap
+                    # (both columns were NULL) — see _enrich_duplicate_row's
+                    # docstring for why an unconditional call here would
+                    # double-count a real repeated datagram. _ingest_signal
+                    # re-applies its own src_type/msg_type gating unchanged;
+                    # nothing here second-guesses it.
+                    if {"rssi", "snr"} <= filled:
+                        await self._ingest_signal(
+                            callsign,
+                            message,
+                            src_type=src_type,
+                            msg_type=msg_type,
+                            msg_id=msg_id,
+                            rssi=rssi,
+                            snr=snr,
+                            timestamp=timestamp,
+                            signal_via=signal_via,
+                        )
+                else:
+                    logger.debug(
+                        "Duplicate msg_id=%s src=%s: winning row not found, enrichment skipped",
+                        msg_id,
+                        callsign,
+                    )
                 return
 
         # --- Dual-write to new tables ---
