@@ -172,8 +172,17 @@ webapp's Gateway Availability card in Settings. Design and the on-air measuremen
 
 ## MHeard Register (`SRC` / `GW` / `PP`)
 
-The BLE `TYP: "MH"` register, extended by firmware 2026-08-27. Adoption plan and the field
-evidence: `doc/2026-08-28_0900-firmware-4.35p.08.28-adoption.md`.
+The BLE `TYP: "MH"` register. **`SRC`, `GW` and `PP` were added upstream on 2026-08-27 and
+REVERTED on 2026-08-28** (fork-main `dc7d56d7` for `SRC`/`GW`, `17d1796e` for `PP`; the dead
+clamp code went on 2026-09-01). The live builder emits exactly 13 keys: `TYP CALL DATE TIME PLT
+HW MOD RSSI SNR DIST PL MESH NCNT`. The parser is deliberately RETAINED and inert: all three are
+read with `.get()`, every coercer is `None`-safe, so a firmware that re-adds them is picked up
+without a code change. Against current firmware `hey_path.py`, the `"heard"` upsert and the
+BLE-path `gw` write never fire, and on a BLE-only box `station_positions.gw` is not set from
+MHeard. Do not chase a missing `SRC`/`GW`/`PP` as a bug. The rules below describe the reverted
+wire contract and stay authoritative for the parser (audit: RX-07 in
+`doc/2026-09-10_1900-ble-protocol-parity-audit.md`; adoption plan and field evidence:
+`doc/2026-08-28_0900-firmware-4.35p.08.28-adoption.md`).
 
 - **`CALL` is the LAST HOP, `SRC` is the ORIGINATOR, and they are different claims.** `CALL` is the
   station whose transmission the frame's own `RSSI`/`SNR` measured; roughly two thirds of HEY
