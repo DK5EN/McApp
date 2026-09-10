@@ -305,6 +305,12 @@ class UpdateStartRequest(BaseModel):
     dev: bool = False
 
 
+class UpdateActivateRequest(BaseModel):
+    """POST /api/update/activate — activate an already-deployed slot."""
+
+    slot: int = Field(ge=0)
+
+
 class ClassifierRuleCreate(BaseModel):
     """POST /api/classifier/rules — create a classifier rule."""
 

@@ -8,7 +8,12 @@ from typing import TYPE_CHECKING, Any, cast
 from fastapi import APIRouter, HTTPException, Request
 
 from ..logging_setup import get_logger
-from ..schemas import BleEnsureConnectRequest, BlePinRequest, UpdateStartRequest
+from ..schemas import (
+    BleEnsureConnectRequest,
+    BlePinRequest,
+    UpdateActivateRequest,
+    UpdateStartRequest,
+)
 
 if TYPE_CHECKING:
     from ..sse_handler import SSEManager
@@ -97,9 +102,38 @@ def build_deploy_router(manager: SSEManager) -> APIRouter:
 
     @router.post("/api/update/rollback")
     async def start_rollback(request: Request) -> dict[str, str]:
-        """Launch the update runner in rollback mode."""
+        """Launch the update runner in rollback mode.
+
+        Kept for compatibility: the runner treats it as "activate the newest
+        non-active slot". Prefer POST /api/update/activate, which names the
+        slot explicitly. Neither path restores a database snapshot any more.
+        """
         return await manager.launch_update_runner(
             "rollback", request_host=request.headers.get("host")
+        )
+
+    @router.post("/api/update/activate")
+    async def start_activate(request: Request, body: UpdateActivateRequest) -> dict[str, str]:
+        """Launch the update runner in activate mode.
+
+        Replaces the previous-slot rollback above with an explicit slot
+        switch: the operator picks any already-deployed slot (not just the
+        most recent one) and the runner points `current` at it. Unlike
+        rollback, this never restores a stale database snapshot -- it only
+        changes which slot's code is running. Validated here against the
+        slot metadata already on disk; the runner validates again itself.
+        """
+        # Local import: mcapp.sse_handler imports this router module at
+        # import time (build_deploy_router), so a module-level import here
+        # back would be circular -- see reachable_runner_host's neighbours.
+        from ..sse_handler import activate_slot_error  # noqa: PLC0415 - circular at module scope
+
+        slot_info = await asyncio.to_thread(manager.read_slot_info)
+        reason = activate_slot_error(slot_info, body.slot)
+        if reason is not None:
+            raise HTTPException(status_code=400, detail=reason)
+        return await manager.launch_update_runner(
+            "activate", request_host=request.headers.get("host"), slot=body.slot
         )
 
     @router.post("/api/update/converge")

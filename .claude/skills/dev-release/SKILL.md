@@ -183,6 +183,8 @@ ssh mcapp.local 'readlink -f ~/mcapp-slots/current; systemctl is-active mcapp mc
 ```
 
 Report the failure plainly and retry — do not re-cut a release to work around a transient download.
+Any populated slot — including one from an older, previously-abandoned attempt — can be activated
+from the webapp Update page without a re-deploy, if that turns out to be the faster recovery.
 
 ## Pi gotchas that cost round-trips
 

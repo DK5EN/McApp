@@ -9,10 +9,22 @@ A minimal HTTP server (stdlib only, no dependencies) that:
 - Auto-rolls back on health failure (update/rollback modes only)
 - Self-terminates after completion
 
-Modes (--mode): "update" (deploy + activate + health check, rolls back on
-failure), "rollback" (revert to the previous slot), "converge" (re-run the
+Modes (--mode): "update" (deploy + activate + health check, auto-activates the
+previous slot on health failure), "activate" (switch to a specific already-
+deployed --slot N: symlink swap + webapp install + service restart), "rollback"
+(activate the most recently deployed non-active slot — kept for API
+compatibility, implemented on top of "activate"), "converge" (re-run the
 active slot's own bootstrap in --converge mode to bring system-level state
-up to date; no snapshot, no slot swap, no rollback on failure).
+up to date; no slot swap, no rollback on failure).
+
+Activation NEVER touches the database. Migrations in this repo are
+forward-only additive `current_version < N` blocks and the schema marker is
+never written downward, so older application code starting against a newer
+schema is safe — restoring a multi-day-old `messages.db` snapshot is not a
+safety measure, it is data loss. The runner therefore no longer snapshots or
+restores `messages.db` or `/etc` config at all during activation (a harmless
+`/etc` snapshot is still taken for forensic purposes, but nothing restores
+from it).
 
 Launched by McApp via: sudo systemd-run --scope --unit=mcapp-update \
     python3 /path/to/update-runner.py --mode update [--dev]
@@ -29,7 +41,6 @@ import pwd
 import queue
 import re
 import shutil
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -69,6 +80,7 @@ SLOTS_DIR = None  # ~/mcapp-slots
 META_DIR = None  # ~/mcapp-slots/meta
 home = None  # User home directory (inferred from script location)
 DB_PATH = Path("/var/lib/mcapp/messages.db")
+WEBAPP_DIR = Path("/var/www/html/webapp")  # served bundle; a COPIED dir, not a symlink
 UPDATE_TRIGGER_FILE = Path("/var/lib/mcapp/update-trigger")  # must match sse_handler.py's copy
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")  # all ANSI escape sequences
 _DECORATIVE_LINE_RE = re.compile(r"^[\s╔╗╚╝═─┌┐└┘│┤├]+$")  # pure box-drawing decoration
@@ -243,42 +255,6 @@ def snapshot_etc(slot_id: int) -> None:
         )
 
 
-def snapshot_database(slot_id: int) -> None:
-    """Snapshot SQLite database into meta/slot-N.db using online backup."""
-    if not DB_PATH.exists():
-        return
-    backup_path = META_DIR / f"slot-{slot_id}.db"
-    src = sqlite3.connect(str(DB_PATH))
-    dst = sqlite3.connect(str(backup_path))
-    src.backup(dst)
-    dst.close()
-    src.close()
-
-
-def restore_etc(slot_id: int) -> bool:
-    """Restore /etc config files from meta/slot-N.etc.tar.gz."""
-    archive = META_DIR / f"slot-{slot_id}.etc.tar.gz"
-    if not archive.exists():
-        return False
-    subprocess.run(  # noqa: S603 - fixed internal command
-        ["tar", "xzf", str(archive), "-C", "/"],  # noqa: S607 - fixed internal command
-        check=True,
-        capture_output=True,
-    )
-    return True
-
-
-def restore_database(slot_id: int) -> bool:
-    """Restore SQLite database from meta/slot-N.db."""
-    backup_path = META_DIR / f"slot-{slot_id}.db"
-    if not backup_path.exists():
-        return False
-    shutil.copy2(str(backup_path), str(DB_PATH))
-    for suffix in ("-shm", "-wal"):
-        Path(str(DB_PATH) + suffix).unlink(missing_ok=True)
-    return True
-
-
 def swap_symlink(slot_id: int, symlink_dir: Path, name: str = "current") -> None:
     """Atomically swap a symlink to point to a new slot."""
     target = f"slot-{slot_id}"
@@ -431,18 +407,17 @@ def run_update(bus: EventBus, dev_mode: bool = False) -> dict:  # noqa: PLR0912,
         msg = f"Target: slot-{target_slot} (active: slot-{active_slot})"
         bus.publish("phase", {"phase": "prepare", "progress": 5, "message": msg})
 
-        # Phase 2: Snapshot current config and database
+        # Phase 2: Snapshot current config (forensic only — never restored)
         if active_slot is not None:
             bus.publish(
                 "phase",
                 {
                     "phase": "snapshot",
                     "progress": 10,
-                    "message": "Snapshotting config and database...",
+                    "message": "Snapshotting config...",
                 },
             )
             snapshot_etc(active_slot)
-            snapshot_database(active_slot)
 
         # Phase 3: Run bootstrap into target slot
         bus.publish(
@@ -610,7 +585,7 @@ def run_update(bus: EventBus, dev_mode: bool = False) -> dict:  # noqa: PLR0912,
                 "duration_s": int(time.time() - start_time),
             }
 
-        # Phase 6: Auto-rollback
+        # Phase 6: Auto-rollback (re-activate the previous slot)
         bus.publish(
             "phase",
             {
@@ -621,7 +596,7 @@ def run_update(bus: EventBus, dev_mode: bool = False) -> dict:  # noqa: PLR0912,
         )
 
         if active_slot is not None:
-            _do_rollback(active_slot, bus)
+            _activate_slot(active_slot, bus)
             return {
                 "status": "rolled_back",
                 "reason": "health_check_failed",
@@ -647,41 +622,86 @@ def run_update(bus: EventBus, dev_mode: bool = False) -> dict:  # noqa: PLR0912,
 
 
 def run_rollback(bus: EventBus) -> dict:
-    """Execute a manual rollback to the previous slot."""
+    """Execute a manual rollback to the previous slot.
+
+    Kept for API compatibility; a rollback IS an activation of the most
+    recently deployed non-active slot. Returns the `invalid_slot` failure
+    shape when there is no candidate.
+    """
+    return run_activate(bus, get_rollback_slot())
+
+
+def _validate_activation_target(slot: int, active_slot: int | None) -> str | None:
+    """Return why `slot` cannot be activated, or None if it can."""
+    if not (0 <= slot < 3):  # noqa: PLR2004 - fixed 3-slot layout
+        return f"slot {slot} is out of range (must be 0, 1 or 2)"
+    if slot == active_slot:
+        return f"slot-{slot} is already active"
+    meta = get_slot_meta(slot)
+    if not meta.get("version"):
+        return f"slot-{slot} has no deployed version"
+    if not (SLOTS_DIR / f"slot-{slot}" / "pyproject.toml").exists():
+        return f"slot-{slot} is missing pyproject.toml"
+    return None
+
+
+def run_activate(bus: EventBus, slot: int | None) -> dict:
+    """Activate an already-deployed slot: symlink swap, webapp install,
+    service restart. Never touches the database — see the module docstring.
+    """
     start_time = time.time()
 
-    active_slot = get_active_slot()
-    rollback_target = get_rollback_slot()
-
-    if rollback_target is None:
+    if slot is None:
+        detail = "no target slot"
+        bus.publish(
+            "phase",
+            {"phase": "failed", "progress": 100, "message": f"Cannot activate: {detail}"},
+        )
         return {
             "status": "failed",
-            "reason": "no_rollback_target",
+            "reason": "invalid_slot",
+            "detail": detail,
             "duration_s": 0,
         }
 
-    msg = f"Rolling back slot-{active_slot} → slot-{rollback_target}..."
-    bus.publish("phase", {"phase": "rollback", "progress": 10, "message": msg})
+    active_slot = get_active_slot()
+    detail = _validate_activation_target(slot, active_slot)
+    if detail is not None:
+        bus.publish(
+            "phase",
+            {
+                "phase": "failed",
+                "progress": 100,
+                "message": f"Cannot activate slot-{slot}: {detail}",
+            },
+        )
+        return {
+            "status": "failed",
+            "reason": "invalid_slot",
+            "detail": detail,
+            "duration_s": 0,
+        }
 
-    # Snapshot current state first
+    version = get_slot_meta(slot).get("version")
+    msg = f"Activating slot-{slot} ({version})..."
+    bus.publish("phase", {"phase": "activate", "progress": 10, "message": msg})
+
     if active_slot is not None:
         snapshot_etc(active_slot)
-        snapshot_database(active_slot)
 
-    _do_rollback(rollback_target, bus)
+    _activate_slot(slot, bus)
 
-    # Health check after rollback
     bus.publish(
-        "phase", {"phase": "health_check", "progress": 80, "message": "Verifying rollback..."}
+        "phase", {"phase": "health_check", "progress": 80, "message": "Verifying activation..."}
     )
 
     health_ok = run_health_checks(bus)
 
-    version = get_slot_meta(rollback_target).get("version")
+    version = get_slot_meta(slot).get("version") or version
     return {
         "status": "success" if health_ok else "warning",
         "version": version,
-        "slot": rollback_target,
+        "slot": slot,
         "health_ok": health_ok,
         "duration_s": int(time.time() - start_time),
     }
@@ -749,39 +769,95 @@ def run_converge(bus: EventBus) -> dict:
     }
 
 
-def _do_rollback(target_slot: int, bus: EventBus) -> None:
-    """Swap symlink to target slot, restore etc + database, restart services."""
-    # Stop mcapp to release database before restore
+def _install_webapp_bundle(target_slot: int, bus: EventBus) -> None:
+    """Copy `slot-N/webapp` into place as the served bundle.
+
+    `WEBAPP_DIR` is a COPIED directory, not a symlink (see `deploy_webapp` in
+    bootstrap/lib/deploy.sh), so activation must stage-and-swap it the same
+    way: build `webapp.new` alongside it, retire the live dir to `webapp.old`,
+    promote `.new`, then discard `.old`. A slot that predates per-slot webapp
+    bundles has no `webapp` dir at all — leave the currently served bundle
+    untouched rather than deleting it.
+    """
+    slot_webapp = SLOTS_DIR / f"slot-{target_slot}" / "webapp"
+    if not slot_webapp.exists():
+        bus.publish(
+            "log",
+            {
+                "line": f"slot-{target_slot} has no webapp bundle, leaving served webapp as-is",
+                "phase": "activate",
+            },
+        )
+        return
+
+    new_dir = WEBAPP_DIR.with_name(WEBAPP_DIR.name + ".new")
+    old_dir = WEBAPP_DIR.with_name(WEBAPP_DIR.name + ".old")
+    if new_dir.exists():
+        shutil.rmtree(new_dir)
+    shutil.copytree(slot_webapp, new_dir)
+
+    if WEBAPP_DIR.exists():
+        if old_dir.exists():
+            shutil.rmtree(old_dir)
+        WEBAPP_DIR.rename(old_dir)
+    new_dir.rename(WEBAPP_DIR)
+
+    subprocess.run(  # noqa: S603 - fixed internal command
+        ["chown", "-R", "www-data:www-data", str(WEBAPP_DIR)],  # noqa: S607 - fixed internal command
+        capture_output=True,
+        check=False,
+    )
+
+    if old_dir.exists():
+        shutil.rmtree(old_dir)
+
+    bus.publish("log", {"line": "Installed webapp bundle", "phase": "activate"})
+
+
+def _activate_slot(target_slot: int, bus: EventBus) -> None:
+    """Swap symlink to target slot, install its webapp, restart services.
+
+    Never restores the database or /etc — see the module docstring for why.
+    """
+    # Stop mcapp before the symlink swap.
     subprocess.run(
         ["systemctl", "stop", "mcapp"],  # noqa: S607 - fixed internal command
         capture_output=True,
         check=False,
     )
 
-    bus.publish("log", {"line": f"Swapping to slot-{target_slot}", "phase": "rollback"})
+    bus.publish("log", {"line": f"Swapping to slot-{target_slot}", "phase": "activate"})
     swap_symlink(target_slot, SLOTS_DIR)
 
-    # Restore /etc snapshot if available
-    if restore_etc(target_slot):
-        bus.publish("log", {"line": "Restored /etc config snapshot", "phase": "rollback"})
-
-    if restore_database(target_slot):
-        bus.publish("log", {"line": "Restored database snapshot", "phase": "rollback"})
+    _install_webapp_bundle(target_slot, bus)
 
     # Restart services
-    bus.publish("log", {"line": "Restarting services...", "phase": "rollback"})
+    bus.publish("log", {"line": "Restarting services...", "phase": "activate"})
     subprocess.run(
         ["systemctl", "daemon-reload"],  # noqa: S607 - fixed internal command
         capture_output=True,
         check=False,
     )
-    for svc in ["lighttpd", "mcapp"]:
+    for svc in ["lighttpd", "mcapp", "mcapp-ble"]:
         subprocess.run(  # noqa: S603 - fixed internal command
             ["systemctl", "restart", svc],  # noqa: S607 - fixed internal command
             capture_output=True,
             check=False,
         )
-        bus.publish("log", {"line": f"Restarted {svc}", "phase": "rollback"})
+        bus.publish("log", {"line": f"Restarted {svc}", "phase": "activate"})
+
+    # Refresh the target slot's meta — it is now the active, just-activated slot.
+    meta = get_slot_meta(target_slot)
+    version = meta.get("version") or _read_version(target_slot)
+    set_slot_meta(
+        target_slot,
+        {
+            "slot": target_slot,
+            "version": version,
+            "status": "active",
+            "deployed_at": datetime.now(UTC).isoformat(),
+        },
+    )
 
 
 def _run_bootstrap_streaming(cmd: list[str], env: dict, bus: EventBus) -> bool:
@@ -859,7 +935,7 @@ def _read_version(slot_id: int) -> str:
     if version_file.exists():
         return version_file.read_text().strip()
     # Fallback: check deployed webapp
-    webapp_version = Path("/var/www/html/webapp/version.html")
+    webapp_version = WEBAPP_DIR / "version.html"
     if webapp_version.exists():
         return webapp_version.read_text().strip()
     return "unknown"
@@ -971,10 +1047,11 @@ def main():  # noqa: PLR0912, PLR0915 - complex handler kept intact
     parser = argparse.ArgumentParser(description="McApp Update Runner")
     parser.add_argument(
         "--mode",
-        choices=["update", "rollback", "converge"],
+        choices=["update", "activate", "rollback", "converge"],
         help="Operation mode (required unless --args-file given)",
     )
     parser.add_argument("--dev", action="store_true", help="Use development pre-release")
+    parser.add_argument("--slot", type=int, help="Target slot for --mode activate")
     parser.add_argument("--home", help="User home directory (for slot paths)")
     parser.add_argument("--args-file", help="JSON file with mode/dev args (systemd .path trigger)")
     args = parser.parse_args()
@@ -989,6 +1066,8 @@ def main():  # noqa: PLR0912, PLR0915 - complex handler kept intact
                 args.mode = file_args.get("mode", "update")
             if not args.dev:
                 args.dev = file_args.get("dev", False)
+            if args.slot is None:
+                args.slot = file_args.get("slot")
             args_path.unlink(missing_ok=True)
         trigger_path.unlink(missing_ok=True)
 
@@ -1044,6 +1123,8 @@ def main():  # noqa: PLR0912, PLR0915 - complex handler kept intact
     # Run the operation
     if args.mode == "update":
         result = run_update(bus, dev_mode=args.dev)
+    elif args.mode == "activate":
+        result = run_activate(bus, args.slot)
     elif args.mode == "rollback":
         result = run_rollback(bus)
     else:

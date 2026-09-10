@@ -418,5 +418,16 @@ On-device layout:
 - Service: `systemctl status mcapp` — `ExecStart=/home/martin/.local/bin/uv run mcapp`; logs via `sudo journalctl -u mcapp.service -f`
 - DB: `/var/lib/mcapp/messages.db` (SQLite, WAL)
 - Deploy installs deps with `uv sync --all-packages` (pulls `pywebpush` + the BLE workspace member) — see `bootstrap/lib/deploy.sh`
+- **Slot activation never restores the database, and must never again.** The Update page's
+  Activate button (`POST /api/update/activate {slot}`, runner mode `activate`) switches code +
+  webapp bundle + services to an already-deployed slot and keeps `/var/lib/mcapp/messages.db`
+  as it is. Its predecessor, the Rollback button, overwrote the DB with `meta/slot-N.db` — a
+  snapshot taken when slot N was last LEFT through the runner, which `mcapp.sh` deploys never
+  refreshed — so on mcapp.local it would have replaced the live DB with a copy 4 days to 3 weeks
+  old (found 2026-09-10, never pressed). Migrations are forward-only additive and the schema
+  marker is never written downward, so older code on a newer DB is fine; a "restore the DB on
+  rollback" feature is a data-loss bug, not a safety net. The served webapp is a COPIED directory
+  (`/var/www/html/webapp`), not a symlink: a slot switch that only moves `current` leaves the old
+  bundle on screen.
 
 See `bootstrap/README.md` for installation, `doc/tls-architecture.md` for TLS setup, `doc/tls-maintenance-SOP.md` for maintenance.

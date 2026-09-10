@@ -72,6 +72,24 @@ def reachable_runner_host(request_host: str | None, bind_host: str) -> str:
     return bind_host if bind_host != "0.0.0.0" else "localhost"  # noqa: S104 - comparing bind host string, not binding
 
 
+def activate_slot_error(slot_info: dict[str, Any], slot: int) -> str | None:
+    """Return a human-readable reason `slot` cannot be activated, else None.
+
+    Checked in order: the slot index must be within SLOT_COUNT, it must not
+    already be the active slot, and it must have a deployed version. Pure and
+    read-only — the caller (POST /api/update/activate) still hands the slot to
+    the update runner, which validates it again itself.
+    """
+    if slot < 0 or slot >= SLOT_COUNT:
+        return f"slot {slot} is out of range (valid: 0-{SLOT_COUNT - 1})"
+    if slot_info.get("active_slot") == slot:
+        return f"slot {slot} is already active"
+    entry = next((s for s in slot_info.get("slots", []) if s.get("slot") == slot), None)
+    if entry is None or not entry.get("version"):
+        return f"slot {slot} has no deployed version"
+    return None
+
+
 logger = get_logger(__name__)
 
 # Import FastAPI and related modules
@@ -498,13 +516,20 @@ class SSEManager:
         mode: str,
         dev: bool = False,
         request_host: str | None = None,
+        slot: int | None = None,
     ) -> dict[str, Any]:
         """Launch the standalone update runner via systemd .path trigger.
 
-        `mode` is one of "update", "rollback", or "converge" (converge re-runs
-        the current slot's `mcapp.sh --converge` to bring system-level state
-        -- packages, firewall, web front door -- up to `REQUIRED_SYSTEM_EPOCH`
-        without touching slots or restarting mcapp; see system_converge.py).
+        `mode` is one of "update", "rollback", "converge", or "activate"
+        (converge re-runs the current slot's `mcapp.sh --converge` to bring
+        system-level state -- packages, firewall, web front door -- up to
+        `REQUIRED_SYSTEM_EPOCH` without touching slots or restarting mcapp;
+        see system_converge.py). "activate" switches the active slot to
+        `slot` without deploying anything or restoring a database snapshot --
+        a pure slot switch, unlike "rollback".
+
+        `slot` is required for "activate" and is included in the args file
+        only when given; the runner validates it again itself.
 
         `request_host` is the Host the client used to reach this API; it is used
         to build the stream/status URLs so a remote browser connects to the Pi
@@ -531,9 +556,12 @@ class SSEManager:
             pass
 
         # Write args file and trigger file for systemd .path unit
+        args: dict[str, Any] = {"mode": mode, "dev": dev}
+        if slot is not None:
+            args["slot"] = slot
         await asyncio.to_thread(
             UPDATE_ARGS_FILE.write_text,
-            json.dumps({"mode": mode, "dev": dev}),
+            json.dumps(args),
         )
         await asyncio.to_thread(UPDATE_TRIGGER_FILE.write_text, "")
         logger.info("Update trigger file written")
@@ -1639,6 +1667,41 @@ async def run_startup_tests() -> bool:  # noqa: PLR0912, PLR0915 - regression su
         (
             "reachable_runner_host maps a 0.0.0.0 bind fallback to localhost",
             reachable_runner_host(None, "0.0.0.0") == "localhost",  # noqa: S104 - test fixture string, not a bind
+        )
+    )
+
+    # activate_slot_error: gate for POST /api/update/activate. Slot 1 is
+    # active, slot 2 is deployed but not active, slot 0 has no version.
+    _activate_slot_info: dict[str, Any] = {
+        "slots": [
+            {"slot": 0, "version": None},
+            {"slot": 1, "version": "v2.0.5"},
+            {"slot": 2, "version": "v2.0.4"},
+        ],
+        "active_slot": 1,
+    }
+    results.append(
+        (
+            "activate_slot_error rejects an out-of-range slot",
+            activate_slot_error(_activate_slot_info, SLOT_COUNT) is not None,
+        )
+    )
+    results.append(
+        (
+            "activate_slot_error rejects the already-active slot",
+            activate_slot_error(_activate_slot_info, 1) is not None,
+        )
+    )
+    results.append(
+        (
+            "activate_slot_error rejects a slot with no deployed version",
+            activate_slot_error(_activate_slot_info, 0) is not None,
+        )
+    )
+    results.append(
+        (
+            "activate_slot_error accepts a valid, inactive, deployed slot",
+            activate_slot_error(_activate_slot_info, 2) is None,
         )
     )
 
