@@ -339,6 +339,120 @@ def _run_send_message_request_schema_bounds(record: Callable[[str, bool], None])
     )
 
 
+class _FakeBLEClient:
+    """Stand-in BLE client (matches the `send_message(msg, group) -> bool`
+    shape shared by `ble_client_remote.py` / `ble_client_disabled.py` /
+    `ble_client.py`) with a configurable outcome, for exercising TX-04:
+    `_send_via_ble` used to discard the boolean `send_message` returns and
+    never surfaced a failure to the operator, unlike its UDP sibling."""
+
+    def __init__(
+        self,
+        *,
+        result: bool = True,
+        raise_exc: Exception | None = None,
+        connected: bool = True,
+    ) -> None:
+        self._result = result
+        self._raise_exc = raise_exc
+        self.is_connected = connected
+        self.calls: list[tuple[str | None, str | None]] = []
+
+    async def send_message(self, msg: str | None, group: str | None) -> bool:
+        self.calls.append((msg, group))
+        if self._raise_exc is not None:
+            raise self._raise_exc
+        return self._result
+
+
+async def _test_ble_send_failure_surfaces_and_preserves_fanout(
+    record: Callable[[str, bool], None],
+) -> None:
+    """TX-04: a BLE send that fails — `send_message` returning `False`, raising,
+    or no client being registered at all — must surface via the same two
+    channels as the UDP path: a `websocket_message` error toast and a
+    per-message `msg_status` carrying `send_failed`. A successful send must
+    stay silent on both (pins that the fix doesn't fire on the happy path).
+    """
+
+    async def _drive_ble(client: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        router = MessageRouter(None)
+        router.set_callsign("DK5EN")
+        if client is not None:
+            router.register_protocol("ble_client", client)
+
+        errors: list[dict[str, Any]] = []
+
+        async def _capture_error(routed: dict[str, Any]) -> None:
+            if routed["data"].get("type") == "error":
+                errors.append(routed["data"])
+
+        router.subscribe("websocket_message", _capture_error)
+
+        statuses: list[dict[str, Any]] = []
+
+        async def _capture_status(routed: dict[str, Any]) -> None:
+            statuses.append(routed["data"])
+
+        router.subscribe("msg_status", _capture_status)
+
+        outbound = {"src": router.my_callsign, "dst": "20", "msg": "hi"}
+        await router.publish("sse", "ble_message", outbound)
+        return errors, statuses
+
+    # 1. send_message returns False (e.g. disconnected, or the ble_service
+    #    rejected the frame) → send_failed + one error toast.
+    errors, statuses = await _drive_ble(_FakeBLEClient(result=False))
+    record(
+        "BLE send failure (False): one msg_status with send_failed + content",
+        len(statuses) == 1
+        and statuses[0].get("send_failed") is True
+        and statuses[0].get("dst") == "20"
+        and statuses[0].get("msg") == "hi"
+        and statuses[0].get("src") == "DK5EN"
+        and bool(statuses[0].get("reason")),
+    )
+    record(
+        "BLE send failure (False): one websocket_message error toast",
+        len(errors) == 1 and "Failed to send BLE message" in str(errors[0].get("msg", "")),
+    )
+
+    # 2. send_message raises → same surfacing, reason carries the exception text.
+    errors, statuses = await _drive_ble(_FakeBLEClient(raise_exc=RuntimeError("boom")))
+    record(
+        "BLE send failure (raises): msg_status send_failed with exception in reason",
+        len(statuses) == 1
+        and statuses[0].get("send_failed") is True
+        and "boom" in str(statuses[0].get("reason", "")),
+    )
+    record(
+        "BLE send failure (raises): one websocket_message error toast",
+        len(errors) == 1 and "boom" in str(errors[0].get("msg", "")),
+    )
+
+    # 3. send_message returns True → success path stays silent (no send_failed
+    #    noise on the happy path).
+    errors, statuses = await _drive_ble(_FakeBLEClient(result=True))
+    record(
+        "BLE send success: no msg_status, no error toast",
+        statuses == [] and errors == [],
+    )
+
+    # 4. No BLE client registered at all → the "handler not available" branch,
+    #    same shape as UDP's.
+    errors, statuses = await _drive_ble(None)
+    record(
+        "BLE client not available: msg_status send_failed with fixed reason",
+        len(statuses) == 1
+        and statuses[0].get("send_failed") is True
+        and statuses[0].get("reason") == "BLE client not available",
+    )
+    record(
+        "BLE client not available: one websocket_message error toast",
+        len(errors) == 1 and "BLE client not available" in str(errors[0].get("msg", "")),
+    )
+
+
 class _FailingUDPHandler:
     """Stand-in whose `send_message` always raises `socket.gaierror` —
     simulating the DNS-drift failure this wave fixes (unresolvable
@@ -554,6 +668,10 @@ async def run_send_path_tests() -> bool:
     # 12. SendMessageRequest's dst/msg bounds (firmware-derived: getExtern()'s
     #     1..9 char dst / sendMessage()'s 160-byte on-air frame cap).
     _run_send_message_request_schema_bounds(_record)
+
+    # 13. TX-04: a failing BLE send (False return, exception, or no client)
+    #     surfaces the same way the UDP path does; a successful send stays silent.
+    await _test_ble_send_failure_surfaces_and_preserves_fanout(_record)
 
     passed = sum(1 for _, ok in results if ok)
     total = len(results)
