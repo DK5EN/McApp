@@ -90,7 +90,7 @@ _CONTRACT_PATH = pathlib.Path(__file__).parent / "contract" / "push_contract.jso
 # payload_vectors (replayed automatically by the existing payload_vectors
 # loop) plus a dedicated ordering regression here
 # (`_test_ack_suffix_stripped_after_gates`).
-_EXPECTED_SHA256 = "ed3bfba8ccc1f5dc4576717485e24028e22b9d1b6ddcf92f78c08de98e3c9add"
+_EXPECTED_SHA256 = "95c42c95b2f165c3c550213175ae9b9fda1c8eac49607989c71f6ccae73fbb68"
 
 # The VAPID keyfile holds a raw P-256 private scalar, so load_or_create_vapid chmods it
 # owner-only. At the default 0644 any local account could forge VAPID JWTs as this node.
