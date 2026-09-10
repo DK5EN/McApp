@@ -271,12 +271,23 @@ def is_eligible(payload: dict[str, Any], own_callsign: str) -> bool:
         the router topics, not to storage, so without this clause it
         announced raw `{pong}{451010884}` frames that no conversation
         view will ever show.
+    (e) must not carry the firmware's `app_offline` flag (contract v9,
+        `eligibility_app_offline_semantics`). Byte 5 of a BLE data frame
+        is a bitfield; the firmware sets 0x20 on every frame it replays
+        from its catch-up ring after a reconnect, on command replies and
+        on back-pressure notices, and the official app suppresses the
+        notification for it. `ble_protocol.decode_binary_message` emits it
+        as the boolean `app_offline`; a UDP datagram has no such byte and
+        never sets the key. Boolean True only, never merely truthy (RX-04,
+        doc/2026-09-10_1900-ble-protocol-parity-audit.md).
     """
     if payload.get("type") != "msg" or not _push_text(payload):
         return False
     if _is_node_local_noise(payload):
         return False
     if is_link_check_payload(_push_text(payload)):
+        return False
+    if payload.get("app_offline") is True:
         return False
     resolved_src = _resolve_source(str(payload.get("src") or ""))
     return resolved_src != own_callsign

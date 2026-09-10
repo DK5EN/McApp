@@ -90,7 +90,7 @@ _CONTRACT_PATH = pathlib.Path(__file__).parent / "contract" / "push_contract.jso
 # payload_vectors (replayed automatically by the existing payload_vectors
 # loop) plus a dedicated ordering regression here
 # (`_test_ack_suffix_stripped_after_gates`).
-_EXPECTED_SHA256 = "ae068385abade174677f84ce915bbff7c2177fe28bb8f97bab0ecdc2ae2d8169"
+_EXPECTED_SHA256 = "ed3bfba8ccc1f5dc4576717485e24028e22b9d1b6ddcf92f78c08de98e3c9add"
 
 # The VAPID keyfile holds a raw P-256 private scalar, so load_or_create_vapid chmods it
 # owner-only. At the default 0644 any local account could forge VAPID JWTs as this node.
@@ -893,6 +893,26 @@ def _test_node_local_noise_filter(record: _RecordFn) -> None:
     record(
         "noise filter: a real callsign spelling RESPONSE IS pushed (exact, case-sensitive)",
         not _is_node_local_noise({"type": "msg", "src": "RESPONSE-1", "dst": "*", "msg": "hi"}),
+    )
+    # Contract v9 clause (e): the byte-5 app_offline bit marks a catch-up
+    # replay. Lives in is_eligible, not the noise predicate, because it is a
+    # decoded frame flag rather than a text shape.
+    base = {"type": "msg", "src": "OE1ABC-1", "dst": "DK5EN-99", "msg": "sent while link was down"}
+    record(
+        "eligibility (e): an app_offline replay is not pushed",
+        not is_eligible({**base, "app_offline": True}, "DK5EN-99"),
+    )
+    record(
+        "eligibility (e): app_offline False is pushed",
+        is_eligible({**base, "app_offline": False}, "DK5EN-99"),
+    )
+    record(
+        "eligibility (e): a UDP frame without the key is pushed",
+        is_eligible(base, "DK5EN-99"),
+    )
+    record(
+        "eligibility (e): the flag must be boolean True, a truthy string is not it",
+        is_eligible({**base, "app_offline": "yes"}, "DK5EN-99"),
     )
     # Clause (c) reached through the public predicate: an ACK from another station,
     # addressed to us, with a filter that would otherwise match it.
