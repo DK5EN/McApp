@@ -138,8 +138,15 @@ def strip_prefix(msg: str, prefix: str = ":") -> str:
 #   [0]        '@' (already checked by caller / the [:2] checks below)
 #   [1:1+_HEADER_LEN]   _HEADER_FORMAT: payload_type(B) msg_id(I,LE) max_hop_raw(B)
 #   [1+_HEADER_LEN:-_FOOTER_LEN]   variable-length routing path + dest + message text
-#   [-_FOOTER_LEN:-1]   _FOOTER_FORMAT: zero(B) hardware_id(B) lora_mod(B) fcs(H)
-#                       fw(B) lasthw(B) fw_sub(B) ending(B) time_ms(I)
+#   [-_FOOTER_LEN:-5]   _FOOTER_FORMAT: zero(B) hardware_id(B) lora_mod(B) fcs(H)
+#                       fw(B) lasthw(B) fw_sub(B) ending(B)
+#   [-5:-1]    node_rx_ts (uint32, BIG-endian) — the NODE's own reception clock
+#              (`getUnixClock()`, UTC seconds), appended by `addBLEOutBuffer()`
+#              on every non-`D{` frame (firmware loop_functions.cpp:601-609).
+#              Every other field in this layout is little-endian; this one is
+#              not, because it is the node's, not ours. See
+#              `_decode_node_rx_ts_ms` (RX-01, doc/2026-09-10_1900-ble-protocol-
+#              parity-audit.md).
 #   [-1]       trailing terminator byte (not unpacked)
 #
 # The FCS (footer offset 3, 2 bytes) covers byte_msg[1:-_FCS_EXCLUDED_TRAILER_LEN] —
@@ -147,10 +154,21 @@ def strip_prefix(msg: str, prefix: str = ":") -> str:
 # explicitly excluding the FCS field itself and everything after it.
 _HEADER_FORMAT = "<BIB"  # payload_type, msg_id, max_hop_raw
 _HEADER_LEN = 6  # bytes covered by _HEADER_FORMAT
-# zero, hardware_id, lora_mod, fcs, fw, lasthw, fw_sub, ending, time_ms
-_FOOTER_FORMAT = "<BBBHBBBBI"
-_FOOTER_LEN = 14  # total trailing footer width, incl. the 1 terminator byte
+# zero, hardware_id, lora_mod, fcs, fw, lasthw, fw_sub, ending — all little-endian.
+# The node_rx_ts trailer that follows is BIG-endian and decoded separately by
+# _decode_node_rx_ts_ms; it is deliberately NOT part of this struct.
+_FOOTER_FORMAT = "<BBBHBBBB"
+_FOOTER_STRUCT_LEN = 9  # bytes covered by _FOOTER_FORMAT
+_FOOTER_LEN = 14  # total trailing footer width: struct(9) + node_rx_ts(4) + terminator(1)
 _FCS_EXCLUDED_TRAILER_LEN = 11  # FCS covers byte_msg[1 : -_FCS_EXCLUDED_TRAILER_LEN]
+
+# RX-01 bounds for the node_rx_ts trailer. Below MIN: the node's own clock has
+# not synced yet (reads near zero right after a reboot, before NTP/GPS fix) —
+# not a real reception time. More than MAX_SKEW_S ahead of our own clock:
+# nothing legitimate is from the future, so either the node's clock or ours is
+# wrong and the value is not trustworthy either way.
+_NODE_RX_TS_MIN_S = 1706745600  # 2024-02-01T00:00:00Z
+_NODE_RX_TS_MAX_SKEW_S = 60
 
 
 def _decode_ack_frame(
@@ -190,6 +208,25 @@ def _decode_ack_frame(
     if ack_from is not None:
         result["ack_from"] = ack_from
     return result
+
+
+def _decode_node_rx_ts_ms(byte_msg: bytes) -> int | None:
+    """Decode the firmware's 4-byte reception-timestamp trailer (RX-01).
+
+    UTC seconds, BIG-endian, at `byte_msg[-5:-1]` — appended by
+    `addBLEOutBuffer()` after the footer struct and before the terminator
+    (loop_functions.cpp:601-609). This is the NODE's clock, not ours, so an
+    out-of-range value (unsynced after a reboot; anything from the future)
+    is reported as `None` rather than trusted — callers then fall back to
+    arrival time. Zero is not a valid case: it fails the MIN bound.
+    """
+    raw_seconds: int
+    (raw_seconds,) = unpack(">I", byte_msg[-5:-1])
+    if raw_seconds < _NODE_RX_TS_MIN_S:
+        return None
+    if raw_seconds > now_ms() // 1000 + _NODE_RX_TS_MAX_SKEW_S:
+        return None
+    return raw_seconds * 1000
 
 
 def _decode_data_frame(  # noqa: PLR0913 - all fields are needed from the shared header/fcs computation
@@ -236,9 +273,10 @@ def _decode_data_frame(  # noqa: PLR0913 - all fields are needed from the shared
     message = decode_and_filter(raw).strip()
 
     # Extract binary footer (fixed structure at end of message)
-    [_zero, hardware_id, lora_mod, fcs, fw, lasthw, fw_sub, _ending, _time_ms] = unpack(
-        _FOOTER_FORMAT, byte_msg[-_FOOTER_LEN:-1]
+    [_zero, hardware_id, lora_mod, fcs, fw, lasthw, fw_sub, _ending] = unpack(
+        _FOOTER_FORMAT, byte_msg[-_FOOTER_LEN:-5]
     )
+    node_rx_ts_ms = _decode_node_rx_ts_ms(byte_msg)
 
     # Split lasthw byte into hardware ID and last sending flag
     last_hw_id = lasthw & 0x7F  # Bits 0-6: Hardware-Typ (0-127)
@@ -274,6 +312,7 @@ def _decode_data_frame(  # noqa: PLR0913 - all fields are needed from the shared
         "last_hw_id": last_hw_id,
         "last_sending": last_sending,
         "fcs_ok": fcs_ok,
+        "node_rx_ts_ms": node_rx_ts_ms,
     }
 
 
@@ -597,7 +636,13 @@ def transform_common_fields(input_dict: dict[str, Any], own_callsign: str = "") 
         # only, never a filtering/acceptance signal. Absent on non-data frames
         # (MHeard/telemetry/generic BLE), so this key is None there, same as UDP.
         "fcs_ok": input_dict.get("fcs_ok"),
-        "timestamp": now_ms(),
+        # RX-01: the node's own reception clock (trailer, big-endian UTC
+        # seconds) when the frame carried a valid one; `None` on non-data
+        # frames or an out-of-range trailer. Passed through unconditionally
+        # so the next layer (ble_client_remote._finalize_transformed_output)
+        # can tell a trustworthy trailer timestamp from a fallback.
+        "node_rx_ts_ms": input_dict.get("node_rx_ts_ms"),
+        "timestamp": input_dict.get("node_rx_ts_ms") or now_ms(),
     }
 
 

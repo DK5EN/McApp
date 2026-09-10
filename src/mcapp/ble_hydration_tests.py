@@ -1783,6 +1783,80 @@ async def _test_unknown_typ_dropped(record: _RecordFn) -> None:
     )
 
 
+async def _test_finalize_transformed_output_node_rx_ts(record: _RecordFn) -> None:
+    """RX-01: `_finalize_transformed_output` must not overwrite a
+    transformer-set `timestamp` when the frame carried a valid node-clock
+    trailer (`node_rx_ts_ms`) -- the old unconditional overwrite with
+    ble_service's arrival time is exactly what stamped an entire post-outage
+    text-ring backlog burst with the reconnect second instead of each
+    message's own node-clock time. Absence of a trailer (ACK/MH/generic_ble
+    outputs, or a data frame whose trailer failed the range check) must still
+    fall back to arrival time, byte-identical to before this fix."""
+    node_rx_ts_ms = 1789050633000
+    backlog_arrival = node_rx_ts_ms + 10 * 60 * 1000  # 10 min later: a backlog burst
+
+    finalized = BLEClientRemote._finalize_transformed_output(
+        {
+            "transformer": "msg",
+            "timestamp": node_rx_ts_ms,
+            "node_rx_ts_ms": node_rx_ts_ms,
+            "msg_id": "AABBCCDD",
+        },
+        {"timestamp": backlog_arrival},
+    )
+    record(
+        "finalize: a valid node_rx_ts_ms keeps the transformer's timestamp, not "
+        "ble_service's (later) arrival time",
+        finalized["timestamp"] == node_rx_ts_ms,
+    )
+
+    arrival = 1_700_000_000_000
+    finalized_no_trailer = BLEClientRemote._finalize_transformed_output(
+        {"transformer": "mh", "node_rx_ts_ms": None}, {"timestamp": arrival}
+    )
+    record(
+        "finalize: node_rx_ts_ms is None -> timestamp falls back to ble_service's arrival "
+        "time, unchanged from before this fix",
+        finalized_no_trailer["timestamp"] == arrival,
+    )
+
+    finalized_missing_key = BLEClientRemote._finalize_transformed_output(
+        {"transformer": "generic_ble"}, {"timestamp": arrival}
+    )
+    record(
+        "finalize: node_rx_ts_ms entirely absent (generic_ble/mh outputs never set it) "
+        "behaves exactly like the no-trailer case",
+        finalized_missing_key["timestamp"] == arrival,
+    )
+
+    with _capture_log_records("mcapp.ble_client_remote") as backlog_logs:
+        BLEClientRemote._finalize_transformed_output(
+            {
+                "transformer": "msg",
+                "timestamp": node_rx_ts_ms,
+                "node_rx_ts_ms": node_rx_ts_ms,
+                "msg_id": "AABBCCDD",
+            },
+            {"timestamp": backlog_arrival},
+        )
+    record(
+        "finalize: a >5s backlog lag between node clock and arrival is logged at DEBUG",
+        any(level == logging.DEBUG and "backlog" in msg.lower() for level, msg in backlog_logs),
+    )
+
+    with _capture_log_records("mcapp.ble_client_remote") as close_logs:
+        BLEClientRemote._finalize_transformed_output(
+            {
+                "transformer": "msg",
+                "timestamp": node_rx_ts_ms,
+                "node_rx_ts_ms": node_rx_ts_ms,
+                "msg_id": "AABBCCDD",
+            },
+            {"timestamp": node_rx_ts_ms + 1000},  # 1s lag, under the 5s threshold
+        )
+    record("finalize: a lag under the threshold logs nothing", close_logs == [])
+
+
 async def _test_save_and_reboot_uses_save_endpoint(record: _RecordFn) -> None:
     """L3: `save_and_reboot()` must call ble_service's dedicated 0xF0
     save+reboot endpoint (`POST /api/ble/config/save`), never
@@ -1855,6 +1929,7 @@ async def run_ble_hydration_tests() -> bool:  # noqa: PLR0915 - sequential test-
         await _test_raw_format_fragment_dropped(_record)
         await _test_valid_frame_still_publishes(_record)
         await _test_unknown_typ_dropped(_record)
+        await _test_finalize_transformed_output_node_rx_ts(_record)
         await _test_save_and_reboot_uses_save_endpoint(_record)
     finally:
         _swap_main_asyncio(real_asyncio)

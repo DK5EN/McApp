@@ -25,8 +25,10 @@ from .ble_protocol import (
     parse_aprs_position,
     timestamp_from_date_time,
     transform_mh,
+    transform_msg,
+    transform_pos,
 )
-from .util import FEET_TO_METERS
+from .util import FEET_TO_METERS, now_ms
 
 # --- @-frame layout constants (see ble_protocol.py header/footer comment) ---
 FRAME_PREFIX = 0x40  # '@'
@@ -75,6 +77,18 @@ POS_LAST_SENDING = False
 POS_FW_SUB_BYTE = 0x42
 POS_ENDING = 0x00
 POS_TIME_MS = 0x0F1E2D3C
+
+# --- RX-01 node-clock trailer (byte_msg[-5:-1], BIG-endian UTC seconds) ---
+# MSG_TIME_MS/POS_TIME_MS above are the OLD little-endian footer field the
+# firmware never actually wrote that way; decoding those same fixture bytes
+# under the new BE-trailer rule lands well before 2024 (see
+# _test_decode_msg_frame / _test_decode_pos_frame), so they exercise the
+# bounds-rejection path "for free". These vectors exercise the accept path
+# with a trailer built the way the firmware actually writes it.
+NODE_RX_TS_VALID_S = 1789050633  # a plausible real UTC-seconds value
+NODE_RX_TS_VALID_MS = NODE_RX_TS_VALID_S * 1000
+NODE_RX_TS_LEGACY_1970_S = 1_000_000  # ~1970-01-12: unsynced node clock after reboot
+NODE_RX_TS_FUTURE_SKEW_S = 3600  # +1h: past _NODE_RX_TS_MAX_SKEW_S (60s)
 
 # --- ACK (@A) semantics ---
 ACK_PAYLOAD_TYPE = 65
@@ -334,6 +348,38 @@ def _build_data_frame(
     return bytes([FRAME_PREFIX]) + header + body + _footer(fcs) + b"\x00"
 
 
+def _build_data_frame_with_be_trailer(  # noqa: PLR0913, PLR0917 - mirrors _build_data_frame's shape
+    type_byte: int,
+    msg_id: int,
+    max_hop_raw: int,
+    body: bytes,
+    footer_vals: tuple[int, ...],
+    trailer_seconds: int,
+) -> bytes:
+    """Assemble a valid @-frame whose trailing 4 bytes are the RX-01 node-clock
+    trailer written BIG-endian (`>I`), matching the real firmware layout
+    (`loop_functions.cpp:601-609`) — unlike `_build_data_frame`, which packs
+    all nine footer fields little-endian, including the trailing 4 bytes.
+
+    footer_vals = (hardware_id, lora_mod, fw, lasthw, fw_sub, ending) — the
+    8-field struct minus the leading always-zero byte and the fcs field,
+    which is computed here same as `_build_data_frame`.
+    """
+    hardware_id, lora_mod, fw, lasthw, fw_sub, ending = footer_vals
+    header = struct.pack("<BIB", type_byte, msg_id, max_hop_raw)
+    trailer = struct.pack(">I", trailer_seconds)
+
+    def _footer(fcs: int) -> bytes:
+        return (
+            struct.pack("<BBBHBBBB", 0, hardware_id, lora_mod, fcs, fw, lasthw, fw_sub, ending)
+            + trailer
+        )
+
+    provisional = bytes([FRAME_PREFIX]) + header + body + _footer(0) + b"\x00"
+    fcs = calc_fcs(provisional[1:-FCS_TRAILER])
+    return bytes([FRAME_PREFIX]) + header + body + _footer(fcs) + b"\x00"
+
+
 def _build_ack_frame(msg_id: int, ack_type: int) -> bytes:
     """Assemble a 7-byte firmware ACK wrapped as a GATT frame.
 
@@ -414,6 +460,15 @@ def _test_decode_msg_frame(results: list[tuple[str, bool]]) -> None:
     )
     # M2-lite: a golden (self-consistent FCS) frame decodes fcs_ok = True.
     _check(results, "msg fcs_ok True on a golden valid frame", decoded["fcs_ok"] is True)
+    # RX-01: MSG_TIME_MS was never a real node-clock trailer (it's the OLD
+    # little-endian footer field); reinterpreted as the BE trailer it lands
+    # well before 2024 and must be rejected, not surfaced as a real timestamp.
+    # See _test_node_rx_ts_ms_msg_frame for the accept-path vector.
+    _check(
+        results,
+        "msg node_rx_ts_ms is None (legacy fixture bytes fail the RX-01 bounds check)",
+        decoded.get("node_rx_ts_ms") is None,
+    )
 
 
 # A grapheme cluster held together by a zero-width joiner (see text_decode.py's
@@ -491,6 +546,172 @@ def _test_decode_pos_frame(results: list[tuple[str, bool]]) -> None:
     _check(results, "pos last_hw_id", decoded["last_hw_id"] == POS_LAST_HW_ID)
     _check(results, "pos last_sending False", decoded["last_sending"] is POS_LAST_SENDING)
     _check(results, "pos fcs_ok True on a golden valid frame", decoded["fcs_ok"] is True)
+    # RX-01: same reasoning as _test_decode_msg_frame — POS_TIME_MS reinterpreted
+    # as the BE trailer also predates 2024 and must be rejected.
+    _check(
+        results,
+        "pos node_rx_ts_ms is None (legacy fixture bytes fail the RX-01 bounds check)",
+        decoded.get("node_rx_ts_ms") is None,
+    )
+
+
+def _test_node_rx_ts_ms_msg_frame(results: list[tuple[str, bool]]) -> None:
+    """RX-01: an @: frame's 4-byte trailer is the node's own reception clock,
+    UTC seconds BIG-endian — decode_binary_message must surface it as
+    node_rx_ts_ms in milliseconds. Pre-fix, this key did not exist at all
+    (confirmed by hand against the unmodified decoder before this fix)."""
+    frame = _build_data_frame_with_be_trailer(
+        MSG_TYPE_BYTE,
+        MSG_MSG_ID,
+        MSG_MAX_HOP_RAW,
+        MSG_PATH.encode() + MSG_DEST.encode() + MSG_MESSAGE.encode(),
+        (MSG_HARDWARE_ID, MSG_LORA_MOD, MSG_FW, MSG_LASTHW, MSG_FW_SUB_BYTE, MSG_ENDING),
+        NODE_RX_TS_VALID_S,
+    )
+    decoded = decode_binary_message(frame)
+    if decoded is None:
+        _check(results, "msg frame with a valid RX-01 trailer decodes", False)
+        return
+    _check(
+        results,
+        "msg node_rx_ts_ms == trailer seconds * 1000, read BIG-endian",
+        decoded.get("node_rx_ts_ms") == NODE_RX_TS_VALID_MS,
+    )
+
+
+def _test_node_rx_ts_ms_pos_frame(results: list[tuple[str, bool]]) -> None:
+    """Same as _test_node_rx_ts_ms_msg_frame, for an @! (position) frame —
+    _decode_data_frame handles both payload types identically for RX-01."""
+    frame = _build_data_frame_with_be_trailer(
+        POS_TYPE_BYTE,
+        POS_MSG_ID,
+        POS_MAX_HOP_RAW,
+        POS_PATH.encode() + POS_DEST.encode() + POS_MESSAGE.encode(),
+        (POS_HARDWARE_ID, POS_LORA_MOD, POS_FW, POS_LASTHW, POS_FW_SUB_BYTE, POS_ENDING),
+        NODE_RX_TS_VALID_S,
+    )
+    decoded = decode_binary_message(frame)
+    if decoded is None:
+        _check(results, "pos frame with a valid RX-01 trailer decodes", False)
+        return
+    _check(
+        results,
+        "pos node_rx_ts_ms == trailer seconds * 1000, read BIG-endian",
+        decoded.get("node_rx_ts_ms") == NODE_RX_TS_VALID_MS,
+    )
+
+
+def _test_node_rx_ts_ms_bounds(results: list[tuple[str, bool]]) -> None:
+    """RX-01 bounds: an unsynced node clock (near-zero or 1970s) or a
+    clock-skewed future value must not be trusted as a real reception time."""
+
+    def _decode_with_trailer(trailer_seconds: int) -> dict[str, Any] | None:
+        frame = _build_data_frame_with_be_trailer(
+            MSG_TYPE_BYTE,
+            MSG_MSG_ID,
+            MSG_MAX_HOP_RAW,
+            MSG_PATH.encode() + MSG_DEST.encode() + MSG_MESSAGE.encode(),
+            (MSG_HARDWARE_ID, MSG_LORA_MOD, MSG_FW, MSG_LASTHW, MSG_FW_SUB_BYTE, MSG_ENDING),
+            trailer_seconds,
+        )
+        return decode_binary_message(frame)
+
+    zero = _decode_with_trailer(0)
+    _check(
+        results,
+        "trailer 0 -> node_rx_ts_ms is None",
+        zero is not None and zero.get("node_rx_ts_ms") is None,
+    )
+
+    legacy = _decode_with_trailer(NODE_RX_TS_LEGACY_1970_S)
+    _check(
+        results,
+        "trailer in the 1970s (node clock unsynced after reboot) -> node_rx_ts_ms is None",
+        legacy is not None and legacy.get("node_rx_ts_ms") is None,
+    )
+
+    far_future = _decode_with_trailer(now_ms() // 1000 + NODE_RX_TS_FUTURE_SKEW_S)
+    _check(
+        results,
+        "trailer 1h in the future -> node_rx_ts_ms is None",
+        far_future is not None and far_future.get("node_rx_ts_ms") is None,
+    )
+
+    valid = _decode_with_trailer(NODE_RX_TS_VALID_S)
+    _check(
+        results,
+        "trailer within bounds still decodes (sanity control for the three cases above)",
+        valid is not None and valid.get("node_rx_ts_ms") == NODE_RX_TS_VALID_MS,
+    )
+
+
+def _test_transform_node_rx_ts_ms(results: list[tuple[str, bool]]) -> None:
+    """transform_common_fields (shared by transform_msg/transform_pos/
+    transform_tele): a valid RX-01 trailer becomes `timestamp` and is passed
+    through as `node_rx_ts_ms`; its absence falls back to ~now_ms(), same as
+    before this fix."""
+    frame = _build_data_frame_with_be_trailer(
+        MSG_TYPE_BYTE,
+        MSG_MSG_ID,
+        MSG_MAX_HOP_RAW,
+        MSG_PATH.encode() + MSG_DEST.encode() + MSG_MESSAGE.encode(),
+        (MSG_HARDWARE_ID, MSG_LORA_MOD, MSG_FW, MSG_LASTHW, MSG_FW_SUB_BYTE, MSG_ENDING),
+        NODE_RX_TS_VALID_S,
+    )
+    decoded = decode_binary_message(frame)
+    if decoded is None:
+        _check(results, "transform: msg frame with a valid trailer decodes", False)
+        return
+    out = transform_msg(decoded, "")
+    _check(
+        results,
+        "transform_msg: timestamp == node_rx_ts_ms when the trailer is valid",
+        out.get("timestamp") == NODE_RX_TS_VALID_MS,
+    )
+    _check(
+        results,
+        "transform_msg: node_rx_ts_ms is passed through in the output",
+        out.get("node_rx_ts_ms") == NODE_RX_TS_VALID_MS,
+    )
+
+    pos_frame = _build_data_frame_with_be_trailer(
+        POS_TYPE_BYTE,
+        POS_MSG_ID,
+        POS_MAX_HOP_RAW,
+        POS_PATH.encode() + POS_DEST.encode() + POS_MESSAGE.encode(),
+        (POS_HARDWARE_ID, POS_LORA_MOD, POS_FW, POS_LASTHW, POS_FW_SUB_BYTE, POS_ENDING),
+        NODE_RX_TS_VALID_S,
+    )
+    decoded_pos = decode_binary_message(pos_frame)
+    if decoded_pos is None:
+        _check(results, "transform: pos frame with a valid trailer decodes", False)
+        return
+    out_pos = transform_pos(decoded_pos, "")
+    _check(
+        results,
+        "transform_pos: timestamp == node_rx_ts_ms when the trailer is valid",
+        out_pos.get("timestamp") == NODE_RX_TS_VALID_MS,
+    )
+
+    # No valid trailer (the legacy MSG_FRAME fixture's reinterpreted-BE value
+    # predates 2024, see _test_decode_msg_frame) -> falls back to now_ms(),
+    # exactly like every transform did before this fix.
+    decoded_no_trailer = decode_binary_message(MSG_FRAME)
+    if decoded_no_trailer is None:
+        _check(results, "transform: legacy golden MSG_FRAME decodes", False)
+        return
+    before = now_ms()
+    out_fallback = transform_msg(decoded_no_trailer, "")
+    after = now_ms()
+    fallback_ts = out_fallback.get("timestamp")
+    _check(
+        results,
+        "transform_msg: no valid trailer -> node_rx_ts_ms is None and timestamp falls back "
+        "to now_ms()",
+        decoded_no_trailer.get("node_rx_ts_ms") is None
+        and isinstance(fallback_ts, int)
+        and before <= fallback_ts <= after,
+    )
 
 
 def _test_decode_malformed(results: list[tuple[str, bool]]) -> None:
@@ -1310,6 +1531,10 @@ def run_ble_protocol_tests() -> bool:
     _test_decode_msg_frame(results)
     _test_decode_msg_frame_charset(results)
     _test_decode_pos_frame(results)
+    _test_node_rx_ts_ms_msg_frame(results)
+    _test_node_rx_ts_ms_pos_frame(results)
+    _test_node_rx_ts_ms_bounds(results)
+    _test_transform_node_rx_ts_ms(results)
     _test_decode_malformed(results)
     _test_fcs(results)
     _test_ack(results)
