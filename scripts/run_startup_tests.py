@@ -42,6 +42,7 @@ from mcapp.commands.handler import create_command_handler
 from mcapp.commands.hashtag_dst_tests import run_hashtag_dst_tests
 from mcapp.commands.linkcheck_session_tests import run_linkcheck_session_tests
 from mcapp.commands.parsing_tests import run_parsing_tests
+from mcapp.commands.response_tests import run_response_tests
 from mcapp.commands.routing_tests import run_routing_tests
 from mcapp.contract_parity_tests import run_contract_parity_tests
 from mcapp.dedup_contract_tests import run_dedup_contract_tests
@@ -130,6 +131,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     routing_ok = run_routing_tests()
     print(f"routing: {'PASS' if routing_ok else 'FAIL'}")
+
+    response_ok = run_response_tests()
+    print(f"response: {'PASS' if response_ok else 'FAIL'}")
 
     conversation_key_ok = run_conversation_key_tests()
     print(f"conversation_key: {'PASS' if conversation_key_ok else 'FAIL'}")
@@ -245,6 +249,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and hashtag_dst_ok
         and dedup_ok
         and routing_ok
+        and response_ok
         and conversation_key_ok
         and query_ok
         and migration_chain_ok
