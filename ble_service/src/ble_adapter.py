@@ -122,6 +122,16 @@ KEEPALIVE_INTERVAL_S = 300
 DST_CHECK_INTERVAL_S = 3600
 POST_PAIR_SETTLE_S = 2
 REGISTER_QUERY_DELAY_S = 0.8
+# The firmware drains its whole BLE RX queue into one global `textbuff_phone`
+# and acts on it once per main-loop pass (esp32_main.cpp:3058-3084,
+# nrf52_main.cpp:1642-1670): two 0xA0 (MsgType.TEXT_COMMAND) writes landing in
+# the same pass silently lose all but the last. `write()` serialises via
+# `_write_lock` but that only prevents concurrent D-Bus calls -- it adds no
+# gap between them. This floor is the loop period (unmeasured) rounded up
+# from a 200 ms guess plus margin. Only TEXT_COMMAND frames share this
+# firmware state; the binary config frames (0x20/0x50/0x55/0x70/0x80/0x90/
+# 0x95/0xF0) do not and are never delayed.
+A0_MIN_GAP_S = 0.3
 
 # ACK attribution opt-in (firmware proposal docs/ack-wer-hat-quittiert.md
 # §5.5): the node's "first ACK only" gate falls only while this session flag
@@ -386,6 +396,12 @@ SAVE_TO_FLASH = 0x0A
 RAM_ONLY = 0x0B
 
 
+# Index of the type byte in a `_frame()`-built buffer ([length, type,
+# ...payload]) -- used by `BLEAdapter.write()` to recognise a TEXT_COMMAND
+# frame for A0_MIN_GAP_S without re-deriving the frame layout there.
+_FRAME_TYPE_BYTE_INDEX = 1
+
+
 def _frame(msg_type: MsgType, payload: bytes = b"") -> bytes:
     """Build a GATT write frame: length-byte + type-byte + payload.
 
@@ -602,6 +618,10 @@ class BLEAdapter:
         self._status = BLEStatus()
         self._operation_lock = asyncio.Lock()
         self._write_lock = asyncio.Lock()
+        # monotonic timestamp of the last successful TEXT_COMMAND (0xA0)
+        # write; see A0_MIN_GAP_S. None means "no prior A0 write this
+        # session" -- never wait on it.
+        self._last_a0_write_monotonic: float | None = None
         self._keepalive_task: asyncio.Task[None] | None = None
         self._dst_check_task: asyncio.Task[None] | None = None
         self._last_utc_offset: float | None = None
@@ -913,6 +933,9 @@ class BLEAdapter:
         """
         self._connected_mac = mac
         self._status.state = ConnectionState.CONNECTED
+        # A fresh session must never inherit a stale gap marker from a prior
+        # connection (see A0_MIN_GAP_S).
+        self._last_a0_write_monotonic = None
         # Read device name from BlueZ D-Bus
         name = ""
         if self.props_iface is not None:
@@ -1171,6 +1194,10 @@ class BLEAdapter:
         self.read_props_iface = None
         self.write_char_iface = None
         self._connected_mac = None
+        # A stale marker only ever causes at most one extra A0_MIN_GAP_S
+        # wait, but a fresh session should never inherit one from a prior
+        # connection.
+        self._last_a0_write_monotonic = None
         # The proxy the notification handler was attached to is gone with the
         # interfaces above, so the handler is gone with it.
         self._notify_handler_attached = False
@@ -1324,7 +1351,21 @@ class BLEAdapter:
         if not self.is_connected or not self.write_char_iface:
             raise RuntimeError("Not connected")
 
+        # `_frame()`'s layout is [length, type, ...payload]: data[1] is the
+        # type byte. Only TEXT_COMMAND (0xA0) shares the firmware's single
+        # `textbuff_phone` buffer -- see A0_MIN_GAP_S.
+        is_a0 = (
+            len(data) > _FRAME_TYPE_BYTE_INDEX
+            and data[_FRAME_TYPE_BYTE_INDEX] == MsgType.TEXT_COMMAND
+        )
+
         async with self._write_lock:
+            if is_a0 and self._last_a0_write_monotonic is not None:
+                elapsed = time.monotonic() - self._last_a0_write_monotonic
+                remaining = A0_MIN_GAP_S - elapsed
+                if remaining > 0:
+                    await asyncio.sleep(remaining)
+
             try:
                 await asyncio.wait_for(
                     self.write_char_iface.call_write_value(data, {}), timeout=WRITE_TIMEOUT_S
@@ -1341,6 +1382,8 @@ class BLEAdapter:
                 return False
 
             else:
+                if is_a0:
+                    self._last_a0_write_monotonic = time.monotonic()
                 return True
 
     def _on_disconnect_detected(self) -> None:
@@ -1352,6 +1395,7 @@ class BLEAdapter:
         self._status.device = None
         self._status.error = "Connection lost"
         self._connected_mac = None
+        self._last_a0_write_monotonic = None
 
         # Cancel keepalive and DST check
         for task_attr in ("_keepalive_task", "_dst_check_task"):
