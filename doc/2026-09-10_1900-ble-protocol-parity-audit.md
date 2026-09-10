@@ -17,7 +17,7 @@ Ranked by impact:
 | ----- | --------- | ------------------------------------------------------------------------------------------------------------------- | -------- |
 | RX-01 | node → us | The node's 4-byte reception timestamp is discarded; backlog after a BLE outage is stamped at reconnect time         | P1       |
 | TX-03 | us → node | Two `0xA0` writes in one firmware loop pass: only the last survives                                                 | P1       |
-| TX-01 | us → node | Any `--` string from the webapp reaches the node verbatim, including `--cleanflash` / `--btcode`                    | P1       |
+| TX-01 | us → node | Any `--` string from the webapp reaches the node verbatim, including `--cleanflash` / `--btcode`                    | accepted |
 | RX-02 | node → us | APRS `T#` telemetry frames are stored as chat in a phantom group 100001 (latent, none observed)                     | P1/P2    |
 | RX-03 | node → us | Firmware command replies (`response>*:`) are filtered from storage but still pushed and streamed                    | P2       |
 | RX-04 | node → us | The flag nibble (`app_offline`, `msg_server`, `msg_track`) is stored opaque; catch-up frames push like live traffic | P2       |
@@ -155,7 +155,11 @@ raw MH frames at INFO). Re-mark the section as "reverted upstream, parser retain
 
 ## 2. Send side: MCProxy → node
 
-### TX-01 (P1) — unbounded `--` pass-through reaches the node
+### TX-01 (P1, ACCEPTED 2026-09-10) — unbounded `--` pass-through reaches the node
+
+**Decision:** accepted as-is by the operator on 2026-09-10. The API is LAN-only and
+unauthenticated by design; the pass-through stays unbounded. No allow-list will be added.
+Recorded so the finding is not re-raised.
 
 `main.py:691-699` forwards any webapp command starting `--` as an `0xA0` frame, no allow-list.
 `POST /api/send` has no auth (`sse_routes/stream.py:99-145`), which is by design for the whole
@@ -332,7 +336,7 @@ fixtures.
 ## 7. Suggested order of work
 
 1. TX-03 outbound queue with an inter-frame gap, and TX-04 send-failure reporting.
-2. TX-01 command allow-list.
+2. TX-01: accepted, no change.
 3. RX-01 timestamp trailer and RX-04 flag booleans together, then gate push on `app_offline`.
 4. RX-03 push exclusion for `response` (mc-chat contract first, then subtree pull).
 5. RX-07 doc correction in `CLAUDE.md` and `ble_protocol.py`.
