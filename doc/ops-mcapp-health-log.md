@@ -674,3 +674,32 @@ to promote rather than wait. Both dev tags were watched against live rows, not j
 - **W10 — `@lucide/vue` pinned at 1.41.0** in the webapp. 1.44.0 breaks the lint gate (45
   unsafe-assignment errors from its type declarations). Re-test on the next dependency pass.
 - **W1, W2, W3, W6, W7** carry forward unchanged.
+
+## 9. 2026-09-10 21:40 CEST — v2.0.5 promoted to production
+
+Post-release check after promoting `v2.0.5-dev.2` to **v2.0.5**. Verdict: **green.** The first
+`release.sh 2` run failed at the tag push (`! [remote rejected] v2.0.5 -> v2.0.5 (failed)`, no
+reason from GitHub) after `main` had already been pushed; the rollback removed the tags but left
+MCProxy `origin/main` one merge commit ahead of `development` and the webapp's local `main`
+seven commits ahead of its remote. Repaired by merging `main` back into `development` (MCProxy)
+and resetting the never-pushed local `main` (webapp); an annotated probe tag then pushed fine,
+so the rejection was transient. The second run went through cleanly.
+
+Deployed with the copied bootstrap pinned to `--tag v2.0.5` (the browser extension was not
+connected, and the shell `POST /api/update/start` was classifier-blocked); same path the
+update runner executes.
+
+| Check                           | Result                                                     |
+| ------------------------------- | ---------------------------------------------------------- |
+| `/api/status` version           | `v2.0.5`                                                   |
+| `/webapp/version.html`          | `v2.0.5`                                                   |
+| Active slot                     | **slot-2** (rollback target slot-1, `v2.0.5-dev.2`)        |
+| Services                        | mcapp, mcapp-ble, caddy, lighttpd all active               |
+| `NRestarts`                     | 0                                                          |
+| Schema                          | `LATEST_SCHEMA_VERSION = 30`, no migration in this release |
+| Health check                    | 15 `[OK]`                                                  |
+| Tracebacks after restart        | 0                                                          |
+| Repos after `post_release_prep` | both `unpushed 0`, `behind_main 0`; next dev 2.0.6         |
+
+Watch points **W9** (CI disabled in both repos) and **W10** (`@lucide/vue` pin) carry from §8.
+A full `/ai-ops` sweep is still owed once the box has settled.
