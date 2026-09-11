@@ -17,8 +17,8 @@ change log for this wave.
 ## Keys MCProxy types
 
 `A` (alt), `B` (batt), `R` (group list), `T` (temp1), `O` (temp2), `H` (hum),
-`P` (qfe), `Q` (qnh — parsed but not stored, see below), `G` (gas), `C` (co2)
-— already typed before this wave — plus four newly typed keys:
+`P` (qfe), `Q` (qnh — stored again, see below), `G` (gas), `C` (co2) —
+already typed before this wave — plus four newly typed keys:
 
 - `N` → `mh_ncnt` (neighbour count; the no-`=` `/N%i` form gets its own
   pattern, and shares the field name `transform_mh()` already uses for the
@@ -47,11 +47,24 @@ after the padded originator callsign on `PAYLOAD_TYPE_MSG` and handed to
 the gap where a telemetry frame was previously stored as a chat message in a
 phantom group.
 
-## `/Q=` stays unstored by design
+## `/Q=` is stored again
 
-`qnh` is parsed off the wire (needed as an intermediate for the QFE
-derivation) but the `telemetry`/`station_positions` `qnh` column is never
-written — see `src/mcapp/storage/ingest.py:1815-1823`: node-reported QNH is
-unreliable, so the frontend derives QNH from QFE + altitude instead. This was
-flagged as a gap in the firmware-side drift analysis; it is not a gap, it is
-this decision, and this note is where it is now recorded.
+`qnh` is parsed off the wire (still feeding the QFE derivation when QFE is
+missing) and, as of 2026-09-11, is also written to the `telemetry` and
+`station_positions` `qnh` columns — see `src/mcapp/storage/ingest.py`'s
+`qnh_reading` note (`store_telemetry`, near the QFE derivation) and
+`telemetry_reconcile.ALL_FIELDS`.
+
+This reverses the original "node QNH is unreliable" policy that dropped the
+column (the frontend derived QNH from QFE + altitude instead). The reversal
+is a firmware-side fix, not a policy change on general principle:
+MeshCom-Firmware item 174 (GPS-01..04, `docs/CHANGELOG-stability.md`
+~line 755, shipped in 4.35s/4.35t) gave the node's barometric QNH reference a
+plausibility gate and a re-latch once the altitude filter converges, so a
+plausible reading is now trustworthy enough to store under the same
+measured/derived precedence as every other telemetry sensor column.
+
+`qnh` still passes through `_QNH_PLAUSIBLE_HPA_RANGE` (850-1100 hPa) before
+either use — that range guards against wrong-unit junk (an mmHg feeder
+reporting ~760 for hPa), a distinct failure mode from the firmware-side
+reference drift that item 174 fixed, and keeps applying independently of it.

@@ -1812,15 +1812,25 @@ class IngestMixin(StorageBase):
         else:
             qfe_reading = absent()
 
-        # Node QNH is unreliable; frontend calculates QNH from qfe + alt. The
-        # `telemetry`/`station_positions` qnh column is therefore always NULL —
-        # `qnh_raw` above only ever feeds the qfe derivation. `telemetry` still binds
-        # an explicit None (its INSERT lists every column); the station_positions
-        # upsert below does not name `qnh` AT ALL, deliberately: while it bound None
-        # through a `COALESCE(excluded.qnh, station_positions.qnh)`, no write could
-        # ever change the column but no write could clear it either, so pre-policy
-        # values froze there permanently and were served for months (scrubbed by
-        # migration v23, `_scrub_frozen_station_cache`).
+        # QNH is stored again as of this change. It used to be dropped after feeding
+        # the qfe derivation above ("node QNH is unreliable, frontend derives QNH from
+        # qfe+alt instead") because the node-side barometric reference could drift
+        # unbounded. Firmware item 174 (GPS-01..04, MeshCom-Firmware
+        # docs/CHANGELOG-stability.md ~line 755, shipped 4.35s/4.35t) gave that
+        # reference a plausibility gate and a re-latch once the altitude filter
+        # converges, so a plausible `/Q=`/`qnh` value is trustworthy enough to store
+        # under the same measured/derived precedence as every other sensor column
+        # (see `telemetry_reconcile.ALL_FIELDS`). Still gated by
+        # `_QNH_PLAUSIBLE_HPA_RANGE` — that range exists independently to catch
+        # wrong-unit junk (e.g. mmHg ~760), not firmware drift, and keeps applying
+        # here. `qnh_out_of_range` is deliberately NOT combined with the `raw_qfe`
+        # dispatch above: an implausible qnh must still be excluded from the qfe
+        # derivation (handled by the `elif` above) and from the qnh column (handled
+        # here), independently of whether qfe itself came from a real sensor.
+        qnh_out_of_range = qnh_raw is not None and not (
+            _QNH_PLAUSIBLE_HPA_RANGE[0] <= qnh_raw <= _QNH_PLAUSIBLE_HPA_RANGE[1]
+        )
+        qnh_reading = absent() if qnh_raw is None or qnh_out_of_range else measured(qnh_raw)
 
         incoming = readings(
             temp1=_wire_reading("temp1"),
@@ -1828,6 +1838,7 @@ class IngestMixin(StorageBase):
             hum=_wire_reading("hum"),
             hum2=_wire_reading("hum2"),
             qfe=qfe_reading,
+            qnh=qnh_reading,
             gas=_wire_reading("gas"),
             co2=_wire_reading("co2"),
             batt=_wire_reading("batt"),
@@ -1845,7 +1856,7 @@ class IngestMixin(StorageBase):
         # this window — that would silently swallow the replayed observation
         # instead of recording it as history (verdict V1 prerequisite 3).
         recent = await self._query(
-            "SELECT id, timestamp, temp1, temp2, hum, hum2, qfe, gas, co2, batt, extras"
+            "SELECT id, timestamp, temp1, temp2, hum, hum2, qfe, qnh, gas, co2, batt, extras"
             " FROM telemetry WHERE callsign = ? AND timestamp > ? AND timestamp < ?"
             " ORDER BY timestamp DESC LIMIT 1",
             (
@@ -1909,7 +1920,7 @@ class IngestMixin(StorageBase):
                     vals["hum"],
                     vals["hum2"],
                     vals["qfe"],
-                    None,
+                    vals["qnh"],
                     vals["gas"],
                     vals["co2"],
                     alt,
@@ -1921,13 +1932,14 @@ class IngestMixin(StorageBase):
             assert existing_row is not None  # noqa: S101 - reconcile() guarantees this
             await self._mutate(
                 "UPDATE telemetry SET temp1 = ?, temp2 = ?, hum = ?, hum2 = ?,"
-                " qfe = ?, gas = ?, co2 = ?, batt = ?, extras = ? WHERE id = ?",
+                " qfe = ?, qnh = ?, gas = ?, co2 = ?, batt = ?, extras = ? WHERE id = ?",
                 (
                     vals["temp1"],
                     vals["temp2"],
                     vals["hum"],
                     vals["hum2"],
                     vals["qfe"],
+                    vals["qnh"],
                     vals["gas"],
                     vals["co2"],
                     vals["batt"],
@@ -1955,7 +1967,7 @@ class IngestMixin(StorageBase):
                     vals["hum"],
                     vals["hum2"],
                     vals["qfe"],
-                    None,
+                    vals["qnh"],
                     vals["gas"],
                     vals["co2"],
                     alt,
@@ -1987,15 +1999,16 @@ class IngestMixin(StorageBase):
         telemetry_ts = max(existing_ts, timestamp)
         await self._mutate(
             """INSERT INTO station_positions
-                   (callsign, temp1, temp2, hum, hum2, qfe, gas, co2, batt,
+                   (callsign, temp1, temp2, hum, hum2, qfe, qnh, gas, co2, batt,
                     telemetry_ts, last_seen, extras)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(callsign) DO UPDATE SET
                    temp1 = COALESCE(excluded.temp1, station_positions.temp1),
                    temp2 = COALESCE(excluded.temp2, station_positions.temp2),
                    hum = COALESCE(excluded.hum, station_positions.hum),
                    hum2 = COALESCE(excluded.hum2, station_positions.hum2),
                    qfe = COALESCE(excluded.qfe, station_positions.qfe),
+                   qnh = COALESCE(excluded.qnh, station_positions.qnh),
                    gas = COALESCE(excluded.gas, station_positions.gas),
                    co2 = COALESCE(excluded.co2, station_positions.co2),
                    batt = COALESCE(excluded.batt, station_positions.batt),
@@ -2012,6 +2025,7 @@ class IngestMixin(StorageBase):
                 vals["hum"],
                 vals["hum2"],
                 vals["qfe"],
+                vals["qnh"],
                 vals["gas"],
                 vals["co2"],
                 vals["batt"],

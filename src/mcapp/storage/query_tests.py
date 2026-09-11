@@ -48,6 +48,16 @@ Coverage:
       real one. Covers a plain hashtag dst, a via-routed hashtag dst param,
       and `get_search_summary`'s destinations list (which used to GLOB-filter
       on digits only, making every hashtag conversation invisible to search).
+  (g) `store_telemetry()` qnh storage (2026-09-11 decision: firmware item 174
+      gave the barometric QNH reference a plausibility gate and re-latch, so
+      MCProxy stores `qnh` again instead of dropping it) — a plausible BLE
+      qnh persists to both `telemetry.qnh` and `station_positions.qnh`; a
+      wrong-unit UDP `tele` qnh (mmHg junk, e.g. 760) is rejected by
+      `_QNH_PLAUSIBLE_HPA_RANGE` and stores NULL without deriving a qfe from
+      it; and a later frame with no qnh at all leaves NULL in its OWN
+      `telemetry` row (an honest INSERT once outside the dedup window) while
+      `station_positions.qnh` keeps the last real value via its
+      `COALESCE(excluded.qnh, station_positions.qnh)` upsert clause.
 
 All timestamps are MILLISECONDS (project-wide DB convention).
 """
@@ -65,6 +75,7 @@ from .constants import (
     BUCKET_SECONDS,
     DEFAULT_POS_RETENTION_HOURS,
     HOURLY_BUCKET_MS,
+    TELEMETRY_DEDUP_WINDOW_MS,
     compute_conversation_key,
 )
 
@@ -725,6 +736,89 @@ async def run_query_tests() -> bool:  # noqa: PLR0915 - test suite lists one cas
                 )
             )
             await _wipe_buckets()
+
+            # --- (g) store_telemetry() qnh storage (2026-09-11 decision) ---
+            # Firmware item 174 gave the barometric QNH reference a plausibility
+            # gate + re-latch (shipped 4.35s/4.35t), so MCProxy stores `qnh`
+            # again instead of dropping it (see ingest.py's qnh_reading note and
+            # telemetry_reconcile.ALL_FIELDS).
+
+            async def _telemetry_qnh_qfe(callsign: str) -> tuple[Any, Any]:
+                rows = await storage._query(
+                    "SELECT qnh, qfe FROM telemetry WHERE callsign = ? ORDER BY id DESC LIMIT 1",
+                    (callsign,),
+                )
+                return (rows[0]["qnh"], rows[0]["qfe"]) if rows else (None, None)
+
+            async def _station_qnh(callsign: str) -> Any:
+                rows = await storage._query(
+                    "SELECT qnh FROM station_positions WHERE callsign = ?", (callsign,)
+                )
+                return rows[0]["qnh"] if rows else None
+
+            # (g1) A plausible BLE qnh persists to both telemetry.qnh and
+            # station_positions.qnh.
+            qnh_t0 = now_ms()
+            await storage.store_telemetry(
+                "QNHTEST-1", {"src_type": "ble", "timestamp": qnh_t0, "qnh": 1013.2}
+            )
+            tele_qnh, _ = await _telemetry_qnh_qfe("QNHTEST-1")
+            results.append(
+                (
+                    "qnh: a plausible BLE qnh persists to telemetry.qnh",
+                    tele_qnh == 1013.2,
+                )
+            )
+            results.append(
+                (
+                    "qnh: a plausible BLE qnh persists to station_positions.qnh",
+                    await _station_qnh("QNHTEST-1") == 1013.2,
+                )
+            )
+
+            # (g2) A wrong-unit UDP tele qnh (mmHg junk, ~760) is outside
+            # _QNH_PLAUSIBLE_HPA_RANGE (850-1100): stores NULL and derives no qfe.
+            await storage.store_telemetry(
+                "QNHTEST-2",
+                {"src_type": "node", "timestamp": now_ms(), "temp1": 15.0, "qnh": 760},
+            )
+            junk_qnh, junk_qfe = await _telemetry_qnh_qfe("QNHTEST-2")
+            results.append(
+                (
+                    "qnh: a wrong-unit (mmHg) UDP qnh stores NULL, not the junk value",
+                    junk_qnh is None,
+                )
+            )
+            results.append(("qnh: a wrong-unit UDP qnh still derives no qfe", junk_qfe is None))
+
+            # (g3) A second frame with no qnh at all, far enough outside the dedup
+            # window to be its own honest INSERT: NULL in its OWN telemetry row,
+            # but station_positions.qnh keeps the prior value via COALESCE.
+            qnh3_t0 = now_ms()
+            await storage.store_telemetry(
+                "QNHTEST-3", {"src_type": "ble", "timestamp": qnh3_t0, "qnh": 1009.5}
+            )
+            await storage.store_telemetry(
+                "QNHTEST-3",
+                {
+                    "src_type": "ble",
+                    "timestamp": qnh3_t0 + 3 * TELEMETRY_DEDUP_WINDOW_MS,
+                    "temp1": 20.0,
+                },
+            )
+            later_qnh, _ = await _telemetry_qnh_qfe("QNHTEST-3")
+            results.append(
+                (
+                    "qnh: a later frame without qnh writes NULL into its OWN telemetry row",
+                    later_qnh is None,
+                )
+            )
+            results.append(
+                (
+                    "qnh: station_positions.qnh keeps the prior value via COALESCE",
+                    await _station_qnh("QNHTEST-3") == 1009.5,
+                )
+            )
         finally:
             await storage.close()
 

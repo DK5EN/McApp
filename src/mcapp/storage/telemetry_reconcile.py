@@ -101,6 +101,7 @@ ALL_FIELDS: Final[tuple[str, ...]] = (
     "hum",
     "hum2",
     "qfe",
+    "qnh",
     "gas",
     "co2",
     "batt",
@@ -417,9 +418,12 @@ def column_names() -> tuple[str, ...]:
     built from THIS call rather than hand-typed twice — the drift between
     `store_telemetry`'s MERGE and REPLACE branches (V2) was exactly two
     hand-typed column lists disagreeing with each other. `telemetry`'s
-    other writable columns (`callsign`, `timestamp`, `alt`, `qnh`,
-    `extras`) are not reconciled fields and are supplied by the caller
-    separately.
+    other writable columns (`callsign`, `timestamp`, `alt`, `extras`)
+    are not reconciled fields and are supplied by the caller separately.
+    `qnh` IS one of `ALL_FIELDS` (firmware item 174 gave the barometric
+    QNH reference a plausibility gate and a re-latch once the altitude
+    filter converges, so it is reliable enough to store under the same
+    measured/derived precedence as every other sensor column).
     """
     return ALL_FIELDS
 
