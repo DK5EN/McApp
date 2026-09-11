@@ -32,16 +32,19 @@ active_slot() { remote 'basename "$(readlink -f ~/mcapp-slots/current)"' | sed '
 slot_version() { remote "python3 -c 'import json;print(json.load(open(\"/home/martin/mcapp-slots/meta/slot-$1.json\")).get(\"version\") or \"\")'"; }
 api_version() { "${CURL[@]}" "${API}/api/status" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("version",""))'; }
 served_version() { "${CURL[@]}" "${API}/webapp/version.html" | tr -d '[:space:]'; }
-runner_has_activate() { remote "grep -q '\"activate\"' ~/mcapp-slots/slot-$1/scripts/update-runner.py && echo yes || echo no"; }
+runner_has_activate() { remote "grep -q 'def run_activate' ~/mcapp-slots/slot-$1/scripts/update-runner.py && echo yes || echo no"; }
+# /api/status reports v<pyproject version>, which is the base version for a dev tag (v2.0.5 for v2.0.5-dev.2).
+slot_api_version() { remote "sed -n 's/^version = \"\(.*\)\"/v\1/p' ~/mcapp-slots/slot-$1/pyproject.toml | head -1"; }
 
-# DB fingerprint: rows older than the sweep start must stay exactly as they were.
+# DB fingerprint: rows from the last 7 days before the sweep start must stay exactly as they
+# were. Older rows are excluded because every mcapp start prunes the 30-day retention window.
 db_fingerprint() {
   remote "python3 - '$1' << 'PYEOF'
 import sqlite3, sys
 cut = int(sys.argv[1])
 c = sqlite3.connect('file:/var/lib/mcapp/messages.db?mode=ro', uri=True)
 v = c.execute('select version from schema_version').fetchone()[0]
-n, s = c.execute('select count(*), coalesce(sum(rowid),0) from messages where timestamp < ?', (cut,)).fetchone()
+n, s = c.execute('select count(*), coalesce(sum(rowid),0) from messages where timestamp < ? and timestamp >= ?', (cut, cut - 7 * 86400 * 1000)).fetchone()
 p = c.execute('select count(*) from station_positions').fetchone()[0]
 print(f'schema={v} rows_before_cut={n} rowid_sum={s} positions>={p}')
 PYEOF"
@@ -74,7 +77,7 @@ wait_service_settled() { # wait for the runner port to close and the API to answ
 verify_slot() { # slot expected_version step_start_epoch cut_ms baseline_fp
   local slot="$1" want="$2" t0="$3" cut="$4" base="$5"
   assert_eq "current symlink" "$slot" "$(active_slot)"
-  assert_eq "/api/status version" "$want" "$(api_version)"
+  assert_eq "/api/status version" "$(slot_api_version "$slot")" "$(api_version)"
   assert_eq "served webapp version" "$want" "$(served_version)"
   assert_eq "services active" "active active active" "$(remote 'systemctl is-active mcapp mcapp-ble lighttpd | xargs')"
   local ble_start
