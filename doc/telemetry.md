@@ -15,8 +15,13 @@ Since firmware v4.35k.02.19, telemetry packets come in two variants:
   "src_type": "node",
   "type": "tele",
   "src": "DK5EN-99",
-  "temp1": 0, "temp2": 0, "hum": 0,
-  "qfe": 0, "qnh": 0, "gas": 0, "co2": 0
+  "temp1": 0,
+  "temp2": 0,
+  "hum": 0,
+  "qfe": 0,
+  "qnh": 0,
+  "gas": 0,
+  "co2": 0
 }
 ```
 
@@ -28,26 +33,31 @@ Since firmware v4.35k.02.19, telemetry packets come in two variants:
   "type": "tele",
   "src": "DL2JA-2,DL2UD-01",
   "batt": 70,
-  "temp1": 16.5, "temp2": 0, "hum": 33.6,
-  "qfe": 412, "qnh": 0, "gas": 81.8, "co2": 0
+  "temp1": 16.5,
+  "temp2": 0,
+  "hum": 33.6,
+  "qfe": 412,
+  "qnh": 0,
+  "gas": 81.8,
+  "co2": 0
 }
 ```
 
 ### Fields
 
-| Field | Type | Description | Availability |
-|-------|------|-------------|-------------|
-| `src_type` | string | `"node"` (own) or `"lora"` (remote) | Always |
-| `type` | string | Always `"tele"` | Always |
-| `src` | string | Callsign + relay path (e.g. `"DL2JA-1,DB0ED-99"`) | Always (new FW); missing in old FW |
-| `batt` | int | Battery level (%) | LoRa only; stored since schema v14 |
-| `temp1` | float | Temperature sensor 1 (C) | Optional |
-| `temp2` | float | Temperature sensor 2 (C) | Optional |
-| `hum` | float | Relative humidity (%) | Optional |
-| `qfe` | float | Station pressure (hPa) | Optional |
-| `qnh` | float | Sea-level pressure (hPa) | Optional; used to calculate QFE if QFE missing |
-| `gas` | int | Gas sensor reading | Optional |
-| `co2` | int | CO2 concentration (ppm) | Optional |
+| Field      | Type   | Description                                       | Availability                                                                               |
+| ---------- | ------ | ------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `src_type` | string | `"node"` (own) or `"lora"` (remote)               | Always                                                                                     |
+| `type`     | string | Always `"tele"`                                   | Always                                                                                     |
+| `src`      | string | Callsign + relay path (e.g. `"DL2JA-1,DB0ED-99"`) | Always (new FW); missing in old FW                                                         |
+| `batt`     | int    | Battery level (%)                                 | LoRa only; stored since schema v14                                                         |
+| `temp1`    | float  | Temperature sensor 1 (C)                          | Optional                                                                                   |
+| `temp2`    | float  | Temperature sensor 2 (C)                          | Optional                                                                                   |
+| `hum`      | float  | Relative humidity (%)                             | Optional                                                                                   |
+| `qfe`      | float  | Station pressure (hPa)                            | Optional                                                                                   |
+| `qnh`      | float  | Sea-level pressure (hPa)                          | Optional; stored when plausible (850-1100 hPa) and used to calculate QFE if QFE is missing |
+| `gas`      | int    | Gas sensor reading                                | Optional                                                                                   |
+| `co2`      | int    | CO2 concentration (ppm)                           | Optional                                                                                   |
 
 ## Processing Pipeline
 
@@ -93,6 +103,6 @@ The dedup logic handles most duplicates. QFE validation (< 850 hPa → None) ens
 
 ## Known Limitations
 
-- `qnh` intentionally not stored (node-reported QNH is unreliable; frontend calculates from QFE + altitude). However, if QFE is missing/invalid and QNH + altitude are available, QFE is calculated via barometric formula before discarding QNH.
+- `qnh` is stored again as of 2026-09-11 (firmware item 174 gave the node's barometric QNH reference a plausibility gate and a re-latch once the altitude filter converges, shipped in 4.35s/4.35t — see `doc/2026-09-11_1200-aprs-key-contract-adoption.md`). A plausible value (850-1100 hPa) is written to both `telemetry.qnh` and `station_positions.qnh`; an implausible one (e.g. wrong-unit mmHg junk) stores NULL. If QFE is missing/invalid and a plausible QNH + altitude are available, QFE is still additionally calculated via the barometric formula (a DERIVED reading — a real `/P=` sensor reading always outranks it).
 - Relay path information is lost during callsign normalization (no `via` field in telemetry table)
 - Some stations send only zeros (no sensors) — correctly filtered by all-zero check

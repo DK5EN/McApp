@@ -1,5 +1,68 @@
 # Release History
 
+## v2.0.6 (2026-09-11)
+
+Patch release in two parts: the BLE position parser is aligned with the firmware's published
+APRS key contract (`MeshCom-Firmware docs/architecture/11-wire-format.md` §1.8), and the
+update runner's rollback is replaced by explicit slot activation after the rollback path was
+found to restore a stale database. No schema change (stays at **v30**). Push contract stays at
+**v9**.
+
+### Highlights
+
+- **Neighbour counts from position beacons are stored again.** The firmware writes the MHeard
+  count as `/N12`, without an `=`, and the extension parser only matched `key=value`, so every
+  position frame lost it. It is parsed now, under the same field the MHeard register already
+  uses.
+
+- **Telemetry frames are telemetry, not chat.** The firmware sends `T#` telemetry as a text
+  frame to group 100001 behind a 9-character padded callsign; the dispatcher only looked for
+  `T#` on position frames, so every telemetry frame was stored as a chat message. It is routed
+  to the telemetry path now, and the trailing digital-input bit string is kept.
+
+- **Node QNH is stored.** It was parsed and dropped since the node-side QNH was unreliable;
+  firmware 4.35s/t (item 174) gave the barometric reference a plausibility gate and a re-latch,
+  so a plausible value (850..1100 hPa) is now stored in `telemetry.qnh` and
+  `station_positions.qnh`. Wrong-unit values still store NULL and derive no QFE. Rows written
+  before this release stay NULL.
+
+- **Digital inputs, bus voltage and current are typed.** `/D=` (an 8-character MCP23017 bit
+  string) was coerced to a float; `/U=` and `/I=` (INA226) landed untyped. They are `din`,
+  `vbus` and `vcurrent` now; `/F=` (pressure altitude), `/V=` (sensor-block version) and `/Y=`
+  stay in `extras` on purpose.
+
+- **Slot activation replaces rollback, and never touches the database.** The runner's rollback
+  overwrote the live `messages.db` with a snapshot taken when that slot was last left, which on
+  mcapp.local was 4 days to 3 weeks old, and it never re-staged the webapp bundle or restarted
+  `mcapp-ble`. The new `activate` mode swaps the symlink, stages the slot's webapp, restarts
+  lighttpd, mcapp and mcapp-ble, and runs the health checks. The Update page shows an Activate
+  button per populated slot; the confirm dialog names the exact slot and version.
+
+- **No `--ackinfo` bubble after every reconnect.** The BLE service's automatic `--ackinfo on`
+  was answered by the node and echoed into the live SSE stream; storage and push already dropped
+  it, the broadcast did not. Only the exact auto-command echoes are dropped.
+
+- **Own messages show who heard them.** A radio badge with the number of distinct RF stations
+  that heard the message and a cloud once a gateway acked it, both live from `msg:status`.
+
+- **WiFi TX power offers only what the firmware accepts.** 2..20 dBm; the "Max" option cited a
+  handler that no longer exists and left the node at chip default while the UI said Max.
+  Out-of-range stored values render as a disabled placeholder.
+
+### Documentation
+
+- `doc/MeshCom-ACK.md`: hop mask 0x0F, status 0x02 peer ACK, 13-byte BLE ACK.
+- `CLAUDE.md`, `hey_path.py`: the MHeard `SRC`/`GW`/`PP` keys were reverted upstream on
+  2026-08-28; the parser stays, inert.
+- `doc/2026-09-11_1200-aprs-key-contract-adoption.md`: which of the 17 firmware keys MCProxy
+  types, and why the rest stay in `extras`.
+
+### Verification
+
+ruff, ruff format, mypy --strict and the startup test runner clean; `ble_protocol` 212 cases
+(16 new), `telemetry_reconcile` 62, `query` with six new QNH cases. Slot activation verified
+live on mcapp.local under v2.0.6-dev.1.
+
 ## v2.0.5 (2026-09-10)
 
 Patch release from a three-way audit of the BLE protocol against the firmware source and the

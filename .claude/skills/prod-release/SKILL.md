@@ -384,8 +384,11 @@ Then run `/ai-ops` once the box has settled and append the post-release sweep to
 
 ## Rollback
 
-The update page has a **Rollback** button, and the previous release is still in its slot — so
-rolling back is a slot switch, not a re-deploy. Use it before considering a hotfix release.
+The update page has an **Activate** button on every non-active populated slot row, and the
+previous release is still sitting in its slot — so reverting is a slot activation (code + webapp
+bundle + service restarts), not a re-deploy. Use it before considering a hotfix release. Activation
+never touches the database: migrations are forward-only and additive, so the previous release's
+code runs fine against whatever the current schema is.
 
 Never delete or move a published production tag to "fix" a release. Cut `vX.Y.Z+1` instead; the
 version is already bumped and waiting in `pyproject.toml`.

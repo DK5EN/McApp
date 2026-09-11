@@ -174,6 +174,67 @@ APRS_BATT_OUT_OF_RANGE = "!4812.34N/01143.56E#/B=150"
 APRS_BATT_INJECTION = "!4812.34N/01143.56E#Gebäude/B=12 Etage/B=77"
 APRS_BATT_INJECTION_REAL = 77
 
+# --- RX-05: /N<n> neighbour count. The firmware writes "/N%i" with NO "="
+# (loop_functions.cpp:4415-4420), unlike every other key here.
+APRS_NCNT7 = "!4812.34N/01143.56E#/N7"
+APRS_NCNT7_VALUE = 7
+APRS_NCNT12 = "!4812.34N/01143.56E#/N12"
+APRS_NCNT12_VALUE = 12
+
+# --- RX-12: /D= MCP23017 port A input bits, exactly 8 chars of 0/1
+# (aprs_functions.cpp:1028-1076 accepts nothing else -- 7 chars is a miss,
+# not a partial value).
+APRS_DIN = "!4812.34N/01143.56E#/D=00000101"
+APRS_DIN_VALUE = "00000101"
+APRS_DIN_SHORT = "!4812.34N/01143.56E#/D=0000010"  # 7 chars -> no din at all
+
+# --- INA226 bus voltage/current: /U=%.2f V, /I=%.1f A ---
+APRS_INA226 = "!4812.34N/01143.56E#/U=12.34/I=0.5"
+APRS_INA226_VBUS = 12.34
+APRS_INA226_VCURRENT = 0.5
+
+# --- Full beacon in the encoder's own concatenation order
+# (loop_functions.cpp:4458-4478): B A N P H T O F Q G C R (4 dead buffers,
+# never written) V U I D Y. Exercises every typed key plus RX-05/RX-12
+# together, and pins the extras leftovers to exactly the three keys this
+# parser deliberately leaves untyped: F (pressure altitude, not a pressure),
+# V (sensor-block version marker), Y (telemetry-beacon flag).
+APRS_FULL_BEACON = (
+    "!4812.34N/01143.56E#/B=085/A=001526/N12/P=940.3/H=42.1/T=22.6/O=17.8"
+    "/F=453/Q=956.9/G=236.8/C=412/R=9;20;/V=3/U=12.34/I=0.5/D=00000101/Y=1"
+)
+APRS_FULL_BEACON_ALT_FT = 1526
+APRS_FULL_BEACON_ALT_M = round(APRS_FULL_BEACON_ALT_FT * FEET_TO_METERS)
+APRS_FULL_BEACON_BATT = 85
+APRS_FULL_BEACON_NCNT = 12
+APRS_FULL_BEACON_QFE = 940.3
+APRS_FULL_BEACON_HUM = 42.1
+APRS_FULL_BEACON_TEMP1 = 22.6
+APRS_FULL_BEACON_TEMP2 = 17.8
+APRS_FULL_BEACON_QNH = 956.9
+APRS_FULL_BEACON_GAS = 236.8
+APRS_FULL_BEACON_CO2 = 412.0
+APRS_FULL_BEACON_VBUS = 12.34
+APRS_FULL_BEACON_VCURRENT = 0.5
+APRS_FULL_BEACON_DIN = "00000101"
+APRS_FULL_BEACON_EXTRAS_KEYS = {"F", "V", "Y"}
+
+# --- RX-02: T# telemetry riding a ":" text frame (PAYLOAD_TYPE_MSG) to the
+# reserved destination "100001", body "%-9.9s:T#%03i,..." (the 9-char
+# space-padded originator callsign, a literal ":", then the T# token;
+# loop_functions.cpp:5083-5084,5238).
+TELE_TEXT_DEST = "100001"
+TELE_TEXT_MESSAGE = "DK5EN-98 :T#042,940.3,22.6,42.1,956.9,412,00000101"
+TELE_TEXT_DICT: dict[str, Any] = {
+    "payload_type": MSG_PAYLOAD_TYPE,
+    "msg_id": 0x1,
+    "path": "DK5EN-98>",
+    "dest": TELE_TEXT_DEST,
+    "message": TELE_TEXT_MESSAGE,
+    "hardware_id": 0x01,
+}
+TELE_TEXT_DIN = "00000101"
+
 # --- APRS symbol table id: '/', '\', or an overlay (0-9 A-Z) ---------------
 # Built from chr(92) rather than a backslash literal, for the same reason
 # `udp_parsing_tests.py` mandates it: in Python source the correct value is
@@ -1036,6 +1097,128 @@ def _test_aprs_comment_injection(results: list[tuple[str, bool]]) -> None:
     )
 
 
+def _test_aprs_ncnt(results: list[tuple[str, bool]]) -> None:
+    """RX-05: /N<n> has NO "=" and must not be dropped by the "=" extras regex."""
+    n7 = parse_aprs_position(APRS_NCNT7)
+    _check(
+        results,
+        "APRS /N7 -> mh_ncnt (no '=' in the token)",
+        n7 is not None and n7.get("mh_ncnt") == APRS_NCNT7_VALUE,
+    )
+    n12 = parse_aprs_position(APRS_NCNT12)
+    _check(
+        results,
+        "APRS /N12 -> mh_ncnt (two digits)",
+        n12 is not None and n12.get("mh_ncnt") == APRS_NCNT12_VALUE,
+    )
+    _check(
+        results,
+        "APRS /N12 does not also leak into extras",
+        n12 is not None and "N" not in n12.get("extras", {}),
+    )
+
+
+def _test_aprs_din(results: list[tuple[str, bool]]) -> None:
+    """RX-12: /D= is an 8-char 0/1 bit string, kept verbatim as a string —
+    never coerced to float. 7 chars is a miss, not a partial value, and the
+    firmware's own tolerance drops it entirely rather than half-decoding it."""
+    din = parse_aprs_position(APRS_DIN)
+    _check(
+        results,
+        "APRS /D= -> din, raw 8-char string",
+        din is not None and din.get("din") == APRS_DIN_VALUE,
+    )
+    _check(
+        results,
+        "APRS /D= din is a str, not a float",
+        din is not None and isinstance(din.get("din"), str),
+    )
+    short = parse_aprs_position(APRS_DIN_SHORT)
+    _check(
+        results,
+        "APRS /D= with 7 chars: no din at all (firmware ignores the token)",
+        short is not None and "din" not in short,
+    )
+    _check(
+        results,
+        "APRS /D= with 7 chars: does not leak into extras either",
+        short is not None and "D" not in short.get("extras", {}),
+    )
+
+
+def _test_aprs_ina226(results: list[tuple[str, bool]]) -> None:
+    """/U= bus voltage and /I= current parse typed, excluded from extras;
+    /V= (sensor-block version marker, not a reading) is untouched by this."""
+    ina = parse_aprs_position(APRS_INA226)
+    _check(
+        results,
+        "APRS /U= -> vbus",
+        ina is not None and _close(ina.get("vbus", 0.0), APRS_INA226_VBUS),
+    )
+    _check(
+        results,
+        "APRS /I= -> vcurrent",
+        ina is not None and _close(ina.get("vcurrent", 0.0), APRS_INA226_VCURRENT),
+    )
+    _check(
+        results,
+        "APRS /U= /I= do not leak into extras",
+        ina is not None and not ({"U", "I"} & set(ina.get("extras", {}))),
+    )
+
+
+def _test_aprs_full_beacon(results: list[tuple[str, bool]]) -> None:
+    """Encoder-order full beacon: every typed key, including RX-05/RX-12,
+    together in one frame, and extras pinned to exactly F, V, Y."""
+    full = parse_aprs_position(APRS_FULL_BEACON)
+    if full is None:
+        _check(results, "full encoder-order beacon returns a dict", False)
+        return
+    _check(results, "full beacon: /A= altitude", full.get("alt") == APRS_FULL_BEACON_ALT_M)
+    _check(results, "full beacon: /B= battery", full.get("batt") == APRS_FULL_BEACON_BATT)
+    _check(results, "full beacon: /N12 -> mh_ncnt", full.get("mh_ncnt") == APRS_FULL_BEACON_NCNT)
+    _check(results, "full beacon: /P= qfe", _close(full.get("qfe", 0.0), APRS_FULL_BEACON_QFE))
+    _check(results, "full beacon: /H= hum", _close(full.get("hum", 0.0), APRS_FULL_BEACON_HUM))
+    _check(
+        results, "full beacon: /T= temp1", _close(full.get("temp1", 0.0), APRS_FULL_BEACON_TEMP1)
+    )
+    _check(
+        results, "full beacon: /O= temp2", _close(full.get("temp2", 0.0), APRS_FULL_BEACON_TEMP2)
+    )
+    _check(results, "full beacon: /Q= qnh", _close(full.get("qnh", 0.0), APRS_FULL_BEACON_QNH))
+    _check(results, "full beacon: /G= gas", _close(full.get("gas", 0.0), APRS_FULL_BEACON_GAS))
+    _check(results, "full beacon: /C= co2", _close(full.get("co2", 0.0), APRS_FULL_BEACON_CO2))
+    _check(results, "full beacon: /U= vbus", _close(full.get("vbus", 0.0), APRS_FULL_BEACON_VBUS))
+    _check(
+        results,
+        "full beacon: /I= vcurrent",
+        _close(full.get("vcurrent", 0.0), APRS_FULL_BEACON_VCURRENT),
+    )
+    _check(results, "full beacon: /D= din", full.get("din") == APRS_FULL_BEACON_DIN)
+    _check(
+        results,
+        "full beacon: extras holds only F, V, Y",
+        set(full.get("extras", {})) == APRS_FULL_BEACON_EXTRAS_KEYS,
+    )
+
+
+def _test_tele_text_dispatch(results: list[tuple[str, bool]]) -> None:
+    """RX-02: a T# telemetry frame riding a ":" text frame to dst "100001"
+    must dispatch as tele, not land as chat, and carry the trailing bit
+    string as din."""
+    result = dispatcher(TELE_TEXT_DICT, "")
+    _check(
+        results,
+        "T# text frame to dst 100001 dispatches as tele, not msg",
+        result is not None and result.get("type") == "tele",
+    )
+    _check(
+        results,
+        "T# text frame din carries the trailing bit string",
+        result is not None and result.get("din") == TELE_TEXT_DIN,
+    )
+
+
 def _test_aprs_symbol_table_ids(results: list[tuple[str, bool]]) -> None:
     """The symbol table id: '/', a single backslash, or an overlay (0-9 A-Z).
 
@@ -1656,6 +1839,11 @@ def run_ble_protocol_tests() -> bool:
     _test_ack_appendix(results)
     _test_aprs_position(results)
     _test_aprs_comment_injection(results)
+    _test_aprs_ncnt(results)
+    _test_aprs_din(results)
+    _test_aprs_ina226(results)
+    _test_aprs_full_beacon(results)
+    _test_tele_text_dispatch(results)
     _test_aprs_symbol_table_ids(results)
     _test_timestamp(results)
     _test_mh_transform(results)

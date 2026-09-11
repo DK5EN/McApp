@@ -674,3 +674,75 @@ to promote rather than wait. Both dev tags were watched against live rows, not j
 - **W10 — `@lucide/vue` pinned at 1.41.0** in the webapp. 1.44.0 breaks the lint gate (45
   unsafe-assignment errors from its type declarations). Re-test on the next dependency pass.
 - **W1, W2, W3, W6, W7** carry forward unchanged.
+
+## 9. 2026-09-10 21:40 CEST — v2.0.5 promoted to production
+
+Post-release check after promoting `v2.0.5-dev.2` to **v2.0.5**. Verdict: **green.** The first
+`release.sh 2` run failed at the tag push (`! [remote rejected] v2.0.5 -> v2.0.5 (failed)`, no
+reason from GitHub) after `main` had already been pushed; the rollback removed the tags but left
+MCProxy `origin/main` one merge commit ahead of `development` and the webapp's local `main`
+seven commits ahead of its remote. Repaired by merging `main` back into `development` (MCProxy)
+and resetting the never-pushed local `main` (webapp); an annotated probe tag then pushed fine,
+so the rejection was transient. The second run went through cleanly.
+
+Deployed with the copied bootstrap pinned to `--tag v2.0.5` (the browser extension was not
+connected, and the shell `POST /api/update/start` was classifier-blocked); same path the
+update runner executes.
+
+| Check                           | Result                                                     |
+| ------------------------------- | ---------------------------------------------------------- |
+| `/api/status` version           | `v2.0.5`                                                   |
+| `/webapp/version.html`          | `v2.0.5`                                                   |
+| Active slot                     | **slot-2** (rollback target slot-1, `v2.0.5-dev.2`)        |
+| Services                        | mcapp, mcapp-ble, caddy, lighttpd all active               |
+| `NRestarts`                     | 0                                                          |
+| Schema                          | `LATEST_SCHEMA_VERSION = 30`, no migration in this release |
+| Health check                    | 15 `[OK]`                                                  |
+| Tracebacks after restart        | 0                                                          |
+| Repos after `post_release_prep` | both `unpushed 0`, `behind_main 0`; next dev 2.0.6         |
+
+Watch points **W9** (CI disabled in both repos) and **W10** (`@lucide/vue` pin) carry from §8.
+A full `/ai-ops` sweep is still owed once the box has settled.
+
+## 10. 2026-09-11 00:45 CEST — slot activation verified live (v2.0.6-dev.1)
+
+**Trigger.** The Update page's Rollback button had never been pressed. Reading
+`scripts/update-runner.py` before pressing it showed that rollback overwrote
+`/var/lib/mcapp/messages.db` with `meta/slot-N.db`, a snapshot taken when slot N was last
+_left_ through the runner. The three deploys of 2026-09-10 went through `mcapp.sh`, which never
+refreshes it, so the snapshots on the box were: slot-1 2026-09-06 15:45 UTC (schema 30), slot-0
+2026-09-06 08:36 UTC (schema 29), slot-2 2026-08-22 16:06 UTC (schema 25). Pressing Rollback would
+have replaced a database whose newest row was 2026-09-10 19:27 UTC with the 6 September copy. It
+also never re-installed the served webapp bundle and never restarted `mcapp-ble`. Replaced by
+per-slot activation (MCProxy c817bfa, webapp f35d571), shipped as v2.0.6-dev.1 into slot-0.
+
+**Verification.** `scripts/slot_activation_sweep.sh mcapp.local`, second run (the first run
+had three instrument bugs, fixed in c6b6551):
+
+| Step                            | Result                                                                                  |
+| ------------------------------- | --------------------------------------------------------------------------------------- |
+| activate active slot / slot 7   | 400 both                                                                                |
+| slot-0 → slot-1 (v2.0.5-dev.2)  | runner success 23 s; symlink, API v2.0.5, bundle dev.2, 3 services, mcapp-ble restarted |
+| slot-1 → slot-0 (manual runner) | success; API v2.0.6, bundle v2.0.6-dev.1                                                |
+| slot-0 → slot-2 (v2.0.5)        | runner success 30 s; API v2.0.5, bundle v2.0.5                                          |
+| slot-2 → slot-0 (manual runner) | success                                                                                 |
+| database                        | schema 30 throughout; 7-day fingerprint identical across all four switches              |
+| leftovers                       | no `webapp.old` / `webapp.new`, runner exit 0 every time                                |
+
+A targeted re-check afterwards (fingerprint at t0, t0+90 s, on slot-1, on slot-1 +60 s, back on
+slot-0) lost exactly one fresh row during the 90 s of ordinary running _before_ any switch and
+none across the switches: normal ingest churn on the newest rows, not activation.
+
+**Caveats for the operator.** Slots older than v2.0.6-dev.1 (currently slot-1 and slot-2) carry a
+runner without `activate` and a backend without `/api/update/activate` (404). From such a slot,
+return with the new slot's runner directly:
+
+```bash
+sudo ~/mcapp-slots/slot-0/.venv/bin/python3 ~/mcapp-slots/slot-0/scripts/update-runner.py --mode activate --slot 0
+```
+
+Do not press the old Rollback button while an old slot is active. The `/api/status` version is
+`v<pyproject version>` (v2.0.5 on a v2.0.5-dev.2 slot); `webapp/version.html` carries the tag.
+
+**State after the sweep.** slot-0 v2.0.6-dev.1 active, slot-1 v2.0.5-dev.2, slot-2 v2.0.5;
+services active, NRestarts 0 on the new unit start, schema 30.

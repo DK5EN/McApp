@@ -72,6 +72,67 @@ def reachable_runner_host(request_host: str | None, bind_host: str) -> str:
     return bind_host if bind_host != "0.0.0.0" else "localhost"  # noqa: S104 - comparing bind host string, not binding
 
 
+def activate_slot_error(slot_info: dict[str, Any], slot: int) -> str | None:
+    """Return a human-readable reason `slot` cannot be activated, else None.
+
+    Checked in order: the slot index must be within SLOT_COUNT, it must not
+    already be the active slot, and it must have a deployed version. Pure and
+    read-only — the caller (POST /api/update/activate) still hands the slot to
+    the update runner, which validates it again itself.
+    """
+    if slot < 0 or slot >= SLOT_COUNT:
+        return f"slot {slot} is out of range (valid: 0-{SLOT_COUNT - 1})"
+    if slot_info.get("active_slot") == slot:
+        return f"slot {slot} is already active"
+    entry = next((s for s in slot_info.get("slots", []) if s.get("slot") == slot), None)
+    if entry is None or not entry.get("version"):
+        return f"slot {slot} has no deployed version"
+    return None
+
+
+# The exact command-back replies the firmware sends for the session command
+# ble_service itself sends on every BLE connect (`ACK_ATTRIBUTION_COMMAND` in
+# `ble_service/src/ble_adapter.py`, duplicated here because ble_service is a
+# separate process with its own import graph). `--ackinfo` is the only such
+# auto-command MCProxy issues today; the "off"/"--wrong command" spellings are
+# included so a firmware change of `on`->`off` or an older firmware's
+# unrecognized-command prefix doesn't silently reopen this leak. Storage
+# (`storage.ingest._should_filter_message`) and push
+# (`push_delivery._is_node_local_noise`) already drop EVERY `response`-sourced
+# frame outright — command replies are not conversations either one needs to
+# persist or notify about. The live SSE broadcast has no such blanket rule
+# because the webapp's custom-command box shows the operator's own `--`
+# command replies inline as they arrive, so only this exact, closed set of
+# self-inflicted echoes is dropped here; every other `response` frame (an
+# operator-issued command's reply) must keep flowing.
+_AUTO_COMMAND_ECHOES: frozenset[str] = frozenset(
+    {
+        "--ackinfo on",
+        "--ackinfo off",
+        "--wrong command --ackinfo on",
+        "--wrong command --ackinfo off",
+    }
+)
+
+
+def is_auto_command_echo(payload: dict[str, Any]) -> bool:
+    """True iff `payload` is the node's command-back reply to a session
+    command MCProxy itself sends on connect (see `_AUTO_COMMAND_ECHOES`),
+    rather than a reply to a command the operator typed.
+
+    Matches on the `response` pseudo-callsign plus an exact (stripped) `msg`
+    membership test — never a substring/prefix check, so an operator-issued
+    `--ackinfo on` sent as their OWN custom command (indistinguishable on the
+    wire from ours) is the one case this cannot tell apart, and matching it
+    only in this closed, deliberately narrow set keeps that blast radius
+    minimal rather than swallowing arbitrary future `--` commands.
+    """
+    if payload.get("src") != "response":
+        return False
+    msg = payload.get("msg")
+    return isinstance(msg, str) and msg.strip() in _AUTO_COMMAND_ECHOES
+
+
 logger = get_logger(__name__)
 
 # Import FastAPI and related modules
@@ -498,13 +559,20 @@ class SSEManager:
         mode: str,
         dev: bool = False,
         request_host: str | None = None,
+        slot: int | None = None,
     ) -> dict[str, Any]:
         """Launch the standalone update runner via systemd .path trigger.
 
-        `mode` is one of "update", "rollback", or "converge" (converge re-runs
-        the current slot's `mcapp.sh --converge` to bring system-level state
-        -- packages, firewall, web front door -- up to `REQUIRED_SYSTEM_EPOCH`
-        without touching slots or restarting mcapp; see system_converge.py).
+        `mode` is one of "update", "rollback", "converge", or "activate"
+        (converge re-runs the current slot's `mcapp.sh --converge` to bring
+        system-level state -- packages, firewall, web front door -- up to
+        `REQUIRED_SYSTEM_EPOCH` without touching slots or restarting mcapp;
+        see system_converge.py). "activate" switches the active slot to
+        `slot` without deploying anything or restoring a database snapshot --
+        a pure slot switch, unlike "rollback".
+
+        `slot` is required for "activate" and is included in the args file
+        only when given; the runner validates it again itself.
 
         `request_host` is the Host the client used to reach this API; it is used
         to build the stream/status URLs so a remote browser connects to the Pi
@@ -531,9 +599,12 @@ class SSEManager:
             pass
 
         # Write args file and trigger file for systemd .path unit
+        args: dict[str, Any] = {"mode": mode, "dev": dev}
+        if slot is not None:
+            args["slot"] = slot
         await asyncio.to_thread(
             UPDATE_ARGS_FILE.write_text,
-            json.dumps({"mode": mode, "dev": dev}),
+            json.dumps(args),
         )
         await asyncio.to_thread(UPDATE_TRIGGER_FILE.write_text, "")
         logger.info("Update trigger file written")
@@ -694,6 +765,10 @@ class SSEManager:
         # link-check UI is fed by _linkcheck_handler's `proxy:linkcheck_*`
         # events, which carry everything these raw frames do and more.
         if is_link_check_payload(message_data.get("msg", "")):
+            return
+        # Drop MCProxy's own `--ackinfo on` connect-time command echo (see
+        # is_auto_command_echo) — every other `response` reply keeps flowing.
+        if is_auto_command_echo(message_data):
             return
         router = self.message_router
         decision = router.blocklist_decision(message_data) if router is not None else "pass"
@@ -1639,6 +1714,83 @@ async def run_startup_tests() -> bool:  # noqa: PLR0912, PLR0915 - regression su
         (
             "reachable_runner_host maps a 0.0.0.0 bind fallback to localhost",
             reachable_runner_host(None, "0.0.0.0") == "localhost",  # noqa: S104 - test fixture string, not a bind
+        )
+    )
+
+    # activate_slot_error: gate for POST /api/update/activate. Slot 1 is
+    # active, slot 2 is deployed but not active, slot 0 has no version.
+    _activate_slot_info: dict[str, Any] = {
+        "slots": [
+            {"slot": 0, "version": None},
+            {"slot": 1, "version": "v2.0.5"},
+            {"slot": 2, "version": "v2.0.4"},
+        ],
+        "active_slot": 1,
+    }
+    results.append(
+        (
+            "activate_slot_error rejects an out-of-range slot",
+            activate_slot_error(_activate_slot_info, SLOT_COUNT) is not None,
+        )
+    )
+    results.append(
+        (
+            "activate_slot_error rejects the already-active slot",
+            activate_slot_error(_activate_slot_info, 1) is not None,
+        )
+    )
+    results.append(
+        (
+            "activate_slot_error rejects a slot with no deployed version",
+            activate_slot_error(_activate_slot_info, 0) is not None,
+        )
+    )
+    results.append(
+        (
+            "activate_slot_error accepts a valid, inactive, deployed slot",
+            activate_slot_error(_activate_slot_info, 2) is None,
+        )
+    )
+
+    # is_auto_command_echo: only MCProxy's own `--ackinfo` connect-time
+    # command echoes are dropped from the live SSE broadcast; every other
+    # `response` reply (an operator-issued custom command) must stay visible.
+    results.append(
+        (
+            "is_auto_command_echo matches '--ackinfo on' from 'response'",
+            is_auto_command_echo({"src": "response", "dst": "*", "msg": "--ackinfo on"}),
+        )
+    )
+    results.append(
+        (
+            "is_auto_command_echo matches the old-firmware '--wrong command' variant",
+            is_auto_command_echo(
+                {"src": "response", "dst": "*", "msg": "--wrong command --ackinfo on"}
+            ),
+        )
+    )
+    results.append(
+        (
+            "is_auto_command_echo ignores the same text from a real callsign",
+            not is_auto_command_echo({"src": "OE1XYZ-9", "dst": "*", "msg": "--ackinfo on"}),
+        )
+    )
+    results.append(
+        (
+            "is_auto_command_echo ignores another response text ('--via on')",
+            not is_auto_command_echo({"src": "response", "dst": "*", "msg": "--via on"}),
+        )
+    )
+    results.append(
+        (
+            "is_auto_command_echo tolerates a non-string msg",
+            not is_auto_command_echo({"src": "response", "dst": "*", "msg": 123}),
+        )
+    )
+    results.append(
+        (
+            "is_auto_command_echo tolerates surrounding whitespace",
+            is_auto_command_echo({"src": "response", "dst": "*", "msg": "  --ackinfo on  "}),
         )
     )
 
