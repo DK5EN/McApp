@@ -1,5 +1,41 @@
 # Release History
 
+## v2.0.7 (2026-09-11)
+
+Small patch release: the APRS position parser now hands the free-text comment and the node name
+to the frontend as separate fields instead of leaving them buried in the raw payload, and the
+dependency set of both repos is refreshed. No schema change (stays at **v30**). Push contract
+stays at **v9**. No frontend code changes.
+
+### Highlights
+
+- **Position beacons carry a comment and a node name.** An APRS position payload such as
+  `!4814.73N\\01122.16E-#DM6CS-10/B=085/A=001621/...` holds two distinct pieces of free text
+  between the symbol and the first telemetry token. They are split now: everything after the
+  last `#` is the node's own name (`DM6CS-10` above), everything before it the operator's
+  comment. Both keys are always present in the SSE frame — an empty string where the sender
+  supplied nothing — so a client never has to probe for them. They are deliberately **not**
+  persisted to `station_positions`: they describe the beacon, and the next beacon replaces them.
+
+### Backend (MCProxy)
+
+- `parse_aprs_position` returns `comment` and `name`; the comment region ends at the first
+  `/X=` telemetry token. Both flow through `transform_pos` into the position SSE frame.
+- `timezonefinder` 8.3.0 → 9.0.0 (with `timezonefinder-data` 1.2026.3 → 3.2026.3.post1). The
+  single call site is `/api/timezone`; the `timezone_at(lat=, lng=)` contract is unchanged and
+  was re-checked against live coordinates.
+- `ble_service/uv.lock` regenerated; dependency specifiers unchanged.
+
+### Frontend (webapp)
+
+- No changes beyond the version bump. `npm update` moved no pins.
+
+### Upgrade notes
+
+- Nothing to do. No migration runs, no configuration changes, no client action required.
+- The new `comment` / `name` keys are additive on the position frame; a client that ignores
+  them is unaffected.
+
 ## v2.0.6 (2026-09-11)
 
 Patch release in two parts: the BLE position parser is aligned with the firmware's published

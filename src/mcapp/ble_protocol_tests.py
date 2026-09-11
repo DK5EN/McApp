@@ -219,6 +219,28 @@ APRS_FULL_BEACON_VCURRENT = 0.5
 APRS_FULL_BEACON_DIN = "00000101"
 APRS_FULL_BEACON_EXTRAS_KEYS = {"F", "V", "Y"}
 
+# --- comment/name region contract (agreed with firmware and app, 2026-09-11) --
+# Region = everything right after the symbol code up to the first `/X=`-style
+# token (`/`+uppercase letter+`=`, or `/N`+digit). Name = text after the LAST
+# `#` in the region; comment = text before it; no `#` -> name "".
+APRS_COMMENT_NONE = "!4812.34N/01143.56E#"
+APRS_COMMENT_SPACE_NO_NAME = "!4812.34N/01143.56E#Home base"
+APRS_COMMENT_SPACE_NO_NAME_COMMENT = "Home base"
+APRS_COMMENT_AND_NAME = "!4812.34N/01143.56E#Home base#Shack"
+APRS_COMMENT_AND_NAME_COMMENT = "Home base"
+APRS_COMMENT_AND_NAME_NAME = "Shack"
+APRS_COMMENT_HASH_THEN_NAME = "!4812.34N/01143.56E#A#B#C"
+APRS_COMMENT_HASH_THEN_NAME_COMMENT = "A#B"
+APRS_COMMENT_HASH_THEN_NAME_NAME = "C"
+APRS_COMMENT_NAME_ONLY = "!4812.34N/01143.56E##OnlyName"
+APRS_COMMENT_NAME_ONLY_NAME = "OnlyName"
+# Region must not swallow the `/X=` tail: comment/name end at the first real
+# extension token, not at end of message.
+APRS_COMMENT_TAIL_NOT_SWALLOWED = "!4812.34N/01143.56E#Foo#Bar/B=085/A=001526"
+APRS_COMMENT_TAIL_NOT_SWALLOWED_COMMENT = "Foo"
+APRS_COMMENT_TAIL_NOT_SWALLOWED_NAME = "Bar"
+APRS_COMMENT_TAIL_NOT_SWALLOWED_BATT = 85
+
 # --- RX-02: T# telemetry riding a ":" text frame (PAYLOAD_TYPE_MSG) to the
 # reserved destination "100001", body "%-9.9s:T#%03i,..." (the 9-char
 # space-padded originator callsign, a literal ":", then the T# token;
@@ -1097,6 +1119,68 @@ def _test_aprs_comment_injection(results: list[tuple[str, bool]]) -> None:
     )
 
 
+def _test_aprs_comment_name(results: list[tuple[str, bool]]) -> None:
+    """comment/name region contract (2026-09-11, agreed with firmware and app):
+    region = text after the symbol code up to the first `/X=`-style token; name
+    = text after the LAST `#` in that region, comment = text before it.
+    """
+    none = parse_aprs_position(APRS_COMMENT_NONE)
+    _check(
+        results,
+        "no comment/name -> both empty strings, always present",
+        none is not None and none.get("comment") == "" and none.get("name") == "",
+    )
+
+    space_no_name = parse_aprs_position(APRS_COMMENT_SPACE_NO_NAME)
+    _check(
+        results,
+        "comment with a space and no '#': space does not end the region",
+        space_no_name is not None
+        and space_no_name.get("comment") == APRS_COMMENT_SPACE_NO_NAME_COMMENT
+        and space_no_name.get("name") == "",
+    )
+
+    comment_and_name = parse_aprs_position(APRS_COMMENT_AND_NAME)
+    _check(
+        results,
+        "comment + '#name': split on the single '#'",
+        comment_and_name is not None
+        and comment_and_name.get("comment") == APRS_COMMENT_AND_NAME_COMMENT
+        and comment_and_name.get("name") == APRS_COMMENT_AND_NAME_NAME,
+    )
+
+    hash_then_name = parse_aprs_position(APRS_COMMENT_HASH_THEN_NAME)
+    _check(
+        results,
+        "comment containing '#' plus a name: LAST '#' wins the split",
+        hash_then_name is not None
+        and hash_then_name.get("comment") == APRS_COMMENT_HASH_THEN_NAME_COMMENT
+        and hash_then_name.get("name") == APRS_COMMENT_HASH_THEN_NAME_NAME,
+    )
+
+    name_only = parse_aprs_position(APRS_COMMENT_NAME_ONLY)
+    _check(
+        results,
+        "region starts with '#': empty comment, name is everything after it",
+        name_only is not None
+        and name_only.get("comment") == ""
+        and name_only.get("name") == APRS_COMMENT_NAME_ONLY_NAME,
+    )
+
+    tail_not_swallowed = parse_aprs_position(APRS_COMMENT_TAIL_NOT_SWALLOWED)
+    # Kills: a comment/name region that runs to end-of-message instead of
+    # stopping at the first '/X=' token -> "Bar/B=085/A=001526" would end up
+    # as the name, and /B=/A= would never be parsed at all.
+    _check(
+        results,
+        "comment/name region stops at the first /X= tail token, not at EOM",
+        tail_not_swallowed is not None
+        and tail_not_swallowed.get("comment") == APRS_COMMENT_TAIL_NOT_SWALLOWED_COMMENT
+        and tail_not_swallowed.get("name") == APRS_COMMENT_TAIL_NOT_SWALLOWED_NAME
+        and tail_not_swallowed.get("batt") == APRS_COMMENT_TAIL_NOT_SWALLOWED_BATT,
+    )
+
+
 def _test_aprs_ncnt(results: list[tuple[str, bool]]) -> None:
     """RX-05: /N<n> has NO "=" and must not be dropped by the "=" extras regex."""
     n7 = parse_aprs_position(APRS_NCNT7)
@@ -1839,6 +1923,7 @@ def run_ble_protocol_tests() -> bool:
     _test_ack_appendix(results)
     _test_aprs_position(results)
     _test_aprs_comment_injection(results)
+    _test_aprs_comment_name(results)
     _test_aprs_ncnt(results)
     _test_aprs_din(results)
     _test_aprs_ina226(results)
