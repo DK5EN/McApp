@@ -1,6 +1,12 @@
 """Pure parser for the per-hop signal-report chain in a MeshCom HEY beacon's
 `PP` field (BLE `TYP: "MH"` register, `payload_type == '@'`).
 
+`PP` (along with `SRC`/`GW`) was reverted upstream 2026-08-28 (`dc7d56d7`,
+`17d1796e`) and the current `MH` register no longer carries it. This parser
+is retained anyway: it stays correct against older firmware still in the
+field, and is ready to be exercised again without rewriting it if `PP` is
+re-adopted upstream.
+
 Wire format, verbatim from firmware (do not re-derive — these citations are
 the source of truth):
 

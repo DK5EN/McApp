@@ -399,7 +399,7 @@ def timestamp_from_date_time(date: str, time_str: str) -> int:
     return int(dt.timestamp() * 1000)
 
 
-def parse_aprs_position(message: str) -> dict[str, Any] | None:  # noqa: PLR0912 - complex handler kept intact
+def parse_aprs_position(message: str) -> dict[str, Any] | None:  # noqa: PLR0912, PLR0915 - complex handler kept intact
     """Parse an uncompressed APRS position report into a flat field dict.
 
     Returns None when `message` is not an APRS position at all. That None is
@@ -590,14 +590,54 @@ def parse_aprs_position(message: str) -> dict[str, Any] | None:  # noqa: PLR0912
         with contextlib.suppress(ValueError):
             result.setdefault(field.removesuffix("_legacy"), float(matches[-1].group(1)))
 
+    # Neighbour count: `/N7`, `/N12` (RX-05). The firmware writes `"/N%i"`,
+    # deliberately with NO `=` (loop_functions.cpp:4415-4420, count capped at
+    # 99) — unlike every other key in this tail, so it needs its own pattern;
+    # the generic extras regex below requires `=` and would silently drop it.
+    # Key name matches `mh_ncnt`, the one `transform_mh()` already writes
+    # (~line 987), so a position frame's neighbour count lands under the same
+    # field name the MH path uses. Its span joins `matched_spans` so the
+    # generic extras loop cannot re-capture any part of it.
+    ncnt_match = re.search(r"/N(\d{1,2})(?=/|\s|$)", message)
+    if ncnt_match:
+        result["mh_ncnt"] = int(ncnt_match.group(1))
+        matched_spans.append(ncnt_match.span())
+
+    # Digital input bits: `/D=00000101` (RX-12), MCP23017 port A input bits,
+    # GPA0 first, fork-only (`b179fdff`). The firmware's own decoder requires
+    # exactly 8 characters, each `0`/`1` (`aprs_functions.cpp:1028-1076`), and
+    # otherwise ignores the token entirely rather than accepting a partial
+    # value — mirrored here via the fixed `{8}` count. Stored as the raw
+    # 8-char string (`din`), never coerced to float/int: it is a bitfield, not
+    # a magnitude. `din` is also the key name the Extern-UDP `tele` path
+    # already emits (`extern_tele_json.h`), so storage's extras catch-all
+    # picks this up unchanged.
+    din_match = re.search(r"/D=([01]{8})(?=/|\s|$)", message)
+    if din_match:
+        result["din"] = din_match.group(1)
+
+    # INA226 bus voltage/current: `/U=12.34` (V, `%.2f`), `/I=0.5` (A,
+    # `%.1f`). `/V=` is deliberately left OUT of this table and stays in
+    # `extras` below — it is not a sensor reading but a sensor-block version
+    # marker (`2`/`3`/`5` for MCU811/BME680/INA226; see §1.8.2 of the wire
+    # format doc).
+    vbus_match = re.search(r"/U=(-?[\d.]+)", message)
+    if vbus_match:
+        with contextlib.suppress(ValueError):
+            result["vbus"] = float(vbus_match.group(1))
+    vcurrent_match = re.search(r"/I=(-?[\d.]+)", message)
+    if vcurrent_match:
+        with contextlib.suppress(ValueError):
+            result["vcurrent"] = float(vcurrent_match.group(1))
+
     # Capture any remaining /KEY=VALUE extensions into extras
     extras: dict[str, float] = {}
     for m in re.finditer(r"/([A-Za-z]\w*)=(-?[\d.]+)", message):
         if any(m.start() >= s and m.start() < e for s, e in matched_spans):
             continue  # already matched above
         key = m.group(1)
-        if key in ("A", "B", "R"):
-            continue  # already handled: altitude, battery, groups
+        if key in ("A", "B", "R", "D", "U", "I"):
+            continue  # already handled: altitude, battery, groups, din, vbus, vcurrent
         with contextlib.suppress(ValueError):
             extras[key] = float(m.group(2))
     if extras:
@@ -610,17 +650,29 @@ def parse_aprs_telemetry(message: str) -> dict[str, Any] | None:
     """Parse APRS T# telemetry format.
 
     Format: T#seq,v1,v2,v3,v4,v5,bits
-    MeshCom convention: v1=qfe, v2=temp1, v3=hum, v4=qnh, v5=co2
+    MeshCom convention: v1=qfe, v2=temp1, v3=hum, v4=qnh, v5=co2 — this is the
+    firmware's DEFAULT `PARM` layout (`node_values` unset/`"none"`,
+    `loop_functions.cpp:5061,5202-5265`): the digits after `T#seq,` are
+    whichever fields `node_values` names, in that order, so this positional
+    mapping is only correct while the node hasn't been reconfigured with a
+    custom telemetry keyword list.
+
+    RX-02 (`doc/2026-09-10_1900-ble-protocol-parity-audit.md`): matched with
+    `re.search` rather than `re.match` because the BLE `:` text frame carries
+    the firmware's 9-char space-padded originator callsign plus a literal
+    `:` ahead of the `T#` token (`"%-9.9s:T#%03i,..."`,
+    `loop_functions.cpp:5238`) — `re.match` anchors at column 0 and would
+    never see it.
     """
 
-    match = re.match(
+    match = re.search(
         r"T#(\d+),([\d.]+),(-?[\d.]+),([\d.]+),([\d.]+),([\d.]+),(\d+)",
         message,
     )
     if not match:
         return None
 
-    seq, v1, v2, v3, v4, v5, _bits = match.groups()
+    seq, v1, v2, v3, v4, v5, bits = match.groups()
 
     result: dict[str, Any] = {"tele_seq": int(seq)}
     try:
@@ -633,6 +685,9 @@ def parse_aprs_telemetry(message: str) -> dict[str, Any] | None:
             result["co2"] = int(v5_val)
     except ValueError:
         pass
+    # 7th field: the same MCP23017 port A bit string as `/D=` in a position
+    # frame's tail — kept as the raw string, not coerced to a number.
+    result["din"] = bits
 
     return result
 
@@ -1022,6 +1077,15 @@ def transform_ble(input_dict: dict[str, Any]) -> dict[str, Any]:
 
 ROUTINE_JSON_TYPS = ("I", "SN", "G", "SA", "W", "IO", "TM", "AN", "SE", "SW", "S1", "S2")
 
+# RX-02: telemetry beacons ride a `:` text frame (PAYLOAD_TYPE_MSG) addressed
+# to the reserved destination "100001" (`loop_functions.cpp:5083-5084`), body
+# `"%-9.9s:T#%03i,..."` — the 9-char padded originator callsign, a literal
+# `:`, then the `T#` token (`loop_functions.cpp:5238`). Anchored (not a bare
+# "T#" substring search) so an ordinary chat message that happens to contain
+# the two characters "T#" is never misrouted.
+_TELE_DEST = "100001"
+_TELE_TEXT_PREFIX_RE = re.compile(r"^.{9}:T#")
+
 
 def dispatcher(input_dict: dict[str, Any], own_callsign: str = "") -> dict[str, Any] | None:
     """
@@ -1050,10 +1114,15 @@ def dispatcher(input_dict: dict[str, Any], own_callsign: str = "") -> dict[str, 
         logger.warning("Type not found! %s", input_dict)
 
     elif input_dict.get("payload_type") == PAYLOAD_TYPE_MSG:
-        result = transform_msg(input_dict, own_callsign)
+        message = input_dict.get("message", "")
+        if input_dict.get("dest") == _TELE_DEST and _TELE_TEXT_PREFIX_RE.match(message):
+            result = transform_tele(input_dict, own_callsign)
+        else:
+            result = transform_msg(input_dict, own_callsign)
         if result:
             logger.debug(
-                "BLE dispatch: type=msg src=%s msg_id=%s dst=%s",
+                "BLE dispatch: type=%s src=%s msg_id=%s dst=%s",
+                result.get("type"),
                 result.get("src"),
                 result.get("msg_id"),
                 result.get("dst"),
