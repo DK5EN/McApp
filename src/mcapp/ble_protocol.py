@@ -489,6 +489,38 @@ def parse_aprs_position(message: str) -> dict[str, Any] | None:  # noqa: PLR0912
     if symbol:
         result["aprs_symbol"] = symbol
 
+    # --- comment / name region ---
+    # Contract agreed with firmware and app (2026-09-11): the comment region is
+    # everything right after the symbol code up to the first `/X=`-style
+    # extension token, where that token is `/` + one uppercase letter + `=`
+    # (`/A=`, `/B=`, ... including the neighbour-count-adjacent `/T=` etc.) or
+    # `/N` + a digit (the no-`=` neighbour-count token, see RX-05 below). A
+    # bare `/` or a space inside the region does NOT end it — only that exact
+    # token shape does. This is deliberately narrower than the extras/weather
+    # parsing above: e.g. `/T2=` is NOT an end-of-region token by this
+    # contract (the second character after `/T` is a digit, not `=`), even
+    # though it is later recognised as the temp2 legacy alias below. That is
+    # intentional per the agreed contract, not an oversight.
+    #
+    # Within the region, the name is the text after the LAST `#`; the comment
+    # is everything before it. No `#` at all -> name "" and comment is the
+    # whole region. The firmware forbids `#` in the name field it transmits,
+    # so the last `#` is unambiguous; a `#` inside free-text comment is legal
+    # and stays part of the comment when a later `#name` follows it.
+    tail_match = re.search(r"/[A-Z]=|/N\d", message[match.end() :])
+    region = (
+        message[match.end() : match.end() + tail_match.start()]
+        if tail_match
+        else message[match.end() :]
+    )
+    hash_idx = region.rfind("#")
+    if hash_idx == -1:
+        result["comment"] = region
+        result["name"] = ""
+    else:
+        result["comment"] = region[:hash_idx]
+        result["name"] = region[hash_idx + 1 :]
+
     # Altitude in feet: /A=001526. Left as first-match (unlike /B= and the weather
     # fields below): the fixed 6-digit, zero-padded width is a much narrower target
     # for accidental comment injection than a bounded-width value like /B=, and the
