@@ -220,13 +220,24 @@ def _push_text(payload: dict[str, Any]) -> str:
 # valid amateur callsign and stays eligible.
 _COMMAND_REPLY_PSEUDO_CALL = "response"
 
+# Contract `eligibility_noise_semantics`: the node-local reply texts, all in the
+# firmware's padded-callsign layout (`%-9.9s:ack%03i` and its siblings).
+# `":ack"` since contract v4; `":rej"` and `":sto"` since v10 — the
+# store-and-forward replies a firmware WITHOUT the 0x41 status frame emits as
+# ordinary DMs (`"DK5EN-93 :sto017 DK5EN-14"`). Substring tests, deliberately
+# broader than the strict `:ack[0-9]` history predicate; the contract is the
+# authority on why.
+_NOISE_MARKERS = (":ack", ":rej", ":sto")
+
 
 def _is_node_local_noise(payload: dict[str, Any]) -> bool:
     """Contract `eligibility` (c) / `eligibility_noise_semantics`: True iff the
-    message is a text ACK, a `{CET}` time broadcast, or (contract v8) a firmware
-    command reply from the `response` pseudo-callsign.
+    message is a node-local reply text (`:ack`, and since contract v10 `:rej` /
+    `:sto`), a `{CET}` time broadcast, or (contract v8) a firmware command reply
+    from the `response` pseudo-callsign.
 
-    Both arrive as ordinary `type:"msg"` text frames, so clause (a) passes them.
+    All of them arrive as ordinary `type:"msg"` text frames, so clause (a)
+    passes them.
     Without this, the mesh's `"<CALL>  :ackNNN"` reply to every outbound message
     meant the operator got one notification per message they SENT (default
     `filter.dm = true`), and every `broadcast: true` subscriber was notified for
@@ -242,11 +253,20 @@ def _is_node_local_noise(payload: dict[str, Any]) -> bool:
     announce a message that no conversation view will show — the converse
     (this one visible-but-silent case) is the accepted cost. See the
     contract's `eligibility_noise_semantics` for the accepted false positive.
+
+    `":sto"` (contract v10) is history-visible ON PURPOSE and must stay that
+    way: behind a node without the 0x41 status frame it is the only signal the
+    operator gets that a store node is holding the DM, and the firmware's
+    client guide forbids filtering it silently. `storage/query.py`'s exclusion
+    matches `:ack[0-9]` only, so nothing here needs to change to keep it
+    visible — but it does make `:sto` another deliberate push-silent yet
+    view-visible case, which is the accepted direction, never the forbidden one
+    (a push for a message no view will show).
     """
     if payload.get("src") == _COMMAND_REPLY_PSEUDO_CALL:
         return True
     text = _push_text(payload)
-    return ":ack" in text or text.startswith("{CET}")
+    return any(marker in text for marker in _NOISE_MARKERS) or text.startswith("{CET}")
 
 
 def is_eligible(payload: dict[str, Any], own_callsign: str) -> bool:
