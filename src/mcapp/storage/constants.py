@@ -127,12 +127,17 @@ HOURS_PER_YEAR = 8760
 INVALID_CHARACTER_MSG = "-- invalid character --"
 CORE_DUMP_FILTER_TEXT = "No core dump"
 
-# Columns to SELECT when building message JSON (avoids fetching raw_json)
+# Columns to SELECT when building message JSON (avoids fetching raw_json).
+# delivery_status/holder (schema v31) carry store-and-forward DM status;
+# _build_message_dict omits both when NULL, so selecting them here costs
+# nothing on the overwhelming majority of rows that have no store-forward
+# state.
 _MSG_SELECT = (
     "msg_id, src, dst, msg, type, timestamp, rssi, snr, src_type,"
     " via, hw_id, lora_mod, max_hop, mesh_info, firmware, fw_sub,"
     " last_hw_id, last_sending, transformer, echo_id, acked, send_success,"
-    " category, tags, info_score, template_hash, classifier_ver"
+    " category, tags, info_score, template_hash, classifier_ver,"
+    " delivery_status, holder"
 )
 
 
