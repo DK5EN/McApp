@@ -161,8 +161,13 @@ here, because it is a firmware decision this repo only consumes.
 ### 6.4 The webapp is a separate repo and a separate change
 
 This plan changes the `msg_status` wire shape and adds two history fields. Nothing renders `held`
-or `failed` until `/Users/martinwerner/WebDev/webapp` follows. Order of work: backend (this plan),
-then webapp, then mc-chat, then one dev release covering all three.
+or `failed` until `/Users/martinwerner/WebDev/webapp` follows.
+
+Order of work as planned was backend, then webapp, then mc-chat. It ran backend, then **mc-chat**,
+then webapp — which was the better order and would have been worth planning that way. mc-chat is
+the second _producer_ of these events; doing it while the wire shapes were still fresh meant the
+two backends were pinned against each other before any consumer existed to paper over a
+divergence. The webapp is a pure consumer and could only ever have been last.
 
 ## 7. Waves
 
@@ -237,7 +242,13 @@ push-ineligible while still passing `query.py`'s history filter.
 - Webapp rendering of `held` / `failed` (§6.4). It must learn `ack_kind: "held"` (show the holder)
   and `ack_kind: "failed"` (drive the existing `send_failed` / `send_fail_reason` display fields
   from a msg_id-keyed branch), and read `delivery_status` / `holder` from history on reload.
-- mc-chat: `_decode_aprs_struct()` treats `0x41` as an APRS packet (spec §4); its data model needs
-  `status` + `holder`.
+- ~~mc-chat~~ — **done** 2026-09-14 (`7c665bb`, `2a11f46`, `1ae794b`), plan
+  `mc-chat/doc/2026-09-14_store-forward-dm-status.md`. Note for anyone reading the firmware spec:
+  **its §4 mc-chat checklist is wrong on this point.** It says `_decode_aprs_struct()` should
+  "implement the frame from section 2", or else "rely on MCProxy's `msg_status` SSE event".
+  Neither is possible — mc-chat has no phone link, so the `0x41` status frame never reaches it,
+  and it is an independent backend that does not talk to MCProxy. (The `0x41` in its decoder is
+  the on-air APRS ACK packet type, a different `0x41`.) mc-chat's only source is the `:sto` /
+  `:ack` TEXTS of spec §3, which is what it now implements. Fed back in the firmware doc §5.3.
 - Status-driven push notifications (§6.1).
 - Store-node configuration surfaces (§6.3).
