@@ -45,6 +45,23 @@ EIGHT_DAYS_MS = SIGNAL_BACKFILL_WINDOW_HOURS * 3600 * 1000
 
 MHEARD_THROTTLE_MS = 120_000  # 2 minutes
 ACK_DIAG_WINDOW_MS = 300_000
+# Inline `:ackNNN` correlation window for a message a store node is HOLDING.
+#
+# The normal window is DEDUP_WINDOW_MS (1 h): `echo_id` is a 3-digit per-sender
+# counter and that is its uniqueness horizon, so past it a counter match is not
+# evidence. A store-and-forward hold is the one case where that rule does not
+# hold — the DM legitimately sits in a mailbox until the destination reappears
+# and only then gets acked, up to the firmware's `--storetime` maximum of 168 h
+# (default 24 h). A flat 1 h window would refuse every late ack and leave the
+# message stuck at `held` forever, breaking the feature it was meant to protect.
+#
+# Widening it ONLY for rows already at `delivery_status = 'held'` keeps the
+# ambiguity small: a false match would need the same sender, the same
+# recipient, the same counter, AND the older message still held — and since the
+# counter is OUR per-message counter, reusing it means having sent 1000
+# messages to that station in the meantime. The general case keeps the 1 h
+# horizon; only a message we already know is waiting gets the long one.
+HELD_ACK_WINDOW_MS = 168 * 3600 * 1000  # 168 h = the firmware's --storetime max
 TELEMETRY_DEDUP_WINDOW_MS = 60_000
 
 # Gateway-uptime ledger (schema v25) — see

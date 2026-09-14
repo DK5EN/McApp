@@ -47,7 +47,7 @@ from typing import Any
 
 from ..logging_setup import get_logger
 from ..sqlite_storage import create_sqlite_storage
-from .constants import DEDUP_WINDOW_MS
+from .constants import DEDUP_WINDOW_MS, HELD_ACK_WINDOW_MS
 
 logger = get_logger(__name__)
 
@@ -1181,6 +1181,112 @@ async def run_ack_status_tests() -> bool:  # noqa: PLR0915 - seven independent A
                     late_row is not None
                     and late_row.get("acked") != 1
                     and _msg_status_events() == [],
+                )
+            )
+
+            # 17. The store-and-forward exception to the 1h counter horizon.
+            #     A held DM sits in a store node's mailbox until the
+            #     destination reappears — up to --storetime (168h max, 24h
+            #     default) — and is acked only then. A flat DEDUP_WINDOW_MS
+            #     would refuse that ack and strand the message at `held`
+            #     forever, breaking the feature the window was meant to
+            #     protect. Relying on the binary 0x02 frame instead is not
+            #     enough: the extUDP path has no binary ack, and neither does
+            #     mc-chat, so for them this text is the ONLY signal.
+            router.published.clear()
+            held_late = {
+                "msg_id": "HELDLATE",
+                "src": "DK5EN-98",
+                "dst": "DL3NCU-9",
+                "msg": "see you tomorrow {301",
+                "type": "msg",
+                "src_type": "ble",
+                "timestamp": _BASE_TS + 70,
+            }
+            await storage.store_message(held_late, "{}")
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "HELDLATE",
+                    "ack_type": 0x04,
+                    "ack_type_text": "Store Held",
+                    "ack_from": "DK5EN-90",
+                    "timestamp": _BASE_TS + 71,
+                },
+                "{}",
+            )
+            # 20 hours later — far past the 1h counter horizon, well inside the
+            # hold — the destination reappears and answers by TEXT.
+            twenty_hours = 20 * 3600 * 1000
+            await storage.store_message(
+                {
+                    "msg_id": "LATEPEER",
+                    "src": "DL3NCU-9",
+                    "dst": "DK5EN-98",
+                    "msg": "DK5EN-98 :ack301",
+                    "type": "msg",
+                    "src_type": "lora",
+                    "timestamp": _BASE_TS + 70 + twenty_hours,
+                },
+                "{}",
+            )
+            held_late_row = await _row("HELDLATE")
+            results.append(
+                (
+                    "held DM acked by TEXT 20h later (past the 1h horizon) still resolves to acked",
+                    held_late_row is not None
+                    and held_late_row.get("acked") == 1
+                    and held_late_row.get("delivery_status") == "acked"
+                    and {"msg_id": "HELDLATE", "acked": True, "ack_kind": "peer"}
+                    in _msg_status_events(),
+                )
+            )
+            # The exception is scoped to HELD rows only: an ordinary message
+            # past the horizon still gets no late match (case 16d), and even a
+            # held one is bounded by HELD_ACK_WINDOW_MS.
+            router.published.clear()
+            await storage.store_message(
+                {
+                    "msg_id": "HELDGONE",
+                    "src": "DK5EN-98",
+                    "dst": "DL3NCU-9",
+                    "msg": "ancient {302",
+                    "type": "msg",
+                    "src_type": "ble",
+                    "timestamp": _BASE_TS + 80,
+                },
+                "{}",
+            )
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "HELDGONE",
+                    "ack_type": 0x04,
+                    "ack_type_text": "Store Held",
+                    "ack_from": "DK5EN-90",
+                    "timestamp": _BASE_TS + 81,
+                },
+                "{}",
+            )
+            await storage.store_message(
+                {
+                    "msg_id": "TOOLATE1",
+                    "src": "DL3NCU-9",
+                    "dst": "DK5EN-98",
+                    "msg": "DK5EN-98 :ack302",
+                    "type": "msg",
+                    "src_type": "lora",
+                    "timestamp": _BASE_TS + 80 + HELD_ACK_WINDOW_MS + 60_000,
+                },
+                "{}",
+            )
+            held_gone_row = await _row("HELDGONE")
+            results.append(
+                (
+                    "a held DM's ack past HELD_ACK_WINDOW_MS is still refused (bounded, not open)",
+                    held_gone_row is not None
+                    and held_gone_row.get("acked") != 1
+                    and held_gone_row.get("delivery_status") == "held",
                 )
             )
         finally:

@@ -261,7 +261,15 @@ firmware side: `MeshCom-Firmware-DEV-Main/docs/ack-wer-hat-quittiert.md`.
   its target to be who it came FROM, inside `DEDUP_WINDOW_MS`. **Both halves are load-bearing and
   each is mutation-pinned.** Do NOT widen the window to cover a store-and-forward hold: past the
   counter's horizon a "match" is not evidence, and a held DM's real ack still arrives exactly as a
-  binary `0x02` frame carrying the true msg_id.
+  binary `0x02` frame carrying the true msg_id — **except for a message already at
+  `delivery_status = 'held'`**, which gets `HELD_ACK_WINDOW_MS` (168 h, the firmware's
+  `--storetime` max) instead. That exception is not optional: a held DM legitimately sits in a
+  mailbox until the destination reappears, so a flat 1 h window refuses every late ack and strands
+  it at `held` forever. Leaning on `0x02` alone does not cover it — the extUDP path has no binary
+  ack, and neither does mc-chat, so for them the text IS the only signal. Widening it only for
+  already-held rows keeps the ambiguity small: a false match needs the same pair, the same
+  counter, AND the older message still held — and since the counter is ours, reusing it means
+  1000 messages to that station in between.
 - **Never key the inline match on the ack payload's padded callsign.** `%-9.9s:ack%03i` TRUNCATES
   at 9 chars (`OE1ABCD-12` arrives as `OE1ABCD-1`) and real traffic shows the no-separator case
   (`DK1TCP-77:ack622`). The frame's `src`/`dst` carry the same identities untruncated. The padded

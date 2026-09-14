@@ -39,6 +39,7 @@ from .constants import (
     BUCKET_SECONDS,
     CORE_DUMP_FILTER_TEXT,
     DEDUP_WINDOW_MS,
+    HELD_ACK_WINDOW_MS,
     INVALID_CHARACTER_MSG,
     MHEARD_THROTTLE_MS,
     SIGNAL_BACKFILL_BATCH_SIZE,
@@ -1587,20 +1588,32 @@ class IngestMixin(StorageBase):
                 # required: `echo_id` is a 3-digit per-sender counter that is
                 # unique only within that sender and about an hour, so neither
                 # the counter nor the window identifies a message on its own.
-                # The window is DEDUP_WINDOW_MS for exactly that reason — the
-                # same 60 minutes the ingest dedup gate already treats as this
-                # counter's uniqueness horizon; do not widen it to cover a
-                # store-and-forward hold, because past the horizon a "match" is
-                # not evidence of anything (a held DM's real ack still arrives
-                # exactly, as a binary 0x02 frame carrying the true msg_id).
+                # The window is DEDUP_WINDOW_MS — the same 60 minutes the
+                # ingest dedup gate already treats as this counter's horizon —
+                # EXCEPT for a message a store node is holding, which gets
+                # HELD_ACK_WINDOW_MS. That exception is the whole reason this
+                # is two-tier: a held DM legitimately sits in a mailbox until
+                # the destination reappears and is only acked then, so a flat
+                # 1 h window would refuse every late ack and strand it at
+                # `held` forever. Leaning on the binary 0x02 frame instead is
+                # not enough — the extUDP path has no binary ack at all, and
+                # neither does mc-chat, so for them this text IS the only
+                # signal. Widening it only for already-`held` rows keeps the
+                # ambiguity small (see HELD_ACK_WINDOW_MS).
                 # The row's own msg_id is resolved here, in the same lookup the
                 # UPDATE uses, so the published event names the message the
                 # frontend actually rendered, not the echo suffix.
                 candidates = await self._query(
                     "SELECT id, msg_id, src, dst FROM messages"
-                    " WHERE echo_id = ? AND type = 'msg' AND timestamp > ?"
+                    " WHERE echo_id = ? AND type = 'msg'"
+                    "   AND (timestamp > ?"
+                    "        OR (delivery_status = 'held' AND timestamp > ?))"
                     " ORDER BY timestamp DESC",
-                    (ack_num, timestamp - DEDUP_WINDOW_MS),
+                    (
+                        ack_num,
+                        timestamp - DEDUP_WINDOW_MS,
+                        timestamp - HELD_ACK_WINDOW_MS,
+                    ),
                 )
                 original = _inline_ack_original(candidates, callsign, resolve_dst_target(dst))
                 if original is not None:
