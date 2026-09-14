@@ -884,6 +884,49 @@ def _test_normalize_extudp_ack() -> list[tuple[str, bool]]:
             and normalize_extudp_ack({"type": "ack", "msg_id": "1A2B3C4D"}) is None,
         )
     )
+    # Store-and-forward statuses (firmware spec, sibling repo: MeshCom-Firmware-DEV-Main/
+    # docs/client-integration-store-forward.md §2). Wave 1 widened
+    # ble_protocol.ACK_KIND_BY_TYPE to include 0x03/0x04, which this function's gate
+    # derives its accepted set from — these pin that the widening actually reached
+    # the extUDP path, not just the BLE one.
+    failed = normalize_extudp_ack(
+        {"type": "ack", "msg_id": "1A2B3C4D", "status": 3, "from": "OE1XYZ-12"}
+    )
+    results.append(
+        (
+            "extUDP ack: status 3 (store-and-forward failed) -> Send Failed, attribution carried",
+            failed is not None
+            and failed["ack_type"] == 3
+            and failed["ack_type_text"] == "Send Failed"
+            and failed["ack_from"] == "OE1XYZ-12",
+        )
+    )
+    held = normalize_extudp_ack(
+        {"type": "ack", "msg_id": "1A2B3C4D", "status": 4, "from": "OE1XYZ-12"}
+    )
+    results.append(
+        (
+            "extUDP ack: status 4 (store-and-forward held) -> Store Held, attribution carried",
+            held is not None
+            and held["ack_type"] == 4
+            and held["ack_type_text"] == "Store Held"
+            and held["ack_from"] == "OE1XYZ-12",
+        )
+    )
+    results.append(
+        (
+            "extUDP ack: status 5 (outside the widened map) is still rejected -> None",
+            normalize_extudp_ack({"type": "ack", "msg_id": "1A2B3C4D", "status": 5}) is None,
+        )
+    )
+    results.append(
+        (
+            "extUDP ack: bool status (True and False) still rejected -> None, not int 1/0",
+            normalize_extudp_ack({"type": "ack", "msg_id": "1A2B3C4D", "status": True}) is None
+            and normalize_extudp_ack({"type": "ack", "msg_id": "1A2B3C4D", "status": False})
+            is None,
+        )
+    )
     return results
 
 
