@@ -17,20 +17,25 @@ deliberately out of scope — see §6.
 
 ## 2. Surface, by file
 
-| Area                                             | Change                                                                        |
-| ------------------------------------------------ | ----------------------------------------------------------------------------- |
-| `ble_protocol.py`                                | `ACK_KIND_BY_TYPE` / `ACK_TEXT_BY_TYPE` += `0x03 failed`, `0x04 held`         |
-| `storage/migrations.py`, `storage/constants.py`  | v31: `messages.delivery_status TEXT`, `messages.holder TEXT`; bump to 31      |
-| `storage/ingest.py`                              | `_handle_ack`: failed/held branches, precedence write, ledger rows, SSE shape |
-| `storage/constants.py` `_MSG_SELECT`, `query.py` | surface the two columns in history                                            |
-| `udp_handler.py`                                 | extUDP ack datagram accepts status 3/4 (free — gate reads `ACK_KIND_BY_TYPE`) |
-| mc-chat `contract/push_contract.json` → subtree  | v10: noise clause widens `:ack` → `:ack` / `:rej` / `:sto`                    |
-| `push_delivery.py`                               | that widened predicate                                                        |
+| Area                                            | Change                                                                        |
+| ----------------------------------------------- | ----------------------------------------------------------------------------- |
+| `ble_protocol.py`                               | `ACK_KIND_BY_TYPE` / `ACK_TEXT_BY_TYPE` += `0x03 failed`, `0x04 held`         |
+| `storage/migrations.py`, `storage/constants.py` | v31: `messages.delivery_status TEXT`, `messages.holder TEXT`; bump to 31      |
+| `storage/ingest.py`                             | `_handle_ack`: failed/held branches, precedence write, ledger rows, SSE shape |
+| `storage/constants.py` `_MSG_SELECT`            | surface the two columns in history (`query.py` needed no change, see below)   |
+| `udp_handler.py`                                | extUDP ack datagram accepts status 3/4 (free — gate reads `ACK_KIND_BY_TYPE`) |
+| mc-chat `contract/push_contract.json` → subtree | v10: noise clause widens `:ack` → `:ack` / `:rej` / `:sto`                    |
+| `push_delivery.py`                              | that widened predicate                                                        |
 
 Frame decoding needs **no** change. `parse_ack_appendix` already walks the frame by its length
 byte, `_ACK_APPENDIX_MAX_LEN = 10` is a superset of the spec's `n <= 9`, and an unrecognised
 status byte already falls through to `unknown(...)`. The spec's §6 byte vectors are therefore
 pinned as tests, not implemented as new code.
+
+`query.py` likewise turned out to need no change: every path that builds message JSON
+(`get_smart_initial_with_summary`, `get_messages_page`, `get_smart_initial`, `get_full_dump`)
+interpolates `_MSG_SELECT`, and none hand-lists columns. Checked, not assumed — worth knowing,
+because it means the next message column is free here too.
 
 ## 3. Two defects the current code has the moment `0x03` arrives
 
@@ -53,6 +58,26 @@ sent / node / gateway = 1     held = 2     failed = 3     acked = 4
 `delivery_status` / `holder` are written only when `new_rank > rank(current)`. That yields every
 rule in spec §2 and every sequence in spec §6 — `held → acked` ends acked, `acked → held` stays
 acked, `failed → acked` ends acked — with no special case.
+
+**The rank test lives in the UPDATE's own WHERE clause, not in a read-then-write.** One statement,
+with the stored status mapped to its rank by a SQL `CASE` (NULL falls to the `ELSE 0`). That is
+what makes two acks for the same message race-proof: whichever commits first, the loser's UPDATE
+matches zero rows instead of overwriting a higher rank from a stale read. `_DELIVERY_STATUS_RANK`
+in `storage/ingest.py` is the single source and the `CASE` is built from it, so the SQL and any
+Python lookup cannot drift. Rank 1 (`sent`/`node`/`gateway`) is an implicit baseline: no branch
+ever writes the literal `"sent"` into the column, so it is deliberately absent from the dict.
+
+**Deviation from the spec, deliberate: equal rank does not overwrite.** `held(A)` followed by
+`held(B)` leaves the stored holder at A, while spec §2 says to "show the most recent holder". A
+strict `>` is precisely what buys the race-proofness above, and a `>=` would reintroduce
+last-writer-wins on out-of-order frames. The information is not lost — `message_acks` keeps both
+holders as separate rows, which is the same place spec §2's "keep the others if you have room"
+points at. If the rendered holder ever needs to be the newest one, read it from that ledger rather
+than loosening this comparison.
+
+`holder` is written through `COALESCE(?, holder)`, so an unattributed frame (`n == 0`, no
+appendix) never blanks a holder that is already known. This matters most on the `acked` write: a
+peer ack with no appendix must not erase the store node recorded by an earlier `held`.
 
 `messages.acked` and `messages.send_success` stay the single flags the bubble renders;
 `delivery_status` is the detail behind them, exactly as `message_acks` is the detail behind
@@ -171,6 +196,36 @@ orchestrator-only commits.
 
 Gate after every wave: `uvx ruff check`, `uvx ruff format --check .`,
 `uv run mypy src/mcapp ble_service/src`, `uv run python scripts/run_startup_tests.py`.
+
+### As built (2026-09-14)
+
+All four waves ran the same day. Commits on `development`:
+
+| Commit    | Wave | Contents                                                              |
+| --------- | ---- | --------------------------------------------------------------------- |
+| `0d01172` | 1    | status maps + §6 byte vectors; migration v31; `LATEST_SCHEMA_VERSION` |
+| `db7f517` | 2    | `_handle_ack` branches, rank write, ledger, payloads; extUDP vectors  |
+| `2ca1fe4` | 3B   | contract v10 subtree pull + widened predicate + re-pinned sha256      |
+| `2fedea1` | 3A   | `_MSG_SELECT`, history round-trip tests                               |
+| `baa97d1` | 4    | CLAUDE.md section, this document                                      |
+
+Sibling repos: mc-chat `5f18e10` (contract v10, its own predicate, sha re-pin, split to
+`contract-subtree`); firmware `c55e595c` (§5.1/§5.2 of the client guide).
+
+Two things went differently from §7 and are worth knowing:
+
+- **Wave 2B made no logic change at all.** Widening `ACK_KIND_BY_TYPE` in wave 1 had already
+  widened the extUDP gate, because that gate tests membership in the shared map rather than
+  listing bytes. 2B became documentation plus the vectors that pin it — including the guard that
+  a status outside the map is still rejected, so "the gate still gates" is asserted rather than
+  assumed.
+- **Wave 3B ran as one orchestrator task across two repos**, not as a writer agent: the contract
+  edit has to start in mc-chat, and the `subtree pull` plus the re-captured sha256 must land in a
+  single commit or the drift tripwire is red in between.
+
+Verification beyond the suites: the precedence SQL was driven directly through all three spec §6
+sequences plus `held(A) → held(B)` and the unattributed-frame case, and `:sto` was confirmed
+push-ineligible while still passing `query.py`'s history filter.
 
 ## 8. Follow-up, not in this plan
 
