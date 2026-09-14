@@ -1,6 +1,7 @@
 # Store-and-forward DM status (`failed` / `held`) — MCProxy implementation plan
 
-Status: approved 2026-09-14, implemented in waves (see §7).
+Status: approved 2026-09-14, **backend complete** the same day (waves 1-4, §7). Webapp and
+mc-chat client work still open (§8).
 Source spec: `MeshCom-Firmware-DEV-Main/docs/client-integration-store-forward.md`
 (firmware fork-main `150b0a4a`, stages 0, 2.1, 3, 4 of `docs/dm-transport-impl-plan-20260913.md`).
 
@@ -173,7 +174,14 @@ Gate after every wave: `uvx ruff check`, `uvx ruff format --check .`,
 
 ## 8. Follow-up, not in this plan
 
-- Webapp rendering of `held` / `failed` (§6.4).
+- **The webapp's hand copy of the push contract is at v9 and MUST be synced.**
+  `webapp/src/pwa/__tests__/push_contract.json` is a third copy (the repo has no access to the
+  subtree), pinned by `src/pwa/__tests__/pushFilter.spec.ts`, and `src/pwa/pushFilter.ts`'s
+  `isNodeLocalNoise()` mirrors the predicate for the foreground-sound decision. Until both are
+  updated, an open webapp still chimes on a `:sto` hold notice that both backends now suppress.
+- Webapp rendering of `held` / `failed` (§6.4). It must learn `ack_kind: "held"` (show the holder)
+  and `ack_kind: "failed"` (drive the existing `send_failed` / `send_fail_reason` display fields
+  from a msg_id-keyed branch), and read `delivery_status` / `holder` from history on reload.
 - mc-chat: `_decode_aprs_struct()` treats `0x41` as an APRS packet (spec §4); its data model needs
   `status` + `holder`.
 - Status-driven push notifications (§6.1).

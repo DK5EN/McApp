@@ -253,6 +253,50 @@ firmware side: `MeshCom-Firmware-DEV-Main/docs/ack-wer-hat-quittiert.md`.
 - **The extUDP `{"type":"ack"}` datagram has no `msg` key** and must be claimed in
   `_handle_non_chat_frame` before the DEBUG-only non-chat log, which is where it used to vanish.
 
+## Store-and-Forward DM Status (`0x03 failed` / `0x04 held`)
+
+Delivery states a store-and-forward node reports for a DM, on top of the three ACK kinds above.
+Plan and the decisions: `doc/2026-09-14_1153-store-forward-dm-status-plan.md`; firmware side:
+`MeshCom-Firmware-DEV-Main/docs/client-integration-store-forward.md` (fork-main `150b0a4a`).
+
+- **`failed` must NOT set `send_success`, and that is the whole point of the branch.** `_handle_ack`
+  set it unconditionally for every ack type; `0x03` means every retry was exhausted and nobody
+  acked, so the pre-existing write would have marked the message transport-confirmed — the exact
+  inversion of the frame. The `0x03` path runs a read-only existence `SELECT` instead, so `rows`
+  still means "a matching original exists" for the record/publish gates. `0x04 held` KEEPS the
+  write: a store node demonstrably took the frame off the air.
+- **Precedence is one monotone rank, enforced in the UPDATE's own WHERE clause.**
+  `sent/node/gateway = 1 < held = 2 < failed = 3 < acked = 4`, NULL = 0 via the SQL `CASE`'s `ELSE`;
+  `_DELIVERY_STATUS_RANK` in `storage/ingest.py` is the single source and the SQL is built from it.
+  Encoding the test in SQL rather than read-then-write is what makes two out-of-order acks
+  race-proof — the loser matches zero rows instead of clobbering a higher rank from a stale read.
+  This reproduces every rule in the spec's §2 and every sequence in its §6 with no special case.
+- **Equal rank does not overwrite, so `held(A)` then `held(B)` keeps A.** The spec says "show the
+  most recent holder"; a strict `>` is what makes the scheme race-proof, so the deviation is
+  deliberate. Both holders survive in `message_acks`, whose `(msg_id, kind, from_call)` key also
+  collapses the firmware's hourly per-holder repeat for free. `holder` is written through
+  `COALESCE(?, holder)` so an unattributed frame never blanks a known holder.
+- **`acked: false` on the `failed` event is a compatibility floor, not decoration.** The webapp's
+  `msg:status` handler renders ANY event with no `sent` key and no `acked === false` as a peer
+  acknowledgement — ✓✓ Delivered. Without that key a `failed` event renders the one thing it
+  exists to deny. Do not remove it once the webapp learns `ack_kind: "failed"`. `held` needs no
+  such guard: its `sent: true` takes the transport branch, which is already the honest rendering.
+- **`holder` is a deliberate duplicate of `from` on the `held` event.** The spec names it; the
+  webapp reads it without knowing this repo's attribution convention.
+- **Do not fold this into the existing `send_failed` event.** `_publish_send_failed` (`main.py`) is
+  a LOCAL send failure, emitted before a msg_id exists, which is why the webapp matches it by
+  `dst` + `msg`. `0x03` has a msg_id and is a different fact. Same display fields, distinct events.
+- **`:sto` is push-silent but history-VISIBLE, and the asymmetry with `:ack` is intended.** Push
+  contract **v10** widens the noise clause to `:ack` / `:rej` / `:sto`; `query.py`'s exclusion
+  stays `msg NOT GLOB '*:ack[0-9]*'` so the text keeps showing, because behind a node without the
+  `0x41` frame it is the only signal the operator gets that the DM is held (spec §3 forbids
+  filtering it silently). Never "fix" this into symmetry.
+- **No `held` is synthesised from that `:sto` text**, and no push is emitted for `failed` or for
+  `acked`-after-`held` — both deliberate, reasons in the plan's §6.1/§6.2.
+- **The frame decoder needed no change and still needs none.** `parse_ack_appendix` walks by the
+  length byte and `_ACK_APPENDIX_MAX_LEN = 10` already covers the spec's `n <= 9`. An unknown
+  status byte is reported as `unknown(...)`, never an error — the spec is explicit about that.
+
 ## Unread Cursors (`read_cursors`, sidebar badges)
 
 Server-authoritative "what has the operator seen" state behind the webapp's sidebar badges and
