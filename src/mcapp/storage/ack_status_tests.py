@@ -47,6 +47,7 @@ from typing import Any
 
 from ..logging_setup import get_logger
 from ..sqlite_storage import create_sqlite_storage
+from .constants import DEDUP_WINDOW_MS
 
 logger = get_logger(__name__)
 
@@ -181,7 +182,13 @@ async def run_ack_status_tests() -> bool:  # noqa: PLR0915 - seven independent A
                 "msg_id": "REPLY001",
                 "src": "DL3NCU-1",
                 "dst": "DK5EN-98",
-                "msg": "DL3NCU-1 :ack087",
+                # Real firmware layout is `%-9.9s:ack%03i` where the padded
+                # field is the ORIGINAL SENDER, not the acking station — see
+                # live capture 'DL2JA-73 :ack746' answering DL2JA-73's DM.
+                # Nothing parses that field (the match keys on the FRAME's
+                # src/dst, which carry no 9-char truncation), but a fixture
+                # that misstates the wire is bad documentation.
+                "msg": "DK5EN-98 :ack087",
                 "type": "msg",
                 "src_type": "lora",
                 "timestamp": _BASE_TS + 6,
@@ -1044,6 +1051,136 @@ async def run_ack_status_tests() -> bool:  # noqa: PLR0915 - seven independent A
                         "ack_kind": "peer",
                     }
                     in _msg_status_events(),
+                )
+            )
+
+            # 16. Inline-ack SCOPING (the echo_id collision, fixed 2026-09-14).
+            #     `echo_id` is a 3-digit per-sender counter, unique only within
+            #     that sender and ~1 hour, so the counter alone identifies
+            #     nothing. Before the fix the lookup was `WHERE echo_id = ?
+            #     ORDER BY timestamp DESC LIMIT 1` and a stranger's ack marked
+            #     whichever message last used that number — on mcapp.local an
+            #     own DM to DK1TCP-77 rendered ✓✓ Delivered because an
+            #     unrelated DH6MAV pair reused 201. Each case below fails if
+            #     either half of the guard (addressing, or the time window) is
+            #     removed.
+            router.published.clear()
+            scoped_outbound = {
+                "msg_id": "SCOPE001",
+                "src": "DK5EN-98",
+                "dst": "DK1TCP-77",
+                "msg": "are you there {201",
+                "type": "msg",
+                "src_type": "ble",
+                "timestamp": _BASE_TS + 50,
+            }
+            await storage.store_message(scoped_outbound, "{}")
+            # (a) An ack with the SAME counter from an unrelated pair: the
+            #     mcapp.local case verbatim. Must not touch SCOPE001.
+            await storage.store_message(
+                {
+                    "msg_id": "STRNGR01",
+                    "src": "DH6MAV-10,DB4UW-1",
+                    "dst": "DH6MAV-1",
+                    "msg": "DH6MAV-1 :ack201",
+                    "type": "msg",
+                    "src_type": "lora",
+                    "timestamp": _BASE_TS + 51,
+                },
+                "{}",
+            )
+            stranger_row = await _row("SCOPE001")
+            results.append(
+                (
+                    "inline ack scoping: an unrelated pair's :ack201 does NOT ack our DM",
+                    stranger_row is not None
+                    and stranger_row.get("acked") != 1
+                    and stranger_row.get("delivery_status") is None
+                    and _msg_status_events() == [],
+                )
+            )
+            # (b) Right counter, right sender, but addressed to someone else —
+            #     the ack is not for us.
+            await storage.store_message(
+                {
+                    "msg_id": "WRONGDST",
+                    "src": "DK1TCP-77",
+                    "dst": "DL9XYZ-3",
+                    "msg": "DL9XYZ-3 :ack201",
+                    "type": "msg",
+                    "src_type": "lora",
+                    "timestamp": _BASE_TS + 52,
+                },
+                "{}",
+            )
+            results.append(
+                (
+                    "inline ack scoping: right sender but addressed elsewhere does NOT ack our DM",
+                    (r16b := await _row("SCOPE001")) is not None and r16b.get("acked") != 1,
+                )
+            )
+            # (c) The genuine ack — same counter, correct pair — still matches.
+            await storage.store_message(
+                {
+                    "msg_id": "GENUINE1",
+                    "src": "DK1TCP-77,DB0ED-99",
+                    "dst": "DK5EN-98",
+                    "msg": "DK5EN-98 :ack201",
+                    "type": "msg",
+                    "src_type": "lora",
+                    "timestamp": _BASE_TS + 53,
+                },
+                "{}",
+            )
+            genuine_row = await _row("SCOPE001")
+            results.append(
+                (
+                    "inline ack scoping: the genuine via-routed ack DOES ack our DM",
+                    genuine_row is not None
+                    and genuine_row.get("acked") == 1
+                    and genuine_row.get("delivery_status") == "acked"
+                    and {"msg_id": "SCOPE001", "acked": True, "ack_kind": "peer"}
+                    in _msg_status_events(),
+                )
+            )
+            # (d) Time window: the counter's uniqueness horizon is ~1 hour
+            #     (DEDUP_WINDOW_MS). A correctly-paired ack arriving after it
+            #     is not evidence — the counter has had time to be reused.
+            router.published.clear()
+            await storage.store_message(
+                {
+                    "msg_id": "SCOPE002",
+                    "src": "DK5EN-98",
+                    "dst": "DK1TCP-77",
+                    "msg": "much earlier {202",
+                    "type": "msg",
+                    "src_type": "ble",
+                    "timestamp": _BASE_TS + 60,
+                },
+                "{}",
+            )
+            await storage.store_message(
+                {
+                    "msg_id": "LATEACK1",
+                    "src": "DK1TCP-77",
+                    "dst": "DK5EN-98",
+                    "msg": "DK5EN-98 :ack202",
+                    "type": "msg",
+                    "src_type": "lora",
+                    "timestamp": _BASE_TS + 60 + DEDUP_WINDOW_MS + 1000,
+                },
+                "{}",
+            )
+            late_row = await _row("SCOPE002")
+            results.append(
+                (
+                    (
+                        "inline ack scoping: a correctly-paired ack past the 1h"
+                        " counter horizon does NOT ack"
+                    ),
+                    late_row is not None
+                    and late_row.get("acked") != 1
+                    and _msg_status_events() == [],
                 )
             )
         finally:

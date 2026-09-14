@@ -250,6 +250,23 @@ firmware side: `MeshCom-Firmware-DEV-Main/docs/ack-wer-hat-quittiert.md`.
   pinned by `ack_status_tests` cases 1-6; adding `from: None` breaks them and mc-chat parity.
 - **`message_acks.from_call` is `''`, never NULL, for an unattributed frame** so the
   `(msg_id, kind, from_call)` key collapses repeats once firmware stops gating "first ACK only".
+- **`echo_id` identifies NOTHING on its own — the inline `:ackNNN` match needs the ack's addressing
+  AND a 1-hour window.** It is the firmware's `{NNN` counter: three digits, minted per sender,
+  unique only within that sender and roughly an hour. The lookup was `WHERE echo_id = ? ORDER BY
+  timestamp DESC LIMIT 1`, so any station's ack marked whichever message last used that number —
+  on mcapp.local an own DM to DK1TCP-77 rendered ✓✓ Delivered because an unrelated DH6MAV pair
+  reused 201 forty-four minutes later (5 of 82 acked rows mis-attributed; 25 of 200 live counter
+  values already shared by >1 sender). Same user-visible failure as the 2026-08-19 ctcping bug.
+  `_inline_ack_original` now requires the original's sender to be who the ack is addressed TO and
+  its target to be who it came FROM, inside `DEDUP_WINDOW_MS`. **Both halves are load-bearing and
+  each is mutation-pinned.** Do NOT widen the window to cover a store-and-forward hold: past the
+  counter's horizon a "match" is not evidence, and a held DM's real ack still arrives exactly as a
+  binary `0x02` frame carrying the true msg_id.
+- **Never key the inline match on the ack payload's padded callsign.** `%-9.9s:ack%03i` TRUNCATES
+  at 9 chars (`OE1ABCD-12` arrives as `OE1ABCD-1`) and real traffic shows the no-separator case
+  (`DK1TCP-77:ack622`). The frame's `src`/`dst` carry the same identities untruncated. The padded
+  field holds the ORIGINAL SENDER, not the acking station — a test fixture said otherwise until
+  2026-09-14.
 - **The extUDP `{"type":"ack"}` datagram has no `msg` key** and must be claimed in
   `_handle_non_chat_frame` before the DEBUG-only non-chat log, which is where it used to vanish.
 

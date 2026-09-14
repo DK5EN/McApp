@@ -19,6 +19,7 @@ from typing import Any
 
 from .. import linkcheck
 from ..ble_protocol import normalise_ack_callsign
+from ..commands.parsing import resolve_dst_target
 from ..logging_setup import get_logger
 from ..util import (
     ACK_SUFFIX_RE,
@@ -171,6 +172,46 @@ def _ack_attribution_fields(ack_from: str | None, ack_via: str | None) -> dict[s
     if ack_via is not None:
         fields["via"] = ack_via
     return fields
+
+
+def _inline_ack_original(
+    candidates: list[dict[str, Any]], acking_station: str, ack_addressed_to: str
+) -> dict[str, Any] | None:
+    """Pick the message an inline `:ackNNN` actually answers, or None.
+
+    `echo_id` is the firmware's `{NNN` ack-request counter: THREE DIGITS,
+    minted per sender, and unique only within that sender and roughly an
+    hour. On its own it identifies nothing — matching on it alone marked
+    whichever message most recently carried that counter, which on
+    mcapp.local meant an own DM to DK1TCP-77 rendering as ✓✓ Delivered
+    because an unrelated DH6MAV pair reused 201 forty-four minutes later
+    (5 of 82 acked rows were mis-attributed this way; 25 of 200 live
+    counter values were already shared by more than one sender). Same
+    user-visible failure as the 2026-08-19 ctcping bug, different route.
+
+    The ack's own addressing is what disambiguates it, and it is exact:
+    the frame is a DM from the addressee back to the original sender, so
+    the original is the message whose sender is who this ack is addressed
+    TO and whose target is who it came FROM. Callers pass both already
+    resolved; the caller's time window supplies the other half of the
+    counter's uniqueness.
+
+    The ack payload's own padded callsign (`%-9.9s:ack%03i`) is
+    deliberately NOT used: it is TRUNCATED at 9 characters, so a longer
+    callsign arrives cut (`OE1ABCD-12` -> `OE1ABCD-1`) and would fail an
+    equality test that the frame fields pass. Real traffic also shows the
+    no-separator case (`DK1TCP-77:ack622`).
+    """
+    ack_from = acking_station.strip().upper()
+    ack_to = ack_addressed_to.strip().upper()
+    if not ack_from or not ack_to:
+        return None
+    for row in candidates:
+        original_sender = (row["src"] or "").split(",")[0].strip().upper()
+        original_target = resolve_dst_target(row["dst"] or "").upper()
+        if original_sender == ack_to and original_target == ack_from:
+            return row
+    return None
 
 
 # Store-and-forward DM status (doc/2026-09-14_1153-store-forward-dm-status-plan.md
@@ -1541,16 +1582,28 @@ class IngestMixin(StorageBase):
             ack_match = re.search(r":ack([0-9]+)", msg)
             if ack_match:
                 ack_num = ack_match.group(1)
-                # Resolve the original outbound row's own msg_id in the SAME lookup
-                # the UPDATE uses, so the published event names the message the
+                # Narrow by counter AND time, then disambiguate by the ack's
+                # own addressing (`_inline_ack_original`). BOTH halves are
+                # required: `echo_id` is a 3-digit per-sender counter that is
+                # unique only within that sender and about an hour, so neither
+                # the counter nor the window identifies a message on its own.
+                # The window is DEDUP_WINDOW_MS for exactly that reason — the
+                # same 60 minutes the ingest dedup gate already treats as this
+                # counter's uniqueness horizon; do not widen it to cover a
+                # store-and-forward hold, because past the horizon a "match" is
+                # not evidence of anything (a held DM's real ack still arrives
+                # exactly, as a binary 0x02 frame carrying the true msg_id).
+                # The row's own msg_id is resolved here, in the same lookup the
+                # UPDATE uses, so the published event names the message the
                 # frontend actually rendered, not the echo suffix.
-                original_rows = await self._query(
-                    "SELECT id, msg_id FROM messages WHERE echo_id = ? AND type = 'msg'"
-                    " ORDER BY timestamp DESC LIMIT 1",
-                    (ack_num,),
+                candidates = await self._query(
+                    "SELECT id, msg_id, src, dst FROM messages"
+                    " WHERE echo_id = ? AND type = 'msg' AND timestamp > ?"
+                    " ORDER BY timestamp DESC",
+                    (ack_num, timestamp - DEDUP_WINDOW_MS),
                 )
-                if original_rows:
-                    original = original_rows[0]
+                original = _inline_ack_original(candidates, callsign, resolve_dst_target(dst))
+                if original is not None:
                     rows_updated = await self._mutate(
                         "UPDATE messages SET acked = 1 WHERE id = ?",
                         (original["id"],),
