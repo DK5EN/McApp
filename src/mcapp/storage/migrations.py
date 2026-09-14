@@ -632,10 +632,53 @@ class MigrationsMixin(StorageBase):
                         " read-cursor write)",
                         current_version,
                     )
+                    _set_schema_version(conn, 30)
+
+                if current_version < 31:  # noqa: PLR2004 - schema migration step
+                    # Store-and-forward DM status (doc/2026-09-14_1153-store-
+                    # forward-dm-status-plan.md §2, §4; firmware spec,
+                    # sibling repo: MeshCom-Firmware-DEV-Main/docs/
+                    # client-integration-store-forward.md §2). A DM's
+                    # delivery can now pass through two extra states a store
+                    # node reports with frame status bytes 0x03 `failed` / 0x04
+                    # `held` — `messages.send_success` and `messages.acked` stay
+                    # the single flags the bubble renders from, exactly as
+                    # `message_acks` (v29) is the per-station detail behind
+                    # `send_success`; `delivery_status` is the detail behind
+                    # both of those for this new pair of states.
+                    #
+                    # `delivery_status` holds `held` / `failed`, and — once a
+                    # later frame supersedes either — `acked`. `holder` is the
+                    # callsign out of the 0x41 frame's attribution appendix:
+                    # the STORE NODE while `delivery_status = held`, the
+                    # DESTINATION while `delivery_status = failed`.
+                    #
+                    # Both are NULL for every pre-existing row and stay NULL
+                    # forever for any message from firmware that never sends
+                    # 0x03/0x04 — NULL means "no store-and-forward state was
+                    # ever reported", never "not held". No backfill.
+                    #
+                    # Precedence across out-of-order frames is a plan-§4
+                    # monotone rank (sent/node/gateway = 1 < held = 2 <
+                    # failed = 3 < acked = 4), written only when the new rank
+                    # exceeds the stored one. That rank write lives in
+                    # `storage/ingest.py`'s `_handle_ack` (wave 2), not here —
+                    # this migration only adds the columns it writes into.
+                    for col in ("delivery_status", "holder"):
+                        try:
+                            conn.execute(f"ALTER TABLE messages ADD COLUMN {col} TEXT")
+                        except sqlite3.OperationalError:
+                            logger.debug("Column %s already exists in messages, skipping", col)
+                    logger.info(
+                        "Migration v%d → v31: added messages.delivery_status,"
+                        " messages.holder columns (nullable, no backfill —"
+                        " store-and-forward DM status)",
+                        current_version,
+                    )
                     # Adding a step after this one? Bump LATEST_SCHEMA_VERSION in
                     # storage/constants.py in the same commit — the startup suite
                     # asserts every migration chain terminates there.
-                    _set_schema_version(conn, 30)
+                    _set_schema_version(conn, 31)
 
         await asyncio.to_thread(_init_db)
 
