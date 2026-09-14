@@ -283,6 +283,14 @@ Plan and the decisions: `doc/2026-09-14_1153-store-forward-dm-status-plan.md`; f
   such guard: its `sent: true` takes the transport branch, which is already the honest rendering.
 - **`holder` is a deliberate duplicate of `from` on the `held` event.** The spec names it; the
   webapp reads it without knowing this repo's attribution convention.
+- **There are TWO paths that mean "the addressee answered", and both must write the rank.** The
+  binary `0x02` branch in `_handle_ack` and the inline `:ackNNN` TEXT match further down
+  `store_message` are independent; wiring only the first left a `held` message acked by text
+  sitting at `delivery_status='held'` AND `acked=1`, with history contradicting the live event.
+  The inline path passes `row_id=` explicitly, because it locates the original by `echo_id` while
+  `_write_delivery_status`'s own lookup takes the newest row for the msg_id — and one msg_id
+  legitimately has two transport copies, so resolving separately can mark `acked` on one and
+  `delivery_status` on the other.
 - **Do not fold this into the existing `send_failed` event.** `_publish_send_failed` (`main.py`) is
   a LOCAL send failure, emitted before a msg_id exists, which is why the webapp matches it by
   `dst` + `msg`. `0x03` has a msg_id and is a different fact. Same display fields, distinct events.

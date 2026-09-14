@@ -970,6 +970,82 @@ async def run_ack_status_tests() -> bool:  # noqa: PLR0915 - seven independent A
                     and [(a["kind"], a["from"]) for a in unattr_held_acks] == [("held", None)],
                 )
             )
+
+            # 15. Regression: a `held` message later acked by an INLINE
+            #     `:ackNNN` TEXT frame (not a binary 0x02) must end at
+            #     delivery_status='acked'. The inline path sets `acked` on the
+            #     row it found by echo_id; before this was wired it wrote no
+            #     delivery_status at all, so the row read `held` AND `acked` at
+            #     once and history contradicted the live event. The outbound
+            #     text carries the firmware ack-request suffix, which is what
+            #     store_message turns into the echo_id the inline path joins on.
+            router.published.clear()
+            outbound_inline = {
+                "msg_id": "INLN0001",
+                "src": "DK5EN-98",
+                "dst": "DL3NCU-1",
+                "msg": "are you there {042",
+                "type": "msg",
+                "src_type": "ble",
+                "timestamp": _BASE_TS + 40,
+            }
+            await storage.store_message(outbound_inline, "{}")
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "INLN0001",
+                    "ack_type": 0x04,
+                    "ack_type_text": "Store Held",
+                    "ack_from": "DK5EN-90",
+                    "timestamp": _BASE_TS + 41,
+                },
+                "{}",
+            )
+            held_then_row = await _row("INLN0001")
+            results.append(
+                (
+                    "inline-ack regression: 0x04 first leaves the row held/DK5EN-90",
+                    held_then_row is not None
+                    and held_then_row.get("delivery_status") == "held"
+                    and held_then_row.get("holder") == "DK5EN-90",
+                )
+            )
+            await storage.store_message(
+                {
+                    "msg_id": "PEER0042",
+                    "src": "DL3NCU-1",
+                    "dst": "DK5EN-98",
+                    "msg": "DK5EN-98 :ack042",
+                    "type": "msg",
+                    "src_type": "lora",
+                    "timestamp": _BASE_TS + 42,
+                },
+                "{}",
+            )
+            inline_row = await _row("INLN0001")
+            results.append(
+                (
+                    (
+                        "inline :ackNNN after a hold writes delivery_status='acked'"
+                        " (not just acked=1) and keeps the holder"
+                    ),
+                    inline_row is not None
+                    and inline_row.get("acked") == 1
+                    and inline_row.get("delivery_status") == "acked"
+                    and inline_row.get("holder") == "DK5EN-90",
+                )
+            )
+            results.append(
+                (
+                    "inline :ackNNN still publishes the unchanged peer payload",
+                    {
+                        "msg_id": "INLN0001",
+                        "acked": True,
+                        "ack_kind": "peer",
+                    }
+                    in _msg_status_events(),
+                )
+            )
         finally:
             await storage.close()
 

@@ -1202,7 +1202,9 @@ class IngestMixin(StorageBase):
                 },
             )
 
-    async def _write_delivery_status(self, msg_id: str, status: str, holder: str | None) -> None:
+    async def _write_delivery_status(
+        self, msg_id: str, status: str, holder: str | None, *, row_id: int | None = None
+    ) -> None:
         """Persist `messages.delivery_status`/`holder` with the store-forward
         plan's §4 monotone-rank precedence (`_DELIVERY_STATUS_RANK`).
 
@@ -1231,20 +1233,38 @@ class IngestMixin(StorageBase):
         `acked` write, since an `:ackNNN`/peer-ack with no appendix must not
         erase a `held`/`failed` holder that was already known.
 
+        `row_id` pins the write to ONE row instead of resolving it from
+        `msg_id`. The inline `:ackNNN` path needs that: it finds the original
+        by `echo_id` and sets `acked` on THAT row's id, while this method's
+        own lookup takes the newest row for the msg_id — and the same message
+        legitimately lands as two rows with one msg_id (the UDP and BLE copies
+        ~100 ms apart, see the unread-cursor notes in CLAUDE.md). Resolving
+        independently could therefore mark `acked` on one copy and
+        `delivery_status` on the other. Callers holding a row id pass it;
+        `_handle_ack`, which has only the msg_id, does not.
+
         Never raises into the ingest hot path — mirrors `_record_message_ack`.
         """
         # CASE clause built from the fixed module-level _DELIVERY_STATUS_RANK
         # dict, never user input.
+        if row_id is None:
+            target_sql = (
+                " WHERE id = ("
+                "  SELECT id FROM messages WHERE msg_id = ? AND type = 'msg'"
+                "  ORDER BY timestamp DESC LIMIT 1"
+                " )"
+            )
+            target_param: Any = msg_id
+        else:
+            target_sql = " WHERE id = ?"
+            target_param = row_id
         query = (
             "UPDATE messages SET delivery_status = ?, holder = COALESCE(?, holder)"  # noqa: S608
-            " WHERE id = ("
-            "  SELECT id FROM messages WHERE msg_id = ? AND type = 'msg'"
-            "  ORDER BY timestamp DESC LIMIT 1"
-            " )"
-            f" AND ? > {_DELIVERY_STATUS_RANK_CASE_SQL}"
+            + target_sql
+            + f" AND ? > {_DELIVERY_STATUS_RANK_CASE_SQL}"
         )
         try:
-            await self._mutate(query, (status, holder, msg_id, _DELIVERY_STATUS_RANK[status]))
+            await self._mutate(query, (status, holder, target_param, _DELIVERY_STATUS_RANK[status]))
         except sqlite3.Error:
             logger.exception("Failed to write delivery_status=%s for msg_id=%s", status, msg_id)
 
@@ -1535,6 +1555,20 @@ class IngestMixin(StorageBase):
                         "UPDATE messages SET acked = 1 WHERE id = ?",
                         (original["id"],),
                     )
+                    if rows_updated:
+                        # Same store-forward rank write the binary 0x02 branch
+                        # does (`_handle_ack`). Without it a message a store
+                        # node had reported as `held` would keep
+                        # delivery_status='held' forever once the addressee
+                        # answered by TEXT rather than by a 0x02 frame — the
+                        # row would then read `held` and `acked` at once, and
+                        # history would contradict the live event. Pinned to
+                        # `original["id"]`, the row `acked` was just set on:
+                        # one msg_id can have two transport copies, and the two
+                        # writes must not land on different ones.
+                        await self._write_delivery_status(
+                            original["msg_id"], "acked", None, row_id=original["id"]
+                        )
                     # Publish only on an actual match — an unmatched :ackNNN from
                     # foreign traffic must never claim a delivery. Never let a
                     # publish failure break ingestion (hot path).
