@@ -11,7 +11,10 @@ Group={{USER}}
 WorkingDirectory={{HOME}}/mcapp-slots/current
 Environment="PATH={{HOME}}/.local/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="MCAPP_ENV=prod"
-ExecStart={{HOME}}/.local/bin/uv run mcapp
+Environment="MALLOC_ARENA_MAX=2"
+# uv run is not used at exec time: deploy.sh runs uv sync; the wrapper cost
+# ~10 MB virtual per service and a resolver step per restart.
+ExecStart={{HOME}}/mcapp-slots/current/.venv/bin/mcapp
 Restart=always
 RestartSec=10
 StandardOutput=journal

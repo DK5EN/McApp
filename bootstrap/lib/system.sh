@@ -12,6 +12,7 @@ setup_system() {
   disable_unused_services
   remove_bloat_packages
   configure_tmpfs
+  configure_boot_memory
   configure_journald
   configure_logrotate
   configure_firewall
@@ -220,6 +221,146 @@ EOF
 }
 
 #──────────────────────────────────────────────────────────────────
+# BOOT MEMORY (GPU/CMA reservation + cgroup memory accounting)
+#──────────────────────────────────────────────────────────────────
+# B4 item 1 (doc/backlog.md): the stock boot config reserves 64MB for the
+# GPU and a 256MB CMA pool that nothing on this headless box uses (no HDMI,
+# no camera, no audio) -- that reservation is what pushes mcapp/mcapp-ble
+# into zram swap under normal load on a 512MB Pi Zero 2 W. Also enables
+# cgroup memory accounting, missing today (memory.current reads 0 for every
+# cgroup because cgroup_enable=memory is absent from cmdline.txt).
+#
+# Takes effect only after a reboot -- this function NEVER reboots. It marks
+# /var/lib/mcapp/reboot-required so an operator (or a later health check)
+# knows a reboot is owed.
+
+# Rewrites config.txt in place: adds gpu_mem=16 under a McApp-owned [all]
+# block (a directive appended after a [pi5]/[cm4] filter header would be
+# ignored on the Zero 2 W, so the block gets its own explicit [all] header),
+# adds a cma-64 parameter to an un-parameterized vc4-kms-v3d overlay line
+# (left alone if it already carries a cma- parameter), and turns off the
+# onboard-audio dtparam. Returns 0 if the file changed, 1 if it was already
+# converged -- idempotent by content, not by a marker check, so re-running
+# this after a hand edit still converges it.
+_mcapp_configure_config_txt() {
+  local file="$1"
+  local tmp
+  tmp="$(mktemp)"
+  cp "$file" "$tmp"
+
+  # Existing KMS overlay: add cma-64 only if it has no cma- parameter yet.
+  sed -i.bak -E 's/^dtoverlay=vc4-kms-v3d$/dtoverlay=vc4-kms-v3d,cma-64/' "$tmp"
+
+  # Nothing on this headless box drives onboard audio.
+  sed -i.bak -E 's/^dtparam=audio=on$/dtparam=audio=off/' "$tmp"
+
+  # gpu_mem must live in [all] or before any section header.
+  if grep -q '# McApp boot memory - begin' "$tmp"; then
+    sed -i.bak -E '/# McApp boot memory - begin/,/# McApp boot memory - end/ s/^gpu_mem=.*/gpu_mem=16/' "$tmp"
+  else
+    {
+      echo ""
+      echo "[all]"
+      echo "# McApp boot memory - begin"
+      echo "gpu_mem=16"
+      echo "# McApp boot memory - end"
+    } >> "$tmp"
+  fi
+
+  rm -f "${tmp}.bak"
+
+  if ! cmp -s "$file" "$tmp"; then
+    cat "$tmp" > "$file"
+    rm -f "$tmp"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
+# Appends cgroup_enable=memory cgroup_memory=1 to the SAME line of a
+# single-line cmdline.txt if not already present. Returns 0 if changed, 1
+# if already converged.
+_mcapp_configure_cmdline_txt() {
+  local file="$1"
+  local content
+  content="$(cat "$file")"
+
+  if [[ "$content" == *"cgroup_enable=memory"* ]]; then
+    return 1
+  fi
+
+  printf '%s cgroup_enable=memory cgroup_memory=1\n' "$content" > "$file"
+  return 0
+}
+
+# Args are optional and exist so tests can point this at fixture files
+# instead of the real boot partition; production calls it with no args.
+configure_boot_memory() {
+  log_info "Configuring boot memory reservation..."
+
+  local config_txt="${1:-}"
+  local cmdline_txt="${2:-}"
+
+  if [[ -z "$config_txt" ]]; then
+    if [[ -f /boot/firmware/config.txt ]]; then
+      config_txt="/boot/firmware/config.txt"
+    elif [[ -f /boot/config.txt ]]; then
+      config_txt="/boot/config.txt"
+    fi
+  fi
+
+  if [[ -z "$cmdline_txt" ]]; then
+    if [[ -f /boot/firmware/cmdline.txt ]]; then
+      cmdline_txt="/boot/firmware/cmdline.txt"
+    elif [[ -f /boot/cmdline.txt ]]; then
+      cmdline_txt="/boot/cmdline.txt"
+    fi
+  fi
+
+  if [[ -z "$config_txt" ]] && [[ -z "$cmdline_txt" ]]; then
+    log_warn "  No /boot/firmware or /boot found (not a Pi firmware partition?), skipping"
+    return 0
+  fi
+
+  local changed=false
+
+  if [[ -n "$config_txt" ]]; then
+    if [[ -f "$config_txt" ]]; then
+      if _mcapp_configure_config_txt "$config_txt"; then
+        changed=true
+        log_info "  Updated $config_txt (gpu_mem=16, cma-64, audio off)"
+      else
+        log_info "  $config_txt already configured"
+      fi
+    else
+      log_warn "  $config_txt not found, skipping config.txt changes"
+    fi
+  fi
+
+  if [[ -n "$cmdline_txt" ]]; then
+    if [[ -f "$cmdline_txt" ]]; then
+      if _mcapp_configure_cmdline_txt "$cmdline_txt"; then
+        changed=true
+        log_info "  Updated $cmdline_txt (cgroup_enable=memory)"
+      else
+        log_info "  $cmdline_txt already configured"
+      fi
+    else
+      log_warn "  $cmdline_txt not found, skipping cmdline.txt changes"
+    fi
+  fi
+
+  if [[ "$changed" == "true" ]]; then
+    mkdir -p /var/lib/mcapp
+    touch /var/lib/mcapp/reboot-required
+    log_warn "  reboot required for boot memory settings"
+  else
+    log_ok "  Boot memory settings already applied"
+  fi
+}
+
+#──────────────────────────────────────────────────────────────────
 # JOURNALD CONFIGURATION (Volatile Storage)
 #──────────────────────────────────────────────────────────────────
 
@@ -231,9 +372,17 @@ configure_journald() {
 
   mkdir -p "$conf_dir"
 
-  # Check if already configured (ours or pi-harden's)
-  if [[ -f "$conf_file" ]] || [[ -f "${conf_dir}/volatile.conf" ]]; then
-    log_info "  journald already configured"
+  # pi-harden's own drop-in wins if present and we haven't laid down ours yet.
+  if [[ -f "${conf_dir}/volatile.conf" ]] && [[ ! -f "$conf_file" ]]; then
+    log_info "  journald already configured (pi-harden)"
+    return 0
+  fi
+
+  # Idempotent by content, not by file-exists: an existing install carrying
+  # the pre-B4 RuntimeMaxUse=20M must actually converge to 8M on the next
+  # --converge, not skip forever because the file was already there.
+  if [[ -f "$conf_file" ]] && grep -q '^RuntimeMaxUse=8M$' "$conf_file"; then
+    log_info "  journald already configured (RuntimeMaxUse=8M)"
     return 0
   fi
 
@@ -241,13 +390,13 @@ configure_journald() {
 # McApp: Use volatile storage to protect SD card
 [Journal]
 Storage=volatile
-RuntimeMaxUse=20M
+RuntimeMaxUse=8M
 RuntimeKeepFree=10M
 RuntimeMaxFileSize=5M
 MaxRetentionSec=1week
 EOF
 
-  log_ok "  journald configured for volatile storage"
+  log_ok "  journald configured for volatile storage (RuntimeMaxUse=8M)"
 
   # Restart journald to apply
   systemctl restart systemd-journald || true
@@ -717,6 +866,18 @@ APT::Periodic::AutocleanInterval "7";
 EOF
 
   log_ok "  Unattended upgrades configured (security updates only)"
+
+  # B4 item 6 (doc/backlog.md): disable the unattended-upgrades.service unit
+  # itself (7MB RSS + 13.5MB swap on mcapp.local) -- it is ONLY the
+  # `unattended-upgrade-shutdown --wait-for-signal` hook that finishes an
+  # in-flight upgrade at shutdown. apt-daily-upgrade.timer (untouched) keeps
+  # running the actual upgrades on schedule regardless of this unit's state.
+  # Do NOT re-enable this as a "fix" for missed updates -- the timer is the
+  # thing doing the work; this unit only trims a shutdown-time nicety.
+  # packages.sh's wait_for_apt_lock()/restore_unattended_upgrades() gate on
+  # is-active/is-enabled, so once this unit reads disabled they correctly
+  # treat it as "nothing to stop/restart" and leave it alone.
+  systemctl disable --now unattended-upgrades.service 2>/dev/null || true
 }
 
 #──────────────────────────────────────────────────────────────────
