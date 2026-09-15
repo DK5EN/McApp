@@ -675,10 +675,54 @@ class MigrationsMixin(StorageBase):
                         " store-and-forward DM status)",
                         current_version,
                     )
+                    _set_schema_version(conn, 31)
+
+                if current_version < 32:  # noqa: PLR2004 - schema migration step
+                    # Stall tracking (doc/2026-09-15_1530-stall-tracking-plan.md
+                    # §2, §6). `stall_events` is the durable record of server-
+                    # and client-side "the app looked stuck" events, written by
+                    # `mcapp.stalls.StallRecorder` — one row per sample/stall/
+                    # critical observation with a JSON `context` snapshot and a
+                    # kind-specific `detail` blob. This migration is the
+                    # canonical DDL; `StallRecorder` also issues the identical
+                    # `CREATE TABLE/INDEX IF NOT EXISTS` statements defensively
+                    # at startup as a fallback for a DB that skipped this step.
+                    # Keep the two definitions byte-identical.
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS stall_events (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            ts_ms INTEGER NOT NULL,
+                            origin TEXT NOT NULL,
+                            kind TEXT NOT NULL,
+                            severity TEXT NOT NULL,
+                            request_id TEXT,
+                            session_id TEXT,
+                            method TEXT,
+                            path TEXT,
+                            query TEXT,
+                            body TEXT,
+                            status INTEGER,
+                            duration_ms REAL,
+                            context TEXT,
+                            detail TEXT
+                        );
+                    """)
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_stall_events_ts ON stall_events(ts_ms);"
+                    )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_stall_events_kind_ts"
+                        " ON stall_events(kind, ts_ms);"
+                    )
+                    logger.info(
+                        "Migration v%d → v32: created stall_events table"
+                        " (stall tracking, empty until the first recorded stall)",
+                        current_version,
+                    )
                     # Adding a step after this one? Bump LATEST_SCHEMA_VERSION in
                     # storage/constants.py in the same commit — the startup suite
                     # asserts every migration chain terminates there.
-                    _set_schema_version(conn, 31)
+                    _set_schema_version(conn, 32)
 
         await asyncio.to_thread(_init_db)
 

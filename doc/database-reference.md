@@ -8,7 +8,7 @@ The SQLite backend (`sqlite_storage.py`) is the default for production deploymen
 
 **Journal mode:** WAL (Write-Ahead Logging) for concurrent reads during writes.
 
-**Current schema: v23.** The migration chain lives in `storage/migrations.py` as `current_version < N` blocks, driven from `sqlite_storage.initialize()`; `LATEST_SCHEMA_VERSION` (`storage/constants.py`) gates it — both `migration_chain_tests.py` and `connection_lifecycle_tests.py` assert every chain terminates there. Add a new block and bump that constant in the same commit — never edit an existing block.
+**Current schema: v32.** The migration chain lives in `storage/migrations.py` as `current_version < N` blocks, driven from `sqlite_storage.initialize()`; `LATEST_SCHEMA_VERSION` (`storage/constants.py`) gates it — both `migration_chain_tests.py` and `connection_lifecycle_tests.py` assert every chain terminates there. Add a new block and bump that constant in the same commit — never edit an existing block.
 
 ### Tables (Schema v25)
 
@@ -57,24 +57,54 @@ There is no backfill and none is possible: `{CET}` is dropped at ingest by
 `_should_filter_message`, so these tables start empty on any existing DB.
 Design: `2026-08-21_2350-gateway-uptime-plan.md`.
 
+Added v32:
+
+| Table          | Added | Purpose                                                                                      |
+| -------------- | ----- | -------------------------------------------------------------------------------------------- |
+| `stall_events` | v32   | Stall tracking — one row per server- or client-observed sample/stall/critical duration event |
+
+**Stall tracking (v32).** Every stall between the webapp and the API, server- and client-observed,
+recorded by `src/mcapp/stalls.py`'s `StallRecorder` for retrieval through `/api/stalls`. Columns:
+`id` (PK), `ts_ms` (event time, ms — server clock for server rows, client clock for client rows),
+`origin` (`server`/`client`), `kind` (`http`, `client_http`, `client_timeout`, `client_error`,
+`sse_answer`/`sse_answer_missing`, `sse_heartbeat`, `loop_lag`, `pool_wait`, `handler`), `severity`
+(`sample`/`stall`/`critical`), `request_id` (correlation id, nullable for `loop_lag`/`handler`),
+`session_id` (per-tab id from the client, nullable), `method`, `path` (route path without query),
+`query` (raw query string), `body` (JSON, redacted, capped at `body_cap_bytes` — 8 KB default —
+`context.body_truncated` set if cut), `status` (HTTP status or NULL), `duration_ms`, `context`
+(JSON: server snapshot — `loop_lag_ms`, `pool_queued`, `pool_running`, `pool_max`, `sse_clients`,
+`rss_kb`, `db_bytes`, `wal_bytes`, `ble_connected`, `version`, `slot`, `dropped`; or
+client snapshot — `app_version`, `ua`, `online`, `visibility`, `sse_state`, `sse_age_ms`,
+`outbox_len`, `base_url`, `device_memory`, `connection_type`), `detail` (JSON, kind-specific — `resp_bytes` and the client address for `http`; e.g.
+`{fn, queued, running}` for `pool_wait`, `{message_type, handler, message}` for `handler`).
+Redaction (both origins, applied before the row leaves the recorder): push-subscription `endpoint`/
+`keys`/`p256dh`/`auth`, and any field named `*api_key*`/`authorization` — message text is kept.
+Written by `StallRecorder`'s own dedicated writer thread (never the shared `to_thread` pool, so a
+starved pool cannot make the stall logger itself stall) and pruned to `max_rows` (default 5000)
+every 200 inserts — not by the nightly retention job. `StallRecorder.start()` issues the identical
+`CREATE TABLE/INDEX IF NOT EXISTS` DDL defensively at startup; migration 32 above is canonical, the
+two must stay byte-identical. Design: `2026-09-15_1530-stall-tracking-plan.md`.
+
 `mheard_cache` exists in older DBs but is unused.
 
 **Key design principle:** MHeard beacons (RSSI/SNR, no coordinates) and position beacons (lat/lon, no signal) are completely disjoint packet types. `station_positions` merges them per callsign with independent field-group updates — signal fields never overwrite location fields and vice versa.
 
 ### Indexes
 
-| Index                             | Columns                     | Purpose                                   |
-| --------------------------------- | --------------------------- | ----------------------------------------- |
-| `idx_messages_timestamp`          | `timestamp`                 | Time-range filters                        |
-| `idx_messages_src`                | `src`                       | Source callsign lookups                   |
-| `idx_messages_dst`                | `dst`                       | Destination lookups                       |
-| `idx_messages_type`               | `type`                      | Type filters                              |
-| `idx_messages_type_timestamp`     | `type, timestamp DESC`      | Smart initial payload, recent messages    |
-| `idx_messages_type_dst_timestamp` | `type, dst, timestamp DESC` | Paginated channel queries                 |
-| `idx_signal_log_cs_ts`            | `callsign, timestamp DESC`  | Signal log time-range queries             |
-| `idx_messages_category`           | `category`                  | Classifier category filters (v16)         |
-| `idx_messages_template_hash`      | `template_hash`             | Template/beacon grouping (v16)            |
-| `idx_link_uptime_segments_end`    | `end_ms`                    | Window-overlap scan for /api/uptime (v25) |
+| Index                             | Columns                     | Purpose                                          |
+| --------------------------------- | --------------------------- | ------------------------------------------------ |
+| `idx_messages_timestamp`          | `timestamp`                 | Time-range filters                               |
+| `idx_messages_src`                | `src`                       | Source callsign lookups                          |
+| `idx_messages_dst`                | `dst`                       | Destination lookups                              |
+| `idx_messages_type`               | `type`                      | Type filters                                     |
+| `idx_messages_type_timestamp`     | `type, timestamp DESC`      | Smart initial payload, recent messages           |
+| `idx_messages_type_dst_timestamp` | `type, dst, timestamp DESC` | Paginated channel queries                        |
+| `idx_signal_log_cs_ts`            | `callsign, timestamp DESC`  | Signal log time-range queries                    |
+| `idx_messages_category`           | `category`                  | Classifier category filters (v16)                |
+| `idx_messages_template_hash`      | `template_hash`             | Template/beacon grouping (v16)                   |
+| `idx_link_uptime_segments_end`    | `end_ms`                    | Window-overlap scan for /api/uptime (v25)        |
+| `idx_stall_events_ts`             | `ts_ms`                     | Time-range filters for `/api/stalls` (v32)       |
+| `idx_stall_events_kind_ts`        | `kind, ts_ms`               | Per-kind queries and `/api/stalls/summary` (v32) |
 
 ### Retention (nightly pruning at 04:00)
 
@@ -116,7 +146,7 @@ conn.close()
 \""
 ```
 
-**Schema version:** 23 (WAL mode enabled)
+**Schema version:** 32 (WAL mode enabled)
 
 ### Tables (Production Stats)
 
@@ -130,7 +160,7 @@ Row counts are order-of-magnitude only, sampled 2026-04, and drift with retentio
 | `signal_buckets`    | ~7k           | Pre-aggregated 5-min and 1-hour signal buckets                   |
 | `telemetry`         | ~20           | Temperature, humidity, pressure readings                         |
 | `mheard_cache`      | 0             | Unused cache table                                               |
-| `schema_version`    | 1             | Holds the single current schema version (23)                     |
+| `schema_version`    | 1             | Holds the single current schema version (32)                     |
 
 ### Key columns in `messages`
 

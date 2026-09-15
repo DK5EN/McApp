@@ -66,6 +66,7 @@ async def run_migration_chain_tests() -> bool:
     await _test_v29_message_acks_table(results)
     await _test_v30_read_cursors_table(results)
     await _test_v31_delivery_status_columns(results)
+    await _test_v32_stall_events_table(results)
 
     for label, ok in results:
         print(f"    {'✅ PASS' if ok else '❌ FAIL'} | {label}")
@@ -1149,6 +1150,66 @@ async def _test_v31_delivery_status_columns(results: list[tuple[str, bool]]) -> 
                 (
                     ("v31 delivery_status: pre-existing row's own data (msg/src/dst) is untouched"),
                     bool(row) and row[0]["msg"] == "hi" and row[0]["dst"] == "OE3ABC",
+                )
+            )
+        finally:
+            await storage.close()
+
+
+async def _test_v32_stall_events_table(results: list[tuple[str, bool]]) -> None:
+    """Seed a v31 fixture and assert the v32 step stands up `stall_events` with
+    its `(ts_ms)` and `(kind, ts_ms)` indexes — the table
+    `mcapp.stalls.StallRecorder` writes (doc/2026-09-15_1530-stall-tracking-
+    plan.md §2, §6). Empty until the first recorded stall."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = Path(tmp_dir) / "migration_chain_v32.db"
+
+        def _create_v31_db() -> None:
+            with db_write(db_path) as conn:
+                conn.executescript(CREATE_SCHEMA_SQL)
+                conn.executescript(CREATE_SCHEMA_V2_SQL)
+                conn.execute("DELETE FROM schema_version")
+                conn.execute("INSERT INTO schema_version (version) VALUES (31)")
+                conn.commit()
+
+        await asyncio.to_thread(_create_v31_db)
+
+        try:
+            storage = await create_sqlite_storage(db_path)
+        except Exception:
+            logger.exception("v32 stall_events migration raised")
+            results.append(("v32 stall_events: migrator runs v31→HEAD without error", False))
+            return
+
+        results.append(("v32 stall_events: migrator runs v31→HEAD without error", True))
+        try:
+            version = await _schema_version(storage)
+            results.append(
+                (
+                    f"v32 stall_events: final schema_version marker is {FINAL_SCHEMA_VERSION}",
+                    version == FINAL_SCHEMA_VERSION,
+                )
+            )
+            await storage._mutate(
+                "INSERT INTO stall_events (ts_ms, origin, kind, severity) VALUES (?, ?, ?, ?)",
+                (BASE_TS, "server", "loop_lag", "stall"),
+            )
+            rows = await storage._query("SELECT COUNT(*) AS n FROM stall_events", ())
+            results.append(
+                (
+                    "v32 stall_events: table accepts a minimal row (nullable columns default)",
+                    bool(rows) and rows[0]["n"] == 1,
+                )
+            )
+            indexes = await storage._query(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'stall_events'",
+                (),
+            )
+            index_names = {row["name"] for row in indexes}
+            results.append(
+                (
+                    "v32 stall_events: idx_stall_events_ts and idx_stall_events_kind_ts exist",
+                    {"idx_stall_events_ts", "idx_stall_events_kind_ts"} <= index_names,
                 )
             )
         finally:

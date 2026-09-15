@@ -172,6 +172,26 @@ class LocationConfig:
 
 
 @dataclass
+class StallsConfig:
+    """Thresholds and limits for stall tracking.
+
+    Read from the `stalls` key in config.json (nested dict, field names as
+    JSON keys); absent key or absent sub-key = the default below. See
+    doc/2026-09-15_1530-stall-tracking-plan.md §1/§6 for what each threshold
+    gates and why the defaults are what they are.
+    """
+
+    stall_ms: int = 500
+    critical_ms: int = 2000
+    sample_every: int = 50
+    loop_lag_ms: int = 100
+    pool_wait_ms: int = 100
+    handler_ms: int = 500
+    body_cap_bytes: int = 8192
+    max_rows: int = 5000
+
+
+@dataclass
 class Config:
     """Main McApp configuration."""
 
@@ -188,6 +208,9 @@ class Config:
 
     # Location configuration
     location: LocationConfig = field(default_factory=LocationConfig)
+
+    # Stall tracking configuration
+    stalls: StallsConfig = field(default_factory=StallsConfig)
 
     # Raw config for backward compatibility
     _raw: dict[str, Any] = field(default_factory=dict, repr=False)
@@ -333,6 +356,30 @@ class Config:
         )
         location = LocationConfig(**location_kwargs)
 
+        # Nested `stalls` sub-object (not one of the flat UPPER_CASE top-level
+        # keys the rest of config.json uses) — field names double as the JSON
+        # keys, so `_pluck_present`'s 1:1 mapping still fits. A non-dict or
+        # absent "stalls" key leaves stalls_kwargs empty and every field falls
+        # through to StallsConfig's own default, same convention as above.
+        stalls_kwargs: dict[str, Any] = {}
+        stalls_raw = data.get("stalls")
+        if isinstance(stalls_raw, dict):
+            cls._pluck_present(
+                stalls_kwargs,
+                stalls_raw,
+                {
+                    "stall_ms": "stall_ms",
+                    "critical_ms": "critical_ms",
+                    "sample_every": "sample_every",
+                    "loop_lag_ms": "loop_lag_ms",
+                    "pool_wait_ms": "pool_wait_ms",
+                    "handler_ms": "handler_ms",
+                    "body_cap_bytes": "body_cap_bytes",
+                    "max_rows": "max_rows",
+                },
+            )
+        stalls = StallsConfig(**stalls_kwargs)
+
         top_kwargs: dict[str, Any] = {}
         cls._pluck_present(
             top_kwargs, data, {"CALL_SIGN": "call_sign", "USER_INFO_TEXT": "user_info_text"}
@@ -344,6 +391,7 @@ class Config:
             ble=ble,
             storage=storage,
             location=location,
+            stalls=stalls,
             _raw=data,
         )
 
