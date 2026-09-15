@@ -355,9 +355,23 @@ configure_boot_memory() {
     mkdir -p /var/lib/mcapp
     touch /var/lib/mcapp/reboot-required
     log_warn "  reboot required for boot memory settings"
+  elif [[ -f /var/lib/mcapp/reboot-required ]] && _mcapp_boot_memory_live; then
+    # The files were unchanged AND the running kernel shows the values: the
+    # reboot happened, so the marker is stale. "Unchanged" alone proves nothing.
+    rm -f /var/lib/mcapp/reboot-required
+    log_ok "  Boot memory settings live (gpu_mem=16, cgroup memory); reboot marker cleared"
   else
     log_ok "  Boot memory settings already applied"
   fi
+}
+
+# True when the RUNNING system reflects the boot memory settings.
+_mcapp_boot_memory_live() {
+  grep -qw "cgroup_enable=memory" /proc/cmdline 2>/dev/null || return 1
+  if command -v vcgencmd >/dev/null 2>&1; then
+    [[ "$(vcgencmd get_mem gpu 2>/dev/null)" == "gpu=16M" ]] || return 1
+  fi
+  return 0
 }
 
 #──────────────────────────────────────────────────────────────────
