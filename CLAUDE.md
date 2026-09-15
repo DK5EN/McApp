@@ -127,14 +127,16 @@ Linux, only ~144 MB usable for kernel non-movable allocations before this work) 
   load-bearing for the BLE service specifically: uvicorn's CLI inserts the CWD into `sys.path` via
   its `--app-dir` default, which is how `ble_service.src.main:app` resolves at all.
 - **journald `RuntimeMaxUse=8M`** (`configure_journald`, was 20M) and **Caddy
-  `GOMEMLIMIT=48MiB`** (`bootstrap/templates/caddy/caddy.service`, was 256MiB;
-  `GOGC=50` already set).
+  `GOMEMLIMIT=48MiB` + `GOGC=50` via the drop-in `/etc/systemd/system/caddy.service.d/memory.conf`**
+  written by `configure_caddy_sudo` in `bootstrap/lib/packages.sh`. mcapp.local runs the DISTRO
+  caddy unit, so `bootstrap/templates/caddy/caddy.service` is never installed there — an edit to
+  that template reaches no running box (found 2026-09-15 when the first attempt did exactly that).
 - **`unattended-upgrades.service` disabled, its timers kept.** `configure_unattended_upgrades`
   disables only the `unattended-upgrade-shutdown --wait-for-signal` shutdown hook (7 MB RSS);
   `apt-daily-upgrade.timer` keeps running the actual upgrades on schedule. Do not re-enable the
   service as a "fix" for missed updates — the timer is what does the work, this unit only trims a
   shutdown-time nicety.
-- **`SYSTEM_EPOCH` bumped to 3** (`bootstrap/mcapp.sh` / `REQUIRED_SYSTEM_EPOCH` in
+- **`SYSTEM_EPOCH` bumped to 3, then 4 for the Caddy drop-in** (`bootstrap/mcapp.sh` / `REQUIRED_SYSTEM_EPOCH` in
   `system_converge.py`) alongside these changes, per the existing System Epoch convergence
   contract above.
 

@@ -35,7 +35,8 @@ readonly SCRIPT_VERSION="2.6.0"
 # and of the DB schema version.
 # Epoch 3 (B4): boot memory config, journald 8M, unattended-upgrades hook
 # off, direct venv exec, MALLOC_ARENA_MAX.
-readonly SYSTEM_EPOCH=3
+# Epoch 4: Caddy GOMEMLIMIT/GOGC drop-in (the distro unit ignores the template).
+readonly SYSTEM_EPOCH=4
 
 # Detect piped mode (curl | bash) — BASH_SOURCE is empty when piped
 # SCRIPT_DIR is intentionally NOT readonly: source_libs() overwrites it with
