@@ -99,6 +99,113 @@ Add columns/tables via a `current_version < N` block in the chain in `storage/mi
 
 System-level machine state (packages, firewall, web front door) is versioned by `SYSTEM_EPOCH` in `bootstrap/mcapp.sh` and mirrored by `REQUIRED_SYSTEM_EPOCH` in `src/mcapp/system_converge.py` — bump both together, a startup test enforces parity. Installed state is marked at `/var/lib/mcapp/system-epoch`; `mcapp.sh --converge` runs `setup_system` + `install_packages` idempotently to bring a box up to date. The update runner converges the newly deployed slot after every successful update, and the app's converge watchdog self-heals boxes whose update was driven by a pre-epoch runner.
 
+## Memory Footprint (B4)
+
+Reduced the usable-RAM squeeze on mcapp.local's Pi Zero 2W (512 MB physical, 415 MB seen by
+Linux, only ~144 MB usable for kernel non-movable allocations before this work) — shipped
+2026-09-15 alongside stall tracking in the same campaign. Plan and the PSS measurements:
+`doc/backlog.md` B4, `doc/2026-09-15_1530-stall-tracking-plan.md` §8.
+
+- **The 512/415/144 MB budget was never a RAM shortage — it was a CMA reservation.** The stock
+  boot config reserved 64 MB for the GPU plus a 256 MB CMA pool on a headless box with no HDMI
+  or audio load, which is what actually pushed processes into zram swap under normal operation.
+  `gpu_mem=16` and shrinking the KMS overlay's CMA to `cma-64` (`dtoverlay=vc4-kms-v3d,cma-64`,
+  `dtparam=audio=off`) are the largest single win, in `bootstrap/lib/system.sh`'s
+  `configure_boot_memory` / `_mcapp_configure_config_txt`.
+- **Boot-config changes need a reboot and are marked, never assumed applied.** A change writes
+  `/var/lib/mcapp/reboot-required`; the converge path must check that marker rather than assume
+  the new `gpu_mem`/`cma-64`/`cgroup_enable=memory` values are already live.
+- **`gpu_mem` must land in `[all]` or before any section header — a Pi Zero 2 W trap.**
+  `_mcapp_configure_config_txt` appends a `[all]` block with a begin/end marker comment pair so a
+  re-run can find and update it idempotently instead of duplicating it.
+- **`cmdline.txt` must stay exactly ONE line.** `_mcapp_configure_cmdline_txt` appends
+  `cgroup_enable=memory cgroup_memory=1` to the existing single line rather than writing a new
+  one — a second line makes the bootloader ignore the file.
+- **`MALLOC_ARENA_MAX=2` plus a direct venv `ExecStart`** in both `bootstrap/templates/*.service`
+  — `uv run` is no longer used at exec time (still used by `deploy.sh` to build the venv), which
+  removes an idle wrapper process and a resolver step per restart. `WorkingDirectory` is
+  load-bearing for the BLE service specifically: uvicorn's CLI inserts the CWD into `sys.path` via
+  its `--app-dir` default, which is how `ble_service.src.main:app` resolves at all.
+- **journald `RuntimeMaxUse=8M`** (`configure_journald`, was 20M) and **Caddy
+  `GOMEMLIMIT=48MiB`** (`bootstrap/templates/caddy/caddy.service`, was 256MiB;
+  `GOGC=50` already set).
+- **`unattended-upgrades.service` disabled, its timers kept.** `configure_unattended_upgrades`
+  disables only the `unattended-upgrade-shutdown --wait-for-signal` shutdown hook (7 MB RSS);
+  `apt-daily-upgrade.timer` keeps running the actual upgrades on schedule. Do not re-enable the
+  service as a "fix" for missed updates — the timer is what does the work, this unit only trims a
+  shutdown-time nicety.
+- **`SYSTEM_EPOCH` bumped to 3** (`bootstrap/mcapp.sh` / `REQUIRED_SYSTEM_EPOCH` in
+  `system_converge.py`) alongside these changes, per the existing System Epoch convergence
+  contract above.
+
+## Stall Tracking (`stall_events`, `/api/stalls`)
+
+Every stall between the webapp and the API — server- and client-observed — recorded with the
+parameters needed to reproduce it, keyed by one correlation id, retrievable by a coding agent
+through `/api/stalls`. No UI; this is capture-and-upload only. Design and the interface contract:
+`doc/2026-09-15_1530-stall-tracking-plan.md`.
+
+- **A stall is any call that crosses a duration threshold, recorded by `kind` into
+  `stall_events`.** `http` (server ASGI middleware), `client_http` (webapp fetch wrapper,
+  includes the Caddy/lighttpd hop), `sse_answer` (`page_request` → SSE `response`, missing after
+  10 s → `sse_answer_missing`) and `handler` (one `MessageRouter.publish` subscriber) are
+  **0.5 s = stall, 2 s = critical**, plus a **1-in-50 sample of every sub-threshold call**
+  (`severity="sample"`) so there is a healthy baseline to diff against. `loop_lag` (event-loop
+  drift watchdog) and `pool_wait` (queue wait before a `to_thread` job ran) are far tighter —
+  **100 ms stall / 500 ms critical** — because they measure infrastructure health, not a
+  user-facing SLO: a 100 ms event-loop hesitation is already abnormal. `client_timeout` (10 s
+  fetch abort), `client_error` (network error / HTTP ≥ 400) and `sse_heartbeat` (90 s reconnect
+  watchdog) are recorded unconditionally — there is no sub-threshold case for "it failed." All
+  thresholds live under the `stalls` key in `config.json` (`StallsConfig`,
+  `src/mcapp/config_loader.py`); an absent key means the defaults above.
+- **Correlation is `X-Request-Id`, minted by the client and echoed by the server** on the
+  response and stored on both ends' rows; `X-Session-Id` (per browser tab) rides alongside it.
+  `mcapp.stalls.current_request_id` is a `ContextVar[str | None]` set by the middleware for the
+  request's lifetime, so a `handler` stall triggered by that request can still report the id. The
+  `page_request` path is the one exception — it already carried its own `request_id`
+  (webapp `messages.ts`, echoed on `proxy:messages_page`) before this work existed, and the
+  client's `sse_answer` timer keys on that pre-existing id instead of minting a new one.
+- **The middleware is PURE ASGI, never `BaseHTTPMiddleware`.** `BaseHTTPMiddleware` buffers the
+  whole response before the downstream body is visible, which would turn `/events` and
+  `/update-stream` — long-lived SSE streams — into "one very slow request" or break them outright.
+  `StallMiddleware` (`src/mcapp/stall_middleware.py`) taps `receive`/`send` chunk by chunk instead,
+  and passes `/events*`, `/update-stream` and `/health` through completely untouched: no id, no
+  header, no timing.
+- **Added after `CORSMiddleware` so it is the OUTERMOST layer** (`sse_handler.py`,
+  `_create_app`) — Starlette applies middleware innermost-first in registration order, so timing
+  from outside CORS covers the whole stack, not just what CORS lets through.
+- **The recorder has its OWN writer thread and never touches the shared executor.** `record()`
+  and `ingest_client()` are non-blocking: they push onto a bounded `queue.Queue(maxsize=1000)` and
+  return, drained by one dedicated `mcapp-stalls-writer` thread with its own SQLite connection. A
+  starved thread pool must not make the stall logger itself stall, or stall reporting would fail
+  exactly when it is most needed; a full queue drops the row and counts the drop rather than
+  blocking.
+- **The counting executor is installed BEFORE any `to_thread` call.** `install_executor()` swaps
+  in a `ThreadPoolExecutor` subclass as the loop's default executor, in `build_app()` before
+  `create_sqlite_storage` runs — installed any later and the first `to_thread` calls would already
+  be running on the un-instrumented default, invisibly to `pool_wait`.
+- **The recorder's own DDL duplicates migration 32 on purpose.** `StallRecorder.start()` issues
+  the identical `CREATE TABLE/INDEX IF NOT EXISTS stall_events` statements as a defensive
+  fallback; migration 32 (`storage/migrations.py`) is the canonical, schema-versioned source.
+  Keep the two texts byte-identical if either changes.
+- **Redaction replaces VALUES, not keys**, for push-subscription fields (`endpoint`, `keys`,
+  `p256dh`, `auth`) and anything named `*api_key*`/`authorization` (`redact()` in
+  `src/mcapp/stalls.py`) — applied to `body`/`detail`/`context` on both server records and
+  client-submitted ones (redacted again server-side in `ingest_client`, never trusted from the
+  client). **Message text is deliberately kept** — it is ham radio traffic, not a secret, and is
+  often exactly what a coding agent needs to reproduce a slow handler.
+- **`/api/stalls` (full records, coding-agent interface) and `/api/stalls/summary`
+  (per-path p50/p95/p99/max baseline) are read surfaces; `POST /api/stalls/client` is how the
+  webapp uploads its own observations** (`src/mcapp/sse_routes/stalls.py`, one or an array of
+  records, capped at 100/call). `scripts/replay_stall.py --id <row>` re-issues the recorded
+  `method path?query`+`body` against a running instance and prints new p50/p95/max next to the
+  recorded duration and server context — the reproduce tool, not a dashboard.
+- **Row cap is `max_rows` (default 5000)**, enforced by the writer thread pruning the oldest rows
+  every 200 inserts — not a nightly job, and not schema-enforced.
+- **`ble_connected` handles property-vs-method.** `is_connected` is a property on the remote BLE
+  client (and on every current client); the gauge (`_ble_connected` in `main.py`) tolerates a method too and calls it
+  only when callable, mirroring the same pattern the BLE code already uses elsewhere.
+
 ## Link Check (`{ping}` / `{pong}`)
 
 Probes whether a station answers on **direct RF**, using the firmware's `v4.35p.07.24.2` ping

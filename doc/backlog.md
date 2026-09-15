@@ -83,12 +83,13 @@ already lazy and numpy is not loaded in production — leave that alone.
 245 MB to roughly 120–150 MB with no swap pressure. Measure before and after each with the same
 PSS script; the numbers above are the baseline.
 
-1. **Boot config (largest win, no code).** `gpu_mem=16` returns ~48 MB to MemTotal
-   (`vcgencmd get_mem arm` reads 448M today). Shrink CMA: `dtoverlay=vc4-kms-v3d,cma-64`, or drop
-   the overlay and `dtparam=audio=on` entirely — nothing on the box drives HDMI or audio. This is
-   what actually pushes processes into zram today. Belongs in `bootstrap/lib/system.sh` with a
-   `SYSTEM_EPOCH` / `REQUIRED_SYSTEM_EPOCH` bump; needs a reboot, so the converge path must not
-   assume it applies live.
+1. **Boot config (largest win, no code) — shipped 2026-09-15.** `gpu_mem=16` returns ~48 MB to
+   MemTotal (`vcgencmd get_mem arm` reads 448M today). Shrink CMA: `dtoverlay=vc4-kms-v3d,cma-64`,
+   or drop the overlay and `dtparam=audio=on` entirely — nothing on the box drives HDMI or audio.
+   This is what actually pushes processes into zram today. Belongs in `bootstrap/lib/system.sh`
+   with a `SYSTEM_EPOCH` / `REQUIRED_SYSTEM_EPOCH` bump; needs a reboot, so the converge path must
+   not assume it applies live. Landed as `configure_boot_memory` (`bootstrap/lib/system.sh`,
+   `SYSTEM_EPOCH` bumped to 3); see `doc/2026-09-15_1530-stall-tracking-plan.md` §8.
 2. **Slim or fold in the BLE service (30–45 MB).** Its API surface is small (REST + SSE + API
    key, see `ble_service/README.md`). Options: run BLE in-process when mcapp is on the same box
    (full 45 MB, loses crash isolation and the remote-brain topology the service exists for), or
@@ -101,24 +102,34 @@ PSS script; the numbers above are the baseline.
    ECDH/HKDF. Lazy-importing pywebpush on first dispatch only helps boxes with no subscribers,
    which mcapp.local is not. Contract semantics (`push_contract.json` v7+) are untouched; the
    mocked `webpush_fn` seam in `push_delivery.py` is where the swap happens.
-4. **Malloc tuning, cheap experiment.** `Environment="MALLOC_ARENA_MAX=2"` in both unit
-   templates. mcapp shows 40 anonymous rw regions across 4 threads, consistent with glibc arena
-   sprawl; typical gain 5–15 MB on long-running Python. Optionally
-   `MALLOC_TRIM_THRESHOLD_=131072`. Verify, do not assume.
-5. **Logs in RAM (10–15 MB).** Logs ship to rpizero via journal-upload, so lower journald
-   `RuntimeMaxUse` from 20M to 8M (`bootstrap/lib/system.sh`, journald drop-in) and cap the
-   32 MB `/run/journalxship` tmpfs that journal-remote fills to 8–16 MB.
-6. **Disable `unattended-upgrades.service` (7 MB RSS).** It is only the
+4. **Malloc tuning, cheap experiment — shipped 2026-09-15.** `Environment="MALLOC_ARENA_MAX=2"`
+   in both unit templates. mcapp shows 40 anonymous rw regions across 4 threads, consistent with
+   glibc arena sprawl; typical gain 5–15 MB on long-running Python. Optionally
+   `MALLOC_TRIM_THRESHOLD_=131072`. Verify, do not assume. Landed in
+   `bootstrap/templates/mcapp.service` and `bootstrap/templates/mcapp-ble.service`;
+   `MALLOC_TRIM_THRESHOLD_` was not added. See `doc/2026-09-15_1530-stall-tracking-plan.md` §8.
+5. **Logs in RAM (10–15 MB) — journald part shipped 2026-09-15, tmpfs cap still open.** Logs ship
+   to rpizero via journal-upload, so lower journald `RuntimeMaxUse` from 20M to 8M
+   (`bootstrap/lib/system.sh`, journald drop-in) and cap the 32 MB `/run/journalxship` tmpfs that
+   journal-remote fills to 8–16 MB. `configure_journald` now writes `RuntimeMaxUse=8M`
+   (`doc/2026-09-15_1530-stall-tracking-plan.md` §8). The `/run/journalxship` tmpfs cap is
+   **still open** — that tmpfs is owned by the AIOps units on the box, not by this repo, so there
+   is nothing here to ship for it.
+6. **Disable `unattended-upgrades.service` (7 MB RSS) — shipped 2026-09-15.** It is only the
    `unattended-upgrade-shutdown --wait-for-signal` hook; `apt-daily-upgrade.timer` keeps doing
    the upgrades. Lost: finishing an in-flight upgrade on shutdown. `configure_unattended_upgrades`
-   in `bootstrap/lib/system.sh` is the place.
-7. **Exec the venv directly.** `ExecStart={{HOME}}/mcapp-slots/current/.venv/bin/mcapp` (and the
-   uvicorn equivalent) in `bootstrap/templates/*.service` instead of `uv run` — removes two idle
-   wrapper processes and the uv resolution step on every restart. `uv sync --all-packages` in
-   `deploy.sh` still owns the environment; the runner does not need `uv run` at exec time.
-8. **Caddy: `GOMEMLIMIT=24MiB` or `GOGC=50`** in `bootstrap/templates/caddy/caddy.service`,
-   3–5 MB. Replacing lighttpd with Caddy's `file_server` saves 2.4 MB and is not worth the
-   change.
+   in `bootstrap/lib/system.sh` is the place. Landed disabling the service unit while leaving its
+   timers running; see `doc/2026-09-15_1530-stall-tracking-plan.md` §8.
+7. **Exec the venv directly — shipped 2026-09-15.**
+   `ExecStart={{HOME}}/mcapp-slots/current/.venv/bin/mcapp` (and the uvicorn equivalent) in
+   `bootstrap/templates/*.service` instead of `uv run` — removes two idle wrapper processes and
+   the uv resolution step on every restart. `uv sync --all-packages` in `deploy.sh` still owns the
+   environment; the runner does not need `uv run` at exec time. Landed in both unit templates; see
+   `doc/2026-09-15_1530-stall-tracking-plan.md` §8.
+8. **Caddy: `GOMEMLIMIT=24MiB` or `GOGC=50` — shipped 2026-09-15.** In
+   `bootstrap/templates/caddy/caddy.service`, 3–5 MB. Replacing lighttpd with Caddy's
+   `file_server` saves 2.4 MB and is not worth the change. Landed as `GOMEMLIMIT=48MiB` (not
+   24MiB) with `GOGC=50` already set; see `doc/2026-09-15_1530-stall-tracking-plan.md` §8.
 
 **Open question, needs one more sample:** mcapp grows from 67 MB at import to 85–95 MB live. No
 unbounded cache found in the code (`PushDedup`'s `OrderedDict` and the meteo cache are small),
