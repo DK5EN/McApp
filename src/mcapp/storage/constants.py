@@ -265,8 +265,20 @@ def db_write(db_path: Path | str) -> Iterator[sqlite3.Connection]:
     manager supplies that back (commits on success, rolls back on error);
     ``closing`` still does the closing. Both are required, in this order. See
     storage/connection_lifecycle_tests.py for the regression coverage.
+
+    Sets this connection's ``synchronous`` pragma to ``NORMAL`` before yielding it.
+    In WAL mode (the schema's mode) the default ``FULL`` fsyncs the WAL on
+    every commit, which on the production Pi's SD card was the entire cause
+    of the F1 handler stalls (measured 2026-09-16: 15 ms typical, up to
+    1.7 s, per commit at FULL vs. ~0.3 ms at NORMAL). NORMAL still fsyncs at
+    WAL checkpoints, so the database file itself can never be corrupted; the
+    trade is that the last transaction(s) can be lost on a power loss or OS
+    crash between commit and the next checkpoint, which is accepted here.
+    The pragma is per-connection, so ``db_read`` (no commits, nothing to
+    fsync) is deliberately left at the SQLite default.
     """
     with closing(sqlite3.connect(db_path, timeout=SQLITE_BUSY_TIMEOUT_S)) as conn, conn:
+        conn.execute("PRAGMA synchronous=NORMAL")
         yield conn
 
 
