@@ -75,3 +75,24 @@ index already serves it. Orchestrator edits: `isSignalSentinel` in the webapp's
   `mcapp.local` and `ERR_ADDRESS_UNREACHABLE` for `192.168.68.74`, while curl/ssh from the same
   machine work — macOS Local Network permission for Chrome is the likely cause. Popover checks
   1-3 of the bugfix report are still open.
+
+## Wave 2 (orchestrator, 09:50) — the two residuals found in live verification
+
+| Item                                                          | Files                                             | Status |
+| ------------------------------------------------------------- | ------------------------------------------------- | ------ |
+| F2 residual: same-place GPS update wiped the weather cache    | meteo.py (`LOCATION_EPSILON_DEG`), meteo_tests.py | done   |
+| F4 residual: sperrliste `httpx` SSL context built on the loop | commands/handler.py, blocklist_history_tests.py   | done   |
+
+- Live verification over HTTPS in Chrome (v2.0.8-dev.4 bundle, no certificate banner): server-relayed
+  message → `Hardware` + `Firmware` rows, no `MOD`, no `Signal`; LoRa message → `Firmware` +
+  real `Signal` (-119 dBm, -8 dB); a message that arrived live at 09:40 showed `Hardware`,
+  `Firmware` and `Max hops` without reload. That one's stored copy was the BLE half and already
+  carried firmware, so the BUG-2 client merge is proven by its spec, not yet on air.
+- Backend sentinel fix confirmed in the DB: a `udp` chat row stored after the restart holds
+  NULL/NULL where the pre-restart rows hold 0/0.
+- 35 min after the restart: 8 stall rows, all in the startup minute; zero `handler` stalls
+  under traffic since (the previous 14 h averaged four per hour), zero journal errors.
+- The 806 ms `/api/weather` row at 09:37 came from `update_location` bumping the cache
+  generation on an unchanged position (the node's own BLE position beacon), not from the
+  stale path — fixed here. Chrome's earlier `DNS_PROBE_FINISHED_NXDOMAIN` for `mcapp.local`
+  was transient; Caddy and the certificate validated strictly from the Mac throughout.
