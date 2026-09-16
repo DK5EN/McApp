@@ -1,9 +1,10 @@
 # McApp production health log — mcapp.local
 
-> **Status:** Current — newest section: §11 (2026-09-11, v2.0.7 promoted to production).
-> Newest sweep: §11 (2026-09-11 12:15 CEST) — box **all green**, zero findings. Last finding was
+> **Status:** Current — newest section: §12 (2026-09-16, pre-release sweep for v2.0.8).
+> Newest sweep: §12 (2026-09-16 10:21 CEST) — box **all green**, zero findings, one new watch
+> point (**W12**, 24 h link uptime 95.4 % across three same-day restarts). Last finding was
 > **F13** (§7, a 6.07 h `{CET}` uplink outage), upstream and resolved 2026-09-01 18:38 CEST.
-> Open watch points: **W1** (zram swap, 144 MB out — flat), **W2** (live `config.json` stays
+> Open watch points: **W1** (zram swap — now 22 MB out after B4, see §12), **W12** (§12), **W2** (live `config.json` stays
 > `0640` by decision), **W3** (Caddy 12 h certs), **W6** and **W7** (§6, accepted residual risks),
 > **W9** (CI `disabled_manually` in both repos) and **W10** (`@lucide/vue` pinned 1.41.0).
 > **W4** (§3), **W5** (§5), **W8** (§7) and **W11** (§11) are resolved.
@@ -854,3 +855,78 @@ Caddy internal ECC leaf `notBefore Sep 11 09:18 GMT → notAfter 21:18 GMT`, i.e
 are now **30** and **2**. Its `{CET}` cadence of `~303 s` was halved upstream to **606.5 s** on
 2026-08-22 (CLAUDE.md § Gateway Uptime is the authority). Recorded here rather than rewritten in
 place, so the next run can decide whether §1 should be re-baselined.
+
+## 12. 2026-09-16 10:21 CEST — pre-release sweep before promoting v2.0.8-dev.5 to v2.0.8
+
+Sign-off sweep for the **v2.0.8** promotion. Verdict: **all green — zero findings, one new watch
+point (W12).** The box is 13 minutes past the `v2.0.8-dev.5` deploy, so rates are recorded with
+that window and totals are context only. Soak is short by decision: `dev.4` ran 09:13–10:08,
+`dev.5` since 10:08 (two small performance fixes on top of dev.4); the operator chose to promote
+today. Campaign record: `doc/2026-09-16_0900-stall-popover-campaign.md`.
+
+Sequence of the day: `v2.0.8-dev.3` (running since the 2026-09-15 reboot) → `dev.4` (09:13, copied
+bootstrap, `--tag`) → `dev.5` (10:08, same path).
+
+### Anchors
+
+| Anchor              | Value                                                         |
+| ------------------- | ------------------------------------------------------------- |
+| Snapshot            | 2026-09-16 10:21 CEST                                         |
+| Release             | `v2.0.8-dev.5` (`/webapp/version.html` agrees)                |
+| App version         | `v2.0.8` (`/api/status`, dev suffix not carried there)        |
+| Active slot         | **slot-1** (slot-2 `dev.4`, slot-0 `dev.3`)                   |
+| Schema              | **32** = `LATEST_SCHEMA_VERSION` ✓ (migrations 31, 32 ran)    |
+| System epoch        | installed **4** = `REQUIRED_SYSTEM_EPOCH` ✓, no reboot marker |
+| Service start       | 2026-09-16 10:08:52 CEST                                      |
+| `systemd NRestarts` | **0** (mcapp and mcapp-ble)                                   |
+| Host uptime         | 16:47 (rebooted 2026-09-15 for B4) — load 0.08 / 0.09 / 0.12  |
+
+### Measured
+
+| Check                           | Value                | vs §1 baseline                              |
+| ------------------------------- | -------------------- | ------------------------------------------- |
+| `messages` type `msg`           | **4 / h**            | 11 / h — quiet late morning                 |
+| `messages` type `pos`           | **79 / h**           | 87 / h ✓                                    |
+| `signal_log`                    | **302 / h**          | 347 / h ✓                                   |
+| `stall_events`                  | **20 / h**           | new since v2.0.8; all in the restart minute |
+| journal warnings (`-p warning`) | **0 / 24 h**         | 0 / 24 h ✓                                  |
+| unclassified `msg`, last 1 h    | **0**                | 0 ✓                                         |
+| `{CET}` rows in `messages`      | **0**                | 0 ✓                                         |
+| classifier version / rules      | **3** / **38**       | 3 / 38 ✓                                    |
+| `messages` total                | 18 782, newest 10:21 | context                                     |
+| `station_positions`             | 396                  | context                                     |
+| `signal_log` total              | 51 530               | context                                     |
+| DB size / WAL                   | **40.4 MB** / 0.0 MB | far under the 1 GB limit                    |
+| heartbeat age                   | **18 s**             | < 60 s ✓                                    |
+| last `{CET}` beacon             | **344 s** ago        | under the 606.5 s cadence ✓                 |
+
+Link uptime over 24 h: **95.42 % uptime, 100 % coverage**, 67 stored segments (W12: three
+same-day service restarts each reset `last_beacon_ms`; re-read after a quiet day).
+
+Host headroom: disk **8 %** of 59 G; `MemTotal` **462 MB** (was 415 before the B4 CMA change);
+`MemAvailable` **161 MB**; swap **22 MB out** (SwapFree 450 584 of 473 084 kB — W1 improved
+from 144 MB); SoC temperature **45.1 °C**.
+
+Secrets and TLS: `vapid.json` **0600**, raw base64url scalar; `config.json` 0640 (W2); Caddy
+internal ECC leaf `notBefore Sep 16 03:34 GMT → notAfter 15:34 GMT`, mid-life (W3). Strict
+`curl` validation from the Mac passes.
+
+### Absent signals — the zero is the result
+
+- `udp_untrusted_source_ips` **empty**, `udp_multiple_sources` **false**,
+  `udp_suppressed_target_changes` **0**, `udp_target_kind` `identified`.
+- **0** journal warnings in 24 h (`-- No entries --`), **0** tracebacks since the 10:08:52
+  start; the two SSE reconnect lines at 10:08:42/48 belong to the old process's shutdown.
+- **0** unclassified messages, **0** `{CET}` rows, **0** `NRestarts`, **0** `handler` stalls
+  under traffic since the restart (one during the restart itself).
+
+### Watch points
+
+- **W12 (new):** 24 h link uptime 95.42 % with 67 segments after three same-day restarts. Each
+  restart resets `last_beacon_ms`, and the metric's resolution is one 606 s cadence, so this is
+  expected today. Re-read after 24 quiet hours; a value still under ~98 % then is a finding.
+- **W1:** swap out 144 → 22 MB after B4 (§ Memory Footprint in CLAUDE.md). Keep watching the
+  trend; the number is now a healthy baseline, not a squeeze.
+- **W9** unchanged: CI is `disabled_manually` in both repos, so the promotion is signed off on
+  the local gates (ruff, mypy, all suites; eslint, vue-tsc, 3322 vitest cases, prettier), all
+  green on the dependency-updated trees.
