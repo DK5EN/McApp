@@ -61,3 +61,17 @@ index already serves it. Orchestrator edits: `isSignalSentinel` in the webapp's
   `test_meteo_negative_cache` pins that and errors are not the stall.
 - useConnectionManager.ts unchanged: `handleVisibilityResume` already reconnects immediately
   on resume to visible (`reconnectNow()`); the F5 rows fire while still hidden.
+- 09:13 v2.0.8-dev.4 deployed to mcapp.local (slot-2), all 14 health lines OK, both services
+  restarted, every new backend symbol present in the active slot, served webapp bundle carries the
+  `Firmware` row and no `MOD` template.
+- **First F4 attributions, 30 s after restart** (`/api/stalls?kind=loop_lag`), both follow-ups:
+  - 800 ms: `commands/handler.py:272` `_fetch_sperrliste` builds a fresh `httpx.AsyncClient()`
+    per refresh, and `httpx` loads the certifi trust store in `ssl.create_default_context` ON
+    the event loop. The refresh runs every 15 min, so this is a recurring 0.8 s lag. Fix: one
+    long-lived client (or build it under `asyncio.to_thread`).
+  - 1299 ms: a lazy `anyio` import (`anyio/_lazyimport.py`) at startup, filesystem stat storms on
+    the SD card. Startup-only; document, or pre-import in `build_app`.
+- Browser verification blocked: Chrome on the Mac gets `DNS_PROBE_FINISHED_NXDOMAIN` for
+  `mcapp.local` and `ERR_ADDRESS_UNREACHABLE` for `192.168.68.74`, while curl/ssh from the same
+  machine work — macOS Local Network permission for Chrome is the likely cause. Popover checks
+  1-3 of the bugfix report are still open.
