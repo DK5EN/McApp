@@ -207,11 +207,11 @@ class WeatherService:
         self.timeout = HTTP_TIMEOUT_S
         self.max_retries = MAX_RETRIES
 
-        # SSE-06: TTL cache + single-flight guard. get_weather_data() runs via
+        # SSE-06 / F2 (2026-09-16): TTL cache + single-flight guard, now caching
+        # the FULLY ASSEMBLED response (post-fusion, ready to return as-is) and
+        # serving it stale-while-revalidate. get_weather_data() runs via
         # asyncio.to_thread() from multiple concurrent REST requests, so this is a
-        # real threading.Lock (not asyncio.Lock) — held across the whole fetch when
-        # the cache is stale, so concurrent callers block on the one in-flight
-        # fetch instead of each hitting the weather APIs.
+        # real threading.Lock (not asyncio.Lock).
         self._cache: dict[str, Any] | None = None
         self._cache_time: float = 0.0
         self._cache_lock = threading.Lock()
@@ -220,6 +220,14 @@ class WeatherService:
         # — or an in-flight fetch — that belongs to a superseded location is discarded.
         self._cache_generation: int = 0
         self._cached_generation: int = -1
+        # F2 stale-while-revalidate bookkeeping (GOOD cached data only — see
+        # get_weather_data()'s docstring for why the error-cache path is
+        # deliberately excluded and stays synchronous). `_refresh_in_flight`
+        # single-flights the background refresh thread; `_refresh_retry_after`
+        # throttles a FAILED refresh's next attempt to WEATHER_ERROR_CACHE_TTL_S
+        # without ever touching the still-good `_cache`/`_cache_time`.
+        self._refresh_in_flight: bool = False
+        self._refresh_retry_after: float = 0.0
 
         logger.info(
             "WeatherService initialisiert für %s %s/%s, Hybrid-Modus: DWD + OpenMeteo",
@@ -249,27 +257,72 @@ class WeatherService:
         self._cache_generation += 1
 
     def get_weather_data(self, *, bypass_cache: bool = False) -> dict[str, Any]:
-        """Cached hybrid weather fetch (SSE-06).
+        """Cached hybrid weather fetch (SSE-06, stale-while-revalidate since F2).
 
         `bypass_cache=True` is for the mesh `!wx` command (weather_command.py)
         — a ham operator asking for weather over LoRa expects a live reading,
         not a REST-poll-driven cache. REST callers (sse_routes/weather.py's
         `/api/weather` and `/api/weather/preview`) use the default cached path.
-        Error responses (no GPS, all APIs down) are cached too, but only for
-        WEATHER_ERROR_CACHE_TTL_S (negative caching): waiters queued behind the
-        first failing fetch get the cached error back immediately instead of
-        each running their own full fetch serially, while a transient failure
-        still can't outlive its cause by more than the short TTL.
+
+        The cache holds the FULLY ASSEMBLED response — the same dict this
+        method returns, post-fusion — so a warm hit is a lock, a TTL compare
+        and a dict return: no re-fusion, no age/humidity recompute, no solar
+        work. Nothing in the cached dict is refreshed per call either: its
+        `timestamp`/`messzeitpunkt` fields already record when the data was
+        actually fetched/measured, which is correct to leave frozen for the
+        TTL, and the "now"-dependent bits (`_is_daytime` -> solar altitude,
+        cloud-cover text) are never stored here at all — they're computed
+        on demand by `format_for_lora`/`get_verbose_report` from the stored
+        fields and stay out of this cache's scope.
+
+        Three tiers, in order of what a caller sees:
+        1. **Warm** (age < TTL): the cached dict, verbatim, no work at all.
+        2. **Stale, GOOD data cached** (age >= WEATHER_CACHE_TTL_S, no
+           "error" key): the stale dict is returned immediately and exactly
+           one background daemon thread refreshes it (`_refresh_in_flight`
+           single-flights it — an overlapping caller just gets the same
+           stale dict, never a second fetch). A refresh that itself fails
+           does NOT clobber the good stale data with an error payload; it
+           only arms `_refresh_retry_after` so the next attempt waits
+           WEATHER_ERROR_CACHE_TTL_S instead of retrying on every call.
+        3. **No cached data for this generation** (cold start, or the first
+           call after `update_location()`/an error-cache expiry): blocks on
+           `_fetch_weather_data()` synchronously, as before. An error result
+           here is cached under WEATHER_ERROR_CACHE_TTL_S and, deliberately,
+           is NOT promoted to stale-while-revalidate on its own expiry — with
+           nothing good to show in the meantime there is no "stale" value
+           worth serving early, so that case keeps the original synchronous
+           refetch-on-expiry behaviour (pinned by
+           commands/tests.py::test_meteo_negative_cache, which this must not
+           regress).
         """
         if bypass_cache:
             return self._fetch_weather_data()
 
         with self._cache_lock:
             generation = self._cache_generation
-            if self._cache is not None and self._cached_generation == generation:
-                ttl = WEATHER_ERROR_CACHE_TTL_S if "error" in self._cache else WEATHER_CACHE_TTL_S
+            cached = self._cache
+            if cached is not None and self._cached_generation == generation:
+                is_error_cache = "error" in cached
+                ttl = WEATHER_ERROR_CACHE_TTL_S if is_error_cache else WEATHER_CACHE_TTL_S
                 if (time.monotonic() - self._cache_time) < ttl:
-                    return self._cache
+                    return cached
+                if not is_error_cache:
+                    # Good data has gone stale: serve it immediately and kick
+                    # at most one background refresh (see tier 2 above).
+                    now = time.monotonic()
+                    if not self._refresh_in_flight and now >= self._refresh_retry_after:
+                        self._refresh_in_flight = True
+                        threading.Thread(
+                            target=self._refresh_cache_in_background,
+                            args=(generation,),
+                            daemon=True,
+                            name="mcapp-weather-refresh",
+                        ).start()
+                    return cached
+                # Error cache expired: fall through to the synchronous refetch
+                # below, unchanged from the pre-F2 behaviour (tier 3).
+
             data = self._fetch_weather_data()
             # Only publish the result if the location didn't move while we fetched —
             # otherwise this would re-cache weather for the superseded coordinates.
@@ -277,7 +330,42 @@ class WeatherService:
                 self._cache = data
                 self._cache_time = time.monotonic()
                 self._cached_generation = generation
+                self._refresh_retry_after = 0.0
             return data
+
+    def _refresh_cache_in_background(self, generation: int) -> None:
+        """Stale-while-revalidate's background refresh (see get_weather_data()).
+
+        Runs on its own daemon thread, outside `_cache_lock`, since a hybrid
+        fetch can take up to the ~96 s worst case `update_location()`'s
+        docstring documents — the whole point is that no REST caller waits
+        on it. The lock is only taken to read/publish the result.
+        """
+        try:
+            data = self._fetch_weather_data()
+        except Exception:
+            logger.exception("Hintergrund-Wetter-Refresh fehlgeschlagen")
+            data = {
+                "error": "Hintergrund-Refresh fehlgeschlagen",
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+        with self._cache_lock:
+            self._refresh_in_flight = False
+            if self._cache_generation != generation:
+                # Location moved while this refresh was in flight — it belongs
+                # to a superseded location; the caller for the new generation
+                # already ran (or will run) its own synchronous fetch.
+                return
+            if "error" in data:
+                # Do not clobber good stale data with an error payload. Only
+                # throttle the next attempt; `_cache`/`_cache_time` are left
+                # exactly as they were.
+                self._refresh_retry_after = time.monotonic() + WEATHER_ERROR_CACHE_TTL_S
+                return
+            self._cache = data
+            self._cache_time = time.monotonic()
+            self._cached_generation = generation
+            self._refresh_retry_after = 0.0
 
     def _fetch_weather_data(self) -> dict[str, Any]:  # noqa: PLR0912, PLR0915 - complex handler kept intact
         """

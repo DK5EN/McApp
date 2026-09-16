@@ -9,11 +9,14 @@ from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import APIRouter, HTTPException
 
+from ..logging_setup import get_logger
 from ..meteo import is_valid_position
 from ..util import now_ms
 
 if TYPE_CHECKING:
     from ..sse_handler import SSEManager
+
+logger = get_logger(__name__)
 
 TELEMETRY_MAX_HOURS = 744
 
@@ -29,6 +32,23 @@ def _get_tz_finder() -> Any:
 
         _tz_finder = TimezoneFinder()
     return _tz_finder
+
+
+def warm_timezone_finder() -> None:
+    """F3a: pre-construct the TimezoneFinder singleton off the request path.
+
+    `_get_tz_finder()`'s first call costs ~3.9 s (loading its dataset), which
+    otherwise lands on whichever request happens to hit `/api/timezone` first.
+    This just does that construction eagerly. It is NOT wired into startup
+    here — `main.py`'s `build_app()` (orchestrator-owned) is expected to call
+    `asyncio.to_thread(warm_timezone_finder)` once. Never raises: a failure
+    here just means the lazy path in `_get_tz_finder()` pays the cost later,
+    same as today.
+    """
+    try:
+        _get_tz_finder()
+    except Exception:
+        logger.debug("warm_timezone_finder: TimezoneFinder warm-up failed", exc_info=True)
 
 
 def build_weather_router(manager: SSEManager) -> APIRouter:
