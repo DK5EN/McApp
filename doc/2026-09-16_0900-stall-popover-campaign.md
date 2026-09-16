@@ -96,3 +96,14 @@ index already serves it. Orchestrator edits: `isSignalSentinel` in the webapp's
   generation on an unchanged position (the node's own BLE position beacon), not from the
   stale path — fixed here. Chrome's earlier `DNS_PROBE_FINISHED_NXDOMAIN` for `mcapp.local`
   was transient; Caddy and the certificate validated strictly from the Mac throughout.
+- 10:08 v2.0.8-dev.5 deployed (slot-1), all health lines OK, both wave-2 symbols in the active
+  slot. Stall rows since: startup minute only (loop_lag up to 1.1 s during imports, one cold
+  `/api/weather` fetch at 706 ms, one `handler` 568 ms during the restart itself); warm
+  `/api/weather` is 0 ms server-side and the journal shows exactly one upstream fetch. The
+  startup loop_lag rows carried no stack this time — a blocker that holds the GIL in C
+  (imports, JSON) cannot be sampled; known F4 limit.
+- Under dev.4 (09:13-10:08) exactly one `handler` stall in 55 min (755 ms, 09:53), against
+  four per hour before F1.
+- Firmware handover for BUG-2 cause B written to
+  `~/Desktop/2026-09-16_firmware-extudp-hw-id-on-text-frames.md`, including why a
+  non-subscribed group never gets a BLE copy (`lora_functions.cpp:1185` / `CheckOwnGroup`).
