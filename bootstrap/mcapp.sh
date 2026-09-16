@@ -33,7 +33,10 @@ readonly SCRIPT_VERSION="2.6.0"
 # front door). Bump this when setup_system/install_packages output changes in
 # a way existing installs must converge to. Independent of the app version
 # and of the DB schema version.
-readonly SYSTEM_EPOCH=2
+# Epoch 3 (B4): boot memory config, journald 8M, unattended-upgrades hook
+# off, direct venv exec, MALLOC_ARENA_MAX.
+# Epoch 4: Caddy GOMEMLIMIT/GOGC drop-in (the distro unit ignores the template).
+readonly SYSTEM_EPOCH=4
 
 # Detect piped mode (curl | bash) — BASH_SOURCE is empty when piped
 # SCRIPT_DIR is intentionally NOT readonly: source_libs() overwrites it with

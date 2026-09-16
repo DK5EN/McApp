@@ -1,0 +1,254 @@
+# Store-and-forward DM status (`failed` / `held`) — MCProxy implementation plan
+
+Status: approved 2026-09-14, **backend complete** the same day (waves 1-4, §7). Webapp and
+mc-chat client work still open (§8).
+Source spec: `MeshCom-Firmware-DEV-Main/docs/client-integration-store-forward.md`
+(firmware fork-main `150b0a4a`, stages 0, 2.1, 3, 4 of `docs/dm-transport-impl-plan-20260913.md`).
+
+## 1. BLUF
+
+Five new facts must reach the webapp: status `0x03 failed`, `0x04 held`, the holder callsign, a
+durable per-message status that survives a reload, and precedence so a late `acked` always wins.
+That needs schema v31, a rank-based write in `_handle_ack`, two new `ack_kind` values, and one
+push-contract bump in mc-chat.
+
+Store-node **configuration** (spec §5) and `held` synthesis from the legacy `:sto` text are
+deliberately out of scope — see §6.
+
+## 2. Surface, by file
+
+| Area                                            | Change                                                                        |
+| ----------------------------------------------- | ----------------------------------------------------------------------------- |
+| `ble_protocol.py`                               | `ACK_KIND_BY_TYPE` / `ACK_TEXT_BY_TYPE` += `0x03 failed`, `0x04 held`         |
+| `storage/migrations.py`, `storage/constants.py` | v31: `messages.delivery_status TEXT`, `messages.holder TEXT`; bump to 31      |
+| `storage/ingest.py`                             | `_handle_ack`: failed/held branches, precedence write, ledger rows, SSE shape |
+| `storage/constants.py` `_MSG_SELECT`            | surface the two columns in history (`query.py` needed no change, see below)   |
+| `udp_handler.py`                                | extUDP ack datagram accepts status 3/4 (free — gate reads `ACK_KIND_BY_TYPE`) |
+| mc-chat `contract/push_contract.json` → subtree | v10: noise clause widens `:ack` → `:ack` / `:rej` / `:sto`                    |
+| `push_delivery.py`                              | that widened predicate                                                        |
+
+Frame decoding needs **no** change. `parse_ack_appendix` already walks the frame by its length
+byte, `_ACK_APPENDIX_MAX_LEN = 10` is a superset of the spec's `n <= 9`, and an unrecognised
+status byte already falls through to `unknown(...)`. The spec's §6 byte vectors are therefore
+pinned as tests, not implemented as new code.
+
+`query.py` likewise turned out to need no change: every path that builds message JSON
+(`get_smart_initial_with_summary`, `get_messages_page`, `get_smart_initial`, `get_full_dump`)
+interpolates `_MSG_SELECT`, and none hand-lists columns. Checked, not assumed — worth knowing,
+because it means the next message column is free here too.
+
+## 3. Two defects the current code has the moment `0x03` arrives
+
+1. **`_handle_ack` sets `send_success = 1` unconditionally, for every ack type.** A `failed` frame
+   would mark the message transport-confirmed — the exact inversion of what it means. `failed`
+   must leave `send_success` alone. `held` may set it: a store node demonstrably took the frame
+   off the air.
+2. **The non-`0x02` branch publishes `sent: True`.** For `failed` that is a lie on a field the
+   webapp already renders. The `failed` event carries no `sent` key at all.
+
+## 4. Precedence: one integer rank, applied on write
+
+The spec's five prose rules in §2 collapse to a monotone rank, which is the only form that
+survives out-of-order frames:
+
+```
+sent / node / gateway = 1     held = 2     failed = 3     acked = 4
+```
+
+`delivery_status` / `holder` are written only when `new_rank > rank(current)`. That yields every
+rule in spec §2 and every sequence in spec §6 — `held → acked` ends acked, `acked → held` stays
+acked, `failed → acked` ends acked — with no special case.
+
+**The rank test lives in the UPDATE's own WHERE clause, not in a read-then-write.** One statement,
+with the stored status mapped to its rank by a SQL `CASE` (NULL falls to the `ELSE 0`). That is
+what makes two acks for the same message race-proof: whichever commits first, the loser's UPDATE
+matches zero rows instead of overwriting a higher rank from a stale read. `_DELIVERY_STATUS_RANK`
+in `storage/ingest.py` is the single source and the `CASE` is built from it, so the SQL and any
+Python lookup cannot drift. Rank 1 (`sent`/`node`/`gateway`) is an implicit baseline: no branch
+ever writes the literal `"sent"` into the column, so it is deliberately absent from the dict.
+
+**Deviation from the spec, deliberate: equal rank does not overwrite.** `held(A)` followed by
+`held(B)` leaves the stored holder at A, while spec §2 says to "show the most recent holder". A
+strict `>` is precisely what buys the race-proofness above, and a `>=` would reintroduce
+last-writer-wins on out-of-order frames. The information is not lost — `message_acks` keeps both
+holders as separate rows, which is the same place spec §2's "keep the others if you have room"
+points at. If the rendered holder ever needs to be the newest one, read it from that ledger rather
+than loosening this comparison.
+
+`holder` is written through `COALESCE(?, holder)`, so an unattributed frame (`n == 0`, no
+appendix) never blanks a holder that is already known. This matters most on the `acked` write: a
+peer ack with no appendix must not erase the store node recorded by an earlier `held`.
+
+`messages.acked` and `messages.send_success` stay the single flags the bubble renders;
+`delivery_status` is the detail behind them, exactly as `message_acks` is the detail behind
+`send_success`.
+
+`message_acks` also gains `kind='failed'` / `kind='held'` rows (`from_call` = destination /
+holder). Its `(msg_id, kind, from_call)` primary key collapses the firmware's hourly `held` repeat
+per holder for free, while two _different_ holders stay two rows — which spec §2 asks for.
+
+## 5. `msg_status` SSE payloads
+
+Cases 1-6 of `storage/ack_status_tests.py` stay byte-identical; these are new shapes only.
+
+```
+failed:  {msg_id, acked: false, failed: true, ack_kind: "failed", from: <destination>}
+held:    {msg_id, sent: true, ack_kind: "held", from: <holder>, holder: <holder>}
+```
+
+`holder` is a deliberate alias of `from` on the `held` event. The spec names it, and the webapp
+reads it without having to know this repo's attribution convention. The cost is one duplicated
+key on one event.
+
+**`acked: false` on the `failed` event is load-bearing, not decoration.** The webapp's
+`msg:status` handler (`src/stores/messages.ts`, the branch after the `data.sent !== undefined`
+one) treats _any_ event that carries no `sent` key and does not carry `acked === false` as a peer
+acknowledgement, and patches the bubble to `msg_ack: true` — ✓✓ Delivered. A `failed` event
+without `acked: false` would therefore render the one thing it is meant to deny, on every webapp
+build that predates the frontend change. `acked: false` is already documented there as an explicit
+no-op, so the key makes today's frontend ignore the event instead of inverting it. Do not drop it
+once the webapp learns `ack_kind: "failed"` — it stays the compatibility floor.
+
+The `held` event needs no such guard: `sent: true` sends it down the transport branch, which marks
+the bubble sent and appends the ack without claiming delivery. That is already the honest rendering
+of `held` on an un-updated webapp.
+
+**No reuse of the existing `send_failed` event.** `MessageRouter._publish_send_failed`
+(`main.py`) emits `{send_failed: true, dst, msg, ...}` for a LOCAL send failure — before the node
+has assigned a msg_id, which is why the webapp matches it by `dst` + `msg` content. The firmware's
+`0x03` is a different fact (the frame went out, the mesh gave up) and it _has_ a msg_id, so it
+must not be squeezed into a content-matched event. The webapp change will set the same
+`send_failed` / `send_fail_reason` display fields from the new msg_id-keyed branch; the wire
+events stay distinct.
+
+## 6. Decisions (approved 2026-09-14)
+
+### 6.1 Status-driven push notifications are NOT in this plan
+
+Spec §4 wants a push on `failed` ("not delivered to X") and on `acked`-after-`held` ("delivered to
+X after being held by Y"). Today `push_delivery.py` subscribes to inbound **mesh messages**;
+pushing on `msg_status` is a second, differently-shaped source with its own eligibility, dedup and
+payload questions, and `acked`-after-`held` additionally needs a history lookup at push time to
+know there was a holder.
+
+That is its own plan. This one ships the honest status everywhere it is _displayed_; push stays
+silent about delivery status. The only push change here is the noise-filter widening in §2, which
+is about suppressing `:rej` / `:sto` chatter, not about announcing status.
+
+### 6.2 No `held` synthesis from the legacy `:sto` text
+
+Spec §3 recommends treating a `^\S{1,9}\s*:sto\d{3}( \S+)?$` DM as informational — but only "from
+a node that never sends `0x04`", a condition we cannot cheaply establish. Synthesising `held` from
+the text unconditionally would double-count on fork firmware, which consumes the text and emits
+`0x04` instead.
+
+So the text stays an ordinary, visible DM. `query.py`'s history exclusion is
+`msg NOT GLOB '*:ack[0-9]*'`, which does not match `:sto` — history therefore already behaves as
+spec §3 demands ("never filter it silently") with no change. Contract v10 makes it push-silent.
+If an old node stays in the fleet and the operator wants the state rendered, synthesising `held`
+from the text is a one-line follow-up on top of §4's rank write.
+
+### 6.3 Store-node configuration (spec §5) is out of scope
+
+`--store` / `--storecall` / `--storetime` / `--storeslots` / `--storenotice`, the `--mbox` dump,
+the `[STORE];…` console lines and the `/?page=mailbox` GUI are a separate feature: configuring and
+inspecting a store node, not showing DM status. Spec §5 says so itself.
+
+The spec's open question — a `STORE` / `STON` field in the `SN` node-settings JSON frame — is
+answered in `MeshCom-Firmware-DEV-Main/docs/client-integration-store-forward.md` §5.1 rather than
+here, because it is a firmware decision this repo only consumes.
+
+### 6.4 The webapp is a separate repo and a separate change
+
+This plan changes the `msg_status` wire shape and adds two history fields. Nothing renders `held`
+or `failed` until `/Users/martinwerner/WebDev/webapp` follows.
+
+Order of work as planned was backend, then webapp, then mc-chat. It ran backend, then **mc-chat**,
+then webapp — which was the better order and would have been worth planning that way. mc-chat is
+the second _producer_ of these events; doing it while the wire shapes were still fresh meant the
+two backends were pinned against each other before any consumer existed to paper over a
+divergence. The webapp is a pure consumer and could only ever have been last.
+
+## 7. Waves
+
+Dispatched with `/orchestrate-waves`; disjoint file sets per wave, full gate after each wave,
+orchestrator-only commits.
+
+**Wave 1** (parallel)
+
+- 1A: `ble_protocol.py`, `ble_protocol_tests.py` — status maps; spec §6's three byte vectors
+  pinned as decode tests.
+- 1B: `storage/migrations.py`, `storage/constants.py` (`LATEST_SCHEMA_VERSION`),
+  `storage/migration_chain_tests.py` — migration 31, constant bumped in the same commit.
+
+**Wave 2** (parallel)
+
+- 2A: `storage/ingest.py`, `storage/ack_status_tests.py` — the two branches, the rank write, the
+  ledger rows, the payloads of §5; new cases covering spec §6's three precedence sequences.
+- 2B: `udp_handler.py`, `udp_parsing_tests.py` — extUDP status 3/4 vectors (behaviour arrives free
+  from 1A; the tests pin it).
+
+**Wave 3** (parallel)
+
+- 3A: `storage/constants.py` (`_MSG_SELECT`), `storage/query.py`, `storage/query_tests.py` —
+  `held` / `failed` survive a reload.
+- 3B (orchestrator, two repos): push contract **v10** in mc-chat, `git subtree split` +
+  `git subtree pull` here, widened noise predicate in `push_delivery.py`, new vectors, re-captured
+  sha256 in `push_tests.py` — pull and hash in one commit.
+
+**Wave 4** — `CLAUDE.md` section, this document's final state, prettier then
+`ruff format --check .`, full gate.
+
+Gate after every wave: `uvx ruff check`, `uvx ruff format --check .`,
+`uv run mypy src/mcapp ble_service/src`, `uv run python scripts/run_startup_tests.py`.
+
+### As built (2026-09-14)
+
+All four waves ran the same day. Commits on `development`:
+
+| Commit    | Wave | Contents                                                              |
+| --------- | ---- | --------------------------------------------------------------------- |
+| `0d01172` | 1    | status maps + §6 byte vectors; migration v31; `LATEST_SCHEMA_VERSION` |
+| `db7f517` | 2    | `_handle_ack` branches, rank write, ledger, payloads; extUDP vectors  |
+| `2ca1fe4` | 3B   | contract v10 subtree pull + widened predicate + re-pinned sha256      |
+| `2fedea1` | 3A   | `_MSG_SELECT`, history round-trip tests                               |
+| `baa97d1` | 4    | CLAUDE.md section, this document                                      |
+
+Sibling repos: mc-chat `5f18e10` (contract v10, its own predicate, sha re-pin, split to
+`contract-subtree`); firmware `c55e595c` (§5.1/§5.2 of the client guide).
+
+Two things went differently from §7 and are worth knowing:
+
+- **Wave 2B made no logic change at all.** Widening `ACK_KIND_BY_TYPE` in wave 1 had already
+  widened the extUDP gate, because that gate tests membership in the shared map rather than
+  listing bytes. 2B became documentation plus the vectors that pin it — including the guard that
+  a status outside the map is still rejected, so "the gate still gates" is asserted rather than
+  assumed.
+- **Wave 3B ran as one orchestrator task across two repos**, not as a writer agent: the contract
+  edit has to start in mc-chat, and the `subtree pull` plus the re-captured sha256 must land in a
+  single commit or the drift tripwire is red in between.
+
+Verification beyond the suites: the precedence SQL was driven directly through all three spec §6
+sequences plus `held(A) → held(B)` and the unattributed-frame case, and `:sto` was confirmed
+push-ineligible while still passing `query.py`'s history filter.
+
+## 8. Follow-up, not in this plan
+
+- **The webapp's hand copy of the push contract is at v9 and MUST be synced.**
+  `webapp/src/pwa/__tests__/push_contract.json` is a third copy (the repo has no access to the
+  subtree), pinned by `src/pwa/__tests__/pushFilter.spec.ts`, and `src/pwa/pushFilter.ts`'s
+  `isNodeLocalNoise()` mirrors the predicate for the foreground-sound decision. Until both are
+  updated, an open webapp still chimes on a `:sto` hold notice that both backends now suppress.
+- Webapp rendering of `held` / `failed` (§6.4). It must learn `ack_kind: "held"` (show the holder)
+  and `ack_kind: "failed"` (drive the existing `send_failed` / `send_fail_reason` display fields
+  from a msg_id-keyed branch), and read `delivery_status` / `holder` from history on reload.
+- ~~mc-chat~~ — **done** 2026-09-14 (`7c665bb`, `2a11f46`, `1ae794b`), plan
+  `mc-chat/doc/2026-09-14_store-forward-dm-status.md`. Note for anyone reading the firmware spec:
+  **its §4 mc-chat checklist is wrong on this point.** It says `_decode_aprs_struct()` should
+  "implement the frame from section 2", or else "rely on MCProxy's `msg_status` SSE event".
+  Neither is possible — mc-chat has no phone link, so the `0x41` status frame never reaches it,
+  and it is an independent backend that does not talk to MCProxy. (The `0x41` in its decoder is
+  the on-air APRS ACK packet type, a different `0x41`.) mc-chat's only source is the `:sto` /
+  `:ack` TEXTS of spec §3, which is what it now implements. Fed back in the firmware doc §5.3.
+- Status-driven push notifications (§6.1).
+- Store-node configuration surfaces (§6.3).

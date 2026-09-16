@@ -47,6 +47,7 @@ from typing import Any
 
 from ..logging_setup import get_logger
 from ..sqlite_storage import create_sqlite_storage
+from .constants import DEDUP_WINDOW_MS, HELD_ACK_WINDOW_MS
 
 logger = get_logger(__name__)
 
@@ -181,7 +182,13 @@ async def run_ack_status_tests() -> bool:  # noqa: PLR0915 - seven independent A
                 "msg_id": "REPLY001",
                 "src": "DL3NCU-1",
                 "dst": "DK5EN-98",
-                "msg": "DL3NCU-1 :ack087",
+                # Real firmware layout is `%-9.9s:ack%03i` where the padded
+                # field is the ORIGINAL SENDER, not the acking station — see
+                # live capture 'DL2JA-73 :ack746' answering DL2JA-73's DM.
+                # Nothing parses that field (the match keys on the FRAME's
+                # src/dst, which carry no 9-char truncation), but a fixture
+                # that misstates the wire is bad documentation.
+                "msg": "DK5EN-98 :ack087",
                 "type": "msg",
                 "src_type": "lora",
                 "timestamp": _BASE_TS + 6,
@@ -485,6 +492,801 @@ async def run_ack_status_tests() -> bool:  # noqa: PLR0915 - seven independent A
                 (
                     "message_acks: an ack for an unknown msg_id records nothing",
                     await storage.get_message_acks("NEVER001") == [],
+                )
+            )
+
+            # --- Store-and-forward DM status (0x03 failed / 0x04 held),
+            # doc/2026-09-14_1153-store-forward-dm-status-plan.md §4/§5;
+            # firmware spec MeshCom-Firmware-DEV-Main/docs/client-integration-
+            # store-forward.md §2/§6. ---
+
+            # 8. Binary Failed ACK (ack_type=0x03), attributed to the
+            #    destination: send_success is NEVER set (defect 1 in the
+            #    plan — a failed frame is the mesh giving up, not transport
+            #    confirmation), delivery_status/holder persist, the
+            #    msg_status payload carries acked=False/failed=True (the
+            #    compatibility-floor key, plan §5) and NO "sent" key, and the
+            #    ledger gets a kind="failed" row.
+            router.published.clear()
+            outbound_failed = {
+                "msg_id": "FAIL0001",
+                "src": "DK5EN-98",
+                "dst": "DL3NCU-1",
+                "msg": "hello",
+                "type": "msg",
+                "src_type": "ble",
+                "timestamp": _BASE_TS + 20,
+            }
+            await storage.store_message(outbound_failed, "{}")
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "FAIL0001",
+                    "ack_type": 0x03,
+                    "ack_type_text": "Send Failed",
+                    "ack_from": "DL3NCU-1",
+                    "ack_via": "lora",
+                    "timestamp": _BASE_TS + 21,
+                },
+                "{}",
+            )
+            failed_row = await _row("FAIL0001")
+            failed_events = _msg_status_events()
+            results.append(
+                (
+                    "0x03 failed: send_success is NEVER set (defect 1)",
+                    failed_row is not None and failed_row.get("send_success") != 1,
+                )
+            )
+            results.append(
+                (
+                    "0x03 failed: delivery_status='failed', holder=destination",
+                    failed_row is not None
+                    and failed_row.get("delivery_status") == "failed"
+                    and failed_row.get("holder") == "DL3NCU-1",
+                )
+            )
+            results.append(
+                (
+                    (
+                        '0x03 failed: publishes {"acked": False, "failed": True,'
+                        ' "ack_kind": "failed", "from"/"via"}, no "sent"'
+                    ),
+                    failed_events
+                    == [
+                        {
+                            "msg_id": "FAIL0001",
+                            "acked": False,
+                            "failed": True,
+                            "ack_kind": "failed",
+                            "from": "DL3NCU-1",
+                            "via": "lora",
+                        }
+                    ],
+                )
+            )
+            failed_acks = await storage.get_message_acks("FAIL0001")
+            results.append(
+                (
+                    "0x03 failed: message_acks gets a kind='failed' row",
+                    [(a["kind"], a["from"]) for a in failed_acks] == [("failed", "DL3NCU-1")],
+                )
+            )
+
+            # 9. Binary Held ACK (ack_type=0x04), attributed to the store
+            #    node holding the DM: send_success IS set (the store node
+            #    demonstrably took the frame off the air), delivery_status/
+            #    holder persist, the payload carries sent=True plus BOTH
+            #    "from" and "holder" (deliberate alias, plan §5), and the
+            #    ledger gets a kind="held" row.
+            router.published.clear()
+            outbound_held = {
+                "msg_id": "HELD0001",
+                "src": "DK5EN-98",
+                "dst": "DL3NCU-1",
+                "msg": "hello",
+                "type": "msg",
+                "src_type": "ble",
+                "timestamp": _BASE_TS + 22,
+            }
+            await storage.store_message(outbound_held, "{}")
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "HELD0001",
+                    "ack_type": 0x04,
+                    "ack_type_text": "Store Held",
+                    "ack_from": "OE1STO-1",
+                    "ack_via": "lora",
+                    "timestamp": _BASE_TS + 23,
+                },
+                "{}",
+            )
+            held_row = await _row("HELD0001")
+            held_events = _msg_status_events()
+            results.append(
+                (
+                    "0x04 held: send_success=1 (store node took the frame off the air)",
+                    held_row is not None and held_row.get("send_success") == 1,
+                )
+            )
+            results.append(
+                (
+                    "0x04 held: delivery_status='held', holder=store node",
+                    held_row is not None
+                    and held_row.get("delivery_status") == "held"
+                    and held_row.get("holder") == "OE1STO-1",
+                )
+            )
+            results.append(
+                (
+                    (
+                        '0x04 held: publishes {"sent": True, "ack_kind": "held", "from" AND'
+                        ' "holder" both set to the store node}'
+                    ),
+                    held_events
+                    == [
+                        {
+                            "msg_id": "HELD0001",
+                            "sent": True,
+                            "ack_kind": "held",
+                            "from": "OE1STO-1",
+                            "via": "lora",
+                            "holder": "OE1STO-1",
+                        }
+                    ],
+                )
+            )
+            held_acks = await storage.get_message_acks("HELD0001")
+            results.append(
+                (
+                    "0x04 held: message_acks gets a kind='held' row",
+                    [(a["kind"], a["from"]) for a in held_acks] == [("held", "OE1STO-1")],
+                )
+            )
+            # `_build_message_dict` surfaces both new columns so they survive
+            # a reload (plan §2 surface table) — assert directly on it rather
+            # than only through the row, since that's the function the
+            # client-facing message JSON is actually built from.
+            assert held_row is not None  # narrows for mypy; S101 is ignored for *_tests.py
+            held_dict = storage._build_message_dict(held_row)
+            results.append(
+                (
+                    "_build_message_dict surfaces delivery_status/holder for a held message",
+                    held_dict.get("delivery_status") == "held"
+                    and held_dict.get("holder") == "OE1STO-1",
+                )
+            )
+
+            # 10. Spec §6 sequence 1: held -> acked ends acked. The second
+            #     frame (peer ack, unattributed) must NOT blank the holder
+            #     the held frame stored — COALESCE(NULL, holder) leaves it.
+            router.published.clear()
+            outbound_seq1 = {
+                "msg_id": "SEQ10001",
+                "src": "DK5EN-98",
+                "dst": "DL3NCU-1",
+                "msg": "hello",
+                "type": "msg",
+                "src_type": "ble",
+                "timestamp": _BASE_TS + 24,
+            }
+            await storage.store_message(outbound_seq1, "{}")
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "SEQ10001",
+                    "ack_type": 0x04,
+                    "ack_type_text": "Store Held",
+                    "ack_from": "OE1STO-1",
+                    "timestamp": _BASE_TS + 25,
+                },
+                "{}",
+            )
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "SEQ10001",
+                    "ack_type": 0x02,
+                    "ack_type_text": "Peer ACK",
+                    "timestamp": _BASE_TS + 26,
+                },
+                "{}",
+            )
+            seq1_row = await _row("SEQ10001")
+            results.append(
+                (
+                    "spec §6 sequence held -> acked: ends acked",
+                    seq1_row is not None and seq1_row.get("delivery_status") == "acked",
+                )
+            )
+            results.append(
+                (
+                    (
+                        "spec §6 sequence held -> acked: an unattributed acked does"
+                        " NOT blank the holder the held frame stored"
+                    ),
+                    seq1_row is not None and seq1_row.get("holder") == "OE1STO-1",
+                )
+            )
+
+            # 11. Spec §6 sequence 2: acked -> held stays acked. The later
+            #     held frame's rank (2) does not exceed the stored acked
+            #     rank (4), so delivery_status/holder are left untouched —
+            #     but the held frame still gets its own msg_status event and
+            #     its own message_acks ledger row (publish/ledger are gated
+            #     on "row exists", not on the rank test winning).
+            router.published.clear()
+            outbound_seq2 = {
+                "msg_id": "SEQ20001",
+                "src": "DK5EN-98",
+                "dst": "DL3NCU-1",
+                "msg": "hello",
+                "type": "msg",
+                "src_type": "ble",
+                "timestamp": _BASE_TS + 27,
+            }
+            await storage.store_message(outbound_seq2, "{}")
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "SEQ20001",
+                    "ack_type": 0x02,
+                    "ack_type_text": "Peer ACK",
+                    "ack_from": "DL3NCU-1",
+                    "timestamp": _BASE_TS + 28,
+                },
+                "{}",
+            )
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "SEQ20001",
+                    "ack_type": 0x04,
+                    "ack_type_text": "Store Held",
+                    "ack_from": "OE1STO-2",
+                    "timestamp": _BASE_TS + 29,
+                },
+                "{}",
+            )
+            seq2_row = await _row("SEQ20001")
+            seq2_events = _msg_status_events()
+            results.append(
+                (
+                    (
+                        "spec §6 sequence acked -> held: stays acked (rank 2 does"
+                        " not exceed the stored rank 4)"
+                    ),
+                    seq2_row is not None
+                    and seq2_row.get("delivery_status") == "acked"
+                    and seq2_row.get("holder") == "DL3NCU-1",
+                )
+            )
+            results.append(
+                (
+                    (
+                        "spec §6 sequence acked -> held: the held frame still"
+                        " publishes its own msg_status event"
+                    ),
+                    len(seq2_events) == 2  # two acks sent, two events expected
+                    and seq2_events[1].get("ack_kind") == "held",
+                )
+            )
+            seq2_acks = await storage.get_message_acks("SEQ20001")
+            results.append(
+                (
+                    (
+                        "spec §6 sequence acked -> held: message_acks still gets the"
+                        " held row even though delivery_status didn't move"
+                    ),
+                    [(a["kind"], a["from"]) for a in seq2_acks]
+                    == [("peer", "DL3NCU-1"), ("held", "OE1STO-2")],
+                )
+            )
+
+            # 12. Spec §6 sequence 3: failed -> acked ends acked.
+            router.published.clear()
+            outbound_seq3 = {
+                "msg_id": "SEQ30001",
+                "src": "DK5EN-98",
+                "dst": "DL3NCU-1",
+                "msg": "hello",
+                "type": "msg",
+                "src_type": "ble",
+                "timestamp": _BASE_TS + 30,
+            }
+            await storage.store_message(outbound_seq3, "{}")
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "SEQ30001",
+                    "ack_type": 0x03,
+                    "ack_type_text": "Send Failed",
+                    "ack_from": "DL3NCU-1",
+                    "timestamp": _BASE_TS + 31,
+                },
+                "{}",
+            )
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "SEQ30001",
+                    "ack_type": 0x02,
+                    "ack_type_text": "Peer ACK",
+                    "ack_from": "DL3NCU-1",
+                    "timestamp": _BASE_TS + 32,
+                },
+                "{}",
+            )
+            seq3_row = await _row("SEQ30001")
+            results.append(
+                (
+                    (
+                        "spec §6 sequence failed -> acked: ends acked, and send_success"
+                        " is set by the peer ack that followed"
+                    ),
+                    seq3_row is not None
+                    and seq3_row.get("delivery_status") == "acked"
+                    and seq3_row.get("send_success") == 1,
+                )
+            )
+
+            # 13. held(A) -> held(B): equal rank, so the stored holder does
+            #     NOT change (stays A) — deliberate trade-off for a
+            #     race-proof precedence scheme, see _write_delivery_status.
+            #     Both holders are preserved as two message_acks rows, and
+            #     both frames publish their own msg_status event.
+            router.published.clear()
+            outbound_ab = {
+                "msg_id": "HELDAB01",
+                "src": "DK5EN-98",
+                "dst": "DL3NCU-1",
+                "msg": "hello",
+                "type": "msg",
+                "src_type": "ble",
+                "timestamp": _BASE_TS + 33,
+            }
+            await storage.store_message(outbound_ab, "{}")
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "HELDAB01",
+                    "ack_type": 0x04,
+                    "ack_type_text": "Store Held",
+                    "ack_from": "OE1STO-A",
+                    "timestamp": _BASE_TS + 34,
+                },
+                "{}",
+            )
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "HELDAB01",
+                    "ack_type": 0x04,
+                    "ack_type_text": "Store Held",
+                    "ack_from": "OE1STO-B",
+                    "timestamp": _BASE_TS + 35,
+                },
+                "{}",
+            )
+            ab_row = await _row("HELDAB01")
+            ab_events = _msg_status_events()
+            results.append(
+                (
+                    "held(A) -> held(B): stored holder stays A (equal rank does not overwrite)",
+                    ab_row is not None
+                    and ab_row.get("delivery_status") == "held"
+                    and ab_row.get("holder") == "OE1STO-A",
+                )
+            )
+            results.append(
+                (
+                    "held(A) -> held(B): both frames still publish their own msg_status event",
+                    len(ab_events) == 2  # two held frames, two events expected
+                    and [e.get("holder") for e in ab_events] == ["OE1STO-A", "OE1STO-B"],
+                )
+            )
+            ab_acks = await storage.get_message_acks("HELDAB01")
+            results.append(
+                (
+                    "held(A) -> held(B): message_acks preserves BOTH holders as two rows",
+                    [(a["kind"], a["from"]) for a in ab_acks]
+                    == [("held", "OE1STO-A"), ("held", "OE1STO-B")],
+                )
+            )
+
+            # 14. Unattributed (n=0) failed and held frames: no "from"/"holder"
+            #     keys on the event, and the ledger row's from_call is '' ->
+            #     surfaced as None by get_message_acks.
+            router.published.clear()
+            outbound_unattr_failed = {
+                "msg_id": "UFAIL001",
+                "src": "DK5EN-98",
+                "dst": "DL3NCU-1",
+                "msg": "hello",
+                "type": "msg",
+                "src_type": "ble",
+                "timestamp": _BASE_TS + 36,
+            }
+            await storage.store_message(outbound_unattr_failed, "{}")
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "UFAIL001",
+                    "ack_type": 0x03,
+                    "ack_type_text": "Send Failed",
+                    "timestamp": _BASE_TS + 37,
+                },
+                "{}",
+            )
+            outbound_unattr_held = {
+                "msg_id": "UHELD001",
+                "src": "DK5EN-98",
+                "dst": "DL3NCU-1",
+                "msg": "hello",
+                "type": "msg",
+                "src_type": "ble",
+                "timestamp": _BASE_TS + 38,
+            }
+            await storage.store_message(outbound_unattr_held, "{}")
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "UHELD001",
+                    "ack_type": 0x04,
+                    "ack_type_text": "Store Held",
+                    "timestamp": _BASE_TS + 39,
+                },
+                "{}",
+            )
+            unattr_events = _msg_status_events()
+            results.append(
+                (
+                    'unattributed 0x03/0x04: no "from"/"holder" keys on either event',
+                    unattr_events
+                    == [
+                        {
+                            "msg_id": "UFAIL001",
+                            "acked": False,
+                            "failed": True,
+                            "ack_kind": "failed",
+                        },
+                        {"msg_id": "UHELD001", "sent": True, "ack_kind": "held"},
+                    ],
+                )
+            )
+            unattr_failed_row = await _row("UFAIL001")
+            unattr_held_row = await _row("UHELD001")
+            results.append(
+                (
+                    "unattributed 0x03/0x04: delivery_status still persists, holder stays NULL",
+                    unattr_failed_row is not None
+                    and unattr_failed_row.get("delivery_status") == "failed"
+                    and unattr_failed_row.get("holder") is None
+                    and unattr_held_row is not None
+                    and unattr_held_row.get("delivery_status") == "held"
+                    and unattr_held_row.get("holder") is None,
+                )
+            )
+            unattr_failed_acks = await storage.get_message_acks("UFAIL001")
+            unattr_held_acks = await storage.get_message_acks("UHELD001")
+            results.append(
+                (
+                    "unattributed 0x03/0x04: message_acks from_call is '' -> surfaced as None",
+                    [(a["kind"], a["from"]) for a in unattr_failed_acks] == [("failed", None)]
+                    and [(a["kind"], a["from"]) for a in unattr_held_acks] == [("held", None)],
+                )
+            )
+
+            # 15. Regression: a `held` message later acked by an INLINE
+            #     `:ackNNN` TEXT frame (not a binary 0x02) must end at
+            #     delivery_status='acked'. The inline path sets `acked` on the
+            #     row it found by echo_id; before this was wired it wrote no
+            #     delivery_status at all, so the row read `held` AND `acked` at
+            #     once and history contradicted the live event. The outbound
+            #     text carries the firmware ack-request suffix, which is what
+            #     store_message turns into the echo_id the inline path joins on.
+            router.published.clear()
+            outbound_inline = {
+                "msg_id": "INLN0001",
+                "src": "DK5EN-98",
+                "dst": "DL3NCU-1",
+                "msg": "are you there {042",
+                "type": "msg",
+                "src_type": "ble",
+                "timestamp": _BASE_TS + 40,
+            }
+            await storage.store_message(outbound_inline, "{}")
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "INLN0001",
+                    "ack_type": 0x04,
+                    "ack_type_text": "Store Held",
+                    "ack_from": "DK5EN-90",
+                    "timestamp": _BASE_TS + 41,
+                },
+                "{}",
+            )
+            held_then_row = await _row("INLN0001")
+            results.append(
+                (
+                    "inline-ack regression: 0x04 first leaves the row held/DK5EN-90",
+                    held_then_row is not None
+                    and held_then_row.get("delivery_status") == "held"
+                    and held_then_row.get("holder") == "DK5EN-90",
+                )
+            )
+            await storage.store_message(
+                {
+                    "msg_id": "PEER0042",
+                    "src": "DL3NCU-1",
+                    "dst": "DK5EN-98",
+                    "msg": "DK5EN-98 :ack042",
+                    "type": "msg",
+                    "src_type": "lora",
+                    "timestamp": _BASE_TS + 42,
+                },
+                "{}",
+            )
+            inline_row = await _row("INLN0001")
+            results.append(
+                (
+                    (
+                        "inline :ackNNN after a hold writes delivery_status='acked'"
+                        " (not just acked=1) and keeps the holder"
+                    ),
+                    inline_row is not None
+                    and inline_row.get("acked") == 1
+                    and inline_row.get("delivery_status") == "acked"
+                    and inline_row.get("holder") == "DK5EN-90",
+                )
+            )
+            results.append(
+                (
+                    "inline :ackNNN still publishes the unchanged peer payload",
+                    {
+                        "msg_id": "INLN0001",
+                        "acked": True,
+                        "ack_kind": "peer",
+                    }
+                    in _msg_status_events(),
+                )
+            )
+
+            # 16. Inline-ack SCOPING (the echo_id collision, fixed 2026-09-14).
+            #     `echo_id` is a 3-digit per-sender counter, unique only within
+            #     that sender and ~1 hour, so the counter alone identifies
+            #     nothing. Before the fix the lookup was `WHERE echo_id = ?
+            #     ORDER BY timestamp DESC LIMIT 1` and a stranger's ack marked
+            #     whichever message last used that number — on mcapp.local an
+            #     own DM to DK1TCP-77 rendered ✓✓ Delivered because an
+            #     unrelated DH6MAV pair reused 201. Each case below fails if
+            #     either half of the guard (addressing, or the time window) is
+            #     removed.
+            router.published.clear()
+            scoped_outbound = {
+                "msg_id": "SCOPE001",
+                "src": "DK5EN-98",
+                "dst": "DK1TCP-77",
+                "msg": "are you there {201",
+                "type": "msg",
+                "src_type": "ble",
+                "timestamp": _BASE_TS + 50,
+            }
+            await storage.store_message(scoped_outbound, "{}")
+            # (a) An ack with the SAME counter from an unrelated pair: the
+            #     mcapp.local case verbatim. Must not touch SCOPE001.
+            await storage.store_message(
+                {
+                    "msg_id": "STRNGR01",
+                    "src": "DH6MAV-10,DB4UW-1",
+                    "dst": "DH6MAV-1",
+                    "msg": "DH6MAV-1 :ack201",
+                    "type": "msg",
+                    "src_type": "lora",
+                    "timestamp": _BASE_TS + 51,
+                },
+                "{}",
+            )
+            stranger_row = await _row("SCOPE001")
+            results.append(
+                (
+                    "inline ack scoping: an unrelated pair's :ack201 does NOT ack our DM",
+                    stranger_row is not None
+                    and stranger_row.get("acked") != 1
+                    and stranger_row.get("delivery_status") is None
+                    and _msg_status_events() == [],
+                )
+            )
+            # (b) Right counter, right sender, but addressed to someone else —
+            #     the ack is not for us.
+            await storage.store_message(
+                {
+                    "msg_id": "WRONGDST",
+                    "src": "DK1TCP-77",
+                    "dst": "DL9XYZ-3",
+                    "msg": "DL9XYZ-3 :ack201",
+                    "type": "msg",
+                    "src_type": "lora",
+                    "timestamp": _BASE_TS + 52,
+                },
+                "{}",
+            )
+            results.append(
+                (
+                    "inline ack scoping: right sender but addressed elsewhere does NOT ack our DM",
+                    (r16b := await _row("SCOPE001")) is not None and r16b.get("acked") != 1,
+                )
+            )
+            # (c) The genuine ack — same counter, correct pair — still matches.
+            await storage.store_message(
+                {
+                    "msg_id": "GENUINE1",
+                    "src": "DK1TCP-77,DB0ED-99",
+                    "dst": "DK5EN-98",
+                    "msg": "DK5EN-98 :ack201",
+                    "type": "msg",
+                    "src_type": "lora",
+                    "timestamp": _BASE_TS + 53,
+                },
+                "{}",
+            )
+            genuine_row = await _row("SCOPE001")
+            results.append(
+                (
+                    "inline ack scoping: the genuine via-routed ack DOES ack our DM",
+                    genuine_row is not None
+                    and genuine_row.get("acked") == 1
+                    and genuine_row.get("delivery_status") == "acked"
+                    and {"msg_id": "SCOPE001", "acked": True, "ack_kind": "peer"}
+                    in _msg_status_events(),
+                )
+            )
+            # (d) Time window: the counter's uniqueness horizon is ~1 hour
+            #     (DEDUP_WINDOW_MS). A correctly-paired ack arriving after it
+            #     is not evidence — the counter has had time to be reused.
+            router.published.clear()
+            await storage.store_message(
+                {
+                    "msg_id": "SCOPE002",
+                    "src": "DK5EN-98",
+                    "dst": "DK1TCP-77",
+                    "msg": "much earlier {202",
+                    "type": "msg",
+                    "src_type": "ble",
+                    "timestamp": _BASE_TS + 60,
+                },
+                "{}",
+            )
+            await storage.store_message(
+                {
+                    "msg_id": "LATEACK1",
+                    "src": "DK1TCP-77",
+                    "dst": "DK5EN-98",
+                    "msg": "DK5EN-98 :ack202",
+                    "type": "msg",
+                    "src_type": "lora",
+                    "timestamp": _BASE_TS + 60 + DEDUP_WINDOW_MS + 1000,
+                },
+                "{}",
+            )
+            late_row = await _row("SCOPE002")
+            results.append(
+                (
+                    (
+                        "inline ack scoping: a correctly-paired ack past the 1h"
+                        " counter horizon does NOT ack"
+                    ),
+                    late_row is not None
+                    and late_row.get("acked") != 1
+                    and _msg_status_events() == [],
+                )
+            )
+
+            # 17. The store-and-forward exception to the 1h counter horizon.
+            #     A held DM sits in a store node's mailbox until the
+            #     destination reappears — up to --storetime (168h max, 24h
+            #     default) — and is acked only then. A flat DEDUP_WINDOW_MS
+            #     would refuse that ack and strand the message at `held`
+            #     forever, breaking the feature the window was meant to
+            #     protect. Relying on the binary 0x02 frame instead is not
+            #     enough: the extUDP path has no binary ack, and neither does
+            #     mc-chat, so for them this text is the ONLY signal.
+            router.published.clear()
+            held_late = {
+                "msg_id": "HELDLATE",
+                "src": "DK5EN-98",
+                "dst": "DL3NCU-9",
+                "msg": "see you tomorrow {301",
+                "type": "msg",
+                "src_type": "ble",
+                "timestamp": _BASE_TS + 70,
+            }
+            await storage.store_message(held_late, "{}")
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "HELDLATE",
+                    "ack_type": 0x04,
+                    "ack_type_text": "Store Held",
+                    "ack_from": "DK5EN-90",
+                    "timestamp": _BASE_TS + 71,
+                },
+                "{}",
+            )
+            # 20 hours later — far past the 1h counter horizon, well inside the
+            # hold — the destination reappears and answers by TEXT.
+            twenty_hours = 20 * 3600 * 1000
+            await storage.store_message(
+                {
+                    "msg_id": "LATEPEER",
+                    "src": "DL3NCU-9",
+                    "dst": "DK5EN-98",
+                    "msg": "DK5EN-98 :ack301",
+                    "type": "msg",
+                    "src_type": "lora",
+                    "timestamp": _BASE_TS + 70 + twenty_hours,
+                },
+                "{}",
+            )
+            held_late_row = await _row("HELDLATE")
+            results.append(
+                (
+                    "held DM acked by TEXT 20h later (past the 1h horizon) still resolves to acked",
+                    held_late_row is not None
+                    and held_late_row.get("acked") == 1
+                    and held_late_row.get("delivery_status") == "acked"
+                    and {"msg_id": "HELDLATE", "acked": True, "ack_kind": "peer"}
+                    in _msg_status_events(),
+                )
+            )
+            # The exception is scoped to HELD rows only: an ordinary message
+            # past the horizon still gets no late match (case 16d), and even a
+            # held one is bounded by HELD_ACK_WINDOW_MS.
+            router.published.clear()
+            await storage.store_message(
+                {
+                    "msg_id": "HELDGONE",
+                    "src": "DK5EN-98",
+                    "dst": "DL3NCU-9",
+                    "msg": "ancient {302",
+                    "type": "msg",
+                    "src_type": "ble",
+                    "timestamp": _BASE_TS + 80,
+                },
+                "{}",
+            )
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "HELDGONE",
+                    "ack_type": 0x04,
+                    "ack_type_text": "Store Held",
+                    "ack_from": "DK5EN-90",
+                    "timestamp": _BASE_TS + 81,
+                },
+                "{}",
+            )
+            await storage.store_message(
+                {
+                    "msg_id": "TOOLATE1",
+                    "src": "DL3NCU-9",
+                    "dst": "DK5EN-98",
+                    "msg": "DK5EN-98 :ack302",
+                    "type": "msg",
+                    "src_type": "lora",
+                    "timestamp": _BASE_TS + 80 + HELD_ACK_WINDOW_MS + 60_000,
+                },
+                "{}",
+            )
+            held_gone_row = await _row("HELDGONE")
+            results.append(
+                (
+                    "a held DM's ack past HELD_ACK_WINDOW_MS is still refused (bounded, not open)",
+                    held_gone_row is not None
+                    and held_gone_row.get("acked") != 1
+                    and held_gone_row.get("delivery_status") == "held",
                 )
             )
         finally:

@@ -147,9 +147,11 @@ try:
     from .sse_routes.linkcheck import build_linkcheck_router
     from .sse_routes.prefs import build_prefs_router
     from .sse_routes.push import build_push_router
+    from .sse_routes.stalls import build_stalls_router
     from .sse_routes.stream import build_stream_router
     from .sse_routes.uptime import build_uptime_router
     from .sse_routes.weather import build_weather_router
+    from .stall_middleware import StallMiddleware
 
     FASTAPI_AVAILABLE = True
 except ImportError:
@@ -222,6 +224,9 @@ class SSEManager:
         # only as an attribute monkey-patched onto the APIRouter, so no shutdown path
         # could see it and both tasks were still pending at process exit.
         self.push_dispatcher: Any = None
+        # Set by build_app (main.py); None keeps the middleware and /api/stalls off
+        # (startup tests build a manager without one).
+        self.stall_recorder: Any = None
 
         # Subscribe to messages from the router
         if message_router:
@@ -539,6 +544,11 @@ class SSEManager:
             allow_methods=["GET", "POST", "OPTIONS"],
             allow_headers=["*"],
         )
+        # Added after CORS so it is the OUTERMOST layer: the timing covers the
+        # whole stack. Pure ASGI on purpose (BaseHTTPMiddleware buffers and
+        # would break the /events stream); it skips /events itself.
+        if self.stall_recorder is not None:
+            app.add_middleware(StallMiddleware, recorder=self.stall_recorder)
 
         app.include_router(build_stream_router(self, VERSION))
         app.include_router(build_prefs_router(self))
@@ -549,6 +559,7 @@ class SSEManager:
         app.include_router(build_linkcheck_router(self))
         app.include_router(build_uptime_router(self))
         app.include_router(build_acks_router(self))
+        app.include_router(build_stalls_router(self))
 
         return app
 

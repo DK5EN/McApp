@@ -19,6 +19,7 @@ from typing import Any
 
 from .. import linkcheck
 from ..ble_protocol import normalise_ack_callsign
+from ..commands.parsing import resolve_dst_target
 from ..logging_setup import get_logger
 from ..util import (
     ACK_SUFFIX_RE,
@@ -38,6 +39,7 @@ from .constants import (
     BUCKET_SECONDS,
     CORE_DUMP_FILTER_TEXT,
     DEDUP_WINDOW_MS,
+    HELD_ACK_WINDOW_MS,
     INVALID_CHARACTER_MSG,
     MHEARD_THROTTLE_MS,
     SIGNAL_BACKFILL_BATCH_SIZE,
@@ -171,6 +173,69 @@ def _ack_attribution_fields(ack_from: str | None, ack_via: str | None) -> dict[s
     if ack_via is not None:
         fields["via"] = ack_via
     return fields
+
+
+def _inline_ack_original(
+    candidates: list[dict[str, Any]], acking_station: str, ack_addressed_to: str
+) -> dict[str, Any] | None:
+    """Pick the message an inline `:ackNNN` actually answers, or None.
+
+    `echo_id` is the firmware's `{NNN` ack-request counter: THREE DIGITS,
+    minted per sender, and unique only within that sender and roughly an
+    hour. On its own it identifies nothing — matching on it alone marked
+    whichever message most recently carried that counter, which on
+    mcapp.local meant an own DM to DK1TCP-77 rendering as ✓✓ Delivered
+    because an unrelated DH6MAV pair reused 201 forty-four minutes later
+    (5 of 82 acked rows were mis-attributed this way; 25 of 200 live
+    counter values were already shared by more than one sender). Same
+    user-visible failure as the 2026-08-19 ctcping bug, different route.
+
+    The ack's own addressing is what disambiguates it, and it is exact:
+    the frame is a DM from the addressee back to the original sender, so
+    the original is the message whose sender is who this ack is addressed
+    TO and whose target is who it came FROM. Callers pass both already
+    resolved; the caller's time window supplies the other half of the
+    counter's uniqueness.
+
+    The ack payload's own padded callsign (`%-9.9s:ack%03i`) is
+    deliberately NOT used: it is TRUNCATED at 9 characters, so a longer
+    callsign arrives cut (`OE1ABCD-12` -> `OE1ABCD-1`) and would fail an
+    equality test that the frame fields pass. Real traffic also shows the
+    no-separator case (`DK1TCP-77:ack622`).
+    """
+    ack_from = acking_station.strip().upper()
+    ack_to = ack_addressed_to.strip().upper()
+    if not ack_from or not ack_to:
+        return None
+    for row in candidates:
+        original_sender = (row["src"] or "").split(",")[0].strip().upper()
+        original_target = resolve_dst_target(row["dst"] or "").upper()
+        if original_sender == ack_to and original_target == ack_from:
+            return row
+    return None
+
+
+# Store-and-forward DM status (doc/2026-09-14_1153-store-forward-dm-status-plan.md
+# §4; firmware spec MeshCom-Firmware-DEV-Main/docs/client-integration-store-
+# forward.md §2). One monotone rank across the states `messages.delivery_status`
+# can hold: `held` = 2, `failed` = 3, `acked` = 4. Rank 1 (sent/node/gateway) is
+# the implicit baseline every one of those three must exceed — no branch in
+# `_handle_ack` ever WRITES the literal "sent" into `delivery_status`, so it is
+# deliberately absent from this dict — and rank 0 is NULL ("no store-and-forward
+# state was ever reported"), handled by the SQL CASE's ELSE, not a dict entry.
+# ONE dict: the SQL WHEN clauses below and every Python rank lookup
+# (`_write_delivery_status`) are both derived from it, so they cannot drift.
+_DELIVERY_STATUS_RANK: dict[str, int] = {
+    "held": 2,
+    "failed": 3,
+    "acked": 4,
+}
+
+_DELIVERY_STATUS_RANK_CASE_SQL = (
+    "CASE delivery_status "
+    + "".join(f"WHEN {status!r} THEN {rank} " for status, rank in _DELIVERY_STATUS_RANK.items())
+    + "ELSE 0 END"
+)
 
 
 class IngestMixin(StorageBase):
@@ -950,7 +1015,7 @@ class IngestMixin(StorageBase):
         logger.info("APRS escape backfill complete: %s", summary)
         return summary
 
-    async def _handle_ack(  # noqa: PLR0913 - one call site, every argument is a decoded frame field
+    async def _handle_ack(  # noqa: PLR0912, PLR0913, PLR0915 - single dispatcher for every ack-type branch, kept intact (plan §4/§5)
         self,
         ack_for_msg_id: str,
         ack_type: Any,
@@ -985,19 +1050,36 @@ class IngestMixin(StorageBase):
             ack_type,
             ack_type_text,
         )
-        # send_success = 1 unconditionally, for all three ack types. 0x02 (Peer ACK)
-        # implies the frame was heard by our own node too — the addressee cannot
-        # have answered a DM our node never transmitted — so folding it into the
-        # same "frame left the node" signal as 0x00/0x01 keeps send_success
-        # monotonic (transport confirmed -> stays confirmed) rather than requiring
-        # a second write for the same fact.
-        rows = await self._mutate(
-            "UPDATE messages SET send_success = 1 WHERE id = ("
-            "  SELECT id FROM messages WHERE msg_id = ? AND type = 'msg'"
-            "  ORDER BY timestamp DESC LIMIT 1"
-            ")",
-            (ack_for_msg_id,),
-        )
+        # send_success = 1 for 0x00 Node / 0x01 Gateway / 0x02 Peer / 0x04 Held.
+        # 0x02 (Peer ACK) implies the frame was heard by our own node too — the
+        # addressee cannot have answered a DM our node never transmitted — so
+        # folding it into the same "frame left the node" signal as 0x00/0x01
+        # keeps send_success monotonic (transport confirmed -> stays confirmed)
+        # rather than requiring a second write for the same fact. 0x04 Held is
+        # the same story: a store node demonstrably took the frame off the air.
+        #
+        # 0x03 Failed is the ONE exception (store-forward plan §3, defect 1):
+        # it means every retry was exhausted and nobody acked — marking that
+        # transport-confirmed would invert what the frame says — so a Failed
+        # frame runs a read-only existence check instead of the UPDATE. `rows`
+        # still ends up meaning the same thing either way ("does a matching
+        # original row exist"), which is what the diagnostic below and every
+        # branch's "publish/record only on an actual row match" rule need.
+        if ack_type == 0x03:  # noqa: PLR2004 - firmware wire constant (failed), named in ble_protocol.py
+            existing = await self._query(
+                "SELECT id FROM messages WHERE msg_id = ? AND type = 'msg'"
+                " ORDER BY timestamp DESC LIMIT 1",
+                (ack_for_msg_id,),
+            )
+            rows = len(existing)
+        else:
+            rows = await self._mutate(
+                "UPDATE messages SET send_success = 1 WHERE id = ("
+                "  SELECT id FROM messages WHERE msg_id = ? AND type = 'msg'"
+                "  ORDER BY timestamp DESC LIMIT 1"
+                ")",
+                (ack_for_msg_id,),
+            )
         if rows == 0:
             # Show nearby msg_ids to help diagnose ACK correlation
             recent = await self._query(
@@ -1032,6 +1114,13 @@ class IngestMixin(StorageBase):
             # a publish failure break ingestion (hot path).
             if acked_rows:
                 await self._record_message_ack(ack_for_msg_id, "peer", ack_from, ack_via, timestamp)
+                # `acked` is rank 4, the top of the store-forward precedence
+                # scale (plan §4) — always wins over a stored `held`/`failed`,
+                # and is itself final (nothing outranks it). `ack_from` is the
+                # addressee here; COALESCE inside the helper means an
+                # unattributed peer ack (no appendix) leaves a previously
+                # stored holder alone rather than blanking it.
+                await self._write_delivery_status(ack_for_msg_id, "acked", ack_from)
             if acked_rows and self._message_router:
                 try:
                     await self._message_router.publish(
@@ -1051,13 +1140,90 @@ class IngestMixin(StorageBase):
                     )
             return
 
+        if ack_type == 0x03:  # noqa: PLR2004 - firmware wire constant (failed), named in ble_protocol.py
+            # Failed: all retries exhausted, nobody acked (store-forward spec
+            # §2). `ack_from` here is the DESTINATION, not a store node — the
+            # column is named `holder` because `held` is its other writer, not
+            # because a "failed" write pretends the destination is holding
+            # anything. Record + publish only on an actual row match, exactly
+            # like every other branch; never let a publish failure break
+            # ingestion (hot path).
+            if rows:
+                await self._write_delivery_status(ack_for_msg_id, "failed", ack_from)
+                await self._record_message_ack(
+                    ack_for_msg_id, "failed", ack_from, ack_via, timestamp
+                )
+            if rows and self._message_router:
+                try:
+                    await self._message_router.publish(
+                        "storage",
+                        "msg_status",
+                        {
+                            "msg_id": ack_for_msg_id,
+                            # `acked: False` is a COMPATIBILITY REQUIREMENT, not
+                            # decoration (plan §5). The webapp's msg:status
+                            # handler treats ANY event with no `sent` key and
+                            # no `acked === false` as a peer acknowledgement
+                            # and renders ✓✓ Delivered — without this key a
+                            # `failed` event would render the exact opposite
+                            # of what it means, on every webapp build that
+                            # predates the frontend change. Do not "clean it
+                            # up" once the webapp learns `ack_kind: "failed"`;
+                            # it stays the compatibility floor.
+                            "acked": False,
+                            "failed": True,
+                            "ack_kind": "failed",
+                            **_ack_attribution_fields(ack_from, ack_via),
+                        },
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to publish msg_status for Failed ack of msg_id=%s",
+                        ack_for_msg_id,
+                    )
+            return
+
+        if ack_type == 0x04:  # noqa: PLR2004 - firmware wire constant (held), named in ble_protocol.py
+            # Held: a store node holds the DM for an absent destination — not
+            # final; a later `acked` (or, defensively, `failed`) supersedes it
+            # via the rank write. `ack_from` here is the HOLDER (the store
+            # node), matching the `holder` column's name directly. Record +
+            # publish only on an actual row match; never let a publish failure
+            # break ingestion (hot path).
+            if rows:
+                await self._write_delivery_status(ack_for_msg_id, "held", ack_from)
+                await self._record_message_ack(ack_for_msg_id, "held", ack_from, ack_via, timestamp)
+            if rows and self._message_router:
+                try:
+                    payload: dict[str, Any] = {
+                        "msg_id": ack_for_msg_id,
+                        "sent": True,
+                        "ack_kind": "held",
+                        **_ack_attribution_fields(ack_from, ack_via),
+                    }
+                    # `holder` is a deliberate alias of `from` on this event
+                    # (plan §5; the firmware spec names it directly) so the
+                    # webapp can render "held by DK5EN-90" without knowing
+                    # this repo's attribution convention. Both keys, same
+                    # value — present only when attribution is known, exactly
+                    # like `from` itself.
+                    if ack_from is not None:
+                        payload["holder"] = ack_from
+                    await self._message_router.publish("storage", "msg_status", payload)
+                except Exception:
+                    logger.exception(
+                        "Failed to publish msg_status for Held ack of msg_id=%s",
+                        ack_for_msg_id,
+                    )
+            return
+
         # Notify frontend via SSE. This is a TRANSPORT fact only — "my own node" or
         # "a gateway" took the frame off the air, not "the addressee answered" — so
         # it must never publish `acked`, which is the field meaning peer delivery
         # everywhere else (see the inline-ACK path below, and the 0x02 branch
         # above). ack_type is 0x00=Node, 0x01=Gateway per ble_protocol.py; anything
-        # else (0x02 already returned above) is reported rather than silently
-        # folded into "node".
+        # else (0x02/0x03/0x04 already returned above) is reported rather than
+        # silently folded into "node".
         if ack_type == 0x00:
             ack_kind = "node"
         elif ack_type == 0x01:
@@ -1077,6 +1243,72 @@ class IngestMixin(StorageBase):
                     **_ack_attribution_fields(ack_from, ack_via),
                 },
             )
+
+    async def _write_delivery_status(
+        self, msg_id: str, status: str, holder: str | None, *, row_id: int | None = None
+    ) -> None:
+        """Persist `messages.delivery_status`/`holder` with the store-forward
+        plan's §4 monotone-rank precedence (`_DELIVERY_STATUS_RANK`).
+
+        A single UPDATE encodes the rank test in its own WHERE clause — the
+        write only fires when the incoming rank exceeds the CURRENTLY STORED
+        rank (NULL reads as rank 0 via the SQL CASE's ELSE) — so two
+        out-of-order acks for the same message can never race: whichever one
+        commits first, the loser's UPDATE simply matches zero rows instead of
+        clobbering a higher-precedence value with a stale read. This is what
+        makes `acked` (rank 4) always win over a `held`/`failed` regardless of
+        arrival order, and stops `held`/`failed` from ever regressing a
+        stored `acked`.
+
+        Equal rank does NOT overwrite — `held(A)` followed by `held(B)`
+        leaves the stored holder at A. The firmware spec (§2) says to "show
+        the most recent holder", but a strict `>` rank test is exactly what
+        makes this scheme race-proof against frames arriving out of order,
+        and that trade-off is deliberate: the per-holder detail (BOTH A and
+        B) is preserved separately, in `message_acks` — see the
+        `_record_message_ack` calls at each `_handle_ack` call site — while
+        this column stays a single, race-proof "current state" value.
+
+        `holder` is written via `COALESCE(?, holder)`: passing `None` (an
+        unattributed frame — n=0, no appendix) leaves a previously stored
+        holder untouched rather than blanking it, which matters most for the
+        `acked` write, since an `:ackNNN`/peer-ack with no appendix must not
+        erase a `held`/`failed` holder that was already known.
+
+        `row_id` pins the write to ONE row instead of resolving it from
+        `msg_id`. The inline `:ackNNN` path needs that: it finds the original
+        by `echo_id` and sets `acked` on THAT row's id, while this method's
+        own lookup takes the newest row for the msg_id — and the same message
+        legitimately lands as two rows with one msg_id (the UDP and BLE copies
+        ~100 ms apart, see the unread-cursor notes in CLAUDE.md). Resolving
+        independently could therefore mark `acked` on one copy and
+        `delivery_status` on the other. Callers holding a row id pass it;
+        `_handle_ack`, which has only the msg_id, does not.
+
+        Never raises into the ingest hot path — mirrors `_record_message_ack`.
+        """
+        # CASE clause built from the fixed module-level _DELIVERY_STATUS_RANK
+        # dict, never user input.
+        if row_id is None:
+            target_sql = (
+                " WHERE id = ("
+                "  SELECT id FROM messages WHERE msg_id = ? AND type = 'msg'"
+                "  ORDER BY timestamp DESC LIMIT 1"
+                " )"
+            )
+            target_param: Any = msg_id
+        else:
+            target_sql = " WHERE id = ?"
+            target_param = row_id
+        query = (
+            "UPDATE messages SET delivery_status = ?, holder = COALESCE(?, holder)"  # noqa: S608
+            + target_sql
+            + f" AND ? > {_DELIVERY_STATUS_RANK_CASE_SQL}"
+        )
+        try:
+            await self._mutate(query, (status, holder, target_param, _DELIVERY_STATUS_RANK[status]))
+        except sqlite3.Error:
+            logger.exception("Failed to write delivery_status=%s for msg_id=%s", status, msg_id)
 
     async def _record_message_ack(
         self,
@@ -1254,6 +1486,23 @@ class IngestMixin(StorageBase):
         snr = message.get("snr")
         src_type = message.get("src_type", "")
 
+        # BUG-1 (doc/2026-09-16_0807-message-detail-popover-bugfix-report.md):
+        # rssi=0/snr=0 is the firmware's "no RF reception" sentinel, written
+        # unconditionally on every Extern-UDP frame. `_ingest_signal` already
+        # excludes it from signal_log/station_positions by `src_type`, not by
+        # a range check — the same gate applies here so the sentinel never
+        # lands on the `messages` row itself (and can't be COALESCEd into a
+        # duplicate row by `_enrich_duplicate_row` below). A lone `0` with the
+        # other value real, or a `src_type == "lora"` reading, is left alone.
+        if src_type != "lora" and rssi is not None and snr is not None:
+            try:
+                is_sentinel = float(rssi) == 0.0 and float(snr) == 0.0
+            except (TypeError, ValueError):
+                is_sentinel = False
+            if is_sentinel:
+                rssi = None
+                snr = None
+
         # Extract new columns from message dict
         via_field = message.get("via", "")
         hw_id = message.get("hw_id")
@@ -1351,20 +1600,58 @@ class IngestMixin(StorageBase):
             ack_match = re.search(r":ack([0-9]+)", msg)
             if ack_match:
                 ack_num = ack_match.group(1)
-                # Resolve the original outbound row's own msg_id in the SAME lookup
-                # the UPDATE uses, so the published event names the message the
+                # Narrow by counter AND time, then disambiguate by the ack's
+                # own addressing (`_inline_ack_original`). BOTH halves are
+                # required: `echo_id` is a 3-digit per-sender counter that is
+                # unique only within that sender and about an hour, so neither
+                # the counter nor the window identifies a message on its own.
+                # The window is DEDUP_WINDOW_MS — the same 60 minutes the
+                # ingest dedup gate already treats as this counter's horizon —
+                # EXCEPT for a message a store node is holding, which gets
+                # HELD_ACK_WINDOW_MS. That exception is the whole reason this
+                # is two-tier: a held DM legitimately sits in a mailbox until
+                # the destination reappears and is only acked then, so a flat
+                # 1 h window would refuse every late ack and strand it at
+                # `held` forever. Leaning on the binary 0x02 frame instead is
+                # not enough — the extUDP path has no binary ack at all, and
+                # neither does mc-chat, so for them this text IS the only
+                # signal. Widening it only for already-`held` rows keeps the
+                # ambiguity small (see HELD_ACK_WINDOW_MS).
+                # The row's own msg_id is resolved here, in the same lookup the
+                # UPDATE uses, so the published event names the message the
                 # frontend actually rendered, not the echo suffix.
-                original_rows = await self._query(
-                    "SELECT id, msg_id FROM messages WHERE echo_id = ? AND type = 'msg'"
-                    " ORDER BY timestamp DESC LIMIT 1",
-                    (ack_num,),
+                candidates = await self._query(
+                    "SELECT id, msg_id, src, dst FROM messages"
+                    " WHERE echo_id = ? AND type = 'msg'"
+                    "   AND (timestamp > ?"
+                    "        OR (delivery_status = 'held' AND timestamp > ?))"
+                    " ORDER BY timestamp DESC",
+                    (
+                        ack_num,
+                        timestamp - DEDUP_WINDOW_MS,
+                        timestamp - HELD_ACK_WINDOW_MS,
+                    ),
                 )
-                if original_rows:
-                    original = original_rows[0]
+                original = _inline_ack_original(candidates, callsign, resolve_dst_target(dst))
+                if original is not None:
                     rows_updated = await self._mutate(
                         "UPDATE messages SET acked = 1 WHERE id = ?",
                         (original["id"],),
                     )
+                    if rows_updated:
+                        # Same store-forward rank write the binary 0x02 branch
+                        # does (`_handle_ack`). Without it a message a store
+                        # node had reported as `held` would keep
+                        # delivery_status='held' forever once the addressee
+                        # answered by TEXT rather than by a 0x02 frame — the
+                        # row would then read `held` and `acked` at once, and
+                        # history would contradict the live event. Pinned to
+                        # `original["id"]`, the row `acked` was just set on:
+                        # one msg_id can have two transport copies, and the two
+                        # writes must not land on different ones.
+                        await self._write_delivery_status(
+                            original["msg_id"], "acked", None, row_id=original["id"]
+                        )
                     # Publish only on an actual match — an unmatched :ackNNN from
                     # foreign traffic must never claim a delivery. Never let a
                     # publish failure break ingestion (hot path).
@@ -1631,8 +1918,21 @@ class IngestMixin(StorageBase):
             val = row.get(field)
             if val is not None:
                 data[field] = val
-        # Optional text fields
-        for field in ("via", "firmware", "fw_sub", "last_sending", "transformer"):
+        # Optional text fields. `delivery_status`/`holder` (schema v31,
+        # store-forward DM status) round-trip through this same idiom so a
+        # reload survives — `row.get()` returns None whether the column is
+        # NULL or simply absent from the row's `SELECT`, so this tolerates
+        # `_MSG_SELECT` not carrying them yet (a concurrent wave's job, not
+        # this mixin's `_MSG_SELECT` to touch).
+        for field in (
+            "via",
+            "firmware",
+            "fw_sub",
+            "last_sending",
+            "transformer",
+            "delivery_status",
+            "holder",
+        ):
             val = row.get(field)
             if val is not None and val != "":
                 data[field] = val

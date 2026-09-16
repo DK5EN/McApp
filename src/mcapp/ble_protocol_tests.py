@@ -97,6 +97,17 @@ ACK_TYPE_NODE = 0x00
 ACK_TYPE_GATEWAY = 0x01
 ACK_TYPE_PEER = 0x02  # L1: the addressee's own matched :ack/:rej reply
 ACK_TYPE_UNKNOWN = 0x05
+# Store-and-forward status bytes (firmware spec, sibling repo:
+# MeshCom-Firmware-DEV-Main/docs/client-integration-store-forward.md §2;
+# fork-main 150b0a4a, 2026-09-14).
+ACK_TYPE_FAILED = 0x03  # all retries exhausted, nobody acked; attribution = destination
+ACK_TYPE_HELD = 0x04  # a store node holds the DM; attribution = holder; not final
+
+# --- Store-and-forward status vectors (spec §6, literal byte frames as the node
+# hands them to the transport; our decode adds the +1 offset the spec documents).
+SF_MSG_ID = 0x12345678
+SF_FAILED_DEST = b"DK5EN-14"  # n=8
+SF_HELD_HOLDER = b"DK5EN-90"  # n=8
 
 # --- Real wire-shape ACK 0x02 vector (MCProxy wire-protocol audit, 2026-08-21) ---
 # `40 41 <msg_id x4 LE> 02 00 <ts x4> 00` — 13 bytes on the wire (doc11 correction:
@@ -1906,6 +1917,61 @@ def _test_ack_appendix(results: list[tuple[str, bool]]) -> None:
     )
 
 
+def _test_ack_store_forward_status(results: list[tuple[str, bool]]) -> None:
+    """Store-and-forward status bytes 0x03 failed / 0x04 held
+    (firmware spec, sibling repo: MeshCom-Firmware-DEV-Main/docs/
+    client-integration-store-forward.md §6, fork-main 150b0a4a). Frame
+    decoding needs no new code — these pin the extended `ACK_KIND_BY_TYPE` /
+    `ACK_TEXT_BY_TYPE` maps and the existing appendix parser against the
+    spec's literal byte vectors (msg_id 0x12345678, n=8 attribution)."""
+    failed = decode_binary_message(
+        _build_attributed_ack_frame(SF_MSG_ID, ACK_TYPE_FAILED, SF_FAILED_DEST)
+    )
+    _check(
+        results,
+        "ACK 0x03 -> 'Send Failed', ack_from is the destination, msg_id 0x12345678",
+        failed is not None
+        and failed["msg_id"] == SF_MSG_ID
+        and failed["ack_type"] == ACK_TYPE_FAILED
+        and failed["ack_type_text"] == "Send Failed"
+        and failed.get("ack_from") == "DK5EN-14",
+    )
+
+    held = decode_binary_message(
+        _build_attributed_ack_frame(SF_MSG_ID, ACK_TYPE_HELD, SF_HELD_HOLDER)
+    )
+    _check(
+        results,
+        "ACK 0x04 -> 'Store Held', ack_from is the holder",
+        held is not None
+        and held["ack_type"] == ACK_TYPE_HELD
+        and held["ack_type_text"] == "Store Held"
+        and held.get("ack_from") == "DK5EN-90",
+    )
+
+    # Regression guard: legacy n=0 'acked' frame still decodes with no ack_from
+    # (spec §6: "acked, old format (n = 0), still valid").
+    acked_legacy = decode_binary_message(_build_ack_frame(SF_MSG_ID, ACK_TYPE_PEER))
+    _check(
+        results,
+        "ACK 0x02 legacy n=0 still decodes, no ack_from key (spec: still valid)",
+        acked_legacy is not None
+        and acked_legacy["ack_type"] == ACK_TYPE_PEER
+        and "ack_from" not in acked_legacy,
+    )
+
+    # Spec §2: unknown status values are not errors — log and ignore, never
+    # treated as acked.
+    unknown_status = decode_binary_message(_build_ack_frame(SF_MSG_ID, 0x07))
+    _check(
+        results,
+        "ACK unknown status 0x07 still decodes, ack_type_text 'Unknown (7)'",
+        unknown_status is not None
+        and unknown_status["ack_type"] == 0x07
+        and unknown_status["ack_type_text"] == "Unknown (7)",
+    )
+
+
 def run_ble_protocol_tests() -> bool:
     """Run all ble_protocol golden-frame tests. Returns True iff all pass."""
     results: list[tuple[str, bool]] = []
@@ -1921,6 +1987,7 @@ def run_ble_protocol_tests() -> bool:
     _test_fcs(results)
     _test_ack(results)
     _test_ack_appendix(results)
+    _test_ack_store_forward_status(results)
     _test_aprs_position(results)
     _test_aprs_comment_injection(results)
     _test_aprs_comment_name(results)

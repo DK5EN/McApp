@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ssl
 from typing import Any, TypedDict
 
 import httpx
@@ -197,6 +198,7 @@ class CommandHandler(
         self._sperrliste_entries: set[str] = set()
         # Last ETag seen, for the conditional refresh GET.
         self._sperrliste_etag: str | None = None
+        self._sperrliste_ssl: ssl.SSLContext | None = None
 
         self.message_router = message_router
         self.storage_handler = storage_handler
@@ -269,7 +271,16 @@ class CommandHandler(
         """
         headers = {"If-None-Match": self._sperrliste_etag} if self._sperrliste_etag else {}
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            # `httpx.AsyncClient()` builds an SSL context from the certifi trust
+            # store on construction — ~800 ms of synchronous work on the Pi Zero,
+            # and it ran ON the event loop every 15-minute refresh (first
+            # loop_lag attribution after F4 shipped, 2026-09-16). Build it once,
+            # in the thread pool, and hand it to every client since.
+            if self._sperrliste_ssl is None:
+                self._sperrliste_ssl = await asyncio.to_thread(httpx.create_ssl_context)
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(10.0), verify=self._sperrliste_ssl
+            ) as client:
                 response = await client.get(url, headers=headers)
             if response.status_code == HTTP_NOT_MODIFIED:
                 return NOT_MODIFIED

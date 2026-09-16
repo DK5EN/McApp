@@ -373,6 +373,56 @@ async def _test_duplicate_signal_ingested(results: list[tuple[str, bool]]) -> No
         tmp.cleanup()
 
 
+async def _test_signal_sentinel_not_stored(results: list[tuple[str, bool]]) -> None:
+    """BUG-1 (doc/2026-09-16_0807-message-detail-popover-bugfix-report.md):
+    rssi=0/snr=0 is the firmware's "no RF reception" sentinel on every
+    non-`lora` src_type and must never land on the `messages` row — nor get
+    pre-filled into a column that `_enrich_duplicate_row`'s COALESCE would
+    then refuse to overwrite with a real later reading."""
+    storage, tmp = await _with_storage("dedup_sentinel")
+    try:
+        await storage.store_message(_chat("DK1TCP-77", "E6864020", _T0, "udp", rssi=0, snr=0), "")
+        rows = await storage._query(
+            "SELECT rssi, snr FROM messages WHERE msg_id = ?", ("E6864020",)
+        )
+        ok1 = len(rows) == 1 and rows[0]["rssi"] is None and rows[0]["snr"] is None
+        results.append(("udp src_type with rssi=0/snr=0 sentinel stores NULL/NULL", ok1))
+
+        await storage.store_message(
+            _chat("DK1TCP-77", "E6864021", _T0, "lora", rssi=-118, snr=0), ""
+        )
+        rows = await storage._query(
+            "SELECT rssi, snr FROM messages WHERE msg_id = ?", ("E6864021",)
+        )
+        ok2 = len(rows) == 1 and rows[0]["rssi"] == -118 and rows[0]["snr"] == 0
+        results.append(("real rssi with a lone snr=0 is stored unchanged", ok2))
+
+        await storage.store_message(_chat("DK1TCP-77", "E6864022", _T0, "lora", rssi=0, snr=0), "")
+        rows = await storage._query(
+            "SELECT rssi, snr FROM messages WHERE msg_id = ?", ("E6864022",)
+        )
+        ok3 = len(rows) == 1 and rows[0]["rssi"] == 0 and rows[0]["snr"] == 0
+        results.append(("lora src_type with rssi=0/snr=0 is never normalized here", ok3))
+
+        first = _chat("DK1TCP-77", "E6864023", _T0, "ble_remote", rssi=0, snr=0)
+        second = _chat("DK1TCP-77", "E6864023", _T0 + _GAP_MS, "lora", rssi=-101, snr=7.5)
+        await storage.store_message(first, "")
+        await storage.store_message(second, "")
+        rows = await storage._query(
+            "SELECT rssi, snr FROM messages WHERE msg_id = ?", ("E6864023",)
+        )
+        ok4 = len(rows) == 1 and rows[0]["rssi"] == -101 and rows[0]["snr"] == 7.5
+        results.append(
+            (
+                "sentinel-first duplicate does not block a later real reading from enriching",
+                ok4,
+            )
+        )
+    finally:
+        await storage.close()
+        tmp.cleanup()
+
+
 async def run_ingest_dedup_tests() -> bool:
     """Run the ingest dedup regression suite. Returns True iff every case passes."""
     results: list[tuple[str, bool]] = []
@@ -388,6 +438,7 @@ async def run_ingest_dedup_tests() -> bool:
     await _test_enrichment_preserves_first_value(results)
     await _test_restart_backstop_enrichment(results)
     await _test_duplicate_signal_ingested(results)
+    await _test_signal_sentinel_not_stored(results)
 
     for label, ok in results:
         logger.info("    %s | %s", "✅ PASS" if ok else "❌ FAIL", label)

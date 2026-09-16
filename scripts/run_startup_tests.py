@@ -56,6 +56,8 @@ from mcapp.push_tests import run_push_tests
 from mcapp.send_path_tests import run_send_path_tests
 from mcapp.sqlite_storage import run_startup_tests as run_storage_tests
 from mcapp.sse_handler import run_startup_tests as run_sse_tests
+from mcapp.stall_http_tests import run_stall_http_tests
+from mcapp.stall_tests import run_stall_tests
 from mcapp.storage.ack_status_tests import run_ack_status_tests
 from mcapp.storage.connection_lifecycle_tests import run_connection_lifecycle_tests
 from mcapp.storage.conversation_key_tests import run_conversation_key_tests
@@ -80,6 +82,12 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     send_path_ok = await run_send_path_tests()
     print(f"send_path: {'PASS' if send_path_ok else 'FAIL'}")
+
+    stall_ok = await run_stall_tests()
+    print(f"stalls: {'PASS' if stall_ok else 'FAIL'}")
+
+    stall_http_ok = await run_stall_http_tests()
+    print(f"stall_http: {'PASS' if stall_http_ok else 'FAIL'}")
 
     contract_parity_ok = run_contract_parity_tests()
     print(f"contract_parity: {'PASS' if contract_parity_ok else 'FAIL'}")
@@ -229,6 +237,8 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     all_ok = (
         suppression_ok
         and send_path_ok
+        and stall_ok
+        and stall_http_ok
         and contract_parity_ok
         and dedup_contract_ok
         and linkcheck_ok

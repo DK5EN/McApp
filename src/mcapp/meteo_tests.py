@@ -27,6 +27,7 @@ commands/tests.py::test_meteo_timezone_validators/test_meteo_negative_cache.
 
 import contextlib
 import sys
+import threading
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -37,6 +38,8 @@ from .meteo import (
     _MAX_LORA_MSG_LEN,
     RETRY_AFTER_MAX_S,
     RETRY_DELAY_S,
+    WEATHER_CACHE_TTL_S,
+    WEATHER_ERROR_CACHE_TTL_S,
     WeatherService,
     WeatherServiceError,
     _retry_delay_s,
@@ -466,6 +469,40 @@ def _test_no_position_defers_without_network() -> None:
         )
 
 
+def _test_update_location_same_place_keeps_cache() -> None:
+    """F2 follow-up: the node re-announces its own GPS every beacon cycle and
+    `_cache_gps` forwards each one. An UNCHANGED location must not bump the
+    generation, or every cycle throws the good cache away and the next poll
+    pays a cold upstream fetch (the 806 ms `/api/weather` row of 2026-09-16
+    09:37). A move beyond LOCATION_EPSILON_DEG still invalidates.
+    """
+    ws = WeatherService(lat=48.4078, lon=11.738, stat_name="SameTest")
+    fetch_count = 0
+
+    def fake_fetch() -> dict[str, Any]:
+        nonlocal fetch_count
+        fetch_count += 1
+        return {"temperatur_celsius": 20.0, "timestamp": "test"}
+
+    ws._fetch_weather_data = fake_fetch  # type: ignore[method-assign] # offline cache double
+    first = ws.get_weather_data()
+    gen = ws._cache_generation
+    ws.update_location(48.4078, 11.738)
+    ws.update_location(48.40781, 11.73801)  # 1e-5 deg, ~1 m of GPS jitter
+    _check("same-place update_location: generation unchanged", ws._cache_generation, gen)
+    _check(
+        "same-place update_location: cache still served",
+        ws.get_weather_data() is first and fetch_count == 1,
+        True,
+    )
+    ws.update_location(48.4078, 11.738, "SameTest")  # same name, no bump
+    _check("same-name update_location: generation unchanged", ws._cache_generation, gen)
+    ws.update_location(48.41, 11.738)
+    _check("real move: generation bumped", ws._cache_generation, gen + 1)
+    ws.update_location(48.41, 11.738, "Renamed")
+    _check("rename alone: generation bumped", ws._cache_generation, gen + 2)
+
+
 def _test_update_location_bumps_generation_and_invalidates_cache() -> None:
     """REGRESSION guard for the incident meteo.py's update_location docstring
     documents: a stale cache must not keep serving weather for the OLD
@@ -776,6 +813,294 @@ def _test_make_request_recovers_on_retry() -> None:
         time.sleep = original_sleep  # restore
 
 
+def _fake_weather_get_response(
+    url: str, call_log: list[str], *, dwd_temp: float = 20.0
+) -> httpx.Response:
+    """A real, fully-populated httpx.Response for either upstream (BrightSky's
+    `current_weather` or Open-Meteo's `/forecast`), routed by URL, so a
+    stubbed `httpx.get` can drive `_fetch_weather_data()` end-to-end (fusion
+    included) without ever reaching the network. Appends to `call_log` so
+    tests can count upstream hits precisely.
+    """
+    call_log.append(url)
+    now_iso = datetime.now(UTC).isoformat()
+    if "brightsky" in url:
+        payload: dict[str, Any] = {
+            "weather": {
+                "temperature": dwd_temp,
+                "dew_point": 10.0,
+                "relative_humidity": 55,
+                "pressure_msl": 1013.0,
+                "wind_speed": 10.0,
+                "wind_direction": 180,
+                "cloud_cover": 50,
+                "visibility": 10000,
+                "precipitation": 0.0,
+                "condition": "dry",
+                "timestamp": now_iso,
+            },
+            "sources": [{"station_name": "TestStation"}],
+        }
+    else:
+        payload = {
+            "current": {
+                "temperature_2m": dwd_temp,
+                "relative_humidity_2m": 55,
+                "pressure_msl": 1013.0,
+                "wind_speed_10m": 10.0,
+                "wind_direction_10m": 180,
+                "wind_gusts_10m": 5.0,
+                "cloud_cover": 50,
+                "visibility": 10000,
+                "precipitation": 0.0,
+                "time": now_iso,
+            }
+        }
+    return httpx.Response(status_code=200, json=payload, request=httpx.Request("GET", url))
+
+
+def _wait_until(predicate: Any, *, timeout_s: float = 5.0) -> bool:
+    """Poll `predicate()` until it is true or `timeout_s` elapses. Used to wait
+    for a background refresh thread to finish without a fixed sleep count.
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return bool(predicate())
+
+
+def _test_weather_cache_warm_hits_upstream_once() -> None:
+    """F2: a warm cache serves the fully assembled result verbatim — the
+    second call must not touch the network at all.
+    """
+    ws = WeatherService(lat=48.15, lon=11.58, stat_name="CacheTest")
+    call_log: list[str] = []
+    original_get = httpx.get
+    httpx.get = lambda url, **_kw: _fake_weather_get_response(url, call_log)  # offline HTTP double
+    try:
+        first = ws.get_weather_data()
+        calls_after_first = len(call_log)
+        second = ws.get_weather_data()
+    finally:
+        httpx.get = original_get  # restore
+
+    _check("warm cache: first call fetches without error", "error" in first, False)
+    _check(
+        "warm cache: first call hits upstream exactly twice (BrightSky + OpenMeteo)",
+        calls_after_first,
+        2,
+    )
+    _check("warm cache: second call hits upstream ZERO more times", len(call_log), 2)
+    _check(
+        "warm cache: second call returns the identical cached object (no recompute)",
+        second is first,
+        True,
+    )
+
+
+def _test_weather_stale_while_revalidate() -> None:
+    """F2: once the TTL expires, a caller gets the OLD data immediately and
+    exactly one background thread refreshes the cache; an overlapping caller
+    during that refresh gets the same stale data, never a second fetch.
+    """
+    ws = WeatherService(lat=48.15, lon=11.58, stat_name="SWRTest")
+    call_log: list[str] = []
+    original_get = httpx.get
+
+    # 1. Populate a good, warm cache (dwd_temp=20.0).
+    httpx.get = lambda url, **_kw: _fake_weather_get_response(url, call_log, dwd_temp=20.0)
+    try:
+        first = ws.get_weather_data()
+    finally:
+        httpx.get = original_get
+    _check("SWR setup: initial fetch succeeds", "error" in first, False)
+    calls_before_refresh = len(call_log)
+
+    # 2. Age the cache past WEATHER_CACHE_TTL_S, and install a gated stub
+    #    (dwd_temp=99.0) that blocks mid-fetch until the test releases it —
+    #    proving the refresh runs off-thread rather than blocking the caller.
+    ws._cache_time -= WEATHER_CACHE_TTL_S + 1
+    started_event = threading.Event()
+    release_event = threading.Event()
+
+    def gated_get(*_args: Any, **_kwargs: Any) -> httpx.Response:
+        url = str(_args[0]) if _args else str(_kwargs["url"])
+        response = _fake_weather_get_response(url, call_log, dwd_temp=99.0)
+        started_event.set()
+        release_event.wait(timeout=5)
+        return response
+
+    httpx.get = gated_get  # offline HTTP double
+    try:
+        stale = ws.get_weather_data()
+        _check(
+            "SWR: a stale call returns the OLD data immediately (no block on refresh)",
+            stale.get("temperatur_celsius"),
+            20.0,
+        )
+        _check(
+            "SWR: a stale call marks a refresh in flight",
+            ws._refresh_in_flight,
+            True,
+        )
+
+        # Wait for the background thread to actually issue its first upstream
+        # call (and block on it) before checking overlap — otherwise the
+        # overlapping-call assertions below would race the thread scheduler.
+        _check(
+            "SWR: the background refresh actually starts fetching",
+            _wait_until(started_event.is_set, timeout_s=2),
+            True,
+        )
+
+        # 3. Overlap a second stale call while the refresh is still gated: it
+        #    must get the same stale data and must NOT start a second fetch.
+        overlapping = ws.get_weather_data()
+        _check(
+            "SWR: an overlapping stale call also gets the OLD data",
+            overlapping.get("temperatur_celsius"),
+            20.0,
+        )
+        _check(
+            "SWR: an overlapping stale call triggers no additional upstream hit yet",
+            len(call_log),
+            calls_before_refresh + 1,  # only the gated fetch's first (BrightSky) call so far
+        )
+
+        # 4. Let the background refresh finish and wait for it (poll, no sleep-by-count).
+        release_event.set()
+        finished = _wait_until(lambda: not ws._refresh_in_flight)
+        _check("SWR: the background refresh completes", finished, True)
+    finally:
+        httpx.get = original_get  # restore
+
+    _check(
+        "SWR: exactly one background fetch ran (2 upstream calls, not 4)",
+        len(call_log),
+        calls_before_refresh + 2,
+    )
+
+    refreshed = ws.get_weather_data()
+    _check(
+        "SWR: the following call returns the refreshed payload",
+        refreshed.get("temperatur_celsius"),
+        99.0,
+    )
+
+
+def _test_weather_failed_refresh_keeps_good_data() -> None:
+    """F2: a background refresh that fails must not clobber good stale data
+    with an error payload — the last good result keeps being served, and the
+    error TTL throttles the next retry attempt instead of hammering on every
+    call.
+    """
+    ws = WeatherService(lat=48.15, lon=11.58, stat_name="FailRefreshTest")
+    call_log: list[str] = []
+    original_get = httpx.get
+
+    httpx.get = lambda url, **_kw: _fake_weather_get_response(url, call_log, dwd_temp=20.0)
+    try:
+        good = ws.get_weather_data()
+    finally:
+        httpx.get = original_get
+    _check("failed-refresh setup: initial fetch succeeds", "error" in good, False)
+    calls_before_refresh = len(call_log)
+
+    ws._cache_time -= WEATHER_CACHE_TTL_S + 1
+
+    def failing_get(*_args: Any, **_kwargs: Any) -> httpx.Response:
+        raise httpx.ConnectError("simulated upstream outage")
+
+    original_sleep = time.sleep
+    time.sleep = lambda *_a, **_kw: None  # no real retry delay in this test
+    httpx.get = failing_get  # offline HTTP double
+    try:
+        stale = ws.get_weather_data()
+        _check(
+            "failed-refresh: the stale call still returns the last good data",
+            stale.get("temperatur_celsius"),
+            20.0,
+        )
+        finished = _wait_until(lambda: not ws._refresh_in_flight)
+        _check("failed-refresh: the background refresh attempt completes", finished, True)
+    finally:
+        httpx.get = original_get  # restore
+        time.sleep = original_sleep  # restore
+
+    _check(
+        "failed-refresh: the served cache is still the good data, not an error",
+        "error" in ws._cache if ws._cache is not None else True,
+        False,
+    )
+
+    # A second call, immediately after, must NOT spawn another refresh attempt
+    # (error-TTL throttling) — no further upstream hits.
+    httpx.get = lambda url, **_kw: _fake_weather_get_response(url, call_log, dwd_temp=42.0)
+    try:
+        again = ws.get_weather_data()
+    finally:
+        httpx.get = original_get
+    _check(
+        "failed-refresh: a call right after the failure keeps serving the good data",
+        again.get("temperatur_celsius"),
+        20.0,
+    )
+    _check(
+        "failed-refresh: no additional upstream hit before WEATHER_ERROR_CACHE_TTL_S elapses",
+        len(call_log),
+        calls_before_refresh,
+    )
+
+    # After the error TTL, a retry IS attempted and succeeds.
+    ws._refresh_retry_after -= WEATHER_ERROR_CACHE_TTL_S + 1
+    httpx.get = lambda url, **_kw: _fake_weather_get_response(url, call_log, dwd_temp=42.0)
+    try:
+        ws.get_weather_data()
+        finished = _wait_until(lambda: not ws._refresh_in_flight)
+    finally:
+        httpx.get = original_get
+    _check("failed-refresh: the retry after the error TTL completes", finished, True)
+    recovered = ws.get_weather_data()
+    _check(
+        "failed-refresh: the retried fetch eventually replaces the stale data",
+        recovered.get("temperatur_celsius"),
+        42.0,
+    )
+
+
+def _test_weather_cache_location_change_fetches_anew() -> None:
+    """F2: `update_location()` must invalidate the new (finished-result)
+    cache exactly like it did the old raw-fetch cache — the next call after
+    a location change is a fresh synchronous fetch, not stale-while-revalidate.
+    """
+    ws = WeatherService(lat=48.15, lon=11.58, stat_name="MoveTest")
+    call_log: list[str] = []
+    original_get = httpx.get
+    httpx.get = lambda url, **_kw: _fake_weather_get_response(url, call_log, dwd_temp=20.0)
+    try:
+        first = ws.get_weather_data()
+        calls_before_move = len(call_log)
+
+        ws.update_location(48.40, 11.75, "MovedTest")
+        second = ws.get_weather_data()
+    finally:
+        httpx.get = original_get
+
+    _check("location change: initial fetch succeeds", "error" in first, False)
+    _check(
+        "location change: the next call fetches anew (2 more upstream hits)",
+        len(call_log) - calls_before_move,
+        2,
+    )
+    _check(
+        "location change: the new fetch is a distinct result, not the stale one",
+        second is not first,
+        True,
+    )
+
+
 def run_meteo_tests() -> bool:
     """Run all pure-logic meteo tests. Returns True iff every case passed."""
     results.clear()  # allow repeated invocations within one process (e.g. re-runs)
@@ -792,11 +1117,16 @@ def run_meteo_tests() -> bool:
     _test_is_valid_position()
     _test_no_position_defers_without_network()
     _test_update_location_bumps_generation_and_invalidates_cache()
+    _test_update_location_same_place_keeps_cache()
     _test_make_request_4xx_fails_fast()
     _test_retry_after_is_honoured_but_bounded()
     _test_make_request_5xx_retries()
     _test_make_request_timeout_retries()
     _test_make_request_recovers_on_retry()
+    _test_weather_cache_warm_hits_upstream_once()
+    _test_weather_stale_while_revalidate()
+    _test_weather_failed_refresh_keeps_good_data()
+    _test_weather_cache_location_change_fetches_anew()
 
     passed = sum(1 for status, _ in results if status.startswith("✅"))
     total = len(results)

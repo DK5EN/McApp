@@ -26,7 +26,7 @@ jobs:
         # turns off for pull_request_target / workflow_run / release (cache
         # poisoning). The cache is enabled explicitly below and this workflow
         # triggers on none of those events, so the bump is a no-op for us.
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.1.0
         with:
           enable-cache: true
 

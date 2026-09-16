@@ -558,6 +558,31 @@ DROPIN
     systemctl daemon-reload
     log_ok "  caddy systemd drop-in written (${dropin_file})"
   fi
+
+  # 3. Systemd drop-in — Go runtime memory ceiling (backlog B4 item 8). The box
+  #    runs the DISTRO caddy unit (/usr/lib/systemd/system/caddy.service), so
+  #    bootstrap/templates/caddy/caddy.service is never installed here; a drop-in
+  #    is the only path that reaches a running install. Caddy RSS is ~21 MB;
+  #    48 MiB leaves headroom for TLS handshakes without GC thrash.
+  local mem_file="${dropin_dir}/memory.conf"
+  local mem_marker="Environment=GOMEMLIMIT=48MiB"
+  if [[ -f "$mem_file" ]] && grep -qF "$mem_marker" "$mem_file" 2>/dev/null; then
+    log_info "  caddy memory drop-in already in place"
+  else
+    mkdir -p "$dropin_dir"
+    cat > "$mem_file" <<'DROPIN'
+[Service]
+# Go runtime memory ceiling for a 512 MB Pi (McApp backlog B4). GOMEMLIMIT is a
+# soft cap the GC works towards, not an OOM kill; GOGC=50 collects earlier.
+Environment=GOMEMLIMIT=48MiB
+Environment=GOGC=50
+DROPIN
+    systemctl daemon-reload
+    if systemctl is-active --quiet caddy 2>/dev/null; then
+      systemctl restart caddy 2>/dev/null || log_warn "  caddy restart failed — memory limit applies on next restart"
+    fi
+    log_ok "  caddy memory drop-in written (${mem_file})"
+  fi
 }
 
 configure_caddy() {

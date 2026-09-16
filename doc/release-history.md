@@ -1,5 +1,81 @@
 # Release History
 
+## v2.0.8 (2026-09-16)
+
+Operations release. Every stall between the webapp and the API is now recorded with the data
+needed to reproduce it, the first 14 hours of that data were turned into fixes, the Pi Zero's
+memory budget was reclaimed from a CMA reservation, store-and-forward DM delivery states are
+rendered, and the message detail popover stops inventing facts. Schema **v30 → v32**. Push
+contract **v9 → v10**. System epoch **2 → 4** (boot memory settings and the Caddy memory
+drop-in; the converge watchdog applies them, the boot settings need one reboot).
+
+### Highlights
+
+- **Stall tracking.** Server ASGI middleware, the webapp's fetch wrapper, the SSE answer path,
+  every router handler, an event-loop lag watchdog and the thread-pool queue all record stalls
+  into `stall_events`, correlated by `X-Request-Id`, with a 1-in-50 baseline sample.
+  `GET /api/stalls` and `/api/stalls/summary` are the read surfaces;
+  `scripts/replay_stall.py --id N` re-issues a recorded request. `loop_lag` rows carry the
+  blocking stack. Thresholds live under `stalls` in `config.json`.
+- **Ingest stalls fixed at the root.** The 0.5-1.25 s `store_message` stalls seen in the first
+  data were not many DB calls (a message makes 2-6) but the WAL fsync every commit does on the
+  SD card at `synchronous=FULL`: 15 ms typical, 1.7 s outliers, measured on the box. `db_write`
+  runs at `synchronous=NORMAL` now (crash-safe in WAL mode; the last transactions can be lost on
+  power loss). Under the fix: one ingest stall in 55 minutes where there were four per hour.
+- **Weather route no longer blocks.** A stale cached result is served immediately and refreshed
+  in one background thread; an unchanged GPS re-announcement from the node no longer throws the
+  cache away; `timezonefinder` is warmed 30 s after startup instead of on the first request
+  (3.9 s). The sperrliste refresh no longer builds its TLS trust store on the event loop
+  (0.8 s every 15 min).
+- **Memory footprint (backlog B4).** `gpu_mem=16`, the KMS overlay's CMA pool shrunk from
+  256 MB to 64 MB, audio off, `MALLOC_ARENA_MAX=2` with a direct venv `ExecStart`, journald
+  `RuntimeMaxUse=8M`, Caddy `GOMEMLIMIT=48MiB`, the `unattended-upgrades` shutdown hook
+  disabled (its timers keep running). After the reboot: MemTotal 415 → 473 MB.
+- **Store-and-forward DM status.** `0x03 failed` / `0x04 held` ack frames are ranked
+  (`sent/node/gateway < held < failed < acked`) in the UPDATE's own WHERE clause, so
+  out-of-order acks are race-proof, and the webapp renders held / failed. `:sto` text stays
+  visible in history and push-silent.
+- **ACK attribution corrected.** The inline `:ackNNN` match requires the ack's addressing and a
+  one-hour window (168 h for a message already `held`); a bare counter match had marked an
+  unrelated DM ✓✓ Delivered.
+- **Message detail popover.** The firmware's `rssi=0/snr=0` "no RF reception" sentinel is no
+  longer stored on `messages` rows nor rendered as a `Signal`; `Hardware` and `Firmware` are
+  separate rows; the `MOD 8` token is gone; the live path merges the complementary UDP and BLE
+  copies of one frame the way the database already did, so `Hardware` no longer appears only
+  after a reload. A message that reaches the node only over Extern-UDP still has no hardware
+  id: that needs a firmware change (handover written).
+
+### Backend (MCProxy)
+
+- Migration 31 (store-forward ledger) and 32 (`stall_events`).
+- `StallMiddleware` is pure ASGI, outermost after CORS, passes `/events*`, `/update-stream`
+  and `/health` through untouched; the recorder writes on its own thread and never uses the
+  shared executor; the counting executor is installed before the first `to_thread`.
+- Bootstrap: boot memory settings written idempotently under a marker pair in `config.txt`,
+  `cmdline.txt` kept to one line, `reboot-required` marker set and cleared once live; Caddy
+  memory limit as a systemd drop-in (the box runs the distro unit).
+- Extern-UDP `{"type":"ack"}` datagrams are claimed before the non-chat log.
+- Dependencies: uvicorn 0.53, urllib3 2.8, yarl 1.25; `ble_service/uv.lock` regenerated.
+
+### Frontend (webapp)
+
+- Stall reporter: every API call timed, stalls uploaded to `POST /api/stalls/client`; a
+  hidden-tab SSE heartbeat timeout (iOS background suspension) is a `sample`, not `critical`.
+- Store-and-forward delivery status rendering; message detail popover fixes and the
+  live-duplicate merge (above); MapSearch model fix; `@lucide/vue` 1.45.
+- `@lucide/vue` and transitive pins refreshed with `npm update`.
+
+### Upgrade notes
+
+- Migrations 31 and 32 run at first start; both are additive.
+- The system epoch converge writes the boot memory settings and sets
+  `/var/lib/mcapp/reboot-required`; **reboot the Pi once** after the update to get the CMA and
+  `gpu_mem` change. Nothing breaks before the reboot.
+- `synchronous=NORMAL` trades the durability of the last few transactions on power loss for
+  the removal of a per-commit fsync. The database file cannot be corrupted by it.
+- Soak: v2.0.8-dev.4 ran 55 minutes and dev.5 (the last two performance fixes) minutes on
+  mcapp.local before this promotion — shorter than the usual soak, by operator decision.
+
 ## v2.0.7 (2026-09-11)
 
 Small patch release: the APRS position parser now hands the free-text comment and the node name

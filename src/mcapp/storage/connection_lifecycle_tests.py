@@ -52,11 +52,13 @@ import ast
 import sqlite3
 import tempfile
 import threading
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
 from ..logging_setup import get_logger
 from ..sqlite_storage import create_sqlite_storage
+from .constants import db_read, db_write
 from .migration_chain_tests import FINAL_SCHEMA_VERSION
 
 logger = get_logger(__name__)
@@ -385,6 +387,40 @@ async def _test_tracker_detects_known_leak(results: list[tuple[str, bool]]) -> N
     results.append((f"tracker detects a known leak (still_open={detected})", detected == 1))
 
 
+async def _test_write_connections_use_synchronous_normal(results: list[tuple[str, bool]]) -> None:
+    """F1: `db_write` must set `PRAGMA synchronous=NORMAL`, and only `db_write`.
+
+    In WAL mode the default `synchronous=FULL` fsyncs the WAL on every commit,
+    which on the production Pi's SD card measured 15 ms typical / up to 1.7 s
+    per commit and was the entire cause of the F1 handler stalls (see
+    `db_write`'s docstring in `constants.py`). `db_read` never commits, so it
+    is deliberately left at the SQLite default (`FULL` / `2`) rather than
+    also being switched — this asserts that omission is intentional, not a
+    gap.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "synchronous.db"
+        try:
+            # Put the file into WAL mode first, as production databases run.
+            with closing(sqlite3.connect(db_path)) as setup_conn:
+                setup_conn.execute("PRAGMA journal_mode=WAL")
+
+            with db_write(db_path) as conn:
+                write_sync = conn.execute("PRAGMA synchronous").fetchone()[0]
+
+            with db_read(db_path) as conn:
+                read_sync = conn.execute("PRAGMA synchronous").fetchone()[0]
+        except Exception:
+            logger.exception("synchronous-pragma probe raised")
+            results.append(("synchronous pragma probe runs end-to-end", False))
+            return
+
+    results.append((f"db_write sets synchronous=NORMAL (got {write_sync})", write_sync == 1))
+    results.append(
+        (f"db_read stays at the default synchronous=FULL (got {read_sync})", read_sync == 2)
+    )
+
+
 async def run_connection_lifecycle_tests() -> bool:
     """Run the SQLite connection-lifecycle suite. Returns True iff all pass."""
     results: list[tuple[str, bool]] = []
@@ -393,6 +429,7 @@ async def run_connection_lifecycle_tests() -> bool:
     await _test_writes_are_committed(results)
     await _test_no_unpatchable_sqlite_imports(results)
     await _test_tracker_detects_known_leak(results)
+    await _test_write_connections_use_synchronous_normal(results)
 
     for label, ok in results:
         print(f"    {'✅ PASS' if ok else '❌ FAIL'} | {label}")

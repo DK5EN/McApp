@@ -204,6 +204,19 @@ def normalize_extudp_ack(message: dict[str, Any]) -> dict[str, Any] | None:
     "via": "lora"}` — `status` uses the firmware's BLE status byte values
     (0 Node ACK / heard, 1 Gateway ACK, 2 Peer ACK), `from`/`via` optional.
 
+    The accepted status range is now 0x00-0x04: 0x03/0x04 are the
+    store-and-forward additions (firmware spec, sibling repo:
+    MeshCom-Firmware-DEV-Main/docs/client-integration-store-forward.md §2;
+    fork-main 150b0a4a). 0x03 "failed" — all retries exhausted, nobody acked;
+    attribution is the DESTINATION, not a relaying station. 0x04 "held" — a
+    store-and-forward node is holding the DM for an absent destination;
+    attribution is the HOLDER, and this is NOT a final state (a later `acked`
+    still replaces it). The validity gate below deliberately checks membership
+    in `ble_protocol.ACK_KIND_BY_TYPE` rather than listing accepted byte values
+    itself, so this path and the BLE binary-frame path cannot drift on what
+    counts as a valid status — widening the shared map (as it was for 0x03/0x04)
+    widens both ingest paths at once, with no second gate to remember to update.
+
     Returns the SAME dict shape `ble_protocol.transform_ack` produces for the
     BLE binary frame (`type`, `msg_id`, `ack_type`, `ack_type_text`, optional
     `ack_from`/`ack_via`), so `storage/ingest.py::_handle_ack` has one input

@@ -99,6 +99,127 @@ Add columns/tables via a `current_version < N` block in the chain in `storage/mi
 
 System-level machine state (packages, firewall, web front door) is versioned by `SYSTEM_EPOCH` in `bootstrap/mcapp.sh` and mirrored by `REQUIRED_SYSTEM_EPOCH` in `src/mcapp/system_converge.py` — bump both together, a startup test enforces parity. Installed state is marked at `/var/lib/mcapp/system-epoch`; `mcapp.sh --converge` runs `setup_system` + `install_packages` idempotently to bring a box up to date. The update runner converges the newly deployed slot after every successful update, and the app's converge watchdog self-heals boxes whose update was driven by a pre-epoch runner.
 
+## Memory Footprint (B4)
+
+Reduced the usable-RAM squeeze on mcapp.local's Pi Zero 2W (512 MB physical, 415 MB seen by
+Linux, only ~144 MB usable for kernel non-movable allocations before this work) — shipped
+2026-09-15 alongside stall tracking in the same campaign. Plan and the PSS measurements:
+`doc/backlog.md` B4, `doc/2026-09-15_1530-stall-tracking-plan.md` §8.
+
+- **The 512/415/144 MB budget was never a RAM shortage — it was a CMA reservation.** The stock
+  boot config reserved 64 MB for the GPU plus a 256 MB CMA pool on a headless box with no HDMI
+  or audio load, which is what actually pushed processes into zram swap under normal operation.
+  `gpu_mem=16` and shrinking the KMS overlay's CMA to `cma-64` (`dtoverlay=vc4-kms-v3d,cma-64`,
+  `dtparam=audio=off`) are the largest single win, in `bootstrap/lib/system.sh`'s
+  `configure_boot_memory` / `_mcapp_configure_config_txt`.
+- **Boot-config changes need a reboot and are marked, never assumed applied.** A change writes
+  `/var/lib/mcapp/reboot-required`; the converge path must check that marker rather than assume
+  the new `gpu_mem`/`cma-64`/`cgroup_enable=memory` values are already live.
+- **`gpu_mem` must land in `[all]` or before any section header — a Pi Zero 2 W trap.**
+  `_mcapp_configure_config_txt` appends a `[all]` block with a begin/end marker comment pair so a
+  re-run can find and update it idempotently instead of duplicating it.
+- **`cmdline.txt` must stay exactly ONE line.** `_mcapp_configure_cmdline_txt` appends
+  `cgroup_enable=memory cgroup_memory=1` to the existing single line rather than writing a new
+  one — a second line makes the bootloader ignore the file.
+- **`MALLOC_ARENA_MAX=2` plus a direct venv `ExecStart`** in both `bootstrap/templates/*.service`
+  — `uv run` is no longer used at exec time (still used by `deploy.sh` to build the venv), which
+  removes an idle wrapper process and a resolver step per restart. `WorkingDirectory` is
+  load-bearing for the BLE service specifically: uvicorn's CLI inserts the CWD into `sys.path` via
+  its `--app-dir` default, which is how `ble_service.src.main:app` resolves at all.
+- **journald `RuntimeMaxUse=8M`** (`configure_journald`, was 20M) and **Caddy
+  `GOMEMLIMIT=48MiB` + `GOGC=50` via the drop-in `/etc/systemd/system/caddy.service.d/memory.conf`**
+  written by `configure_caddy_sudo` in `bootstrap/lib/packages.sh`. mcapp.local runs the DISTRO
+  caddy unit, so `bootstrap/templates/caddy/caddy.service` is never installed there — an edit to
+  that template reaches no running box (found 2026-09-15 when the first attempt did exactly that).
+- **`unattended-upgrades.service` disabled, its timers kept.** `configure_unattended_upgrades`
+  disables only the `unattended-upgrade-shutdown --wait-for-signal` shutdown hook (7 MB RSS);
+  `apt-daily-upgrade.timer` keeps running the actual upgrades on schedule. Do not re-enable the
+  service as a "fix" for missed updates — the timer is what does the work, this unit only trims a
+  shutdown-time nicety.
+- **`SYSTEM_EPOCH` bumped to 3, then 4 for the Caddy drop-in** (`bootstrap/mcapp.sh` / `REQUIRED_SYSTEM_EPOCH` in
+  `system_converge.py`) alongside these changes, per the existing System Epoch convergence
+  contract above.
+
+## Stall Tracking (`stall_events`, `/api/stalls`)
+
+Every stall between the webapp and the API — server- and client-observed — recorded with the
+parameters needed to reproduce it, keyed by one correlation id, retrievable by a coding agent
+through `/api/stalls`. No UI; this is capture-and-upload only. Design and the interface contract:
+`doc/2026-09-15_1530-stall-tracking-plan.md`.
+
+- **A stall is any call that crosses a duration threshold, recorded by `kind` into
+  `stall_events`.** `http` (server ASGI middleware), `client_http` (webapp fetch wrapper,
+  includes the Caddy/lighttpd hop), `sse_answer` (`page_request` → SSE `response`, missing after
+  10 s → `sse_answer_missing`) and `handler` (one `MessageRouter.publish` subscriber) are
+  **0.5 s = stall, 2 s = critical**, plus a **1-in-50 sample of every sub-threshold call**
+  (`severity="sample"`) so there is a healthy baseline to diff against. `loop_lag` (event-loop
+  drift watchdog) and `pool_wait` (queue wait before a `to_thread` job ran) are far tighter —
+  **100 ms stall / 500 ms critical** — because they measure infrastructure health, not a
+  user-facing SLO: a 100 ms event-loop hesitation is already abnormal. `client_timeout` (10 s
+  fetch abort), `client_error` (network error / HTTP ≥ 400) and `sse_heartbeat` (90 s reconnect
+  watchdog) are recorded unconditionally — there is no sub-threshold case for "it failed." All
+  thresholds live under the `stalls` key in `config.json` (`StallsConfig`,
+  `src/mcapp/config_loader.py`); an absent key means the defaults above.
+- **Correlation is `X-Request-Id`, minted by the client and echoed by the server** on the
+  response and stored on both ends' rows; `X-Session-Id` (per browser tab) rides alongside it.
+  `mcapp.stalls.current_request_id` is a `ContextVar[str | None]` set by the middleware for the
+  request's lifetime, so a `handler` stall triggered by that request can still report the id. The
+  `page_request` path is the one exception — it already carried its own `request_id`
+  (webapp `messages.ts`, echoed on `proxy:messages_page`) before this work existed, and the
+  client's `sse_answer` timer keys on that pre-existing id instead of minting a new one.
+- **The middleware is PURE ASGI, never `BaseHTTPMiddleware`.** `BaseHTTPMiddleware` buffers the
+  whole response before the downstream body is visible, which would turn `/events` and
+  `/update-stream` — long-lived SSE streams — into "one very slow request" or break them outright.
+  `StallMiddleware` (`src/mcapp/stall_middleware.py`) taps `receive`/`send` chunk by chunk instead,
+  and passes `/events*`, `/update-stream` and `/health` through completely untouched: no id, no
+  header, no timing.
+- **Added after `CORSMiddleware` so it is the OUTERMOST layer** (`sse_handler.py`,
+  `_create_app`) — Starlette applies middleware innermost-first in registration order, so timing
+  from outside CORS covers the whole stack, not just what CORS lets through.
+- **The recorder has its OWN writer thread and never touches the shared executor.** `record()`
+  and `ingest_client()` are non-blocking: they push onto a bounded `queue.Queue(maxsize=1000)` and
+  return, drained by one dedicated `mcapp-stalls-writer` thread with its own SQLite connection. A
+  starved thread pool must not make the stall logger itself stall, or stall reporting would fail
+  exactly when it is most needed; a full queue drops the row and counts the drop rather than
+  blocking.
+- **The counting executor is installed BEFORE any `to_thread` call.** `install_executor()` swaps
+  in a `ThreadPoolExecutor` subclass as the loop's default executor, in `build_app()` before
+  `create_sqlite_storage` runs — installed any later and the first `to_thread` calls would already
+  be running on the un-instrumented default, invisibly to `pool_wait`.
+- **The recorder's own DDL duplicates migration 32 on purpose.** `StallRecorder.start()` issues
+  the identical `CREATE TABLE/INDEX IF NOT EXISTS stall_events` statements as a defensive
+  fallback; migration 32 (`storage/migrations.py`) is the canonical, schema-versioned source.
+  Keep the two texts byte-identical if either changes.
+- **Redaction replaces VALUES, not keys**, for push-subscription fields (`endpoint`, `keys`,
+  `p256dh`, `auth`) and anything named `*api_key*`/`authorization` (`redact()` in
+  `src/mcapp/stalls.py`) — applied to `body`/`detail`/`context` on both server records and
+  client-submitted ones (redacted again server-side in `ingest_client`, never trusted from the
+  client). **Message text is deliberately kept** — it is ham radio traffic, not a secret, and is
+  often exactly what a coding agent needs to reproduce a slow handler.
+- **`/api/stalls` (full records, coding-agent interface) and `/api/stalls/summary`
+  (per-path p50/p95/p99/max baseline) are read surfaces; `POST /api/stalls/client` is how the
+  webapp uploads its own observations** (`src/mcapp/sse_routes/stalls.py`, one or an array of
+  records, capped at 100/call). `scripts/replay_stall.py --id <row>` re-issues the recorded
+  `method path?query`+`body` against a running instance and prints new p50/p95/max next to the
+  recorded duration and server context — the reproduce tool, not a dashboard.
+- **Row cap is `max_rows` (default 5000)**, enforced by the writer thread pruning the oldest rows
+  every 200 inserts — not a nightly job, and not schema-enforced.
+- **`db_write` runs at `synchronous=NORMAL`, and the first stall data proved why.** The
+  0.5-1.25 s `handler` rows of v2.0.8-dev.3 were NOT many DB calls (a real message makes 2-6)
+  but the WAL fsync every commit does at the default `FULL` on the SD card: 15 ms typical,
+  1.7 s outliers, measured 2026-09-16 against a copy of the live DB. NORMAL keeps WAL
+  crash-safe (fsync at checkpoints) and trades the last transactions on power loss. Measure on
+  the Pi's ext4 root, never in `/tmp` — it is tmpfs there and hides the whole effect.
+- **`loop_lag` rows carry the blocker's stack** (`detail.stack`, `samples`, `sampled_at_ms`).
+  The lag loop runs ON the loop and cannot see what blocked it, so a daemon thread
+  (`mcapp-stalls-lagsampler`) compares a heartbeat every 50 ms and reads the loop thread's frame
+  through `sys._current_frames()` only once overdue. An unsampled lag omits the key entirely.
+- **`sse_heartbeat` from a hidden tab is a `sample`, not `critical`** (webapp
+  `recordSseHeartbeatTimeout`): iOS suspends the PWA and wakes it hourly while still hidden.
+- **`ble_connected` handles property-vs-method.** `is_connected` is a property on the remote BLE
+  client (and on every current client); the gauge (`_ble_connected` in `main.py`) tolerates a method too and calls it
+  only when callable, mirroring the same pattern the BLE code already uses elsewhere.
+
 ## Link Check (`{ping}` / `{pong}`)
 
 Probes whether a station answers on **direct RF**, using the firmware's `v4.35p.07.24.2` ping
@@ -250,8 +371,85 @@ firmware side: `MeshCom-Firmware-DEV-Main/docs/ack-wer-hat-quittiert.md`.
   pinned by `ack_status_tests` cases 1-6; adding `from: None` breaks them and mc-chat parity.
 - **`message_acks.from_call` is `''`, never NULL, for an unattributed frame** so the
   `(msg_id, kind, from_call)` key collapses repeats once firmware stops gating "first ACK only".
+- **`echo_id` identifies NOTHING on its own — the inline `:ackNNN` match needs the ack's addressing
+  AND a 1-hour window.** It is the firmware's `{NNN` counter: three digits, minted per sender,
+  unique only within that sender and roughly an hour. The lookup was `WHERE echo_id = ? ORDER BY
+  timestamp DESC LIMIT 1`, so any station's ack marked whichever message last used that number —
+  on mcapp.local an own DM to DK1TCP-77 rendered ✓✓ Delivered because an unrelated DH6MAV pair
+  reused 201 forty-four minutes later (5 of 82 acked rows mis-attributed; 25 of 200 live counter
+  values already shared by >1 sender). Same user-visible failure as the 2026-08-19 ctcping bug.
+  `_inline_ack_original` now requires the original's sender to be who the ack is addressed TO and
+  its target to be who it came FROM, inside `DEDUP_WINDOW_MS`. **Both halves are load-bearing and
+  each is mutation-pinned.** Do NOT widen the window to cover a store-and-forward hold: past the
+  counter's horizon a "match" is not evidence, and a held DM's real ack still arrives exactly as a
+  binary `0x02` frame carrying the true msg_id — **except for a message already at
+  `delivery_status = 'held'`**, which gets `HELD_ACK_WINDOW_MS` (168 h, the firmware's
+  `--storetime` max) instead. That exception is not optional: a held DM legitimately sits in a
+  mailbox until the destination reappears, so a flat 1 h window refuses every late ack and strands
+  it at `held` forever. Leaning on `0x02` alone does not cover it — the extUDP path has no binary
+  ack, and neither does mc-chat, so for them the text IS the only signal. Widening it only for
+  already-held rows keeps the ambiguity small: a false match needs the same pair, the same
+  counter, AND the older message still held — and since the counter is ours, reusing it means
+  1000 messages to that station in between.
+- **Never key the inline match on the ack payload's padded callsign.** `%-9.9s:ack%03i` TRUNCATES
+  at 9 chars (`OE1ABCD-12` arrives as `OE1ABCD-1`) and real traffic shows the no-separator case
+  (`DK1TCP-77:ack622`). The frame's `src`/`dst` carry the same identities untruncated. The padded
+  field holds the ORIGINAL SENDER, not the acking station — a test fixture said otherwise until
+  2026-09-14.
 - **The extUDP `{"type":"ack"}` datagram has no `msg` key** and must be claimed in
   `_handle_non_chat_frame` before the DEBUG-only non-chat log, which is where it used to vanish.
+
+## Store-and-Forward DM Status (`0x03 failed` / `0x04 held`)
+
+Delivery states a store-and-forward node reports for a DM, on top of the three ACK kinds above.
+Plan and the decisions: `doc/2026-09-14_1153-store-forward-dm-status-plan.md`; firmware side:
+`MeshCom-Firmware-DEV-Main/docs/client-integration-store-forward.md` (fork-main `150b0a4a`).
+
+- **`failed` must NOT set `send_success`, and that is the whole point of the branch.** `_handle_ack`
+  set it unconditionally for every ack type; `0x03` means every retry was exhausted and nobody
+  acked, so the pre-existing write would have marked the message transport-confirmed — the exact
+  inversion of the frame. The `0x03` path runs a read-only existence `SELECT` instead, so `rows`
+  still means "a matching original exists" for the record/publish gates. `0x04 held` KEEPS the
+  write: a store node demonstrably took the frame off the air.
+- **Precedence is one monotone rank, enforced in the UPDATE's own WHERE clause.**
+  `sent/node/gateway = 1 < held = 2 < failed = 3 < acked = 4`, NULL = 0 via the SQL `CASE`'s `ELSE`;
+  `_DELIVERY_STATUS_RANK` in `storage/ingest.py` is the single source and the SQL is built from it.
+  Encoding the test in SQL rather than read-then-write is what makes two out-of-order acks
+  race-proof — the loser matches zero rows instead of clobbering a higher rank from a stale read.
+  This reproduces every rule in the spec's §2 and every sequence in its §6 with no special case.
+- **Equal rank does not overwrite, so `held(A)` then `held(B)` keeps A.** The spec says "show the
+  most recent holder"; a strict `>` is what makes the scheme race-proof, so the deviation is
+  deliberate. Both holders survive in `message_acks`, whose `(msg_id, kind, from_call)` key also
+  collapses the firmware's hourly per-holder repeat for free. `holder` is written through
+  `COALESCE(?, holder)` so an unattributed frame never blanks a known holder.
+- **`acked: false` on the `failed` event is a compatibility floor, not decoration.** The webapp's
+  `msg:status` handler renders ANY event with no `sent` key and no `acked === false` as a peer
+  acknowledgement — ✓✓ Delivered. Without that key a `failed` event renders the one thing it
+  exists to deny. Do not remove it once the webapp learns `ack_kind: "failed"`. `held` needs no
+  such guard: its `sent: true` takes the transport branch, which is already the honest rendering.
+- **`holder` is a deliberate duplicate of `from` on the `held` event.** The spec names it; the
+  webapp reads it without knowing this repo's attribution convention.
+- **There are TWO paths that mean "the addressee answered", and both must write the rank.** The
+  binary `0x02` branch in `_handle_ack` and the inline `:ackNNN` TEXT match further down
+  `store_message` are independent; wiring only the first left a `held` message acked by text
+  sitting at `delivery_status='held'` AND `acked=1`, with history contradicting the live event.
+  The inline path passes `row_id=` explicitly, because it locates the original by `echo_id` while
+  `_write_delivery_status`'s own lookup takes the newest row for the msg_id — and one msg_id
+  legitimately has two transport copies, so resolving separately can mark `acked` on one and
+  `delivery_status` on the other.
+- **Do not fold this into the existing `send_failed` event.** `_publish_send_failed` (`main.py`) is
+  a LOCAL send failure, emitted before a msg_id exists, which is why the webapp matches it by
+  `dst` + `msg`. `0x03` has a msg_id and is a different fact. Same display fields, distinct events.
+- **`:sto` is push-silent but history-VISIBLE, and the asymmetry with `:ack` is intended.** Push
+  contract **v10** widens the noise clause to `:ack` / `:rej` / `:sto`; `query.py`'s exclusion
+  stays `msg NOT GLOB '*:ack[0-9]*'` so the text keeps showing, because behind a node without the
+  `0x41` frame it is the only signal the operator gets that the DM is held (spec §3 forbids
+  filtering it silently). Never "fix" this into symmetry.
+- **No `held` is synthesised from that `:sto` text**, and no push is emitted for `failed` or for
+  `acked`-after-`held` — both deliberate, reasons in the plan's §6.1/§6.2.
+- **The frame decoder needed no change and still needs none.** `parse_ack_appendix` walks by the
+  length byte and `_ACK_APPENDIX_MAX_LEN = 10` already covers the spec's `n <= 9`. An unknown
+  status byte is reported as `unknown(...)`, never an error — the spec is explicit about that.
 
 ## Unread Cursors (`read_cursors`, sidebar badges)
 
@@ -393,7 +591,7 @@ One policy, one module, both ingest routes. Firmware background: CHR-03
 ## Key Gotchas
 
 - **A `#TAG` destination is a hashtag channel, not a callsign — and `is_group()` stays numeric.** The MeshCom FW 4.36 RfC puts a `#OE-SOTA` token in the destination field. All three repos independently misclassified it as a personal DM, which sent it into `compute_conversation_key`'s DM branch where it was **split on its first hyphen** (`"#OE-SOTA"` → key `"#OE<>DK5EN"`), collapsing distinct tags and fragmenting one tag per sender. Fixed in `ea15511` by adding **sibling** predicates `is_hashtag()` / `dst_kind()` / `resolve_dst_target()` beside `is_group()` in `commands/parsing.py` — `is_group` was deliberately NOT widened, because it is pinned by a corpus mirrored in mc-chat and the webapp. Two invariants look like oversights and are load-bearing: classification is **case-insensitive** and **NOT length-bounded** — a tag failing either would fall straight back into the DM branch, which is the defect. The RfC's 9-char cap is send-side grammar, enforced at the API boundary, never in classification. `dst_kind` returns `"unknown"` (never `"direct"`) for a `#`-prefixed value that fails the tag charset: it addresses nobody, and is the shape most likely to arrive from a buggy or hostile sender. Contract: `commands/hashtag_dst_vectors.json` (32 vectors, sha256-pinned by `commands/hashtag_dst_tests.py`). **No prefix/subscription matching exists** (RfC US-3) — its stated rule contradicts its own worked examples, so implementing it would encode a guess. Background: `MeshCom-Hashtag-prep.md`.
-- **Four vector corpora are hand-copied to mc-chat and the webapp, and nothing syncs them for you.** `commands/group_dst_vectors.json` (v2), `storage/conversation_key_vectors.json` (v4), `blocklist_decision_vectors.json` (v2) and `commands/hashtag_dst_vectors.json` (v1) are canonical **here**. mc-chat asserts parse-equality against these exact paths; the webapp pins a sha256 of the conversation-key corpus and runs drift checks against both siblings. Change one and you must copy it to both repos **and** bump the webapp's `EXPECTED_SHA256`, or their suites fail the moment anyone runs them with siblings checked out. Unlike `contract/`, these are not a git subtree — there is no `subtree pull` that will do it for you.
+- **Four vector corpora are hand-copied to the sibling repos, and nothing syncs them for you.** `commands/group_dst_vectors.json` (v2), `storage/conversation_key_vectors.json` (v4), `blocklist_decision_vectors.json` (v2) and `commands/hashtag_dst_vectors.json` (v1) are canonical **here**. The first three go to **both** mc-chat (`tests/fixtures/`) and the webapp; `blocklist_decision_vectors.json` goes to the **webapp only** (`src/services/__tests__/`) — mc-chat has its own `sperrliste.py` and never reads this corpus, so do not go looking for a copy there. mc-chat asserts parse-equality against the paths it does carry; the webapp pins a sha256 of the conversation-key corpus and runs drift checks against both siblings. Change one and you must copy it to every repo that carries it **and** bump the webapp's `EXPECTED_SHA256`, or their suites fail the moment anyone runs them with siblings checked out. Unlike `contract/`, these are not a git subtree — there is no `subtree pull` that will do it for you.
 - **Two different ACKs, never conflate them.** `send_success` is the firmware's 7-byte **binary** ack (`ack_type` 0x00 Node / 0x01 Gateway, `ble_protocol.py`) — "my node or a gateway took the frame". `acked` is a matched inline `:ackNNN` text frame — "the addressee answered". `_handle_ack` publishes `msg_status` `{sent, ack_kind: node|gateway}`, the inline path publishes `{acked, ack_kind: "peer"}` with the ORIGINAL message's msg_id; the webapp renders only the latter as ✓✓ Delivered. Wiring the webapp's `msg_ack` to `send_success` is exactly the 2026-08-19 bug where three unanswered `!ctcping` probes all showed as delivered. `ack_status_tests.py` pins both payloads.
 - **A BLE `D{` register frame carries at most 244 chars of JSON.** `addBLEComToOutBuffer` clamps at
   245 bytes, minus the `0x44` type byte; the firmware names it `BLE_JSON_PAYLOAD_MAX`. Over that it

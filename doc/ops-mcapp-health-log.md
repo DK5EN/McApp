@@ -1,12 +1,13 @@
 # McApp production health log — mcapp.local
 
-> **Status:** Current — newest section: §7 (2026-09-01, v2.0.2 promoted to production).
-> Newest sweep: §7 (2026-09-01 15:45 CEST) — box **all green**. Its one finding (**F13**, a 6.07 h
-> `{CET}` uplink outage) was upstream and **resolved the same evening at 18:38 CEST**, which also
-> verified the v2.0.2 gap-close path and re-confirmed the 606.8 s cadence.
-> Open watch points: **W1** (zram swap, 59 MB out — improving), **W2** (live `config.json` stays
-> `0640` by decision), **W3** (Caddy 12 h certs), **W6** and **W7** (§6, accepted residual risks).
-> **W4** (§3), **W5** (§5) and **W8** (§7) are resolved.
+> **Status:** Current — newest section: §12 (2026-09-16, pre-release sweep for v2.0.8).
+> Newest sweep: §12 (2026-09-16 10:21 CEST) — box **all green**, zero findings, one new watch
+> point (**W12**, 24 h link uptime 95.4 % across three same-day restarts). Last finding was
+> **F13** (§7, a 6.07 h `{CET}` uplink outage), upstream and resolved 2026-09-01 18:38 CEST.
+> Open watch points: **W1** (zram swap — now 22 MB out after B4, see §12), **W12** (§12), **W2** (live `config.json` stays
+> `0640` by decision), **W3** (Caddy 12 h certs), **W6** and **W7** (§6, accepted residual risks),
+> **W9** (CI `disabled_manually` in both repos) and **W10** (`@lucide/vue` pinned 1.41.0).
+> **W4** (§3), **W5** (§5), **W8** (§7) and **W11** (§11) are resolved.
 >
 > **Kind:** Recurring ops review; one dated section per run, appended, never edited in place.
 > **Produced by:** the `ai-ops` skill (`.claude/skills/ai-ops/SKILL.md`).
@@ -746,3 +747,186 @@ Do not press the old Rollback button while an old slot is active. The `/api/stat
 
 **State after the sweep.** slot-0 v2.0.6-dev.1 active, slot-1 v2.0.5-dev.2, slot-2 v2.0.5;
 services active, NRestarts 0 on the new unit start, schema 30.
+
+## 11. 2026-09-11 12:15 CEST — v2.0.7 promoted to production, full sweep
+
+Sign-off and post-release sweep for **v2.0.7**. Verdict: **all green — zero findings, one new
+watch point (W11).** The box is 7 minutes past the production deploy at the time of the numbers
+below, so the rates are recorded with that window and the totals are context only.
+
+Sequence of the day on this box: `v2.0.6` (08:49) → `v2.0.7-dev.1` (11:38, via the copied
+bootstrap pinned to `--tag`) → `v2.0.7` (12:03, via the Update page, Mode: Production).
+
+### Anchors
+
+| Anchor              | Value                                                             |
+| ------------------- | ----------------------------------------------------------------- |
+| Snapshot            | 2026-09-11 12:05–12:15 CEST                                       |
+| Release             | `v2.0.7` (`/webapp/version.html` agrees)                          |
+| App version         | `v2.0.7` (`/api/status`)                                          |
+| Active slot         | **slot-0** (slot-1 `v2.0.7-dev.1`, slot-2 `v2.0.6`)               |
+| Schema              | **30** = `LATEST_SCHEMA_VERSION` ✓ (no migration in this release) |
+| System epoch        | installed **2** = `REQUIRED_SYSTEM_EPOCH` ✓                       |
+| Service start       | 2026-09-11 12:03:53 CEST                                          |
+| `systemd NRestarts` | **0** (mcapp and mcapp-ble)                                       |
+| Host uptime         | 12 days, 13:23 — load 0.35 / 0.32 / 0.25                          |
+
+### Measured
+
+| Check                           | Value                | vs §1 baseline              |
+| ------------------------------- | -------------------- | --------------------------- |
+| `messages` type `msg`           | **7 / h**            | 11 / h — quiet midday       |
+| `messages` type `pos`           | **71 / h**           | 87 / h                      |
+| `signal_log`                    | **243 / h**          | 347 / h                     |
+| journal warnings (`-p warning`) | **0 / 24 h**         | 0 / 24 h ✓                  |
+| unclassified `msg`, last 1 h    | **0**                | 0 ✓                         |
+| `{CET}` rows in `messages`      | **0**                | 0 ✓ (dropped at ingest)     |
+| classifier version / rules      | **3** / **38**       | 3 / 38 ✓                    |
+| backfill markers                | `v0`, `v1`, `v3`     | matches version 3           |
+| `messages` total                | 16 748, newest 12:10 | context                     |
+| `station_positions`             | 362                  | context                     |
+| `signal_log` total              | 46 748               | context                     |
+| DB size / WAL                   | **40.4 MB** / 0.0 MB | far under the 1 GB limit    |
+| heartbeat age                   | **21 s**             | < 60 s ✓                    |
+| last `{CET}` beacon             | **566 s** ago        | under the 606.5 s cadence ✓ |
+
+Link uptime over 24 h: **98.60 % uptime, 100 % coverage**, longest outage **20.2 min**
+(`gap`, 06:57:48 → 07:18:01 CEST, before any of the day's deploys). 59 stored segments, all
+`gap`.
+
+Host headroom: disk **8 %** of 59 G; `MemAvailable` **173 MB**; swap **144 MB out**
+(SwapFree 277 660 of 424 956 kB); SoC temperature **44.5 °C**.
+
+Secrets and TLS: `vapid.json` **0600**, raw base64url scalar (not PEM); `config.json` 0640 (W2);
+Caddy internal ECC leaf `notBefore Sep 11 09:18 GMT → notAfter 21:18 GMT`, i.e. mid-life (W3).
+
+### Absent signals — the zero is the result
+
+- `udp_untrusted_source_ips` **empty**, `udp_multiple_sources` **false**,
+  `udp_suppressed_target_changes` **0**. Nothing is injecting on the unauthenticated UDP port.
+- **0** journal warnings in 24 h, **0** tracebacks since the 12:03:53 service start. The two SSE
+  reconnect warnings at 12:03:42/48 are the deploy's own restart window, before the new unit
+  started.
+- **0** unclassified messages, **0** `{CET}` rows, **0** `NRestarts`.
+
+### Field verification of the release content
+
+- **`comment` / `name` on position frames, both branches seen on air.** DK5EN-98's own beacon
+  `!4824.47N\01144.28E-MeshCom Freising#Martin/A=001575/N4/R=20` parses to
+  `comment='MeshCom Freising'`, `name='Martin'` — the non-empty-comment branch. During the dev.1
+  soak a relayed DM6CS-12 frame gave `comment=''`, `name='DM6CS-10'` — the empty branch. Both keys
+  present in the SSE frame, neither persisted to `station_positions`, as designed.
+- **`timezonefinder` 9.0.0 on ARM.** `/api/timezone?lat=48.2455&lon=11.3693` →
+  `Europe/Berlin / CEST / +2.0`. The 8 → 9 major bump happened after the dev.1 soak, so the
+  released tree is not byte-identical to the soaked one; this probe plus a full local gate re-run
+  is what covers the difference.
+
+### Classified and dismissed — not findings
+
+- **Zero `dark` segments despite three deploys today.** `reconcile_link_uptime_startup` writes a
+  `dark` row only when `now - last_tick_ms > DARK_THRESHOLD_MS` (3 missed 30 s heartbeats). A
+  deploy restart takes seconds, so no row is written — explicitly by design, so that a deploy can
+  never read as a link outage. Zero `dark` rows here is correct behaviour, not a broken recorder.
+- **TLS leaf expiring in 9 hours.** Caddy's internal CA issues 12 h certs; `notBefore` is 09:18,
+  so this is mid-life (W3).
+- **`config.json` at 0640.** Standing decision (W2), unchanged.
+
+### Watch points
+
+- **W11 (new, RESOLVED within this sweep) — `udp_target_kind` read `first_seen` for the first
+  13.5 minutes after the deploy, where §2 and §4 recorded `identified`.** The target is
+  `192.168.68.61` (it was `192.168.68.56` on 2026-08-22 — DHCP, not a finding). `_adopt_target`
+  strengthens `first_seen → identified` only when an inbound **UDP** frame carries our own
+  callsign as `src`; in the hour before this sweep our node's own frames reached the DB over
+  `ble_remote` only (2 rows), while UDP delivered 4 foreign frames. Watched with a terminal
+  condition rather than assumed: it **strengthened to `identified` at T+810 s**
+  (uptime 1355 s, target unchanged, `udp_suppressed_target_changes` still 0, untrusted list still
+  empty). So `first_seen` immediately after a restart is the normal transient state of this box,
+  not a regression — the earlier sweeps simply ran late enough to miss it. Expect it again on the
+  next deploy; only a `first_seen` that persists past the node's own beacon interval (~30 min) is
+  worth chasing.
+- **W1** — zram swap 144 MB out, flat against the 142 MB of 2026-08-22. Stable, still a watch.
+- **W2, W3, W6, W7, W9, W10** carry forward unchanged. **W9 still applies to this release**: both
+  repos' CI workflows remain `disabled_manually`, so `v2.0.7` shipped behind the local gate only.
+
+### §1 baseline drift noted, not silently corrected
+
+§1's structural line still reads schema **25**, epoch **1**; both moved with later releases and
+are now **30** and **2**. Its `{CET}` cadence of `~303 s` was halved upstream to **606.5 s** on
+2026-08-22 (CLAUDE.md § Gateway Uptime is the authority). Recorded here rather than rewritten in
+place, so the next run can decide whether §1 should be re-baselined.
+
+## 12. 2026-09-16 10:21 CEST — pre-release sweep before promoting v2.0.8-dev.5 to v2.0.8
+
+Sign-off sweep for the **v2.0.8** promotion. Verdict: **all green — zero findings, one new watch
+point (W12).** The box is 13 minutes past the `v2.0.8-dev.5` deploy, so rates are recorded with
+that window and totals are context only. Soak is short by decision: `dev.4` ran 09:13–10:08,
+`dev.5` since 10:08 (two small performance fixes on top of dev.4); the operator chose to promote
+today. Campaign record: `doc/2026-09-16_0900-stall-popover-campaign.md`.
+
+Sequence of the day: `v2.0.8-dev.3` (running since the 2026-09-15 reboot) → `dev.4` (09:13, copied
+bootstrap, `--tag`) → `dev.5` (10:08, same path).
+
+### Anchors
+
+| Anchor              | Value                                                         |
+| ------------------- | ------------------------------------------------------------- |
+| Snapshot            | 2026-09-16 10:21 CEST                                         |
+| Release             | `v2.0.8-dev.5` (`/webapp/version.html` agrees)                |
+| App version         | `v2.0.8` (`/api/status`, dev suffix not carried there)        |
+| Active slot         | **slot-1** (slot-2 `dev.4`, slot-0 `dev.3`)                   |
+| Schema              | **32** = `LATEST_SCHEMA_VERSION` ✓ (migrations 31, 32 ran)    |
+| System epoch        | installed **4** = `REQUIRED_SYSTEM_EPOCH` ✓, no reboot marker |
+| Service start       | 2026-09-16 10:08:52 CEST                                      |
+| `systemd NRestarts` | **0** (mcapp and mcapp-ble)                                   |
+| Host uptime         | 16:47 (rebooted 2026-09-15 for B4) — load 0.08 / 0.09 / 0.12  |
+
+### Measured
+
+| Check                           | Value                | vs §1 baseline                              |
+| ------------------------------- | -------------------- | ------------------------------------------- |
+| `messages` type `msg`           | **4 / h**            | 11 / h — quiet late morning                 |
+| `messages` type `pos`           | **79 / h**           | 87 / h ✓                                    |
+| `signal_log`                    | **302 / h**          | 347 / h ✓                                   |
+| `stall_events`                  | **20 / h**           | new since v2.0.8; all in the restart minute |
+| journal warnings (`-p warning`) | **0 / 24 h**         | 0 / 24 h ✓                                  |
+| unclassified `msg`, last 1 h    | **0**                | 0 ✓                                         |
+| `{CET}` rows in `messages`      | **0**                | 0 ✓                                         |
+| classifier version / rules      | **3** / **38**       | 3 / 38 ✓                                    |
+| `messages` total                | 18 782, newest 10:21 | context                                     |
+| `station_positions`             | 396                  | context                                     |
+| `signal_log` total              | 51 530               | context                                     |
+| DB size / WAL                   | **40.4 MB** / 0.0 MB | far under the 1 GB limit                    |
+| heartbeat age                   | **18 s**             | < 60 s ✓                                    |
+| last `{CET}` beacon             | **344 s** ago        | under the 606.5 s cadence ✓                 |
+
+Link uptime over 24 h: **95.42 % uptime, 100 % coverage**, 67 stored segments (W12: three
+same-day service restarts each reset `last_beacon_ms`; re-read after a quiet day).
+
+Host headroom: disk **8 %** of 59 G; `MemTotal` **462 MB** (was 415 before the B4 CMA change);
+`MemAvailable` **161 MB**; swap **22 MB out** (SwapFree 450 584 of 473 084 kB — W1 improved
+from 144 MB); SoC temperature **45.1 °C**.
+
+Secrets and TLS: `vapid.json` **0600**, raw base64url scalar; `config.json` 0640 (W2); Caddy
+internal ECC leaf `notBefore Sep 16 03:34 GMT → notAfter 15:34 GMT`, mid-life (W3). Strict
+`curl` validation from the Mac passes.
+
+### Absent signals — the zero is the result
+
+- `udp_untrusted_source_ips` **empty**, `udp_multiple_sources` **false**,
+  `udp_suppressed_target_changes` **0**, `udp_target_kind` `identified`.
+- **0** journal warnings in 24 h (`-- No entries --`), **0** tracebacks since the 10:08:52
+  start; the two SSE reconnect lines at 10:08:42/48 belong to the old process's shutdown.
+- **0** unclassified messages, **0** `{CET}` rows, **0** `NRestarts`, **0** `handler` stalls
+  under traffic since the restart (one during the restart itself).
+
+### Watch points
+
+- **W12 (new):** 24 h link uptime 95.42 % with 67 segments after three same-day restarts. Each
+  restart resets `last_beacon_ms`, and the metric's resolution is one 606 s cadence, so this is
+  expected today. Re-read after 24 quiet hours; a value still under ~98 % then is a finding.
+- **W1:** swap out 144 → 22 MB after B4 (§ Memory Footprint in CLAUDE.md). Keep watching the
+  trend; the number is now a healthy baseline, not a squeeze.
+- **W9** unchanged: CI is `disabled_manually` in both repos, so the promotion is signed off on
+  the local gates (ruff, mypy, all suites; eslint, vue-tsc, 3322 vitest cases, prettier), all
+  green on the dependency-updated trees.

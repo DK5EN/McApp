@@ -65,6 +65,8 @@ async def run_migration_chain_tests() -> bool:
     await _test_v28_uptime_gap_scrub(results)
     await _test_v29_message_acks_table(results)
     await _test_v30_read_cursors_table(results)
+    await _test_v31_delivery_status_columns(results)
+    await _test_v32_stall_events_table(results)
 
     for label, ok in results:
         print(f"    {'✅ PASS' if ok else '❌ FAIL'} | {label}")
@@ -1064,6 +1066,150 @@ async def _test_v30_read_cursors_table(results: list[tuple[str, bool]]) -> None:
                 (
                     "v30 read_cursors: exactly one row survives the collision attempt",
                     bool(rows) and rows[0]["n"] == 1,
+                )
+            )
+        finally:
+            await storage.close()
+
+
+async def _test_v31_delivery_status_columns(results: list[tuple[str, bool]]) -> None:
+    """Seed a v30 fixture (messages genuinely lacking delivery_status/holder) and
+    assert the v31 step adds both nullable TEXT columns while preserving
+    existing row data.
+
+    Store-and-forward DM status (doc/2026-09-14_1153-store-forward-dm-status-
+    plan.md §2, §4): `delivery_status` holds `held` / `failed` / `acked`,
+    `holder` the store-node or destination callsign attributed by the 0x41
+    frame appendix. No backfill: absence means "no store-and-forward state was
+    ever reported", never "not held" — a pre-existing row must come out NULL.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = Path(tmp_dir) / "migration_chain_v31.db"
+        existing_msg_id = "PRE0V31T"
+
+        def _create_v30_db() -> None:
+            with db_write(db_path) as conn:
+                conn.executescript(CREATE_SCHEMA_SQL)
+                conn.executescript(CREATE_SCHEMA_V2_SQL)
+                conn.execute("DELETE FROM schema_version")
+                conn.execute("INSERT INTO schema_version (version) VALUES (30)")
+                conn.execute(
+                    "INSERT INTO messages (msg_id, src, dst, msg, type, timestamp, src_type)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (existing_msg_id, "OE1PRE-1", "OE3ABC", "hi", "msg", BASE_TS, "ble"),
+                )
+                conn.commit()
+
+        await asyncio.to_thread(_create_v30_db)
+
+        try:
+            storage = await create_sqlite_storage(db_path)
+        except Exception:
+            logger.exception("v31 delivery_status migration raised")
+            results.append(("v31 delivery_status: migrator runs v30→HEAD without error", False))
+            return
+
+        results.append(("v31 delivery_status: migrator runs v30→HEAD without error", True))
+        try:
+            version = await _schema_version(storage)
+            results.append(
+                (
+                    f"v31 delivery_status: final schema_version marker is {FINAL_SCHEMA_VERSION}",
+                    version == FINAL_SCHEMA_VERSION,
+                )
+            )
+
+            cols = await storage._query("PRAGMA table_info(messages)")
+            col_by_name = {c["name"]: c for c in cols}
+            results.append(
+                (
+                    ("v31 delivery_status: messages.delivery_status column exists with type TEXT"),
+                    col_by_name.get("delivery_status", {}).get("type") == "TEXT",
+                )
+            )
+            results.append(
+                (
+                    "v31 delivery_status: messages.holder column exists with type TEXT",
+                    col_by_name.get("holder", {}).get("type") == "TEXT",
+                )
+            )
+
+            row = await storage._query(
+                "SELECT * FROM messages WHERE msg_id = ?", (existing_msg_id,)
+            )
+            results.append(
+                (
+                    (
+                        "v31 delivery_status: pre-existing row is left with"
+                        " delivery_status = NULL, holder = NULL (no backfill)"
+                    ),
+                    bool(row) and row[0]["delivery_status"] is None and row[0]["holder"] is None,
+                )
+            )
+            results.append(
+                (
+                    ("v31 delivery_status: pre-existing row's own data (msg/src/dst) is untouched"),
+                    bool(row) and row[0]["msg"] == "hi" and row[0]["dst"] == "OE3ABC",
+                )
+            )
+        finally:
+            await storage.close()
+
+
+async def _test_v32_stall_events_table(results: list[tuple[str, bool]]) -> None:
+    """Seed a v31 fixture and assert the v32 step stands up `stall_events` with
+    its `(ts_ms)` and `(kind, ts_ms)` indexes — the table
+    `mcapp.stalls.StallRecorder` writes (doc/2026-09-15_1530-stall-tracking-
+    plan.md §2, §6). Empty until the first recorded stall."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = Path(tmp_dir) / "migration_chain_v32.db"
+
+        def _create_v31_db() -> None:
+            with db_write(db_path) as conn:
+                conn.executescript(CREATE_SCHEMA_SQL)
+                conn.executescript(CREATE_SCHEMA_V2_SQL)
+                conn.execute("DELETE FROM schema_version")
+                conn.execute("INSERT INTO schema_version (version) VALUES (31)")
+                conn.commit()
+
+        await asyncio.to_thread(_create_v31_db)
+
+        try:
+            storage = await create_sqlite_storage(db_path)
+        except Exception:
+            logger.exception("v32 stall_events migration raised")
+            results.append(("v32 stall_events: migrator runs v31→HEAD without error", False))
+            return
+
+        results.append(("v32 stall_events: migrator runs v31→HEAD without error", True))
+        try:
+            version = await _schema_version(storage)
+            results.append(
+                (
+                    f"v32 stall_events: final schema_version marker is {FINAL_SCHEMA_VERSION}",
+                    version == FINAL_SCHEMA_VERSION,
+                )
+            )
+            await storage._mutate(
+                "INSERT INTO stall_events (ts_ms, origin, kind, severity) VALUES (?, ?, ?, ?)",
+                (BASE_TS, "server", "loop_lag", "stall"),
+            )
+            rows = await storage._query("SELECT COUNT(*) AS n FROM stall_events", ())
+            results.append(
+                (
+                    "v32 stall_events: table accepts a minimal row (nullable columns default)",
+                    bool(rows) and rows[0]["n"] == 1,
+                )
+            )
+            indexes = await storage._query(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'stall_events'",
+                (),
+            )
+            index_names = {row["name"] for row in indexes}
+            results.append(
+                (
+                    "v32 stall_events: idx_stall_events_ts and idx_stall_events_kind_ts exist",
+                    {"idx_stall_events_ts", "idx_stall_events_kind_ts"} <= index_names,
                 )
             )
         finally:

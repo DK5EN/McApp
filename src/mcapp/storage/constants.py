@@ -20,7 +20,7 @@ from ..commands.parsing import is_group, is_hashtag, resolve_dst_target
 # passing suite for a reason unrelated to the change being made. This is not
 # circular with migrations.py: the step numbers there are independent literals,
 # so forgetting either half fails loudly.
-LATEST_SCHEMA_VERSION = 30
+LATEST_SCHEMA_VERSION = 32
 
 # Constants matching message_storage.py
 BUCKET_SECONDS = 5 * 60
@@ -45,6 +45,23 @@ EIGHT_DAYS_MS = SIGNAL_BACKFILL_WINDOW_HOURS * 3600 * 1000
 
 MHEARD_THROTTLE_MS = 120_000  # 2 minutes
 ACK_DIAG_WINDOW_MS = 300_000
+# Inline `:ackNNN` correlation window for a message a store node is HOLDING.
+#
+# The normal window is DEDUP_WINDOW_MS (1 h): `echo_id` is a 3-digit per-sender
+# counter and that is its uniqueness horizon, so past it a counter match is not
+# evidence. A store-and-forward hold is the one case where that rule does not
+# hold — the DM legitimately sits in a mailbox until the destination reappears
+# and only then gets acked, up to the firmware's `--storetime` maximum of 168 h
+# (default 24 h). A flat 1 h window would refuse every late ack and leave the
+# message stuck at `held` forever, breaking the feature it was meant to protect.
+#
+# Widening it ONLY for rows already at `delivery_status = 'held'` keeps the
+# ambiguity small: a false match would need the same sender, the same
+# recipient, the same counter, AND the older message still held — and since the
+# counter is OUR per-message counter, reusing it means having sent 1000
+# messages to that station in the meantime. The general case keeps the 1 h
+# horizon; only a message we already know is waiting gets the long one.
+HELD_ACK_WINDOW_MS = 168 * 3600 * 1000  # 168 h = the firmware's --storetime max
 TELEMETRY_DEDUP_WINDOW_MS = 60_000
 
 # Gateway-uptime ledger (schema v25) — see
@@ -127,12 +144,17 @@ HOURS_PER_YEAR = 8760
 INVALID_CHARACTER_MSG = "-- invalid character --"
 CORE_DUMP_FILTER_TEXT = "No core dump"
 
-# Columns to SELECT when building message JSON (avoids fetching raw_json)
+# Columns to SELECT when building message JSON (avoids fetching raw_json).
+# delivery_status/holder (schema v31) carry store-and-forward DM status;
+# _build_message_dict omits both when NULL, so selecting them here costs
+# nothing on the overwhelming majority of rows that have no store-forward
+# state.
 _MSG_SELECT = (
     "msg_id, src, dst, msg, type, timestamp, rssi, snr, src_type,"
     " via, hw_id, lora_mod, max_hop, mesh_info, firmware, fw_sub,"
     " last_hw_id, last_sending, transformer, echo_id, acked, send_success,"
-    " category, tags, info_score, template_hash, classifier_ver"
+    " category, tags, info_score, template_hash, classifier_ver,"
+    " delivery_status, holder"
 )
 
 
@@ -243,8 +265,20 @@ def db_write(db_path: Path | str) -> Iterator[sqlite3.Connection]:
     manager supplies that back (commits on success, rolls back on error);
     ``closing`` still does the closing. Both are required, in this order. See
     storage/connection_lifecycle_tests.py for the regression coverage.
+
+    Sets this connection's ``synchronous`` pragma to ``NORMAL`` before yielding it.
+    In WAL mode (the schema's mode) the default ``FULL`` fsyncs the WAL on
+    every commit, which on the production Pi's SD card was the entire cause
+    of the F1 handler stalls (measured 2026-09-16: 15 ms typical, up to
+    1.7 s, per commit at FULL vs. ~0.3 ms at NORMAL). NORMAL still fsyncs at
+    WAL checkpoints, so the database file itself can never be corrupted; the
+    trade is that the last transaction(s) can be lost on a power loss or OS
+    crash between commit and the next checkpoint, which is accepted here.
+    The pragma is per-connection, so ``db_read`` (no commits, nothing to
+    fsync) is deliberately left at the SQLite default.
     """
     with closing(sqlite3.connect(db_path, timeout=SQLITE_BUSY_TIMEOUT_S)) as conn, conn:
+        conn.execute("PRAGMA synchronous=NORMAL")
         yield conn
 
 

@@ -59,8 +59,31 @@ _ACK_CALLSIGN_RE = re.compile(r"^[A-Z0-9][A-Z0-9-]{0,9}$")
 # "heard" (a neighbour repeated our frame), "gateway" its "server reached",
 # "peer" the addressee's own matched reply. Single source for both ingest paths
 # (BLE binary frame and the extUDP `{"type": "ack"}` datagram).
-ACK_KIND_BY_TYPE: dict[int, str] = {0x00: "node", 0x01: "gateway", 0x02: "peer"}
-ACK_TEXT_BY_TYPE: dict[int, str] = {0x00: "Node ACK", 0x01: "Gateway ACK", 0x02: "Peer ACK"}
+#
+# 0x03 "failed" and 0x04 "held" are store-and-forward additions
+# (firmware spec, sibling repo: MeshCom-Firmware-DEV-Main/docs/
+# client-integration-store-forward.md §2; fork-main 150b0a4a, 2026-09-14):
+#   0x03 failed — all retries exhausted, nobody acked (user DMs only).
+#                 Attribution is the DESTINATION, not a relaying station.
+#                 Final unless a later `acked` arrives (the ACK still wins).
+#   0x04 held   — a store-and-forward node is holding the DM for an absent
+#                 destination. Attribution is the HOLDER. This is NOT a final
+#                 state: it replaces sent/heard/gateway, never overrides
+#                 `acked` or `failed`, and a later `acked` replaces it.
+ACK_KIND_BY_TYPE: dict[int, str] = {
+    0x00: "node",
+    0x01: "gateway",
+    0x02: "peer",
+    0x03: "failed",
+    0x04: "held",
+}
+ACK_TEXT_BY_TYPE: dict[int, str] = {
+    0x00: "Node ACK",
+    0x01: "Gateway ACK",
+    0x02: "Peer ACK",
+    0x03: "Send Failed",
+    0x04: "Store Held",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -203,6 +226,13 @@ def _decode_ack_frame(
         0x02 = Peer ACK (the addressee's own matched :ack/:rej reply to a DM this
                node originated — lora_functions.cpp:857-896, the strongest ack the
                firmware emits: `L1`, MCProxy wire-protocol audit 2026-08-21)
+        0x03 = Send Failed (all retries exhausted, nobody acked; user DMs only;
+               attribution is the destination — store-forward plan §2,
+               firmware spec client-integration-store-forward.md,
+               fork-main 150b0a4a)
+        0x04 = Store Held (a store-and-forward node holds the DM for an absent
+               destination; attribution is the holder; not a final state — a
+               later Peer ACK replaces it — same source as 0x03)
 
     Byte 7 is 0x00 on legacy firmware; on attribution-capable firmware it is
     the length of a callsign appendix (see `parse_ack_appendix`). The 4-byte

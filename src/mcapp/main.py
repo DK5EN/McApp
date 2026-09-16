@@ -48,6 +48,7 @@ from .runtime_state import RUNTIME_PATH
 from .runtime_state import (
     save_runtime_state as save_runtime_state,  # noqa: PLC0414 - explicit re-export for mypy
 )
+from .sse_routes.weather import warm_timezone_finder
 from .suppression import get_suppression_reason, should_suppress_outbound
 from .system_converge import converge_watchdog
 from .udp_handler import UDPHandler
@@ -65,6 +66,7 @@ from .classifier import Classifier
 from .classifier.seed import seed_defaults
 from .classifier.types import SSEEvent
 from .sqlite_storage import SQLiteStorage, create_sqlite_storage
+from .stalls import StallRecorder
 from .util import PLACEHOLDER_CALLSIGN_BASES as _PLACEHOLDER_CALLSIGN_BASES
 from .util import now_ms
 
@@ -351,6 +353,8 @@ block_list = [
 class MessageRouter:
     def __init__(self, message_storage_handler: SQLiteStorage | None = None) -> None:
         self._subscribers: dict[str, list[Any]] = defaultdict(list)
+        # Set by build_app; times every subscriber call in publish() (stall plan §1 `handler`).
+        self.stall_recorder: StallRecorder | None = None
         self._protocols: dict[str, Any] = {}
         self.storage_handler: SQLiteStorage | None = message_storage_handler
         self.my_callsign: str | None = None
@@ -605,7 +609,14 @@ class MessageRouter:
         # Send to all subscribers of this message type
         for handler in self._subscribers[message_type]:
             try:
-                await handler(routed_message)
+                if self.stall_recorder is not None:
+                    handler_name = getattr(handler, "__qualname__", repr(handler))
+                    with self.stall_recorder.time_handler(
+                        message_type, handler_name, routed_message
+                    ):
+                        await handler(routed_message)
+                else:
+                    await handler(routed_message)
 
             except Exception:
                 self._logger.exception("Failed to route %s to %s", message_type, handler.__name__)
@@ -2266,6 +2277,7 @@ class AppContext:
     sse_manager: Any  # SSEManager | None — Any here to avoid a hard fastapi import
     ble_client: Any
     ble_mode: BLEMode
+    stall_recorder: StallRecorder
 
 
 class _ClassifierBus:
@@ -2515,9 +2527,18 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
     handlers. Extracted from main() (CO-04); returns everything main() needs to
     log startup info, start background tasks, and drive the shutdown sequence.
     """
+    # Stall tracking (doc/2026-09-15_1530-stall-tracking-plan.md): the counting
+    # executor must be installed before anything calls asyncio.to_thread, and the
+    # recorder starts only after the migration chain has run (its own DDL is the
+    # defensive fallback, migration 32 is canonical).
+    stall_recorder = StallRecorder(
+        cfg.storage.db_path, cfg.stalls, version=VERSION, slot=_detect_slot()
+    )
+    stall_recorder.install_executor(asyncio.get_running_loop())
     # Initialize SQLite storage backend
     logger.info("Database: %s", cfg.storage.db_path)
     storage_handler = await create_sqlite_storage(cfg.storage.db_path)
+    await stall_recorder.start()
     # Gateway-uptime startup reconciliation (plan §4c): must run before the
     # heartbeat task starts (_start_background_tasks, later) or the first
     # tick would paper over the downtime this call is here to record.
@@ -2547,6 +2568,7 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
     storage_handler.set_classifier(classifier)
 
     message_router = MessageRouter(storage_handler)
+    message_router.stall_recorder = stall_recorder
     message_router.set_callsign(cfg.call_sign)
     storage_handler.set_message_router(message_router)
     # One-shot, idempotent read-cursor seed (unread-cursor plan §3): must run
@@ -2608,6 +2630,8 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
         sse_manager = create_sse_manager(SSE_HOST, SSE_PORT, message_router, weather_service)
         if sse_manager:
             message_router.register_protocol("sse", sse_manager)
+            sse_manager.stall_recorder = stall_recorder
+            stall_recorder.register_gauge("sse_clients", lambda: len(sse_manager.clients))
             if hasattr(sse_manager, "set_classifier"):
                 sse_manager.set_classifier(classifier)
             classifier.set_event_bus(_ClassifierBus(sse_manager))
@@ -2674,6 +2698,9 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
     if sse_manager:
         await sse_manager.start_server()
 
+    if ble_client is not None:
+        stall_recorder.register_gauge("ble_connected", lambda: _ble_connected(ble_client))
+
     return AppContext(
         storage_handler=storage_handler,
         classifier=classifier,
@@ -2683,7 +2710,22 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
         sse_manager=sse_manager,
         ble_client=ble_client,
         ble_mode=ble_mode,
+        stall_recorder=stall_recorder,
     )
+
+
+def _ble_connected(ble_client: Any) -> bool:
+    """`is_connected` is a property on every current BLE client; tolerate a method too."""
+    value = ble_client.is_connected
+    return bool(value() if callable(value) else value)
+
+
+def _detect_slot() -> str:
+    """Name of the deploy slot this code runs from (`slot-N`), or `dev`."""
+    for part in Path(__file__).resolve().parts:
+        if part.startswith("slot-"):
+            return part
+    return "dev"
 
 
 def _start_stdin_reader(loop: asyncio.AbstractEventLoop, stop_event: asyncio.Event) -> None:
@@ -2922,6 +2964,17 @@ class _BackgroundTasks:
     sperrliste_task: asyncio.Task[None]
     converge_task: asyncio.Task[None]
     link_uptime_heartbeat_task: asyncio.Task[None]
+    tz_warm_task: asyncio.Task[None]
+
+
+async def _warm_timezone_finder_later(delay_s: float = 30.0) -> None:
+    """F3a (doc/2026-09-16_0800-stall-data-report.md): the first `/api/timezone`
+    call paid ~3.9 s constructing `TimezoneFinder`. Construct it off the request
+    path, in the thread pool, after startup has settled — the delay keeps it
+    from competing with the BLE hydration and backfills on the Pi Zero's CPU.
+    """
+    await asyncio.sleep(delay_s)
+    await asyncio.to_thread(warm_timezone_finder)
 
 
 def _start_background_tasks(
@@ -2962,6 +3015,7 @@ def _start_background_tasks(
     link_uptime_heartbeat_task = asyncio.create_task(
         _link_uptime_heartbeat(ctx.storage_handler, stop_event)
     )
+    tz_warm_task = asyncio.create_task(_warm_timezone_finder_later())
     return _BackgroundTasks(
         prune_task=prune_task,
         classifier_stats_task=classifier_stats_task,
@@ -2971,11 +3025,15 @@ def _start_background_tasks(
         sperrliste_task=sperrliste_task,
         converge_task=converge_task,
         link_uptime_heartbeat_task=link_uptime_heartbeat_task,
+        tz_warm_task=tz_warm_task,
     )
 
 
 async def _cancel_background_tasks(tasks: _BackgroundTasks) -> None:
-    """Cancel the five long-running loops; backfill tasks are one-shots, left alone."""
+    """Cancel the five long-running loops; backfill tasks are one-shots, left alone.
+    The timezone warm-up is cancelled too: it may still be in its start delay.
+    """
+    tasks.tz_warm_task.cancel()
     tasks.prune_task.cancel()
     tasks.classifier_stats_task.cancel()
     tasks.sperrliste_task.cancel()
@@ -2991,6 +3049,8 @@ async def _cancel_background_tasks(tasks: _BackgroundTasks) -> None:
         await tasks.converge_task
     with contextlib.suppress(asyncio.CancelledError):
         await tasks.link_uptime_heartbeat_task
+    with contextlib.suppress(asyncio.CancelledError):
+        await tasks.tz_warm_task
 
 
 async def _shutdown_services(ctx: AppContext) -> None:
@@ -3054,6 +3114,11 @@ async def _shutdown_services(ctx: AppContext) -> None:
             await asyncio.wait_for(ctx.sse_manager.stop_server(), timeout=SHUTDOWN_TIMEOUT_SSE_S)
         except TimeoutError:
             logger.warning("SSE stop timeout")
+
+    try:
+        await asyncio.wait_for(ctx.stall_recorder.stop(), timeout=SHUTDOWN_TIMEOUT_SSE_S)
+    except Exception:
+        logger.warning("Stall recorder stop failed or timed out", exc_info=True)
 
     logger.info("All services stopped")
 

@@ -637,6 +637,77 @@ async def run_query_tests() -> bool:  # noqa: PLR0915 - test suite lists one cas
                 )
             )
 
+            # --- store-forward delivery_status/holder round-trip (schema v31) -------
+            # `_MSG_SELECT` (constants.py) is the only place that decides which
+            # columns the history queries fetch; `_build_message_dict` already
+            # tolerates the columns being present or absent. This proves the
+            # wiring end to end through the REAL client-facing read path
+            # (get_messages_page) rather than calling _build_message_dict
+            # directly, since a regression could just as easily be "the SELECT
+            # forgot the columns" as "the dict-builder forgot the keys".
+            sf_ts = now_ms()
+            await storage._mutate(
+                "INSERT INTO messages"
+                " (msg_id, src, dst, msg, type, timestamp, src_type,"
+                " conversation_key, delivery_status, holder)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "SF-HELD",
+                    "OE1ABC-1",
+                    "OE9XYZ-1",
+                    "message held at a store node",
+                    "msg",
+                    sf_ts,
+                    "lora",
+                    compute_conversation_key("OE1ABC-1", "OE9XYZ-1"),
+                    "held",
+                    "OE5REL-1",
+                ),
+            )
+            await storage._mutate(
+                "INSERT INTO messages"
+                " (msg_id, src, dst, msg, type, timestamp, src_type, conversation_key)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "SF-PLAIN",
+                    "OE1ABC-1",
+                    "OE9XYZ-1",
+                    "ordinary message, no store-forward state",
+                    "msg",
+                    sf_ts + 1,
+                    "lora",
+                    compute_conversation_key("OE1ABC-1", "OE9XYZ-1"),
+                ),
+            )
+            sf_page = await storage.get_messages_page(
+                "OE9XYZ-1", before_timestamp=sf_ts + 10, src="OE1ABC-1"
+            )
+            sf_emitted = [json.loads(m) for m in sf_page["messages"]]
+            sf_held = next((m for m in sf_emitted if m.get("msg_id") == "SF-HELD"), None)
+            sf_plain = next((m for m in sf_emitted if m.get("msg_id") == "SF-PLAIN"), None)
+            results.append(
+                (
+                    (
+                        "store-forward: a stored delivery_status/holder round-trips through"
+                        " get_messages_page with the right values"
+                    ),
+                    sf_held is not None
+                    and sf_held.get("delivery_status") == "held"
+                    and sf_held.get("holder") == "OE5REL-1",
+                )
+            )
+            results.append(
+                (
+                    (
+                        "store-forward: a row with NULL delivery_status/holder emits NEITHER"
+                        " key (absence, not null)"
+                    ),
+                    sf_plain is not None
+                    and "delivery_status" not in sf_plain
+                    and "holder" not in sf_plain,
+                )
+            )
+
             # --- mheard sparse-floor fallback (doc/plan-mheard-fresh-install-fix.md) --
             # A "datapoint" is a distinct 5-min signal_buckets row per callsign, not a
             # packet. `_build_chart_series` used to hard-drop any callsign below
