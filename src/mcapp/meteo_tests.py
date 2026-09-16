@@ -469,6 +469,40 @@ def _test_no_position_defers_without_network() -> None:
         )
 
 
+def _test_update_location_same_place_keeps_cache() -> None:
+    """F2 follow-up: the node re-announces its own GPS every beacon cycle and
+    `_cache_gps` forwards each one. An UNCHANGED location must not bump the
+    generation, or every cycle throws the good cache away and the next poll
+    pays a cold upstream fetch (the 806 ms `/api/weather` row of 2026-09-16
+    09:37). A move beyond LOCATION_EPSILON_DEG still invalidates.
+    """
+    ws = WeatherService(lat=48.4078, lon=11.738, stat_name="SameTest")
+    fetch_count = 0
+
+    def fake_fetch() -> dict[str, Any]:
+        nonlocal fetch_count
+        fetch_count += 1
+        return {"temperatur_celsius": 20.0, "timestamp": "test"}
+
+    ws._fetch_weather_data = fake_fetch  # type: ignore[method-assign] # offline cache double
+    first = ws.get_weather_data()
+    gen = ws._cache_generation
+    ws.update_location(48.4078, 11.738)
+    ws.update_location(48.40781, 11.73801)  # 1e-5 deg, ~1 m of GPS jitter
+    _check("same-place update_location: generation unchanged", ws._cache_generation, gen)
+    _check(
+        "same-place update_location: cache still served",
+        ws.get_weather_data() is first and fetch_count == 1,
+        True,
+    )
+    ws.update_location(48.4078, 11.738, "SameTest")  # same name, no bump
+    _check("same-name update_location: generation unchanged", ws._cache_generation, gen)
+    ws.update_location(48.41, 11.738)
+    _check("real move: generation bumped", ws._cache_generation, gen + 1)
+    ws.update_location(48.41, 11.738, "Renamed")
+    _check("rename alone: generation bumped", ws._cache_generation, gen + 2)
+
+
 def _test_update_location_bumps_generation_and_invalidates_cache() -> None:
     """REGRESSION guard for the incident meteo.py's update_location docstring
     documents: a stale cache must not keep serving weather for the OLD
@@ -1083,6 +1117,7 @@ def run_meteo_tests() -> bool:
     _test_is_valid_position()
     _test_no_position_defers_without_network()
     _test_update_location_bumps_generation_and_invalidates_cache()
+    _test_update_location_same_place_keeps_cache()
     _test_make_request_4xx_fails_fast()
     _test_retry_after_is_honoured_but_bounded()
     _test_make_request_5xx_retries()

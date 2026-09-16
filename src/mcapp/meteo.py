@@ -49,6 +49,8 @@ WEATHER_CACHE_TTL_S = 300  # SSE-06: 5 min — matches typical weather-update ca
 # every queued waiter run its own full ~96 s fetch serially under _cache_lock
 # (each parking a thread in the shared default executor).
 WEATHER_ERROR_CACHE_TTL_S = 60
+# Location change that counts as a move for cache invalidation (~11 m).
+LOCATION_EPSILON_DEG = 1e-4
 
 _MAGNUS_A = 17.27
 _MAGNUS_B = 237.7
@@ -238,10 +240,26 @@ class WeatherService:
 
     def update_location(self, lat: float, lon: float, stat_name: str | None = None) -> None:
         """Update location from GPS device data"""
+        # The node re-announces its own position over BLE every beacon cycle,
+        # and main.py's `_cache_gps` forwards each one here. Bumping the
+        # generation for an UNCHANGED location threw the good weather cache
+        # away every cycle, so the next `/api/weather` poll paid a cold upstream
+        # fetch (the 806 ms row seen 2026-09-16 09:37 after F2 shipped). Only a
+        # real move — beyond LOCATION_EPSILON_DEG, ~11 m — or a station rename
+        # invalidates.
+        moved = (
+            self.lat is None
+            or self.lon is None
+            or abs(lat - self.lat) > LOCATION_EPSILON_DEG
+            or abs(lon - self.lon) > LOCATION_EPSILON_DEG
+        )
+        renamed = bool(stat_name) and stat_name != self.stat_name
         self.lat = lat
         self.lon = lon
         if stat_name:
             self.stat_name = stat_name
+        if not (moved or renamed):
+            return
         # A stale cache would otherwise keep serving weather for the old location.
         #
         # Deliberately LOCK-FREE: this method is synchronous and is called directly
