@@ -323,6 +323,102 @@ async def _test_loop_lag(_record: RecordFn) -> None:
             await recorder.stop()
 
 
+def _block_the_loop_for_attribution_test() -> None:
+    time.sleep(0.3)  # deliberately blocks the loop so the sampler thread catches it
+
+
+async def _test_loop_lag_stack_attributed(_record: RecordFn) -> None:
+    """F4: a lag long enough for the sampler thread to catch mid-block must
+    attribute a stack naming the blocker; a lag the sampler never got a
+    chance to sample (thread frozen) must record no `stack` key at all — the
+    existing fields stay exactly as `_test_loop_lag` already pins.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "stalls.db"
+        config = StallsConfig(loop_lag_ms=50)
+        recorder = StallRecorder(db_path, config, version="v7b", slot="s7b")
+        await recorder.start()
+        try:
+            # Let the lag-loop task actually begin its first sleep cycle
+            # before blocking — otherwise the block happens entirely before
+            # that task has run even once, and its first post-block tick
+            # measures a fresh (unlagged) cycle instead of the blocked one.
+            await asyncio.sleep(0.02)
+            # Block the loop's OWN thread synchronously (on purpose), from
+            # within a coroutine, long enough (300ms) for the ~50ms-period
+            # sampler thread to sample the loop thread's stack mid-block.
+            await _blocking_coro_stub()
+
+            row = None
+            for _ in range(40):  # poll, don't count ticks — up to ~2s total
+                await asyncio.sleep(0.05)
+                await _drain(recorder)
+                rows = await recorder.query(kind="loop_lag", limit=10)
+                row = next(
+                    (
+                        r
+                        for r in rows
+                        if isinstance(r.get("detail"), dict) and "stack" in r["detail"]
+                    ),
+                    None,
+                )
+                if row is not None:
+                    break
+            _record(
+                "loop_lag stack: a lag row with an attributed stack was recorded", row is not None
+            )
+            if row is not None:
+                detail = row["detail"]
+                stack = detail.get("stack")
+                _record(
+                    "loop_lag stack: stack names the blocking test function",
+                    isinstance(stack, str) and "_block_the_loop_for_attribution_test" in stack,
+                )
+                _record(
+                    "loop_lag stack: samples count is at least 1",
+                    isinstance(detail.get("samples"), int) and detail["samples"] >= 1,
+                )
+        finally:
+            await recorder.stop()
+
+    # Negative half: the sampler thread is frozen (stop event set right after
+    # start, before it ever wakes), so a real lag from the same blocking call
+    # is still recorded — but with no sample ever taken, `detail` must carry
+    # no "stack" key at all, never `{"stack": None, ...}`.
+    with tempfile.TemporaryDirectory() as tmp2:
+        db_path2 = Path(tmp2) / "stalls.db"
+        config2 = StallsConfig(loop_lag_ms=1)
+        recorder2 = StallRecorder(db_path2, config2, version="v7c", slot="s7c")
+        await recorder2.start()
+        try:
+            recorder2._lag_sampler_stop.set()  # freeze the sampler before it can ever sample
+            await asyncio.sleep(0.02)  # let the lag-loop task begin its first cycle
+            await _blocking_coro_stub()
+
+            row2 = None
+            for _ in range(40):
+                await asyncio.sleep(0.05)
+                await _drain(recorder2)
+                rows2 = await recorder2.query(kind="loop_lag", limit=10)
+                if rows2:
+                    row2 = rows2[0]
+                    break
+            _record("loop_lag stack: a lag row was recorded (baseline)", row2 is not None)
+            if row2 is not None:
+                detail2 = row2.get("detail")
+                no_stack = detail2 is None or (isinstance(detail2, dict) and "stack" not in detail2)
+                _record(
+                    "loop_lag stack: a lag the frozen sampler never sampled carries no stack key",
+                    no_stack,
+                )
+        finally:
+            await recorder2.stop()
+
+
+async def _blocking_coro_stub() -> None:
+    _block_the_loop_for_attribution_test()
+
+
 async def _test_time_handler(_record: RecordFn) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "stalls.db"
@@ -513,6 +609,7 @@ async def run_stall_tests() -> bool:
     await _test_prune_cadence(_record)
     await _test_install_executor(_record)
     await _test_loop_lag(_record)
+    await _test_loop_lag_stack_attributed(_record)
     await _test_time_handler(_record)
     await _test_ingest_client(_record)
     _test_stalls_config(_record)

@@ -24,11 +24,13 @@ import functools
 import json
 import os
 import queue
+import re
 import resource
 import sqlite3
 import sys
 import threading
 import time
+import traceback
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager, suppress
@@ -93,6 +95,28 @@ _CLIENT_KINDS = frozenset(
     }
 )
 _SEVERITIES = frozenset({"sample", "stall", "critical"})
+
+# `_loop_lag_loop`'s own sleep granularity (F4: also the baseline the
+# lag-sampler thread subtracts before comparing against config.loop_lag_ms —
+# a normal 0.1s sleep must never itself read as lag). Shared so the two loops
+# can't drift apart.
+_LAG_LOOP_INTERVAL_S = 0.1
+# How often the sampler thread wakes to check whether the loop is overdue.
+# Cheap when healthy: one float subtraction and compare per tick.
+_LAG_SAMPLER_PERIOD_S = 0.05
+# Innermost frames kept per stack sample — enough to name the blocking call
+# without storing an unbounded traceback.
+_LAG_SAMPLE_FRAME_LIMIT = 12
+
+# Trims a stack frame's absolute path down to its "src/mcapp/..." (or
+# "ble_service/src/...") relative form — never a full file body, just the
+# `File "..."` header traceback.format_stack already produces per frame.
+_STACK_PATH_RE = re.compile(r'File "[^"]*?[\\/]((?:src[\\/]mcapp|ble_service[\\/]src)[\\/][^"]*)"')
+
+
+def _trim_stack_paths(text: str) -> str:
+    return _STACK_PATH_RE.sub(lambda m: f'File "{m.group(1)}"', text)
+
 
 # Redaction: exact key names (case-insensitive) plus a substring rule for the
 # many api-key spellings. "auth" and "authorization" are both listed because
@@ -182,6 +206,20 @@ class StallRecorder:
         self._writer_thread: threading.Thread | None = None
         self._lag_task: asyncio.Task[None] | None = None
 
+        # F4 (loop-lag attribution): heartbeat published by `_loop_lag_loop`
+        # on every iteration, read by `_lag_sampler_loop` (a separate thread)
+        # to notice the loop is overdue and capture its stack — the lag loop
+        # itself runs ON the loop, so by the time IT wakes the blocker is
+        # already gone.
+        self._last_tick: float = 0.0
+        self._loop_thread_ident: int | None = None
+        self._lag_sampler_thread: threading.Thread | None = None
+        self._lag_sampler_stop = threading.Event()
+        self._lag_sample_lock = threading.Lock()
+        self._lag_sample_text: str | None = None
+        self._lag_sample_count = 0
+        self._lag_sample_age_ms: float = 0.0
+
         self._dropped = 0
         self._dropped_lock = threading.Lock()
 
@@ -211,6 +249,18 @@ class StallRecorder:
             target=self._writer_loop, name="mcapp-stalls-writer", daemon=True
         )
         self._writer_thread.start()
+
+        # This coroutine is started from the event loop thread, so its ident
+        # here IS the loop thread's ident — the one the sampler thread later
+        # looks up a frame for.
+        self._loop_thread_ident = threading.get_ident()
+        self._last_tick = time.perf_counter()
+        self._lag_sampler_stop.clear()
+        self._lag_sampler_thread = threading.Thread(
+            target=self._lag_sampler_loop, name="mcapp-stalls-lagsampler", daemon=True
+        )
+        self._lag_sampler_thread.start()
+
         self._lag_task = asyncio.create_task(self._loop_lag_loop())
 
     async def stop(self) -> None:
@@ -219,6 +269,10 @@ class StallRecorder:
             with suppress(asyncio.CancelledError):
                 await self._lag_task
             self._lag_task = None
+        if self._lag_sampler_thread is not None:
+            self._lag_sampler_stop.set()
+            await asyncio.to_thread(self._lag_sampler_thread.join, 5.0)
+            self._lag_sampler_thread = None
         if self._writer_thread is not None:
             try:
                 self._queue.put_nowait(None)  # sentinel
@@ -440,15 +494,85 @@ class StallRecorder:
     # ── loop-lag watchdog ───────────────────────────────────────────────
 
     async def _loop_lag_loop(self) -> None:
-        interval_s = 0.1
+        interval_s = _LAG_LOOP_INTERVAL_S
         while True:
             t0 = time.perf_counter()
+            self._last_tick = t0
+            self._reset_lag_sample()  # any sample from here on belongs to this cycle only
             await asyncio.sleep(interval_s)
             lag_ms = (time.perf_counter() - t0 - interval_s) * 1000
             self._last_lag_ms = lag_ms
             if lag_ms >= self.config.loop_lag_ms:
                 severity = "critical" if lag_ms >= 5 * self.config.loop_lag_ms else "stall"
-                self.record(kind="loop_lag", severity=severity, duration_ms=lag_ms)
+                self.record(
+                    kind="loop_lag",
+                    severity=severity,
+                    duration_ms=lag_ms,
+                    detail=self._consume_lag_sample(),
+                )
+
+    # ── loop-lag attribution (F4): sampler thread + episode state ──────
+
+    def _reset_lag_sample(self) -> None:
+        with self._lag_sample_lock:
+            self._lag_sample_text = None
+            self._lag_sample_count = 0
+            self._lag_sample_age_ms = 0.0
+
+    def _consume_lag_sample(self) -> dict[str, Any] | None:
+        """Return the current episode's sample (if any) and clear it. `None`
+        means `record()`'s `detail` stays whatever the caller passed — never
+        `{"stack": None, ...}` in the stored row.
+        """
+        with self._lag_sample_lock:
+            text = self._lag_sample_text
+            count = self._lag_sample_count
+            age_ms = self._lag_sample_age_ms
+            self._lag_sample_text = None
+            self._lag_sample_count = 0
+            self._lag_sample_age_ms = 0.0
+        if text is None:
+            return None
+        return {"stack": text, "samples": count, "sampled_at_ms": age_ms}
+
+    def _lag_sampler_loop(self) -> None:
+        """Daemon thread: wakes every `_LAG_SAMPLER_PERIOD_S` and, only once
+        the loop is overdue past `config.loop_lag_ms`, captures the loop
+        thread's stack — cheap (a float compare) on every other tick.
+        """
+        while not self._lag_sampler_stop.wait(_LAG_SAMPLER_PERIOD_S):
+            last_tick = self._last_tick
+            if last_tick <= 0.0:
+                continue
+            overrun_s = time.perf_counter() - last_tick - _LAG_LOOP_INTERVAL_S
+            if overrun_s * 1000 < self.config.loop_lag_ms:
+                continue
+            ident = self._loop_thread_ident
+            if ident is None:
+                continue
+            try:
+                frame = sys._current_frames().get(ident)  # noqa: SLF001 - only way to sample another thread's stack for lag attribution
+            except Exception:
+                frame = None
+            if frame is None:
+                continue  # the frame can vanish between the check and the read
+            try:
+                stack_text = _trim_stack_paths(
+                    "".join(traceback.format_stack(frame, limit=_LAG_SAMPLE_FRAME_LIMIT))
+                )
+            except Exception:
+                stack_text = None
+            if stack_text is None:
+                continue
+            with self._lag_sample_lock:
+                if self._last_tick != last_tick:
+                    # The loop woke, recorded and started a new cycle while we
+                    # were formatting: this stack belongs to the cycle that is
+                    # already filed, never to the next one.
+                    continue
+                self._lag_sample_text = stack_text
+                self._lag_sample_count += 1
+                self._lag_sample_age_ms = overrun_s * 1000
 
     # ── instrumented default executor (pool_wait) ──────────────────────
 
