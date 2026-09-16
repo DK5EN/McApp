@@ -456,7 +456,10 @@ async def _test_conditional_fetch(results: list[tuple[str, bool]]) -> None:
         transport_payload: ClassVar[Any] = ["AAA-1"]
         transport_status: ClassVar[int] = 200
 
+        seen_verify: ClassVar[list[Any]] = []
+
         def __init__(self, **kwargs: Any) -> None:
+            _PatchedClient.seen_verify.append(kwargs.get("verify"))
             kwargs["transport"] = _transport(
                 _PatchedClient.transport_payload, _PatchedClient.transport_status
             )
@@ -481,6 +484,22 @@ async def _test_conditional_fetch(results: list[tuple[str, bool]]) -> None:
         _PatchedClient.transport_status = 304
         unchanged = await handler._fetch_sperrliste("https://example.com/sperrliste.json")
         results.append(("a 304 returns the NOT_MODIFIED sentinel", unchanged is NOT_MODIFIED))
+
+        # F4 follow-up (doc/2026-09-16_0900-stall-popover-campaign.md): the SSL
+        # context is built ONCE off the loop and reused; a fresh
+        # `create_ssl_context` per refresh was an 800 ms event-loop stall.
+        import ssl
+
+        seen = _PatchedClient.seen_verify
+        results.append(
+            (
+                "every client is handed one prebuilt SSLContext",
+                len(seen) == 3 and all(isinstance(v, ssl.SSLContext) for v in seen),
+            )
+        )
+        results.append(
+            ("the SSLContext is reused, not rebuilt per fetch", len({id(v) for v in seen}) == 1)
+        )
     finally:
         httpx.AsyncClient = original_client  # type: ignore[misc]  # restore the real client
 
