@@ -1,6 +1,8 @@
 # Bug fix report: message detail popover (Hardware / Signal rows)
 
-**Status:** RCA complete, nothing implemented. Written 2026-09-16 for a later coding agent to pick up.
+**Status:** RCA complete 2026-09-16 08:07; steps 1-3 implemented the same day (campaign:
+`doc/2026-09-16_0900-stall-popover-campaign.md`), BUG-3 with the `MOD` token removed
+unconditionally by operator decision. Step 4 (firmware `hw_id` on text frames) is still open.
 **Reported by:** DK5EN, from live screenshots of mcapp.local (v2.0.8-dev.3), 2026-09-15 18:16-18:42.
 **Blast radius:** mostly `webapp`; one optional MCProxy change; one upstream firmware change.
 
@@ -299,7 +301,7 @@ webapp:
 
 ```bash
 cd /Users/martinwerner/WebDev/webapp
-npm run lint && npm run type-check && npm run test:unit && npm run format:check
+npm run lint && npm run typecheck && npm run test && npm run format:check
 ```
 
 MCProxy (only if step 3 is taken):

@@ -142,3 +142,22 @@ Not seen at all: `pool_wait`, `client_timeout`, `client_error`, `sse_answer`,
 Re-collect after each step with the script pattern in this session's scratchpad
 (`collect.py`: counts by kind, per-path p50/p95/max since a boot timestamp, worst rows with
 context) — or simply `GET /api/stalls/summary` before and after.
+
+## 5. Status (2026-09-16, fix campaign — `doc/2026-09-16_0900-stall-popover-campaign.md`)
+
+- **F1 — hypothesis FALSIFIED, fixed differently.** Replaying all 58 recorded messages through
+  `store_message` with the DB calls counted gave **2-6 calls per message**, never 69 (the grep
+  counted every awaited call in the file, not the ones a message takes). Against a copy of the
+  live DB on the Pi's SD card, each write cost 15 ms typical with a **1.7 s** outlier — the WAL
+  fsync every `_mutate` commit does under `synchronous=FULL`. `db_write` now sets
+  `PRAGMA synchronous=NORMAL` (0.3 ms per commit; crash-safe, may lose the last transactions on
+  power loss). No per-message connection threading was needed.
+- **F2 — done.** The warm path was already a plain cache hit; the 650 ms rows were the TTL-expiry
+  fetches (the webapp polls at about the 300 s TTL, so nearly every poll fetched upstream). The
+  service now serves the stale result and refreshes in one background thread.
+- **F3 — timezone warm-up done** (`warm_timezone_finder`, delayed 30 s after startup). The
+  telemetry 744 h query is documented only: `idx_telemetry_cs_ts` serves it and the one-off
+  2.8 s was a cold page cache.
+- **F4 — done.** A sampler thread captures the loop thread's stack while the loop is overdue and
+  attaches it as `detail.stack` / `samples` / `sampled_at_ms` on the `loop_lag` row.
+- **F5 — done** (webapp): hidden-tab heartbeat loss is recorded as `sample`.

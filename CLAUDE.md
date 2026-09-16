@@ -204,6 +204,18 @@ through `/api/stalls`. No UI; this is capture-and-upload only. Design and the in
   recorded duration and server context — the reproduce tool, not a dashboard.
 - **Row cap is `max_rows` (default 5000)**, enforced by the writer thread pruning the oldest rows
   every 200 inserts — not a nightly job, and not schema-enforced.
+- **`db_write` runs at `synchronous=NORMAL`, and the first stall data proved why.** The
+  0.5-1.25 s `handler` rows of v2.0.8-dev.3 were NOT many DB calls (a real message makes 2-6)
+  but the WAL fsync every commit does at the default `FULL` on the SD card: 15 ms typical,
+  1.7 s outliers, measured 2026-09-16 against a copy of the live DB. NORMAL keeps WAL
+  crash-safe (fsync at checkpoints) and trades the last transactions on power loss. Measure on
+  the Pi's ext4 root, never in `/tmp` — it is tmpfs there and hides the whole effect.
+- **`loop_lag` rows carry the blocker's stack** (`detail.stack`, `samples`, `sampled_at_ms`).
+  The lag loop runs ON the loop and cannot see what blocked it, so a daemon thread
+  (`mcapp-stalls-lagsampler`) compares a heartbeat every 50 ms and reads the loop thread's frame
+  through `sys._current_frames()` only once overdue. An unsampled lag omits the key entirely.
+- **`sse_heartbeat` from a hidden tab is a `sample`, not `critical`** (webapp
+  `recordSseHeartbeatTimeout`): iOS suspends the PWA and wakes it hourly while still hidden.
 - **`ble_connected` handles property-vs-method.** `is_connected` is a property on the remote BLE
   client (and on every current client); the gauge (`_ble_connected` in `main.py`) tolerates a method too and calls it
   only when callable, mirroring the same pattern the BLE code already uses elsewhere.
