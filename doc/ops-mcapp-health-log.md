@@ -1,6 +1,6 @@
 # McApp production health log — mcapp.local
 
-> **Status:** Current — newest section: §12 (2026-09-16, pre-release sweep for v2.0.8).
+> **Status:** Current — newest section: §13 (2026-09-16, v2.0.8 promoted to production).
 > Newest sweep: §12 (2026-09-16 10:21 CEST) — box **all green**, zero findings, one new watch
 > point (**W12**, 24 h link uptime 95.4 % across three same-day restarts). Last finding was
 > **F13** (§7, a 6.07 h `{CET}` uplink outage), upstream and resolved 2026-09-01 18:38 CEST.
@@ -930,3 +930,27 @@ internal ECC leaf `notBefore Sep 16 03:34 GMT → notAfter 15:34 GMT`, mid-life 
 - **W9** unchanged: CI is `disabled_manually` in both repos, so the promotion is signed off on
   the local gates (ruff, mypy, all suites; eslint, vue-tsc, 3322 vitest cases, prettier), all
   green on the dependency-updated trees.
+
+## 13. 2026-09-16 10:30 CEST — v2.0.8 promoted to production
+
+Promotion of `v2.0.8-dev.5` to **v2.0.8** via the webapp Update page (Mode: Production), five
+minutes after the §12 sign-off. Verdict: **deploy verified, zero findings.** A settled
+post-release sweep is due after the box has run a few quiet hours (re-read W12 then).
+
+| Anchor         | Value                                                          |
+| -------------- | -------------------------------------------------------------- |
+| Release        | `v2.0.8` — `/api/status` and `/webapp/version.html` agree      |
+| Active slot    | **slot-0** (slot-1 `dev.5`, slot-2 `dev.4`)                    |
+| Service start  | 2026-09-16 10:24:47 CEST, `NRestarts` **0** on both units      |
+| Schema         | DB **32** = `LATEST_SCHEMA_VERSION` 32 ✓                       |
+| System epoch   | **4** installed, no reboot marker                              |
+| Browser bundle | `index-C0Hb9sG3.js` = served bundle, no waiting service worker |
+| Health checks  | 14 × `[OK]` in the update modal                                |
+
+- The two journal "error" lines at 10:24:37/42 are the previous process closing its BLE stream
+  during the restart, as in §11.
+- `udp_target_kind` read `first_seen` at 273 s uptime: `identified` needs a datagram from our
+  own callsign, i.e. the node's next own beacon. Not a finding; confirm `identified` in the
+  settled sweep.
+- Post-release invariants: both repos `unpushed 0`, `development` not behind `main`, tags
+  `v2.0.8` at parity with origin, release assets `uploaded`, both repos prepped to 2.0.9.
