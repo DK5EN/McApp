@@ -1486,6 +1486,23 @@ class IngestMixin(StorageBase):
         snr = message.get("snr")
         src_type = message.get("src_type", "")
 
+        # BUG-1 (doc/2026-09-16_0807-message-detail-popover-bugfix-report.md):
+        # rssi=0/snr=0 is the firmware's "no RF reception" sentinel, written
+        # unconditionally on every Extern-UDP frame. `_ingest_signal` already
+        # excludes it from signal_log/station_positions by `src_type`, not by
+        # a range check — the same gate applies here so the sentinel never
+        # lands on the `messages` row itself (and can't be COALESCEd into a
+        # duplicate row by `_enrich_duplicate_row` below). A lone `0` with the
+        # other value real, or a `src_type == "lora"` reading, is left alone.
+        if src_type != "lora" and rssi is not None and snr is not None:
+            try:
+                is_sentinel = float(rssi) == 0.0 and float(snr) == 0.0
+            except (TypeError, ValueError):
+                is_sentinel = False
+            if is_sentinel:
+                rssi = None
+                snr = None
+
         # Extract new columns from message dict
         via_field = message.get("via", "")
         hw_id = message.get("hw_id")
