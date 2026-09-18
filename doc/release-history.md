@@ -1,5 +1,69 @@
 # Release History
 
+## v2.0.10 (2026-09-19)
+
+Stall-tracking follow-up, bootstrap network safety after the 2026-09-18 WiFi outage, and two
+reported bugs fixed: stuck unread badges (#11) and the update banner that would not clear on
+Safari. Schema stays at 32 and the push contract at v10, so no migration and no client
+re-subscribe. **`SYSTEM_EPOCH` moves to 5** — see the upgrade notes.
+
+### Highlights
+
+- **The ingest stalls were fsync, not slow queries.** v2.0.8's first stall data showed
+  `handler` rows at 0.5-1.25 s. The cause was never the query plans (every ingest-path query is
+  an indexed search, under 1 ms on the live DB) but the WAL: closing the last connection to a
+  WAL database checkpoints it and deletes it, costing a DB-file fsync on every write —
+  **23.7 ms against 0.2 ms on a persistent connection**, measured on the Pi's ext4 root. Writes
+  now go through one persistent connection.
+- **A bootstrap run can no longer take the box off the network.** On 2026-09-18 the in-session
+  `apt-get upgrade` replaced wpasupplicant with Raspberry Pi's build, whose SAE advertisement
+  makes NetworkManager force WPA3 for every `wpa-psk` profile — which the Zero 2 W's
+  brcmfmac43436 never completes against a WPA2/WPA3 transition-mode AP. The box was unreachable
+  until it was recovered locally. wpasupplicant and network-manager are now held for the apt
+  phase and reported as deferred, wpasupplicant is pinned to Debian's build, apt runs under
+  `systemd-run` so a dropped SSH session cannot interrupt dpkg, the run is mirrored to
+  `/var/lib/mcapp/bootstrap.log`, and the default route is verified before the run continues.
+- **Messages from a station like `WLNK-1` stayed marked unread** no matter how often they were
+  read (#11, HB9VQQ). Reported as cosmetic; it was permanent — the state could not clear itself.
+
+### Backend (MCProxy)
+
+- Persistent SQLite writer connection, SSE serialisation for the mheard register moved off the
+  event loop, and `handler` stall sampling reduced to 1-in-500 now that the baseline exists.
+- Bootstrap network safety, system epoch 5: `hold_network_packages` +
+  `report_deferred_network_upgrades`, `configure_wpasupplicant_pin`, `run_apt_detached`,
+  `start_bootstrap_log`, `verify_link_state`, and a persistent 16 MB journal on
+  `/var/lib/mcapp/journal` — the box previously kept no on-disk log of its own outage.
+- Extern-UDP text frames now carry `hw_id`, `lora_mod` and `max_hop` (firmware handover
+  2026-09-16). Normalised at the ingress choke point; an older node omits them and the proxy
+  stores NULL, so nothing needs a firmware update.
+- `POST /api/read_cursor` normalises a bare sidebar key to its conversation key, and a one-shot
+  startup pass repairs cursor rows a previous version wrote under the wrong key. The repair is
+  inert on a healthy box — it rewrote 0 of mcapp.local's 144 rows.
+
+### Frontend (webapp)
+
+- A DM partner whose callsign has no digit once the SSID is stripped — a service or gateway
+  alias such as Winlink's `WLNK-1` — was rejected by a plausibility check on the way back to the
+  server key, so the read cursor was stored against a conversation that did not exist and the
+  badge relit on every reload. Marking read then became a no-op forever, which is why it never
+  cleared.
+- The "Update available" banner could persist on Safari after the update had installed: the
+  service worker now answers a build-id handshake instead of the page hashing `sw.js`, and a
+  waiting worker is judged against the page's own build when the active one does not answer.
+
+### Upgrade notes
+
+- **`SYSTEM_EPOCH` 4 → 5.** The Update page's runner converges the newly deployed slot
+  automatically; a box updated by an older runner is self-healed by the converge watchdog. To
+  force it by hand: `sudo ~/bootstrap/mcapp.sh --converge`. The wpasupplicant pin is applied
+  here, and any network-package upgrade it defers is printed with the command to run it
+  deliberately, on a box you can reach physically.
+- No schema migration (still 32) and no push-contract change (still v10) — existing web-push
+  subscriptions keep working and no client needs to re-subscribe.
+- The read-cursor repair runs once at first startup on the new version and marks itself done.
+  If a conversation was stuck unread, it clears after that restart plus one reload.
+
 ## v2.0.9 (2026-09-18)
 
 Hotfix for GitHub issue #10 (HB9VQQ): with v2.0.8 a McApp opened over **plain `http://`** could
