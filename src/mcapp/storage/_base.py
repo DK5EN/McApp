@@ -109,6 +109,9 @@ class StorageBase(Protocol):
     async def seed_read_cursors_from_counts(self, my_callsign: str) -> int:
         raise NotImplementedError
 
+    async def repair_read_cursor_dm_keys(self, my_callsign: str) -> int:
+        raise NotImplementedError
+
     async def get_blocked_texts(self) -> list[str]:
         raise NotImplementedError
 

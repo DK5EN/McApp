@@ -43,6 +43,15 @@ Coverage:
   the `read_cursors_seeded` marker unset, so a later boot with the real
   callsign configured retries instead of silently writing 0 forever.
 
+  Digit-less DM partner base (doc/2026-09-19_0006-unread-badge-digitless-
+  callsign-plan.md, Wave 1a): `conversation_key_for_sidebar_key` pairs a
+  digit-less partner base like 'WLNK' with `my_base` instead of returning it
+  unchanged, leaves every verbatim/'<>'/'A~B' shape as documented, `POST
+  /api/read_cursor` (called directly via its route function, not through
+  TestClient/ASGI) normalises before writing/looking up/broadcasting so the
+  badge actually clears end to end, and `repair_read_cursor_dm_keys` heals
+  rows already written under the bare key on an already-affected install.
+
 All timestamps are milliseconds (project-wide DB convention).
 """
 
@@ -50,11 +59,17 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from starlette.routing import Route
+
 from ..commands.parsing import SPAM_GROUP
 from ..logging_setup import get_logger
+from ..schemas import ReadCursorRequest
 from ..sqlite_storage import create_sqlite_storage
+from ..sse_handler import SSEManager
+from ..sse_routes.prefs import build_prefs_router
 from ..util import now_ms
 from .constants import compute_conversation_key
+from .prefs import conversation_key_for_sidebar_key
 from .query import HistoryFilter
 
 logger = get_logger(__name__)
@@ -575,6 +590,286 @@ async def _test_transport_duplicates(results: list[tuple[str, bool]]) -> None:
             await storage.close()
 
 
+class _StubMessageRouter:
+    """Minimal MessageRouter stand-in for wiring an SSEManager without the
+    whole router/BLE/commands stack — mirrors the `_InitialEventsRouter`
+    stand-in in `sse_handler.py`'s own SSE-burst suite, just not importable
+    from there (it is a function-local class)."""
+
+    def __init__(self, storage: Any, callsign: str) -> None:
+        self.storage_handler = storage
+        self.my_callsign = callsign
+        self.filter_history_row = None
+
+    def subscribe(self, _topic: str, _handler: Any) -> None:
+        return
+
+    def get_protocol(self, _name: str) -> Any:
+        return None
+
+
+async def _test_conversation_key_for_sidebar_key(results: list[tuple[str, bool]]) -> None:
+    """`conversation_key_for_sidebar_key` (plan Wave 1a item 1): a
+    digit-less DM partner base ('WLNK') pairs with `my_base` instead of
+    being returned unchanged, every verbatim shape stays untouched, the
+    'A~B' pair shape sorts and joins, and an already-'<>' key hits the new
+    early exit unchanged.
+    """
+    my_base = "HB9VQQ"
+    results.append(
+        (
+            (
+                "conversation_key_for_sidebar_key: digit-less partner base 'WLNK' pairs"
+                " with my_base -> 'HB9VQQ<>WLNK' (the reported bug)"
+            ),
+            conversation_key_for_sidebar_key("WLNK", my_base) == "HB9VQQ<>WLNK",
+        )
+    )
+    results.extend(
+        (
+            f"conversation_key_for_sidebar_key: '{verbatim_key}' is returned unchanged",
+            conversation_key_for_sidebar_key(verbatim_key, my_base) == verbatim_key,
+        )
+        for verbatim_key in ("232", "#OE-SOTA", "*", "Time")
+    )
+    results.append(
+        (
+            (
+                "conversation_key_for_sidebar_key: 'A~B' pair key sorts and '<>'-joins"
+                " ('DK3PB~OE1XYZ' -> 'DK3PB<>OE1XYZ')"
+            ),
+            conversation_key_for_sidebar_key("DK3PB~OE1XYZ", my_base) == "DK3PB<>OE1XYZ",
+        )
+    )
+    results.append(
+        (
+            (
+                "conversation_key_for_sidebar_key: an already-'<>' key hits the early"
+                " exit and is returned unchanged"
+            ),
+            conversation_key_for_sidebar_key("DK3PB<>OE1XYZ", my_base) == "DK3PB<>OE1XYZ",
+        )
+    )
+    # Advisor-gate finding on this wave: the shapes compute_conversation_key
+    # REFUSES to key (all-ASCII-digit outside 1..99999, malformed '#' tag) are
+    # stored under COALESCE(conversation_key, dst), so the raw dst IS the
+    # server key — never an own-DM partner. Pairing them here would address a
+    # conversation that does not exist, and repair_read_cursor_dm_keys would
+    # then move a CORRECT cursor row onto that phantom key, permanently.
+    results.extend(
+        (
+            (
+                f"conversation_key_for_sidebar_key: '{refused_key}' gets no conversation"
+                " key server-side and is returned unchanged, never paired"
+            ),
+            conversation_key_for_sidebar_key(refused_key, my_base) == refused_key,
+        )
+        for refused_key in ("0", "100000", "#OE_SOTA", "#", "")
+    )
+
+
+async def _test_read_cursor_route_normalises_digitless_partner(
+    results: list[tuple[str, bool]],
+) -> None:
+    """End-to-end claim from the plan's Evidence table: before the fix,
+    `POST /api/read_cursor` stored a digit-less partner's bare sidebar key
+    ('WLNK') verbatim, which never matched the conversation's real key
+    ('HB9VQQ<>WLNK'), so the badge stayed stuck forever. Calls the actual
+    route function directly (not through TestClient/ASGI), the same pattern
+    `sse_handler.py`'s own `POST /api/read_cursor` coverage uses, so the real
+    normalisation-then-write-then-lookup-then-broadcast code path is
+    exercised, not a reimplementation of it.
+    """
+    own_call = "HB9VQQ"
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = Path(tmp_dir) / "read_cursor_route_digitless_test.db"
+        storage = await create_sqlite_storage(db_path)
+        try:
+            t0 = now_ms() - 100_000
+            await _store_msg(storage, "WLNK-1", own_call, "winlink reply", t0)
+
+            manager = SSEManager(
+                host="127.0.0.1", port=0, message_router=_StubMessageRouter(storage, own_call)
+            )
+            router = build_prefs_router(manager)
+            set_cursor_endpoint = next(
+                route.endpoint
+                for route in router.routes
+                if isinstance(route, Route) and route.path == "/api/read_cursor"
+            )
+
+            response = await set_cursor_endpoint(ReadCursorRequest(key="WLNK", ts=t0 + 10))
+            results.append(
+                (
+                    (
+                        "POST /api/read_cursor: the response for the digit-less partner"
+                        " key already reports unread == 0"
+                    ),
+                    response.get("unread") == 0,
+                )
+            )
+
+            partner_key = "HB9VQQ<>WLNK"
+            summary = await storage.get_conversation_summary(own_call)
+            results.append(
+                (
+                    (
+                        "POST /api/read_cursor: setting the cursor under sidebar key"
+                        " 'WLNK' clears unread for the real conversation key"
+                        " 'HB9VQQ<>WLNK' (fails before the fix, which stored it verbatim"
+                        " under 'WLNK')"
+                    ),
+                    summary.get(partner_key, {}).get("unread") == 0,
+                )
+            )
+
+            cursors = await storage.get_read_cursors()
+            results.append(
+                (
+                    (
+                        "POST /api/read_cursor: the stored read_cursors row is keyed by"
+                        " the normalised conversation key, not the bare sidebar key"
+                    ),
+                    partner_key in cursors and "WLNK" not in cursors,
+                )
+            )
+        finally:
+            await storage.close()
+
+
+async def _test_repair_read_cursor_dm_keys(results: list[tuple[str, bool]]) -> None:
+    """`repair_read_cursor_dm_keys` (plan Wave 1a item 3): moves a
+    pre-existing bare-key row to its real conversation key, MAX-merges
+    against an already-correct row (keeping the higher value, never
+    regressing it) while still deleting the stale row, leaves verbatim
+    shapes untouched, and is idempotent.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = Path(tmp_dir) / "read_cursor_repair_test.db"
+        storage = await create_sqlite_storage(db_path)
+        try:
+            t0 = now_ms() - 200_000
+
+            # -- stale bare-key row alone: moved to the real conversation key --
+            await storage.set_read_cursor("WLNK", t0)
+
+            # -- stale bare-key row colliding with an already-correct, NEWER
+            #    row: MAX semantics must keep the newer value, and the stale
+            #    row must still be deleted --
+            await storage.set_read_cursor("DK3PB<>HB9VQQ", t0 + 500)
+            await storage.set_read_cursor("DK3PB", t0)
+
+            # -- untouched shapes: never rewritten or deleted --
+            await storage.set_read_cursor("232", t0)
+            await storage.set_read_cursor("*", t0)
+            # '0' gets NO conversation key from compute_conversation_key, so
+            # its rows are stored under COALESCE(conversation_key, dst) = '0'
+            # and this row is already CORRECT. Moving it to '0<>HB9VQQ' would
+            # strand that conversation unread forever, and the marker makes
+            # the damage one-shot and unrepeatable (advisor-gate finding).
+            await storage.set_read_cursor("0", t0)
+
+            repaired = await storage.repair_read_cursor_dm_keys("HB9VQQ")
+            results.append(
+                (
+                    "repair_read_cursor_dm_keys: repairs exactly the two stale DM rows",
+                    repaired == 2,
+                )
+            )
+
+            cursors = await storage.get_read_cursors()
+            results.append(
+                (
+                    ("repair_read_cursor_dm_keys: 'WLNK' moved to 'HB9VQQ<>WLNK', stale row gone"),
+                    cursors.get("HB9VQQ<>WLNK") == t0 and "WLNK" not in cursors,
+                )
+            )
+            results.append(
+                (
+                    (
+                        "repair_read_cursor_dm_keys: MAX-merges into an already-present"
+                        " correct row instead of regressing it, and deletes the stale"
+                        " one"
+                    ),
+                    cursors.get("DK3PB<>HB9VQQ") == t0 + 500 and "DK3PB" not in cursors,
+                )
+            )
+            results.append(
+                (
+                    (
+                        "repair_read_cursor_dm_keys: verbatim shapes ('232', '*') and a"
+                        " key the server refuses to give a conversation key ('0') are"
+                        " untouched — '0' must NOT become '0<>HB9VQQ'"
+                    ),
+                    cursors.get("232") == t0
+                    and cursors.get("*") == t0
+                    and cursors.get("0") == t0
+                    and "0<>HB9VQQ" not in cursors,
+                )
+            )
+
+            repaired_again = await storage.repair_read_cursor_dm_keys("HB9VQQ")
+            results.append(
+                (
+                    (
+                        "repair_read_cursor_dm_keys: idempotent — a second call repairs"
+                        " nothing (classifier_meta marker)"
+                    ),
+                    repaired_again == 0,
+                )
+            )
+
+            marker = await storage.get_meta("read_cursors_dm_repaired")
+            results.append(
+                ("repair_read_cursor_dm_keys: sets the marker after a real run", bool(marker))
+            )
+        finally:
+            await storage.close()
+
+
+async def _test_repair_read_cursor_dm_keys_empty_callsign(
+    results: list[tuple[str, bool]],
+) -> None:
+    """Empty-callsign rule mirrors seed_read_cursors_from_counts's Finding 6:
+    skip without setting the marker, so a later boot with the real callsign
+    configured retries instead of silently repairing 0 forever.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = Path(tmp_dir) / "read_cursor_repair_empty_callsign_test.db"
+        storage = await create_sqlite_storage(db_path)
+        try:
+            t0 = now_ms() - 200_000
+            await storage.set_read_cursor("WLNK", t0)
+
+            repaired = await storage.repair_read_cursor_dm_keys("")
+            results.append(
+                (
+                    "repair_read_cursor_dm_keys: empty callsign repairs 0 rows",
+                    repaired == 0,
+                )
+            )
+            marker = await storage.get_meta("read_cursors_dm_repaired")
+            results.append(
+                (
+                    ("repair_read_cursor_dm_keys: empty-callsign call leaves the marker unset"),
+                    not marker,
+                )
+            )
+
+            repaired_real = await storage.repair_read_cursor_dm_keys("HB9VQQ")
+            results.append(
+                (
+                    (
+                        "repair_read_cursor_dm_keys: a following call with a real"
+                        " callsign repairs normally"
+                    ),
+                    repaired_real == 1,
+                )
+            )
+        finally:
+            await storage.close()
+
+
 async def run_read_cursor_tests() -> bool:
     """Run the unread-cursor regression suite. Returns True iff every case passes."""
     results: list[tuple[str, bool]] = []
@@ -587,6 +882,10 @@ async def run_read_cursor_tests() -> bool:
     await _test_seed_empty_callsign(results)
     await _test_blocklist_rebucket(results)
     await _test_delete_removes_cursor(results)
+    await _test_conversation_key_for_sidebar_key(results)
+    await _test_read_cursor_route_normalises_digitless_partner(results)
+    await _test_repair_read_cursor_dm_keys(results)
+    await _test_repair_read_cursor_dm_keys_empty_callsign(results)
 
     for label, ok in results:
         print(f"    {'✅ PASS' if ok else '❌ FAIL'} | {label}")

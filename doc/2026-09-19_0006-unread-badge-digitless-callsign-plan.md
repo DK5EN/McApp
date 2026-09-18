@@ -184,3 +184,53 @@ once his box takes the update — worth saying so when answering the issue.
 - HB9VQQ runs v2.0.4 or later (the read-cursor scheme). If his box predates it, he is on the
   legacy `read_counts` path and the diagnosis above does not apply — worth confirming in the
   issue thread before shipping.
+
+## Status — implemented 2026-09-19
+
+Waves 1a and 1b are **done and gated**. Wave 2 remains **deferred** as recommended above.
+
+| Wave | Scope                                | State                 |
+| ---- | ------------------------------------ | --------------------- |
+| 1a   | Backend normalise + one-shot repair  | done                  |
+| 1b   | Webapp round-trip invariant          | done                  |
+| 2    | `makePairKey` third-party digit-less | deferred, not started |
+
+Shipped as specified, with one addition forced by the advisor gate.
+
+**Advisor finding (fixed before commit).** Weakening the webapp gate to a bare empty-string
+check — and mirroring that in the new backend helper — mis-keyed the shapes
+`compute_conversation_key` deliberately **refuses**: an all-ASCII-digit key outside the
+1..99999 group range (`0`, `100000`) and a malformed `#` tag (`#OE_SOTA`, bare `#`). Those rows
+are read back under `COALESCE(conversation_key, dst)` (`storage/query.py`), so the raw dst
+_already is_ the server key. Pairing it produced `0<>HB9VQQ`, a conversation that does not
+exist — the reported bug again, pointed at a different set of keys — and
+`repair_read_cursor_dm_keys` would then have moved a **correct** cursor row onto that phantom
+key and set its marker, making the damage one-shot and unrepeatable. The old
+`isValidPairMember` gate had been covering these by accident (no digit, no letter, bad
+charset).
+
+Both translators now carry an explicit refusal branch mirroring `compute_conversation_key`'s
+own, directly after the group/hashtag/`*`/`Time` verbatim branch, and the empty key is returned
+unchanged on both sides (it previously degenerated to `<>HB9VQQ` on the backend). Pinned by
+`conversation_key_for_sidebar_key` cases for `0` / `100000` / `#OE_SOTA` / `#` / `''`, a
+`repair_read_cursor_dm_keys` case asserting a `'0'` row is left alone, and the webapp's
+"leaves keys the server refuses to give a conversation key unchanged" case. Each was confirmed
+red with the guard removed and green with it restored.
+
+Everything else the advisor examined came back clean: the repair loop's write-then-delete
+ordering is crash-safe and the marker is only set after a complete pass; the route uses the
+normalised key at all five downstream sites; no webapp consumer keys off a verbatim echo of its
+own POSTed key (`applyReadCursorEcho` translates, `scheduleCursorPost`/`cancelCursorPost` share
+the client-side key); and the two translators agree on every non-garbage shape.
+
+**Gate.** MCProxy: `ruff check`, `ruff format --check .`, `mypy src/mcapp ble_service/src`
+("no issues found in 106 source files"), `scripts/run_startup_tests.py` exit 0 with
+`read_cursor: PASS`. webapp: `eslint src`, `vue-tsc --noEmit`, 3366 unit tests, `prettier
+--check .` — all clean, `conversation_key_vectors.json` unmodified.
+
+**Field replay.** `conversation_key_for_sidebar_key` run against mcapp.local's 144 real
+`read_cursors` rows rewrites **0** of them: the repair pass is inert on a healthy box and fires
+only where the bug actually deposited a bare key.
+
+**Still open:** a dev release and deploy, and the reply to issue #11 — including the
+confirmation that HB9VQQ is on v2.0.4 or later (§ Assumptions).

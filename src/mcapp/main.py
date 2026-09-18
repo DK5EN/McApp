@@ -2594,6 +2594,18 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
             logger.info("Seeded %d read cursor(s) from legacy read counts", seeded)
     except Exception:
         logger.warning("seed_read_cursors_from_counts failed", exc_info=True)
+    # One-shot, idempotent repair of read_cursors rows written under a bare,
+    # un-translated sidebar key (doc/2026-09-19_0006-unread-badge-digitless-
+    # callsign-plan.md) — must run after the seed above so seed-then-repair
+    # is the order, and is equally non-fatal.
+    try:
+        repaired = await storage_handler.repair_read_cursor_dm_keys(
+            message_router.my_callsign or ""
+        )
+        if repaired > 0:
+            logger.info("Repaired %d read cursor(s) with a stale DM key", repaired)
+    except Exception:
+        logger.warning("repair_read_cursor_dm_keys failed", exc_info=True)
     message_router.cached_gps = None  # {lat, lon} — set when BLE device sends TYP="G"
     message_router.cached_ble_registers = {}  # {TYP: dict} — cached on ble_notification
     _wire_ble_caches(message_router)
