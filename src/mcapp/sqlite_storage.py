@@ -16,10 +16,12 @@ construction/teardown, and the module-level regression test suite.
 """
 
 import asyncio
+import contextlib
 import inspect
 import json
 import sqlite3
 import tempfile
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -36,6 +38,7 @@ from .storage.constants import (
     CREATE_SCHEMA_SQL,
     CREATE_SCHEMA_V2_SQL,
     LATEST_SCHEMA_VERSION,
+    SQLITE_BUSY_TIMEOUT_S,
     TELEMETRY_DEDUP_WINDOW_MS,
     db_read,
     db_write,
@@ -87,6 +90,17 @@ class SQLiteStorage(
         # subscribe/unsubscribe/prune — see list_push_subscriptions.
         self._push_subs_cache: list[dict[str, Any]] | None = None
 
+        # Persistent writer connection for `_mutate`/`_execute_many` (see the
+        # "Connection plumbing" note below `close()`). None until first use;
+        # opened lazily so it never races `initialize()`'s migration connection.
+        self._writer_conn: sqlite3.Connection | None = None
+        # Serializes access to `_writer_conn` across `asyncio.to_thread` worker
+        # threads. SQLite itself serializes writers, but two threads calling
+        # `execute()`/`commit()` on the SAME Connection object concurrently is
+        # not safe even with `check_same_thread=False` — that flag only lifts
+        # the same-thread restriction, it does not make the object reentrant.
+        self._writer_lock = threading.Lock()
+
         # Ensure parent directory exists
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -110,6 +124,19 @@ class SQLiteStorage(
     # writeup and the regression coverage, and
     # doc/connection-leak-fable-verdict.md for the measurements and the
     # WAL-checkpoint trade-off this fix accepts.
+    #
+    # `_mutate`/`_execute_many` are the one exception to "every query opens
+    # its own connection": they share ONE persistent writer connection
+    # (`_writer_conn`) instead of going through `db_write`. Closing the LAST
+    # connection to a WAL database checkpoints and deletes the WAL file, which
+    # is itself a DB-file fsync — on the production Pi's SD card that measured
+    # 23.7 ms per write vs. ~0.2 ms on a persistent connection (2026-09-18), on
+    # top of the per-commit fsync `db_write`'s NORMAL pragma already fixed. A
+    # per-call open/close paid that checkpoint cost on every single write.
+    # `_query` keeps opening per call via `db_read` — reads never checkpoint on
+    # close (they never commit), so they had nothing to gain here, and forcing
+    # them onto the writer connection would serialize reads behind the
+    # `_writer_lock` for no benefit.
 
     async def _query(self, query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
         """Run a SELECT in the thread pool and return the matched rows."""
@@ -122,14 +149,63 @@ class SQLiteStorage(
 
         return await asyncio.to_thread(_run)
 
+    def _get_writer_conn(self) -> sqlite3.Connection:
+        """Return the persistent writer connection, opening it on first use.
+
+        Must be called with `_writer_lock` held. Opened through
+        `sqlite3.connect` (not `db_write`) so it survives past a single call —
+        `check_same_thread=False` because `asyncio.to_thread` may run
+        successive calls on different worker threads, serialized by
+        `_writer_lock` rather than by sqlite3's own same-thread check.
+        `synchronous=NORMAL` is set once here, matching `db_write`'s pragma
+        (see its docstring in storage/constants.py).
+        """
+        if self._writer_conn is None:
+            conn = sqlite3.connect(
+                str(self.db_path), timeout=SQLITE_BUSY_TIMEOUT_S, check_same_thread=False
+            )
+            try:
+                conn.execute("PRAGMA synchronous=NORMAL")
+            except Exception:
+                conn.close()  # sqlite3.connect is lazy; do not leak a half-opened handle
+                raise
+            self._writer_conn = conn
+        return self._writer_conn
+
+    def _writer_failed(self, conn: sqlite3.Connection, exc: BaseException) -> None:
+        """Roll back after a failed write; must be called with `_writer_lock` held.
+
+        A per-call `db_write` connection healed itself by being thrown away; a
+        persistent one must be dropped explicitly when it is no longer usable
+        (closed underneath us, interface error, or a rollback that itself
+        raises), or every later `_mutate` would fail forever. Dropping it makes
+        the next call reopen via `_get_writer_conn`.
+        """
+        poisoned = isinstance(exc, (sqlite3.ProgrammingError, sqlite3.InterfaceError))
+        if not poisoned:
+            try:
+                conn.rollback()
+            except Exception:
+                poisoned = True
+        if poisoned:
+            with contextlib.suppress(Exception):
+                conn.close()
+            self._writer_conn = None
+
     async def _mutate(self, query: str, params: tuple[Any, ...] = ()) -> int:
         """Run an INSERT/UPDATE/DELETE in the thread pool and return the row count."""
 
         def _run() -> int:
-            with db_write(self.db_path) as conn:
-                cursor = conn.execute(query, params)
-                conn.commit()
-                return cursor.rowcount
+            with self._writer_lock:
+                conn = self._get_writer_conn()
+                try:
+                    cursor = conn.execute(query, params)
+                    conn.commit()
+                except Exception as exc:
+                    self._writer_failed(conn, exc)
+                    raise
+                else:
+                    return cursor.rowcount
 
         return await asyncio.to_thread(_run)
 
@@ -137,18 +213,35 @@ class SQLiteStorage(
         """Execute many queries in thread pool."""
 
         def _run() -> None:
-            with db_write(self.db_path) as conn:
-                conn.executemany(query, params_list)
-                conn.commit()
+            with self._writer_lock:
+                conn = self._get_writer_conn()
+                try:
+                    conn.executemany(query, params_list)
+                    conn.commit()
+                except Exception as exc:
+                    self._writer_failed(conn, exc)
+                    raise
 
         await asyncio.to_thread(_run)
 
     async def close(self) -> None:
-        """No persistent connection to close; every query opens/closes its own.
+        """Close the persistent writer connection, if one was ever opened.
 
-        Kept as a no-op so callers (startup tests, future connection-pooling work)
-        have a stable teardown hook.
+        Run in the thread pool: `_writer_lock` is a `threading.Lock`, and
+        taking it directly on the event-loop thread would block event-loop
+        progress for as long as an in-flight `_mutate`/`_execute_many` holds
+        it. Resets `_writer_conn` to None afterwards so a storage object used
+        again after `close()` transparently reopens on its next write (the
+        startup-test suite closes and reuses storage instances this way).
         """
+
+        def _run() -> None:
+            with self._writer_lock:
+                if self._writer_conn is not None:
+                    self._writer_conn.close()
+                    self._writer_conn = None
+
+        await asyncio.to_thread(_run)
 
     # ── Web Push subscriptions (Wave 5, PWA campaign) ───────────────────────
     # `subscription`/`filter_json` are stored as JSON blobs (contract shapes:

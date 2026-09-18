@@ -216,6 +216,17 @@ through `/api/stalls`. No UI; this is capture-and-upload only. Design and the in
   through `sys._current_frames()` only once overdue. An unsampled lag omits the key entirely.
 - **`sse_heartbeat` from a hidden tab is a `sample`, not `critical`** (webapp
   `recordSseHeartbeatTimeout`): iOS suspends the PWA and wakes it hourly while still hidden.
+- **`/api/weather` at 0.5-1.5 s is the upstream fetch and is CLOSED as a non-issue** (decision
+  2026-09-18, `doc/2026-09-18_2200-stall-followup-plan.md`). It runs off-loop via `to_thread`,
+  stalls nothing else, and 8 of 12 calls crossing the 0.5 s threshold is the weather provider's
+  latency from the Pi, not ours. Do not re-open it from a stall report; a webapp-side cache is the
+  only lever, and it is a frontend change.
+- **Per-call write connections were the second half of the handler stalls.** Closing the LAST
+  connection to a WAL database checkpoints and deletes the WAL, a DB-file fsync per write:
+  23.7 ms vs 0.2 ms on a persistent connection, measured 2026-09-18 on the Pi's ext4 root. The
+  query plans were never the problem (every ingest-path query is `SEARCH ... USING INDEX`, < 1 ms
+  on the live DB), so a "full table scan" hypothesis for `_storage_handler` stalls has already
+  been checked and rejected; look at fsync counts first.
 - **`ble_connected` handles property-vs-method.** `is_connected` is a property on the remote BLE
   client (and on every current client); the gauge (`_ble_connected` in `main.py`) tolerates a method too and calls it
   only when callable, mirroring the same pattern the BLE code already uses elsewhere.

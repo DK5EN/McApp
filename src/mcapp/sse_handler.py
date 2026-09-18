@@ -750,10 +750,20 @@ class SSEManager:
     @staticmethod
     def format_sse_event(data: dict[str, Any], event_type: str | None = None) -> str:
         """Format data as SSE event."""
+        return SSEManager._format_sse_event_from_json(json.dumps(data), event_type)
+
+    @staticmethod
+    def _format_sse_event_from_json(json_str: str, event_type: str | None = None) -> str:
+        """Build the SSE wire text from an already-serialized JSON string.
+
+        Sibling of `format_sse_event` sharing this one framing implementation,
+        so a caller that serializes off-loop (`send_to(..., offload_json=True)`)
+        can never drift from the sync path's byte layout.
+        """
         lines = []
         if event_type:
             lines.append(f"event: {event_type}")
-        lines.append(f"data: {json.dumps(data)}")
+        lines.append(f"data: {json_str}")
         lines.append("")  # Empty line to separate events
         return "\n".join(lines) + "\n"
 
@@ -819,14 +829,30 @@ class SSEManager:
         data = routed_message["data"]
         await self.broadcast_message({"type": "msg_status", **data})
 
-    async def send_to(self, client_id: str, message: dict[str, Any]) -> bool:
+    async def send_to(
+        self, client_id: str, message: dict[str, Any], *, offload_json: bool = False
+    ) -> bool:
         """Send one message to a single SSE client. Returns False if the client
-        is unknown/gone (caller decides fallback; we never broadcast here)."""
+        is unknown/gone (caller decides fallback; we never broadcast here).
+
+        `offload_json` is an explicit opt-in for large payloads (the mheard
+        chart dumps): `json.dumps` runs in a worker thread via
+        `asyncio.to_thread` instead of inline on the event loop, producing the
+        byte-identical wire text `format_sse_event` would. Default stays False
+        — an unconditional thread hop here would let two concurrent `send_to`/
+        `broadcast_event` calls (e.g. `msg` vs `msg:status`) reorder relative
+        to each other, which the webapp's ordering guards depend on.
+        """
         async with self.clients_lock:
             client = self.clients.get(client_id)
         if client is None or not client.connected:
             return False
-        event = self.format_sse_event(message, self._get_event_type(message))
+        event_type = self._get_event_type(message)
+        if offload_json:
+            json_str = await asyncio.to_thread(json.dumps, message)
+            event = self._format_sse_event_from_json(json_str, event_type)
+        else:
+            event = self.format_sse_event(message, event_type)
         try:
             await client.send(event)
         except asyncio.QueueFull:

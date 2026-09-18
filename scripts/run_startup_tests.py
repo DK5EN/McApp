@@ -55,6 +55,7 @@ from mcapp.meteo_tests import run_meteo_tests
 from mcapp.push_tests import run_push_tests
 from mcapp.send_path_tests import run_send_path_tests
 from mcapp.sqlite_storage import run_startup_tests as run_storage_tests
+from mcapp.sse_format_tests import run_sse_format_tests
 from mcapp.sse_handler import run_startup_tests as run_sse_tests
 from mcapp.stall_http_tests import run_stall_http_tests
 from mcapp.stall_tests import run_stall_tests
@@ -88,6 +89,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     stall_http_ok = await run_stall_http_tests()
     print(f"stall_http: {'PASS' if stall_http_ok else 'FAIL'}")
+
+    sse_format_ok = await run_sse_format_tests()
+    print(f"sse_format: {'PASS' if sse_format_ok else 'FAIL'}")
 
     contract_parity_ok = run_contract_parity_tests()
     print(f"contract_parity: {'PASS' if contract_parity_ok else 'FAIL'}")
@@ -239,6 +243,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and send_path_ok
         and stall_ok
         and stall_http_ok
+        and sse_format_ok
         and contract_parity_ok
         and dedup_contract_ok
         and linkcheck_ok
