@@ -1,5 +1,40 @@
 # Release History
 
+## v2.0.9 (2026-09-18)
+
+Hotfix for GitHub issue #10 (HB9VQQ): with v2.0.8 a McApp opened over **plain `http://`** could
+not send messages ("Sending..." never resolved), the Bluetooth device scan found nothing, and the
+Gateway Availability and Device Time cards showed `crypto.randomUUID is not a function`. No
+backend change; the fix is in the webapp. Schema and push contract unchanged.
+
+### Highlights
+
+- **Every API call failed in an insecure context.** The v2.0.8 stall reporter minted its
+  `X-Request-Id` / `X-Session-Id` with `crypto.randomUUID`, which browsers expose only over HTTPS
+  or `localhost`. Over `http://mcapp.local` (the default for anyone who has not installed the
+  Caddy certificate) the call threw before `fetch()` ran, so every request through the API wrapper
+  and `/api/send` rejected as a network error. Incoming SSE traffic was unaffected, which is why it
+  looked like a send-only problem. Reproduced on mcapp.local over port 80.
+- **Fix:** `randomUuid()` prefers `crypto.randomUUID` and falls back to a v4 UUID built from
+  `crypto.getRandomValues`, which insecure contexts do have. A regression test deletes
+  `crypto.randomUUID` and fails on the v2.0.8 code with the reported error.
+
+### Backend (MCProxy)
+
+- No functional change. Dependencies were already current (idna 3.20, ruff 0.16.8).
+
+### Frontend (webapp)
+
+- `src/utils/uuid.ts` with the fallback; used by the stall reporter and the two outbox ids in the
+  send queue (the only pre-2.0.8 use, offline path only).
+
+### Upgrade notes
+
+- No migration, no reboot. Reload the webapp past the service worker ("Update available") to get
+  the fixed bundle.
+- Not soaked as a dev pre-release: a one-file frontend hotfix promoted directly, by operator
+  decision.
+
 ## v2.0.8 (2026-09-16)
 
 Operations release. Every stall between the webapp and the API is now recorded with the data
