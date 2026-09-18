@@ -22,6 +22,7 @@ from ..schemas import (
     ReadCursorRequest,
     SidebarStateRequest,
 )
+from ..storage.prefs import conversation_key_for_sidebar_key
 
 if TYPE_CHECKING:
     from ..sse_handler import SSEManager
@@ -58,24 +59,39 @@ def build_prefs_router(manager: SSEManager) -> APIRouter:  # noqa: PLR0915 - one
         broadcast the stored value to every connected client — see
         sse_handler.py's _linkcheck_handler for the same bare-payload
         broadcast_event precedent (not the {type,msg,data} response envelope).
+
+        Normalises `body.key` through `conversation_key_for_sidebar_key`
+        BEFORE anything else — defence in depth against a client (including a
+        stale cached PWA behind a service worker) that still POSTs a bare,
+        un-translated sidebar key for a digit-less DM partner base (e.g. the
+        Winlink alias 'WLNK-1' -> sidebar key 'WLNK'), which would otherwise
+        be stored and looked up verbatim and never match the conversation's
+        real key (doc/2026-09-19_0006-unread-badge-digitless-callsign-plan.md).
+        Every downstream use — the write, the SPAM_GROUP comparison, the
+        summary lookup and the broadcast payload — uses this same normalised
+        key consistently. With no callsign configured yet, normalisation is
+        skipped entirely and the key is stored verbatim rather than
+        degenerating to '<>WLNK'.
         """
         storage = manager.require_storage()
-        stored = await storage.set_read_cursor(body.key, body.ts)
+        router_ = manager.message_router
+        my_callsign = (router_.my_callsign or "") if router_ else ""
+        my_base = my_callsign.split("-", maxsplit=1)[0].upper()
+        key = conversation_key_for_sidebar_key(body.key, my_base) if my_base else body.key
+        stored = await storage.set_read_cursor(key, body.ts)
         # Fresh `unread` for the advanced key rides along on both the response
         # and the broadcast: the webapp's local window is capped (and offline
         # boot may hold none of the rows), so it cannot recompute the badge
         # itself once the cursor moves — the server is the only party that can.
-        router_ = manager.message_router
-        my_callsign = (router_.my_callsign or "") if router_ else ""
         summary = await storage.get_conversation_summary(
             my_callsign,
             blocklist_filter=router_.filter_history_row if router_ else None,
-            key=None if body.key == SPAM_GROUP else body.key,
+            key=None if key == SPAM_GROUP else key,
         )
-        unread = summary.get(body.key, {}).get("unread", 0)
+        unread = summary.get(key, {}).get("unread", 0)
         await manager.broadcast_event(
             "proxy:read_cursor",
-            {"key": body.key, "ts": stored, "unread": unread},
+            {"key": key, "ts": stored, "unread": unread},
         )
         return {"status": "ok", "ts": stored, "unread": unread}
 

@@ -97,6 +97,152 @@ restore_unattended_upgrades() {
 }
 
 #──────────────────────────────────────────────────────────────────
+# NETWORK-CRITICAL PACKAGES + LINK GUARD (post mortem 2026-09-18)
+#──────────────────────────────────────────────────────────────────
+# Packages whose dpkg postinst restarts the very link the bootstrap session
+# rides on. On 2026-09-18 the in-session `apt-get upgrade` below replaced
+# wpasupplicant, its postinst restarted wpa_supplicant.service, and
+# mcapp.local fell off WiFi for good (the new build advertised WPA3-SAE the
+# Zero 2 W's brcmfmac43436 cannot complete; see
+# doc/2026-09-18_2320-wifi-outage-postmortem.md and raspberrypi/linux#7634).
+# The bootstrap therefore never upgrades these inline: they are held for the
+# duration of the apt phase and a pending upgrade is REPORTED, to be applied
+# from a console where a link drop is survivable.
+readonly -a MCAPP_NETWORK_CRITICAL_PACKAGES=("wpasupplicant" "network-manager")
+
+# Space-separated list of the packages hold_network_packages() put on hold,
+# so unhold_network_packages() never releases an operator's own hold.
+MCAPP_TEMP_HELD=""
+
+# Link state captured by snapshot_link_state() before the apt phase.
+MCAPP_LINK_IFACE=""
+MCAPP_LINK_KEYMGMT=""
+
+# Overridable for the offline test suite (scripts/bootstrap_network_safety_tests.py).
+MCAPP_SYSTEMD_RUNTIME_DIR="${MCAPP_SYSTEMD_RUNTIME_DIR:-/run/systemd/system}"
+MCAPP_LINK_WAIT_S="${MCAPP_LINK_WAIT_S:-45}"
+
+hold_network_packages() {
+  MCAPP_TEMP_HELD=""
+  local pkg status
+  for pkg in "${MCAPP_NETWORK_CRITICAL_PACKAGES[@]}"; do
+    status=$(dpkg-query -W -f='${db:Status-Status}' "$pkg" 2>/dev/null || true)
+    [[ "$status" == "installed" ]] || continue
+    # An existing hold belongs to the operator (or to the wpasupplicant pin
+    # story); leave it alone and never unhold it either.
+    if apt-mark showhold 2>/dev/null | grep -qx "$pkg"; then
+      continue
+    fi
+    if apt-mark hold "$pkg" >/dev/null 2>&1; then
+      MCAPP_TEMP_HELD="${MCAPP_TEMP_HELD:+${MCAPP_TEMP_HELD} }${pkg}"
+    fi
+  done
+  if [[ -n "$MCAPP_TEMP_HELD" ]]; then
+    log_info "  Holding network-critical packages for the apt phase: ${MCAPP_TEMP_HELD}"
+  fi
+  return 0
+}
+
+unhold_network_packages() {
+  local pkg
+  for pkg in $MCAPP_TEMP_HELD; do
+    apt-mark unhold "$pkg" >/dev/null 2>&1 || true
+  done
+  MCAPP_TEMP_HELD=""
+  report_deferred_network_upgrades
+  return 0
+}
+
+# Print what the hold kept back, with the console command to apply it.
+report_deferred_network_upgrades() {
+  local pattern pending
+  pattern=$(IFS='|'; echo "${MCAPP_NETWORK_CRITICAL_PACKAGES[*]}")
+  pending=$(apt-get -s upgrade 2>/dev/null | grep -E "^Inst (${pattern}) " || true)
+  [[ -z "$pending" ]] && return 0
+  log_warn "  Deferred: upgrades of network-critical packages are never applied by the bootstrap"
+  local line
+  while IFS= read -r line; do
+    log_warn "    ${line}"
+  done <<< "$pending"
+  log_warn "  Apply from a console (keyboard or serial), not over the WiFi link:"
+  log_warn "    sudo apt-get install --only-upgrade ${MCAPP_NETWORK_CRITICAL_PACKAGES[*]}"
+  return 0
+}
+
+# Run an apt command where a dropped SSH session cannot interrupt dpkg
+# mid-transaction: as a transient systemd unit when the box is booted with
+# systemd, inline otherwise. apt already runs -qq; its output goes to the
+# bootstrap log, and the tail is shown on failure. The exit status of the
+# unit's main process is propagated by `systemd-run --wait`.
+run_apt_detached() {
+  local log="${MCAPP_BOOTSTRAP_LOG:-/var/lib/mcapp/bootstrap.log}"
+  if command -v systemd-run >/dev/null 2>&1 && [[ -d "$MCAPP_SYSTEMD_RUNTIME_DIR" ]]; then
+    mkdir -p "$(dirname "$log")" 2>/dev/null || true
+    local unit="mcapp-apt-$$-${RANDOM}"
+    local rc=0
+    systemd-run --quiet --wait --collect --unit="$unit" \
+      --setenv=DEBIAN_FRONTEND=noninteractive \
+      -p StandardOutput="append:${log}" -p StandardError="append:${log}" \
+      "$@" || rc=$?
+    (( rc == 0 )) && return 0
+    log_error "apt failed (exit ${rc}): $*"
+    tail -n 20 "$log" 2>/dev/null | sed 's/^/    /' >&2 || true
+    return "$rc"
+  fi
+  DEBIAN_FRONTEND=noninteractive "$@"
+}
+
+# The interface carrying the default route (e.g. wlan0); empty when offline.
+default_route_iface() {
+  ip -o route show default 2>/dev/null \
+    | awk '{ for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }'
+}
+
+snapshot_link_state() {
+  MCAPP_LINK_IFACE=$(default_route_iface)
+  MCAPP_LINK_KEYMGMT=""
+  if [[ -n "$MCAPP_LINK_IFACE" ]] && command -v wpa_cli >/dev/null 2>&1; then
+    MCAPP_LINK_KEYMGMT=$(wpa_cli -i "$MCAPP_LINK_IFACE" status 2>/dev/null | sed -n 's/^key_mgmt=//p')
+  fi
+  if [[ -n "$MCAPP_LINK_IFACE" ]]; then
+    log_info "  Link before apt: ${MCAPP_LINK_IFACE}${MCAPP_LINK_KEYMGMT:+ (${MCAPP_LINK_KEYMGMT})}"
+  fi
+  return 0
+}
+
+# After the apt phase: the default route must be back within MCAPP_LINK_WAIT_S
+# seconds, or the run stops here with the last NetworkManager/wpa_supplicant
+# lines on screen and in the log. Before 2026-09-18 the bootstrap printed
+# "System packages upgraded" and carried on with no network at all.
+verify_link_state() {
+  [[ -z "$MCAPP_LINK_IFACE" ]] && return 0
+  local waited=0 iface=""
+  while :; do
+    iface=$(default_route_iface)
+    [[ -n "$iface" ]] && break
+    (( waited >= MCAPP_LINK_WAIT_S )) && break
+    sleep 3
+    waited=$((waited + 3))
+  done
+  if [[ -z "$iface" ]]; then
+    log_error "Network link lost during the apt phase: ${MCAPP_LINK_IFACE}${MCAPP_LINK_KEYMGMT:+ (${MCAPP_LINK_KEYMGMT})} did not return within ${waited}s"
+    log_error "Last NetworkManager / wpa_supplicant lines:"
+    journalctl -u NetworkManager -u wpa_supplicant --no-pager -n 20 2>/dev/null | sed 's/^/    /' >&2 || true
+    log_error "Recover from a console: systemctl restart NetworkManager. Background: doc/2026-09-18_2320-wifi-outage-postmortem.md"
+    return 1
+  fi
+  local keymgmt=""
+  if command -v wpa_cli >/dev/null 2>&1; then
+    keymgmt=$(wpa_cli -i "$iface" status 2>/dev/null | sed -n 's/^key_mgmt=//p')
+  fi
+  if [[ -n "$MCAPP_LINK_KEYMGMT" && -n "$keymgmt" && "$keymgmt" != "$MCAPP_LINK_KEYMGMT" ]]; then
+    log_warn "  WiFi key management changed during the apt phase: ${MCAPP_LINK_KEYMGMT} -> ${keymgmt}"
+  fi
+  (( waited > 0 )) && log_warn "  Link returned after ${waited}s"
+  return 0
+}
+
+#──────────────────────────────────────────────────────────────────
 # APT DEPENDENCIES
 #──────────────────────────────────────────────────────────────────
 
@@ -112,8 +258,16 @@ install_apt_deps() {
   # Temporary swap to prevent OOM during large upgrades (Pi Zero 2W has 512MB)
   ensure_apt_swap
 
+  snapshot_link_state
+  hold_network_packages
+
   log_info "Upgrading installed packages..."
-  DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
+  if ! run_apt_detached apt-get upgrade -y -qq; then
+    unhold_network_packages
+    remove_apt_swap
+    return 1
+  fi
+  unhold_network_packages
   log_ok "  System packages upgraded"
 
   # Configure locale AFTER upgrade (glibc/locales upgrade invalidates generated locales)
@@ -147,10 +301,16 @@ install_apt_deps() {
   )
 
   # Install all packages
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${packages[@]}"
+  if ! run_apt_detached apt-get install -y -qq "${packages[@]}"; then
+    remove_apt_swap
+    return 1
+  fi
 
   # Clean up temporary swap
   remove_apt_swap
+
+  # The link that carries this session must still be there.
+  verify_link_state || return 1
 
   # Re-enable unattended-upgrades now that apt operations are done
   restore_unattended_upgrades

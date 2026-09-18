@@ -36,7 +36,9 @@ readonly SCRIPT_VERSION="2.6.0"
 # Epoch 3 (B4): boot memory config, journald 8M, unattended-upgrades hook
 # off, direct venv exec, MALLOC_ARENA_MAX.
 # Epoch 4: Caddy GOMEMLIMIT/GOGC drop-in (the distro unit ignores the template).
-readonly SYSTEM_EPOCH=4
+# Epoch 5: wpasupplicant pin (WPA3-SAE regression, raspberrypi/linux#7634),
+# persistent 16M journal on a /var/log/journal bind mount.
+readonly SYSTEM_EPOCH=5
 
 # Detect piped mode (curl | bash) — BASH_SOURCE is empty when piped
 # SCRIPT_DIR is intentionally NOT readonly: source_libs() overwrites it with
@@ -114,6 +116,12 @@ init_paths() {
 # SYSTEM EPOCH
 #──────────────────────────────────────────────────────────────────
 readonly SYSTEM_EPOCH_FILE="/var/lib/mcapp/system-epoch"
+# Every run is mirrored here (one previous run kept as .1). /tmp and /var/log
+# are tmpfs on a McApp box, so this is the only bootstrap output that survives
+# a reboot -- on 2026-09-18 the run that took mcapp.local off WiFi left no
+# trace at all. lib/packages.sh's run_apt_detached() appends apt output here.
+readonly MCAPP_BOOTSTRAP_LOG="/var/lib/mcapp/bootstrap.log"
+MCAPP_ARGS=""
 
 # Prints the installed system epoch (integer). Prints 0 if the marker file is
 # missing or does not contain a plain integer.
@@ -193,6 +201,24 @@ log_error() {
 log_step() {
   [[ "$QUIET" == "true" ]] && return
   echo -e "${GREEN}==>${NC} $*"
+}
+
+# Mirror stdout+stderr into MCAPP_BOOTSTRAP_LOG for the rest of the run.
+# `tee -p` keeps writing the file after the terminal side of the pipe is gone
+# (a dropped ssh session); a plain tee would die of SIGPIPE and take the
+# bootstrap's stdout, and with it the bootstrap, down with it. Only GNU tee
+# has -p, so the mirror is skipped elsewhere and the run is unchanged.
+start_bootstrap_log() {
+  mkdir -p "$(dirname "$MCAPP_BOOTSTRAP_LOG")" 2>/dev/null || return 0
+  if [[ -f "$MCAPP_BOOTSTRAP_LOG" ]]; then
+    mv -f "$MCAPP_BOOTSTRAP_LOG" "${MCAPP_BOOTSTRAP_LOG}.1" 2>/dev/null || true
+  fi
+  echo "=== McApp bootstrap v${SCRIPT_VERSION} $(date '+%Y-%m-%d %H:%M:%S') args: ${MCAPP_ARGS}" \
+    > "$MCAPP_BOOTSTRAP_LOG" 2>/dev/null || return 0
+  if tee -p /dev/null < /dev/null > /dev/null 2>&1; then
+    exec > >(tee -p -a "$MCAPP_BOOTSTRAP_LOG") 2>&1
+  fi
+  log_info "Logging to ${MCAPP_BOOTSTRAP_LOG}"
 }
 
 #──────────────────────────────────────────────────────────────────
@@ -638,6 +664,7 @@ EOF
 # MAIN
 #──────────────────────────────────────────────────────────────────
 main() {
+  MCAPP_ARGS="$*"
   parse_args "$@"
 
   # Show banner
@@ -651,6 +678,7 @@ main() {
   fi
 
   require_root
+  start_bootstrap_log
 
   # Initialize paths that depend on the real user's home
   init_paths
@@ -718,7 +746,10 @@ main() {
     setup_system
 
     log_step "Installing packages..."
-    install_packages
+    if ! install_packages; then
+      log_error "Package phase failed - system epoch NOT advanced (see ${MCAPP_BOOTSTRAP_LOG})"
+      exit 1
+    fi
 
     write_system_epoch
 
@@ -777,7 +808,10 @@ main() {
 
     # Phase 4: Package installation
     log_step "Installing packages..."
-    install_packages
+    if ! install_packages; then
+      log_error "Package phase failed - stopping before deploy (see ${MCAPP_BOOTSTRAP_LOG})"
+      exit 1
+    fi
     write_system_epoch
   fi
 

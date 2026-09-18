@@ -49,6 +49,7 @@ All timestamps are milliseconds (project-wide invariant).
 """
 
 import ast
+import asyncio
 import sqlite3
 import tempfile
 import threading
@@ -421,6 +422,185 @@ async def _test_write_connections_use_synchronous_normal(results: list[tuple[str
     )
 
 
+async def _test_writer_conn_keeps_wal_alive_between_writes(results: list[tuple[str, bool]]) -> None:
+    """F1 second half: two `_mutate` calls must NOT checkpoint the WAL between them.
+
+    Closing the LAST connection to a WAL database checkpoints and deletes/truncates
+    the `-wal` file, which is itself a DB-file fsync (measured 23.7 ms per write vs.
+    ~0.2 ms on a persistent connection, 2026-09-18). The pre-fix `_mutate` opened and
+    closed its own connection on every call, so it paid that checkpoint on every
+    single write. This asserts the `-wal` file is still non-empty right after two
+    `_mutate` calls, before `storage.close()` runs — which fails on the old
+    per-call-connection code (each call's close already checkpointed it) and passes
+    once `_mutate` shares one persistent writer connection across both calls.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "wal_persist.db"
+        wal_path = db_path.with_name(db_path.name + "-wal")
+        wal_state: tuple[bool, int] | None = None
+        try:
+            storage = await create_sqlite_storage(str(db_path))
+            try:
+                await storage._mutate(
+                    "INSERT INTO messages (msg_id, src, dst, msg, type, timestamp)"
+                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    ("WALP0001", "DK5EN-1", "*", "wal persist a", "msg", BASE_TS),
+                )
+                await storage._mutate(
+                    "INSERT INTO messages (msg_id, src, dst, msg, type, timestamp)"
+                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    ("WALP0002", "DK5EN-1", "*", "wal persist b", "msg", BASE_TS + 1),
+                )
+                wal_state = (
+                    wal_path.exists(),
+                    wal_path.stat().st_size if wal_path.exists() else 0,
+                )
+            finally:
+                await storage.close()
+        except Exception:
+            logger.exception("wal-persistence probe raised")
+            results.append(
+                ("writer conn keeps -wal alive between writes: probe runs end-to-end", False)
+            )
+            return
+
+    exists, size = wal_state
+    results.append(
+        (
+            (
+                f"-wal file is still non-empty right after two _mutate calls (exists={exists}, "
+                f"size={size}) — no checkpoint-on-close between them"
+            ),
+            exists and size > 0,
+        )
+    )
+
+
+async def _test_writer_conn_closes_then_reopens(results: list[tuple[str, bool]]) -> None:
+    """`storage.close()` must close the writer connection, and a later `_mutate`
+    must transparently reopen it (many startup-test suites close and reuse a
+    storage instance)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "writer_reopen.db"
+        still_open_after_first_close: int | None = None
+        still_open_after_second_close: int | None = None
+        try:
+            with _ConnectionTracker() as tracker:
+                storage = await create_sqlite_storage(str(db_path))
+                await storage._mutate(
+                    "INSERT INTO messages (msg_id, src, dst, msg, type, timestamp)"
+                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    ("REOPEN01", "DK5EN-1", "*", "before close", "msg", BASE_TS),
+                )
+                await storage.close()
+                still_open_after_first_close = tracker.still_open()
+
+                # Reopen: a write after close() must still work.
+                await storage._mutate(
+                    "INSERT INTO messages (msg_id, src, dst, msg, type, timestamp)"
+                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    ("REOPEN02", "DK5EN-2", "*", "after reopen", "msg", BASE_TS + 1),
+                )
+                await storage.close()
+                still_open_after_second_close = tracker.still_open()
+        except Exception:
+            logger.exception("writer-reopen probe raised")
+            results.append(("writer connection close/reopen: probe runs end-to-end", False))
+            return
+
+        results.append(
+            (
+                (
+                    f"writer connection is closed after storage.close() (still_open="
+                    f"{still_open_after_first_close})"
+                ),
+                still_open_after_first_close == 0,
+            )
+        )
+        results.append(
+            (
+                (
+                    f"writer connection reopens for a _mutate after close(), and closes again"
+                    f" (still_open={still_open_after_second_close})"
+                ),
+                still_open_after_second_close == 0,
+            )
+        )
+
+        verify = sqlite3.connect(db_path)
+        try:
+            msg_ids = {
+                r[0]
+                for r in verify.execute(
+                    "SELECT msg_id FROM messages WHERE msg_id LIKE 'REOPEN%'"
+                ).fetchall()
+            }
+        finally:
+            verify.close()
+        results.append(
+            (
+                "both the pre-close and the post-reopen write are durable",
+                msg_ids == {"REOPEN01", "REOPEN02"},
+            )
+        )
+
+
+async def _test_concurrent_mutate_calls_do_not_race(results: list[tuple[str, bool]]) -> None:
+    """Two `_mutate` calls from different `asyncio.to_thread` worker threads, run
+    concurrently via `asyncio.gather`, must both commit against the shared writer
+    connection with no `sqlite3.ProgrammingError`. Smoke only: CPython's sqlite3
+    is built in serialized threading mode, so this passes even without
+    `_writer_lock`; the lock is pinned by review, not by this test."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "concurrent_mutate.db"
+        try:
+            storage = await create_sqlite_storage(str(db_path))
+            try:
+                await asyncio.gather(
+                    storage._mutate(
+                        "INSERT INTO messages (msg_id, src, dst, msg, type, timestamp)"
+                        " VALUES (?, ?, ?, ?, ?, ?)",
+                        ("CONC0001", "DK5EN-1", "*", "concurrent a", "msg", BASE_TS),
+                    ),
+                    storage._mutate(
+                        "INSERT INTO messages (msg_id, src, dst, msg, type, timestamp)"
+                        " VALUES (?, ?, ?, ?, ?, ?)",
+                        ("CONC0002", "DK5EN-2", "*", "concurrent b", "msg", BASE_TS + 1),
+                    ),
+                )
+            finally:
+                await storage.close()
+        except Exception:
+            logger.exception("concurrent-_mutate probe raised")
+            results.append(
+                (
+                    (
+                        "two concurrent _mutate calls both commit with no ProgrammingError:"
+                        " probe runs end-to-end"
+                    ),
+                    False,
+                )
+            )
+            return
+
+        verify = sqlite3.connect(db_path)
+        try:
+            msg_ids = {
+                r[0]
+                for r in verify.execute(
+                    "SELECT msg_id FROM messages WHERE msg_id LIKE 'CONC%'"
+                ).fetchall()
+            }
+        finally:
+            verify.close()
+        results.append(
+            (
+                "two concurrent _mutate calls both commit (no ProgrammingError, both durable)",
+                msg_ids == {"CONC0001", "CONC0002"},
+            )
+        )
+
+
 async def run_connection_lifecycle_tests() -> bool:
     """Run the SQLite connection-lifecycle suite. Returns True iff all pass."""
     results: list[tuple[str, bool]] = []
@@ -430,6 +610,9 @@ async def run_connection_lifecycle_tests() -> bool:
     await _test_no_unpatchable_sqlite_imports(results)
     await _test_tracker_detects_known_leak(results)
     await _test_write_connections_use_synchronous_normal(results)
+    await _test_writer_conn_keeps_wal_alive_between_writes(results)
+    await _test_writer_conn_closes_then_reopens(results)
+    await _test_concurrent_mutate_calls_do_not_race(results)
 
     for label, ok in results:
         print(f"    {'✅ PASS' if ok else '❌ FAIL'} | {label}")

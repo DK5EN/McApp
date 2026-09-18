@@ -14,7 +14,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
-from .ble_protocol import ACK_KIND_BY_TYPE, ack_type_text, normalise_ack_callsign
+from .ble_protocol import (
+    ACK_KIND_BY_TYPE,
+    ack_type_text,
+    coerce_lora_mod,
+    coerce_optional_int,
+    normalise_ack_callsign,
+)
 from .commands.parsing import strip_relay_path
 from .logging_setup import get_logger
 from .runtime_state import save_runtime_state
@@ -121,6 +127,44 @@ _JSON_SCALAR_TYPES = (str, int, float, bool, type(None))
 # sender does send it — so it is allowlisted here rather than rediscovered later
 # from a missing telemetry column.
 _NON_SCALAR_ALLOWED_FIELDS = frozenset({"extras"})
+
+# Hardware fields the firmware serialises on Extern-UDP frames: `hw_id` on `pos`
+# since forever, and `hw_id`/`lora_mod`/`max_hop` on `msg` (text) frames since the
+# 2026-09-16 handover (`MeshCom-Firmware-DEV-Main/docs/2026-09-16_firmware-extudp-
+# hw-id-on-text-frames.md`). There is no protocol version field, so presence is
+# the only signal: an older node simply omits them and every consumer below
+# reads them with `.get()`, so an absent key stores NULL and raises nothing.
+# `lora_mod` is the firmware's PACKED byte (low nibble modulation, high nibble
+# country) — the handover asks the firmware to mask it, but the mask here is
+# idempotent and makes the proxy correct either way, exactly as the BLE path
+# already is (`ble_protocol._coerce_lora_mod`).
+_WIRE_INT_FIELDS = ("hw_id", "max_hop")
+
+
+def _coerce_hardware_fields(message: dict[str, Any]) -> list[str]:
+    """Normalise `hw_id`/`max_hop` to int and `lora_mod` to its modulation nibble,
+    in place. Keys that are absent stay absent (presence is the version signal);
+    a present key whose value does not coerce cleanly (a string, a bool, a float
+    that is not integral) is REMOVED rather than passed to a SQLite bind, and its
+    name returned for the caller's diagnostics. Port 1799 is unauthenticated, so
+    a junk value must degrade to "unknown", never to a dropped frame."""
+    dropped: list[str] = []
+    for field in _WIRE_INT_FIELDS:
+        if field in message:
+            coerced = coerce_optional_int(message[field])
+            if coerced is None:
+                del message[field]
+                dropped.append(field)
+            else:
+                message[field] = coerced
+    if "lora_mod" in message:
+        mod = coerce_lora_mod(message["lora_mod"])
+        if mod is None:
+            del message["lora_mod"]
+            dropped.append("lora_mod")
+        else:
+            message["lora_mod"] = mod
+    return dropped
 
 
 def _strip_non_scalar_fields(message: dict[str, Any]) -> list[str]:
@@ -507,6 +551,18 @@ class UDPHandler:
         # Same choke point, same reason: every publish path below (and therefore
         # every SQLite bind derived from it) is covered exactly once.
         self._reject_non_scalar_fields(message, addr[0])
+
+        # Same choke point: hardware fields (`hw_id`, `lora_mod`, `max_hop`) are
+        # normalised once for every frame type, so `messages`, `station_positions`
+        # and the live SSE payload all see the same masked ints the BLE copy
+        # carries. Absent keys are left absent — see `_coerce_hardware_fields`.
+        uncoercible = _coerce_hardware_fields(message)
+        if uncoercible:
+            logger.debug(
+                "Dropped uncoercible hardware field(s) %s from :1799 datagram (src=%s)",
+                uncoercible,
+                message.get("src"),
+            )
 
         if "msg" not in message:
             if message.get("type") == "tele":

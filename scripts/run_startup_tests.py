@@ -24,6 +24,7 @@ import asyncio
 import sys
 
 from ble_service_tests import run_ble_service_tests
+from bootstrap_network_safety_tests import run_bootstrap_network_safety_tests
 from bootstrap_pinning_tests import run_bootstrap_pinning_tests
 from caddy_config_tests import run_caddy_config_tests
 from config_migration_tests import run_config_migration_tests
@@ -55,6 +56,7 @@ from mcapp.meteo_tests import run_meteo_tests
 from mcapp.push_tests import run_push_tests
 from mcapp.send_path_tests import run_send_path_tests
 from mcapp.sqlite_storage import run_startup_tests as run_storage_tests
+from mcapp.sse_format_tests import run_sse_format_tests
 from mcapp.sse_handler import run_startup_tests as run_sse_tests
 from mcapp.stall_http_tests import run_stall_http_tests
 from mcapp.stall_tests import run_stall_tests
@@ -88,6 +90,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     stall_http_ok = await run_stall_http_tests()
     print(f"stall_http: {'PASS' if stall_http_ok else 'FAIL'}")
+
+    sse_format_ok = await run_sse_format_tests()
+    print(f"sse_format: {'PASS' if sse_format_ok else 'FAIL'}")
 
     contract_parity_ok = run_contract_parity_tests()
     print(f"contract_parity: {'PASS' if contract_parity_ok else 'FAIL'}")
@@ -209,6 +214,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     bootstrap_pinning_ok = run_bootstrap_pinning_tests()
     print(f"bootstrap_pinning: {'PASS' if bootstrap_pinning_ok else 'FAIL'}")
 
+    bootstrap_network_safety_ok = run_bootstrap_network_safety_tests()
+    print(f"bootstrap_network_safety: {'PASS' if bootstrap_network_safety_ok else 'FAIL'}")
+
     release_prep_ok = run_release_prep_tests()
     print(f"release_prep: {'PASS' if release_prep_ok else 'FAIL'}")
 
@@ -239,6 +247,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and send_path_ok
         and stall_ok
         and stall_http_ok
+        and sse_format_ok
         and contract_parity_ok
         and dedup_contract_ok
         and linkcheck_ok
@@ -279,6 +288,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and system_converge_ok
         and caddy_config_ok
         and bootstrap_pinning_ok
+        and bootstrap_network_safety_ok
         and release_prep_ok
         and webapp_deploy_ok
         and config_migration_ok

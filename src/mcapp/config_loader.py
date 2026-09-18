@@ -187,6 +187,13 @@ class StallsConfig:
     loop_lag_ms: int = 100
     pool_wait_ms: int = 100
     handler_ms: int = 500
+    # Handler sampling has its OWN rate: `time_handler` wraps every subscriber
+    # of every publish (~11 timings per frame heard on both transports, ~80k
+    # calls/day on mcapp.local). At the http rate of 1-in-50 that is ~1.6k
+    # sample rows/day against `max_rows` = 5000, pruned oldest-first regardless
+    # of severity — the baseline would evict the stall rows it exists to be
+    # diffed against within ~3 days. 1-in-500 keeps ~160/day: a p50 in an hour.
+    handler_sample_every: int = 500
     body_cap_bytes: int = 8192
     max_rows: int = 5000
 
@@ -374,6 +381,7 @@ class Config:
                     "loop_lag_ms": "loop_lag_ms",
                     "pool_wait_ms": "pool_wait_ms",
                     "handler_ms": "handler_ms",
+                    "handler_sample_every": "handler_sample_every",
                     "body_cap_bytes": "body_cap_bytes",
                     "max_rows": "max_rows",
                 },

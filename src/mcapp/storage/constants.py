@@ -268,14 +268,29 @@ def db_write(db_path: Path | str) -> Iterator[sqlite3.Connection]:
 
     Sets this connection's ``synchronous`` pragma to ``NORMAL`` before yielding it.
     In WAL mode (the schema's mode) the default ``FULL`` fsyncs the WAL on
-    every commit, which on the production Pi's SD card was the entire cause
-    of the F1 handler stalls (measured 2026-09-16: 15 ms typical, up to
-    1.7 s, per commit at FULL vs. ~0.3 ms at NORMAL). NORMAL still fsyncs at
-    WAL checkpoints, so the database file itself can never be corrupted; the
-    trade is that the last transaction(s) can be lost on a power loss or OS
-    crash between commit and the next checkpoint, which is accepted here.
-    The pragma is per-connection, so ``db_read`` (no commits, nothing to
-    fsync) is deliberately left at the SQLite default.
+    every commit, which on the production Pi's SD card was measured
+    2026-09-16 at 15 ms typical, up to 1.7 s, per commit at FULL vs. ~0.3 ms
+    at NORMAL — but NOT the entire cause of the F1 handler stalls, as this
+    docstring used to claim. NORMAL still fsyncs at WAL checkpoints, so the
+    database file itself can never be corrupted; the trade is that the last
+    transaction(s) can be lost on a power loss or OS crash between commit and
+    the next checkpoint, which is accepted here. The pragma is per-connection,
+    so ``db_read`` (no commits, nothing to fsync) is deliberately left at the
+    SQLite default.
+
+    The second half of the F1 cause, found 2026-09-18: closing the LAST
+    connection to a WAL database checkpoints and deletes the WAL file, which
+    is itself a DB-file fsync (measured 23.7 ms per write vs. ~0.2 ms on a
+    persistent connection) — and this function's own ``with closing(...):``
+    paid that cost on every single call, since each call's connection was the
+    only one open. `sqlite_storage.SQLiteStorage` now avoids it for its own
+    write path by keeping ONE persistent writer connection
+    (``_writer_conn``/``_get_writer_conn``) instead of calling ``db_write`` for
+    `_mutate`/`_execute_many`. This function is unchanged and still used by
+    every other write site (prefs, classifier_api, uptime, stalls,
+    sse_handler, migrations) — those sites benefit automatically once the
+    writer connection is open, because their per-call connection is then never
+    the LAST one to a WAL database with a live writer already attached.
     """
     with closing(sqlite3.connect(db_path, timeout=SQLITE_BUSY_TIMEOUT_S)) as conn, conn:
         conn.execute("PRAGMA synchronous=NORMAL")

@@ -19,6 +19,7 @@ setup_system() {
   configure_bluetooth
   disable_ipv6
   configure_unattended_upgrades
+  configure_wpasupplicant_pin
   configure_fast_ssh_login
   configure_ssh_hardening
 }
@@ -378,42 +379,131 @@ _mcapp_boot_memory_live() {
 # JOURNALD CONFIGURATION (Volatile Storage)
 #──────────────────────────────────────────────────────────────────
 
-configure_journald() {
-  log_info "Configuring journald for volatile storage..."
+# Overridable for the offline test suite (scripts/bootstrap_network_safety_tests.py).
+MCAPP_FSTAB="${MCAPP_FSTAB:-/etc/fstab}"
+MCAPP_JOURNALD_CONF_DIR="${MCAPP_JOURNALD_CONF_DIR:-/etc/systemd/journald.conf.d}"
+MCAPP_JOURNAL_DIR="${MCAPP_JOURNAL_DIR:-/var/lib/mcapp/journal}"
+readonly MCAPP_JOURNAL_BIND_LINE="/var/lib/mcapp/journal /var/log/journal none bind 0 0"
 
-  local conf_dir="/etc/systemd/journald.conf.d"
-  local conf_file="${conf_dir}/mcapp-volatile.conf"
-
-  mkdir -p "$conf_dir"
-
-  # pi-harden's own drop-in wins if present and we haven't laid down ours yet.
-  if [[ -f "${conf_dir}/volatile.conf" ]] && [[ ! -f "$conf_file" ]]; then
-    log_info "  journald already configured (pi-harden)"
-    return 0
+# Insert $line into $fstab after the first line matching $after_regex, once.
+# Prints nothing; returns 0 when the line is present afterwards.
+_mcapp_fstab_ensure_line() {
+  local fstab="$1" line="$2" after_regex="$3"
+  grep -qxF "$line" "$fstab" 2>/dev/null && return 0
+  if grep -qE "$after_regex" "$fstab" 2>/dev/null; then
+    # sed -i differs between GNU and BSD; go through a temp file instead.
+    awk -v line="$line" -v re="$after_regex" 'BEGIN { done = 0 } { print } !done && $0 ~ re { print line; done = 1 }' \
+      "$fstab" > "${fstab}.mcapp-tmp" && mv -f "${fstab}.mcapp-tmp" "$fstab"
+  else
+    printf '%s\n' "$line" >> "$fstab"
   fi
+  grep -qxF "$line" "$fstab"
+}
 
-  # Idempotent by content, not by file-exists: an existing install carrying
-  # the pre-B4 RuntimeMaxUse=20M must actually converge to 8M on the next
-  # --converge, not skip forever because the file was already there.
-  if [[ -f "$conf_file" ]] && grep -q '^RuntimeMaxUse=8M$' "$conf_file"; then
-    log_info "  journald already configured (RuntimeMaxUse=8M)"
+# Persistent journal, capped small. /var/log is tmpfs (configure_tmpfs), so
+# /var/log/journal is a bind mount of /var/lib/mcapp/journal on the root
+# filesystem: a reboot or power cut keeps the last boots' logs. Before
+# 2026-09-18 the journal was volatile and the WiFi outage of that day left
+# no on-box evidence at all -- the only record was the copy shipped to
+# rpizero, which ended at the second the link dropped
+# (doc/2026-09-18_2320-wifi-outage-postmortem.md). 16M of journal with
+# journald's 5-minute sync interval is the SD-wear price of that evidence.
+configure_journald() {
+  log_info "Configuring journald (persistent, SystemMaxUse=16M on ${MCAPP_JOURNAL_DIR})..."
+
+  local conf_dir="$MCAPP_JOURNALD_CONF_DIR"
+  local conf_file="${conf_dir}/mcapp-journal.conf"
+  local legacy_file="${conf_dir}/mcapp-volatile.conf"
+
+  mkdir -p "$conf_dir" "$MCAPP_JOURNAL_DIR"
+  # journald's own layout: root:systemd-journal, setgid, so journal files
+  # inherit the group and `journalctl` works for that group's members.
+  chown root:systemd-journal "$MCAPP_JOURNAL_DIR" 2>/dev/null || true
+  chmod 2755 "$MCAPP_JOURNAL_DIR" 2>/dev/null || true
+
+  _mcapp_fstab_ensure_line "$MCAPP_FSTAB" "$MCAPP_JOURNAL_BIND_LINE" '^tmpfs /var/log tmpfs' \
+    || log_warn "  could not add the journal bind mount to ${MCAPP_FSTAB}"
+
+  # Idempotent by content, not by file-exists: an install carrying the
+  # pre-epoch-5 volatile drop-in must actually converge.
+  if [[ -f "$conf_file" ]] && grep -q '^SystemMaxUse=16M$' "$conf_file" && [[ ! -f "$legacy_file" ]]; then
+    log_info "  journald already configured (persistent, SystemMaxUse=16M)"
     return 0
   fi
 
   cat > "$conf_file" << 'EOF'
-# McApp: Use volatile storage to protect SD card
+# McApp: persistent journal, capped small. /var/log/journal is a bind mount of
+# /var/lib/mcapp/journal (see /etc/fstab, McApp tmpfs block), so the last
+# boots' logs survive a reboot or a power cut while /var/log stays tmpfs.
 [Journal]
-Storage=volatile
+Storage=persistent
+SystemMaxUse=16M
+SystemKeepFree=50M
+SystemMaxFileSize=4M
 RuntimeMaxUse=8M
 RuntimeKeepFree=10M
 RuntimeMaxFileSize=5M
 MaxRetentionSec=1week
 EOF
+  rm -f "$legacy_file"
 
-  log_ok "  journald configured for volatile storage (RuntimeMaxUse=8M)"
+  # Mount now when we are on the live box; a test run has no mount to make.
+  if [[ -d /var/log/journal ]] && ! mountpoint -q /var/log/journal 2>/dev/null; then
+    mount /var/log/journal 2>/dev/null || log_warn "  /var/log/journal bind mount deferred to next reboot"
+  fi
+
+  log_ok "  journald configured (persistent, SystemMaxUse=16M)"
 
   # Restart journald to apply
-  systemctl restart systemd-journald || true
+  systemctl restart systemd-journald 2>/dev/null || true
+}
+
+# Pin wpasupplicant to Debian's 2:2.10-24 on trixie. Raspberry Pi's
+# 2:2.10-24+rpt1 (2026-09-17) makes wpa_supplicant advertise WPA3-SAE to
+# NetworkManager whenever brcmfmac sets NL80211_FEATURE_SAE; NetworkManager
+# 1.52 then forces SAE for every wpa-psk profile, and the Zero 2 W's
+# brcmfmac43436 never completes the handshake against a WPA2/WPA3
+# transition-mode AP. trixie's NetworkManager has no opt-out (the upstream
+# fix is in 1.56+). raspberrypi/linux#7634. Remove once that is resolved.
+MCAPP_APT_PREFERENCES_DIR="${MCAPP_APT_PREFERENCES_DIR:-/etc/apt/preferences.d}"
+
+configure_wpasupplicant_pin() {
+  log_info "Configuring wpasupplicant pin (WPA3-SAE regression guard)..."
+
+  local codename
+  codename=$(get_debian_codename)
+  if [[ "$codename" != "trixie" ]]; then
+    log_info "  Not trixie (${codename}); no pin needed"
+    return 0
+  fi
+
+  local file="${MCAPP_APT_PREFERENCES_DIR}/mcapp-wpasupplicant"
+  local content
+  content=$(cat << 'EOF'
+# McApp: keep wpasupplicant on Debian's 2:2.10-24 (raspberrypi/linux#7634).
+# Raspberry Pi's 2:2.10-24+rpt1 (2026-09-17) reports WPA3-SAE over D-Bus,
+# NetworkManager 1.52 then forces SAE for wpa-psk profiles, and the Zero 2 W's
+# brcmfmac43436 cannot complete it against a WPA2/WPA3 transition-mode AP:
+# the box drops off WiFi and does not come back after a reboot.
+# Managed by McApp bootstrap (configure_wpasupplicant_pin). Remove with the
+# bootstrap once the AP is WPA2-only or the driver/firmware does SAE.
+Package: wpasupplicant
+Pin: version 2:2.10-24
+Pin-Priority: 1001
+EOF
+  )
+
+  if [[ -f "$file" ]] && [[ "$(<"$file")" == "$content" ]]; then
+    log_info "  wpasupplicant pin already in place"
+  else
+    mkdir -p "$MCAPP_APT_PREFERENCES_DIR"
+    printf '%s\n' "$content" > "$file"
+    chmod 644 "$file"
+    log_ok "  wpasupplicant pinned to 2:2.10-24 (${file})"
+  fi
+  # The hand-written predecessor from the 2026-09-18 recovery on mcapp.local.
+  rm -f "${MCAPP_APT_PREFERENCES_DIR}/wpasupplicant-pin"
+  return 0
 }
 
 #──────────────────────────────────────────────────────────────────

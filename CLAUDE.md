@@ -216,9 +216,57 @@ through `/api/stalls`. No UI; this is capture-and-upload only. Design and the in
   through `sys._current_frames()` only once overdue. An unsampled lag omits the key entirely.
 - **`sse_heartbeat` from a hidden tab is a `sample`, not `critical`** (webapp
   `recordSseHeartbeatTimeout`): iOS suspends the PWA and wakes it hourly while still hidden.
+- **`/api/weather` at 0.5-1.5 s is the upstream fetch and is CLOSED as a non-issue** (decision
+  2026-09-18, `doc/2026-09-18_2200-stall-followup-plan.md`). It runs off-loop via `to_thread`,
+  stalls nothing else, and 8 of 12 calls crossing the 0.5 s threshold is the weather provider's
+  latency from the Pi, not ours. Do not re-open it from a stall report; a webapp-side cache is the
+  only lever, and it is a frontend change.
+- **Per-call write connections were the second half of the handler stalls.** Closing the LAST
+  connection to a WAL database checkpoints and deletes the WAL, a DB-file fsync per write:
+  23.7 ms vs 0.2 ms on a persistent connection, measured 2026-09-18 on the Pi's ext4 root. The
+  query plans were never the problem (every ingest-path query is `SEARCH ... USING INDEX`, < 1 ms
+  on the live DB), so a "full table scan" hypothesis for `_storage_handler` stalls has already
+  been checked and rejected; look at fsync counts first.
 - **`ble_connected` handles property-vs-method.** `is_connected` is a property on the remote BLE
   client (and on every current client); the gauge (`_ble_connected` in `main.py`) tolerates a method too and calls it
   only when callable, mirroring the same pattern the BLE code already uses elsewhere.
+
+## Bootstrap Network Safety (system epoch 5)
+
+Rules that keep a `mcapp.sh` run from taking the box off the network, born from the 2026-09-18
+outage (`doc/2026-09-18_2320-wifi-outage-postmortem.md`, raspberrypi/linux#7634): the bootstrap's
+in-session `apt-get upgrade` replaced wpasupplicant with Raspberry Pi's `2:2.10-24+rpt1`, whose
+one patch makes the supplicant advertise WPA3-SAE, NetworkManager 1.52 then forces SAE for every
+`wpa-psk` profile, and the Zero 2 W's brcmfmac43436 never completes it against a WPA2/WPA3
+transition-mode AP. Design: `doc/2026-09-18_2330-bootstrap-network-safety-plan.md`.
+
+- **wpasupplicant and network-manager are never upgraded inline.** `hold_network_packages` puts
+  them on `apt-mark hold` for the apt phase and `report_deferred_network_upgrades` prints what was
+  kept back with the console command. An operator's pre-existing hold is never released. Do not
+  "simplify" this into skipping the upgrade: the rest of the system still upgrades.
+- **wpasupplicant is pinned to Debian `2:2.10-24` on trixie** by `configure_wpasupplicant_pin`
+  (`/etc/apt/preferences.d/mcapp-wpasupplicant`, priority 1001). trixie's NetworkManager has NO
+  configuration-level opt-out from SAE for `wpa-psk` in station mode (the upstream fix b00c6749 is
+  in 1.56+), and Raspberry Pi's own `rpi-brcmfmac.conf` mask (`feature_disable=0x282000`) clears
+  SAE but not `SAE_EXT` (bit 25 in the 6.18 driver), which is the bit that sets
+  `NL80211_FEATURE_SAE`. Removal criteria are in the plan; until one holds, the pin stays.
+- **apt runs under `systemd-run --wait --collect`** (`run_apt_detached`) so a dropped SSH session
+  cannot interrupt dpkg mid-transaction. Exit status is captured with `|| rc=$?`; reading `$?`
+  after an `if` returns 0 and silently swallowed failures in the first version.
+- **Every run is mirrored to `/var/lib/mcapp/bootstrap.log`** via `tee -p` (`start_bootstrap_log`).
+  `-p` is load-bearing: a plain `tee` dies of SIGPIPE when the ssh side goes away and takes the
+  bootstrap down with it. `/tmp` and `/var/log` are tmpfs, so this is the only run output that
+  survives a reboot.
+- **The default route must be back after the apt phase** (`verify_link_state`, 45 s) or the run
+  stops with the last NetworkManager/wpa_supplicant lines. A changed `key_mgmt` is warned about:
+  that one line would have named the 2026-09-18 cause.
+- **The journal is persistent, 16 MB, on `/var/lib/mcapp/journal` bind-mounted to
+  `/var/log/journal`** while `/var/log` stays tmpfs (`configure_journald`, fstab line inside the
+  McApp tmpfs block). Before this the box had no on-disk evidence at all; the only record of the
+  outage was rpizero's shipped copy, which ended at the second the link dropped.
+- **Symptom to cause:** ssh drops during a bootstrap run and the box never comes back on WiFi
+  means a network-critical package was replaced. Read rpizero's peer journal first
+  (`sudo -n journalctl -D /run/journalxship`), then `/var/lib/mcapp/bootstrap.log` on the box.
 
 ## Link Check (`{ping}` / `{pong}`)
 
@@ -605,7 +653,7 @@ One policy, one module, both ingest routes. Firmware background: CHR-03
 - **All DB timestamps are in milliseconds** (not seconds). Divide by 1000 for `datetime.fromtimestamp()`. Forgetting this causes `ValueError: year 58089 is out of range`.
 - **SSH + `python3 -c` quoting**: single-quote the Python code, `\"` for strings inside. Never use f-strings with dict key access — use `%` formatting, or write a temp script with `cat > /tmp/q.py << 'PYEOF'`.
 - **MHeard beacons** (RSSI/SNR, no coordinates) and **position beacons** (lat/lon, no signal) used to be disjoint packet types. Since firmware `c4ad78bb`, an Extern-UDP `pos` packet with `src_type=="lora"` carries **both** — `store_message()` then updates both `station_positions` field groups. See the 2026-07-05 amendment in `doc/2026-02-11_1400-position-signal-architecture-ADR.md` and `doc/UDP-2.0-impl.md`.
-- **Extern-UDP wire format** (node → proxy, JSON, port 1799, bidirectional): `rssi`/`snr` appear only on `pos`/`msg` packets and only since firmware `c4ad78bb` (2026-03-01) — detect by key presence, there is no protocol version field. Both are already final values: RSSI is dBm as-is, SNR is already ÷4 in firmware — **never re-scale either**. Only `src_type=="lora"` carries real signal; `"node"`/`"udp"` send a `0/0` sentinel and must be excluded by an explicit `src_type` check, not a range check.
+- **Extern-UDP wire format** (node → proxy, JSON, port 1799, bidirectional): `rssi`/`snr` appear only on `pos`/`msg` packets and only since firmware `c4ad78bb` (2026-03-01) — detect by key presence, there is no protocol version field. Same rule for the hardware fields: `hw_id` rides on `pos` frames since forever and `hw_id`/`lora_mod`/`max_hop` on `msg` (text) frames since the 2026-09-16 firmware handover (`MeshCom-Firmware-DEV-Main/docs/2026-09-16_firmware-extudp-hw-id-on-text-frames.md`); an older node omits them and the proxy stores NULL. `udp_handler._coerce_hardware_fields` normalises them at the ingress choke point — ints, `lora_mod` masked to its low nibble exactly like the BLE path — and DROPS a present key that does not coerce rather than the frame. Never subscript them. Both are already final values: RSSI is dBm as-is, SNR is already ÷4 in firmware — **never re-scale either**. Only `src_type=="lora"` carries real signal; `"node"`/`"udp"` send a `0/0` sentinel and must be excluded by an explicit `src_type` check, not a range check.
 
 ## Deployment
 

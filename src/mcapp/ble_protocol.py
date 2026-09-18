@@ -899,6 +899,14 @@ def _coerce_lora_mod(value: Any) -> int | None:
     return coerced & 0x0F
 
 
+# Public names for the Extern-UDP ingress (udp_handler.py), which normalises the
+# same three hardware fields the BLE path coerces here. One implementation on
+# purpose: `lora_mod` is a packed byte on BOTH transports and must be masked
+# identically, or the two copies of one frame disagree on the modulation.
+coerce_optional_int = _coerce_optional_int
+coerce_lora_mod = _coerce_lora_mod
+
+
 def _coerce_gw(value: Any) -> int | None:
     """Coerce the MH register's `GW` flag to a strict `0`/`1` `int`, never a
     `bool` (which would round-trip through `json.dumps` as `true`/`false`

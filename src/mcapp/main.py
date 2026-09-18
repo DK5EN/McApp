@@ -736,8 +736,15 @@ class MessageRouter:
         websocket: Any,
         payload: dict[str, Any],
         client_id: str | None = None,
+        *,
+        offload_json: bool = False,
     ) -> None:
-        """Route a command response: websocket_direct > targeted SSE > broadcast."""
+        """Route a command response: websocket_direct > targeted SSE > broadcast.
+
+        `offload_json` is forwarded to `SSEManager.send_to` for the targeted-SSE
+        branch only (large payloads, e.g. mheard chart dumps); it has no effect
+        on the websocket_direct/broadcast branches, which don't serialize here.
+        """
         if websocket:
             await self.publish(
                 "router", "websocket_direct", {"websocket": websocket, "data": payload}
@@ -745,7 +752,7 @@ class MessageRouter:
             return
         if client_id:
             sse = self.get_protocol("sse")
-            if sse is None or not await sse.send_to(client_id, payload):
+            if sse is None or not await sse.send_to(client_id, payload, offload_json=offload_json):
                 # Client gone: drop, never broadcast (that would resurrect the bug).
                 self._logger.debug("Dropped targeted response for gone SSE client %s", client_id)
             return
@@ -939,7 +946,10 @@ class MessageRouter:
         storage_method = getattr(self.storage_handler, method_name)
         mheard = await storage_method(progress_callback=progress_callback)
         payload: dict[str, Any] = {"type": "response", "msg": response_msg_text, "data": mheard}
-        await self._send_response(websocket, payload, client_id)
+        # Large chart-series payload (7day/monthly/yearly): serialize off-loop
+        # (stall plan — 280-400ms json.dumps observed in production). Progress
+        # messages above are small and stay on the default sync path.
+        await self._send_response(websocket, payload, client_id, offload_json=True)
 
     async def _handle_mheard_dump_command(
         self, websocket: Any, client_id: str | None = None
@@ -2584,6 +2594,18 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
             logger.info("Seeded %d read cursor(s) from legacy read counts", seeded)
     except Exception:
         logger.warning("seed_read_cursors_from_counts failed", exc_info=True)
+    # One-shot, idempotent repair of read_cursors rows written under a bare,
+    # un-translated sidebar key (doc/2026-09-19_0006-unread-badge-digitless-
+    # callsign-plan.md) — must run after the seed above so seed-then-repair
+    # is the order, and is equally non-fatal.
+    try:
+        repaired = await storage_handler.repair_read_cursor_dm_keys(
+            message_router.my_callsign or ""
+        )
+        if repaired > 0:
+            logger.info("Repaired %d read cursor(s) with a stale DM key", repaired)
+    except Exception:
+        logger.warning("repair_read_cursor_dm_keys failed", exc_info=True)
     message_router.cached_gps = None  # {lat, lon} — set when BLE device sends TYP="G"
     message_router.cached_ble_registers = {}  # {TYP: dict} — cached on ble_notification
     _wire_ble_caches(message_router)
@@ -3114,6 +3136,13 @@ async def _shutdown_services(ctx: AppContext) -> None:
             await asyncio.wait_for(ctx.sse_manager.stop_server(), timeout=SHUTDOWN_TIMEOUT_SSE_S)
         except TimeoutError:
             logger.warning("SSE stop timeout")
+
+    # Close the persistent SQLite writer so the last-connection checkpoint runs
+    # on a graceful stop and no -wal is left for the next start to recover.
+    try:
+        await asyncio.wait_for(ctx.storage_handler.close(), timeout=SHUTDOWN_TIMEOUT_SSE_S)
+    except Exception:
+        logger.warning("Storage close failed or timed out", exc_info=True)
 
     try:
         await asyncio.wait_for(ctx.stall_recorder.stop(), timeout=SHUTDOWN_TIMEOUT_SSE_S)

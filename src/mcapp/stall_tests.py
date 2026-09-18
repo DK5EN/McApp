@@ -445,11 +445,15 @@ async def _test_time_handler(_record: RecordFn) -> None:
         finally:
             await recorder.stop()
 
-        # A call that stays under handler_ms must record nothing.
+        # A call that stays under handler_ms must record nothing when
+        # sampling is disabled (sample_every=0).
         with tempfile.TemporaryDirectory() as tmp2:
             db_path2 = Path(tmp2) / "stalls.db"
             recorder2 = StallRecorder(
-                db_path2, StallsConfig(handler_ms=5000), version="v8b", slot="s8b"
+                db_path2,
+                StallsConfig(handler_ms=5000, handler_sample_every=0),
+                version="v8b",
+                slot="s8b",
             )
             await recorder2.start()
             try:
@@ -460,6 +464,67 @@ async def _test_time_handler(_record: RecordFn) -> None:
                 _record("time_handler: under-threshold call records nothing", len(rows2) == 0)
             finally:
                 await recorder2.stop()
+
+
+async def _test_time_handler_sampling(_record: RecordFn) -> None:
+    """Sibling of `_test_time_handler` (split out to stay under ruff's
+    PLR0915 statement cap): the 1-in-N healthy-baseline sample rows and the
+    "critical" severity for `time_handler`, both wired via
+    `severity_for_handler`.
+    """
+    # A fast (sub-threshold) call with handler_sample_every=1 must still produce a
+    # "handler" row, with severity "sample" — the healthy baseline
+    # `severity_for` already gives the http kind. This is the case that
+    # fails on unpatched code (time_handler used to only ever record
+    # "stall"/"critical", never "sample").
+    with tempfile.TemporaryDirectory() as tmp3:
+        db_path3 = Path(tmp3) / "stalls.db"
+        recorder3 = StallRecorder(
+            db_path3,
+            StallsConfig(handler_ms=5000, critical_ms=10000, handler_sample_every=1),
+            version="v8c",
+            slot="s8c",
+        )
+        await recorder3.start()
+        try:
+            with recorder3.time_handler("chat", "fast_handler", {}):
+                pass
+            await _drain(recorder3)
+            rows3 = await recorder3.query(kind="handler", limit=10)
+            _record(
+                "time_handler: handler_sample_every=1 records a sub-threshold call as a row",
+                len(rows3) == 1,
+            )
+            if rows3:
+                _record(
+                    "time_handler: sub-threshold sample row carries severity 'sample'",
+                    rows3[0].get("severity") == "sample",
+                )
+        finally:
+            await recorder3.stop()
+
+    # An over-critical-threshold call must record severity "critical", not
+    # just "stall".
+    with tempfile.TemporaryDirectory() as tmp4:
+        db_path4 = Path(tmp4) / "stalls.db"
+        recorder4 = StallRecorder(
+            db_path4,
+            StallsConfig(handler_ms=5, critical_ms=15),
+            version="v8d",
+            slot="s8d",
+        )
+        await recorder4.start()
+        try:
+            with recorder4.time_handler("chat", "critical_handler", {}):
+                time.sleep(0.02)  # noqa: ASYNC251 - 20ms > critical_ms=15ms, deliberately slow
+            await _drain(recorder4)
+            rows4 = await recorder4.query(kind="handler", limit=10)
+            _record(
+                "time_handler: over-critical_ms call records severity 'critical'",
+                len(rows4) == 1 and rows4[0].get("severity") == "critical",
+            )
+        finally:
+            await recorder4.stop()
 
 
 async def _test_ingest_client(_record: RecordFn) -> None:
@@ -553,6 +618,7 @@ def _test_stalls_config(_record: RecordFn) -> None:
             and defaults.loop_lag_ms == 100
             and defaults.pool_wait_ms == 100
             and defaults.handler_ms == 500
+            and defaults.handler_sample_every == 500
             and defaults.body_cap_bytes == 8192
             and defaults.max_rows == 5000
         ),
@@ -611,6 +677,7 @@ async def run_stall_tests() -> bool:
     await _test_loop_lag(_record)
     await _test_loop_lag_stack_attributed(_record)
     await _test_time_handler(_record)
+    await _test_time_handler_sampling(_record)
     await _test_ingest_client(_record)
     _test_stalls_config(_record)
 

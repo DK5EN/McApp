@@ -226,6 +226,12 @@ class StallRecorder:
         self._sample_counter = 0
         self._sample_lock = threading.Lock()
 
+        # Separate from the http counter above on purpose: a burst of mesh
+        # handler traffic must not starve http samples (or vice versa) by
+        # racing them onto one shared modulus.
+        self._handler_sample_counter = 0
+        self._handler_sample_lock = threading.Lock()
+
         self._last_lag_ms: float = 0.0
 
         self._pool_queued = 0
@@ -417,16 +423,51 @@ class StallRecorder:
         1-in-N sampling of normal requests from plan §1); else None.
         `sample_every <= 0` disables sampling entirely.
         """
+        return self._severity_for(
+            duration_ms,
+            stall_ms=self.config.stall_ms,
+            sample_every=self.config.sample_every,
+            lock=self._sample_lock,
+            counter_attr="_sample_counter",
+        )
+
+    def severity_for_handler(self, duration_ms: float) -> str | None:
+        """Same rule as `severity_for`, but the stall threshold is
+        `config.handler_ms` instead of `config.stall_ms`, and sampling uses
+        its own rate (`config.handler_sample_every`, 1-in-500 by default) and
+        its own counter (`_handler_sample_counter`) rather than the http
+        ones — a burst of mesh handler traffic must not starve http samples
+        (or the reverse), and at the http rate the samples would evict the
+        stall rows from the `max_rows` ring (see StallsConfig). Only
+        `critical_ms` is shared.
+        """
+        return self._severity_for(
+            duration_ms,
+            stall_ms=self.config.handler_ms,
+            sample_every=self.config.handler_sample_every,
+            lock=self._handler_sample_lock,
+            counter_attr="_handler_sample_counter",
+        )
+
+    def _severity_for(
+        self,
+        duration_ms: float,
+        *,
+        stall_ms: float,
+        sample_every: int,
+        lock: threading.Lock,
+        counter_attr: str,
+    ) -> str | None:
         if duration_ms >= self.config.critical_ms:
             return "critical"
-        if duration_ms >= self.config.stall_ms:
+        if duration_ms >= stall_ms:
             return "stall"
-        if self.config.sample_every <= 0:
+        if sample_every <= 0:
             return None
-        with self._sample_lock:
-            self._sample_counter += 1
-            count = self._sample_counter
-        return "sample" if count % self.config.sample_every == 0 else None
+        with lock:
+            count = int(getattr(self, counter_attr)) + 1
+            setattr(self, counter_attr, count)
+        return "sample" if count % sample_every == 0 else None
 
     # ── context snapshot ────────────────────────────────────────────────
 
@@ -667,8 +708,8 @@ class StallRecorder:
             yield
         finally:
             elapsed_ms = (time.monotonic() - start) * 1000
-            if elapsed_ms >= self.config.handler_ms:
-                severity = "critical" if elapsed_ms >= self.config.critical_ms else "stall"
+            severity = self.severity_for_handler(elapsed_ms)
+            if severity is not None:
                 self.record(
                     kind="handler",
                     severity=severity,

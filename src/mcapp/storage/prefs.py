@@ -29,6 +29,56 @@ logger = get_logger(__name__)
 _ZERO_MATCH_HINT_LIMIT = 3
 
 
+def conversation_key_for_sidebar_key(sidebar_key: str, my_base: str) -> str:
+    """Translate a webapp sidebar key into a storage `conversation_key`.
+
+    Single source of truth for the sidebar-key -> conversation_key mapping,
+    shared by `seed_read_cursors_from_counts`, `repair_read_cursor_dm_keys`
+    and the `POST /api/read_cursor` route
+    (doc/2026-09-19_0006-unread-badge-digitless-callsign-plan.md, Wave 1a).
+
+    Shapes, in order:
+      * empty                                      -> unchanged
+      * already a '<>'-joined pair key             -> unchanged (idempotent)
+      * 'A~B' (third-party pair)                   -> sorted([A, B]) '<>'-joined
+      * group / hashtag / '*' / 'Time' (verbatim)   -> unchanged
+      * a shape compute_conversation_key REFUSES    -> unchanged (see below)
+      * anything else: a partner BASE callsign      -> sorted([my_base, base])
+                                                        '<>'-joined
+
+    The last branch is what a digit-less partner base (e.g. 'WLNK') used to
+    miss client-side: the webapp's own plausibility guard on the reverse
+    translation returned such a key unchanged instead of pairing it with
+    `my_base`, so it never reaches this function looking like 'WLNK<>DK5EN'
+    on the way in — it arrives as the bare partner base, exactly like any
+    other own-DM partner, and this last branch is what pairs it correctly.
+
+    The refusal branch mirrors `compute_conversation_key`'s own (constants.py:
+    a '#'-prefixed key failing the tag charset, or an all-ASCII-digit key
+    outside the 1..99999 group range, gets NO conversation key at all).
+    Those rows are keyed by `COALESCE(conversation_key, dst)` on the read
+    path, so the server key IS the raw dst ('0', '#OE_SOTA') and the sidebar
+    key is that same string — NOT an own-DM partner. Pairing it here would
+    address a conversation that does not exist, which is the very bug this
+    module exists to fix, just pointed at a different set of keys. The
+    webapp's `serverKeyForSidebarKey` carries the identical branch; the two
+    must agree.
+    """
+    if not sidebar_key:
+        return sidebar_key
+    if "<>" in sidebar_key:
+        return sidebar_key
+    if "~" in sidebar_key:
+        partner_a, partner_b = sidebar_key.split("~", maxsplit=1)
+        return "<>".join(sorted([partner_a, partner_b]))
+    if is_group(sidebar_key) or is_hashtag(sidebar_key) or sidebar_key in ("*", "Time"):
+        return sidebar_key
+    if sidebar_key.startswith("#") or (sidebar_key.isascii() and sidebar_key.isdigit()):
+        return sidebar_key
+    partner_base = sidebar_key.split("-", maxsplit=1)[0].upper()
+    return "<>".join(sorted([my_base, partner_base]))
+
+
 class PrefsMixin(StorageBase):
     async def get_read_counts(self) -> dict[str, int]:
         """Get all read counts for frontend unread badge sync."""
@@ -116,11 +166,9 @@ class PrefsMixin(StorageBase):
         avoids re-scanning every read_counts row (and re-querying `messages`
         once per row) on every startup after the first.
 
-        Sidebar-key -> conversation_key translation (three shapes, in order):
-          * 'A~B' (third-party pair)                 -> sorted([A, B]) '<>'-joined
-          * group / hashtag / '*' / 'Time' (verbatim) -> unchanged
-          * anything else: a partner BASE callsign    -> sorted([my_base, base])
-                                                          '<>'-joined
+        Sidebar-key -> conversation_key translation is
+        `conversation_key_for_sidebar_key` (module-level, shared with
+        `repair_read_cursor_dm_keys` and the `POST /api/read_cursor` route).
 
         For each translated key the cursor is the timestamp of the N-th oldest
         message under that key (N = the legacy read_counts value) — see
@@ -155,14 +203,7 @@ class PrefsMixin(StorageBase):
         for sidebar_key, count in counts.items():
             if count <= 0:
                 continue
-            if "~" in sidebar_key:
-                partner_a, partner_b = sidebar_key.split("~", maxsplit=1)
-                key = "<>".join(sorted([partner_a, partner_b]))
-            elif is_group(sidebar_key) or is_hashtag(sidebar_key) or sidebar_key in ("*", "Time"):
-                key = sidebar_key
-            else:
-                partner_base = sidebar_key.split("-", maxsplit=1)[0].upper()
-                key = "<>".join(sorted([my_base, partner_base]))
+            key = conversation_key_for_sidebar_key(sidebar_key, my_base)
 
             cursor_ts = await self._nth_oldest_message_ts(key, count)
             await self.set_read_cursor(key, cursor_ts)
@@ -176,6 +217,67 @@ class PrefsMixin(StorageBase):
             my_callsign,
         )
         return written
+
+    async def repair_read_cursor_dm_keys(self, my_callsign: str) -> int:
+        """One-shot, idempotent repair of `read_cursors` rows already written
+        under a bare, un-translated sidebar key
+        (doc/2026-09-19_0006-unread-badge-digitless-callsign-plan.md, Wave 1a
+        item 3) — heals installs that stored a row like 'WLNK' before the
+        webapp's `serverKeyForSidebarKey` bug (a digit-less DM partner base,
+        e.g. the Winlink gateway alias 'WLNK-1') and this route's own
+        defence-in-depth normalisation were fixed. Without this pass an
+        already-affected client's badge stays stuck forever even after both
+        fixes ship: `markRead` early-returns once its local cursor is at or
+        past the (wrong) server value, so the correct key is never POSTed
+        again on its own.
+
+        Same shape as `seed_read_cursors_from_counts`, including the empty-
+        callsign rule: guarded by the `classifier_meta` marker
+        'read_cursors_dm_repaired', and an empty `my_callsign` skips the pass
+        WITHOUT setting the marker so a later boot with a configured callsign
+        retries.
+
+        For every existing `read_cursors` row whose key
+        `conversation_key_for_sidebar_key` maps to something different, the
+        translated key is written through `set_read_cursor` (MAX semantics
+        protect an already-correct row from regressing) and the stale row is
+        deleted. A row that already translates to itself (a real group key,
+        an already-correct '<>' pair, '*', 'Time', a hashtag, ...) is left
+        untouched.
+
+        Returns the number of rows repaired (0 on every repeat call, once the
+        marker is set).
+        """
+        if await self.get_meta("read_cursors_dm_repaired"):
+            return 0
+
+        my_base = my_callsign.split("-", maxsplit=1)[0].upper()
+        if not my_base:
+            logger.warning(
+                "repair_read_cursor_dm_keys: empty my_callsign, skipping repair"
+                " without setting the marker — will retry on next boot"
+            )
+            return 0
+
+        cursors = await self.get_read_cursors()
+        repaired = 0
+
+        for stale_key, ts in cursors.items():
+            translated = conversation_key_for_sidebar_key(stale_key, my_base)
+            if translated == stale_key:
+                continue
+            await self.set_read_cursor(translated, ts)
+            await self._mutate("DELETE FROM read_cursors WHERE key = ?", (stale_key,))
+            repaired += 1
+
+        await self.set_meta("read_cursors_dm_repaired", "1")
+        logger.info(
+            "repair_read_cursor_dm_keys: repaired %d read_cursors row(s) translated to"
+            " their conversation key (my_callsign=%s)",
+            repaired,
+            my_callsign,
+        )
+        return repaired
 
     @staticmethod
     def _zero_match_siblings(conn: sqlite3.Connection, dst: str) -> list[str]:

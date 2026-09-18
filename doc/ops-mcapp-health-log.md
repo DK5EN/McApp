@@ -954,3 +954,36 @@ post-release sweep is due after the box has run a few quiet hours (re-read W12 t
   settled sweep.
 - Post-release invariants: both repos `unpushed 0`, `development` not behind `main`, tags
   `v2.0.8` at parity with origin, release assets `uploaded`, both repos prepped to 2.0.9.
+
+## 14. 2026-09-19 00:40 CEST — pre-release state before promoting v2.0.10-dev.3 to v2.0.10
+
+**Not a full `ai-ops` sweep.** This is the targeted state captured around the `v2.0.10-dev.3`
+deploy, recorded here because it is what the `v2.0.10` promotion was signed off against.
+
+| Anchor         | Value                                                                   |
+| -------------- | ----------------------------------------------------------------------- |
+| Release on box | `v2.0.10-dev.3`, deployed 2026-09-19 00:37:26 CEST                      |
+| Active slot    | **slot-2**                                                              |
+| Services       | `mcapp`, `mcapp-ble`, `lighttpd`, `caddy` all active; `NRestarts` **0** |
+| Health checks  | 14 × `[OK]` in the deploy log, `webapp version: v2.0.10-dev.3`          |
+| Schema         | **32** = `LATEST_SCHEMA_VERSION` 32 ✓                                   |
+| Tarball        | sha256 verified by downloading it from the Pi before deploying          |
+
+- **Soak: 2 minutes, not the hours the `prod-release` gate asks for.** Flagged, and the operator
+  chose to promote anyway. Recorded here as the known deviation for this release; rollback is a
+  slot activation to slot-0/slot-1 from the Update page.
+- **The read-cursor repair ran and found nothing**, which is the expected result on a healthy
+  box: journal `repair_read_cursor_dm_keys: repaired 0 read_cursors row(s)
+(my_callsign=DK5EN-98)`, marker `read_cursors_dm_repaired=1`, `read_cursors` still 144 rows,
+  zero bare-callsign rows and zero phantom paired rows. Predicted beforehand by replaying the
+  translator against the live key set.
+- **Live functional check of the #11 fix:** `POST /api/read_cursor {"key":"DK6IX"}` (a bare
+  sidebar key, re-posting its existing timestamp so MAX semantics make it a no-op) answered
+  `unread: 0`, left the row at `DK5EN<>DK6IX`, and created no new row — 144 before and after.
+  On the previous version this call inserted a 145th orphan row, which is the reported bug.
+- Journal since the restart: 5 × `socket.send() raised exception` at 00:38:34, all from that
+  probe's SSE broadcast reaching stale client sockets. Pre-existing behaviour on the broadcast
+  path, not introduced by this release. Zero tracebacks, zero other errors.
+- **W9 still open:** the test workflows are `disabled_manually` in both repos, so there is no CI
+  run for the promoted commit `31186f0` at all — only Dependency Graph. The full gate was run
+  locally in both repos instead, after the dependency bumps, and again before publishing.
