@@ -231,6 +231,43 @@ through `/api/stalls`. No UI; this is capture-and-upload only. Design and the in
   client (and on every current client); the gauge (`_ble_connected` in `main.py`) tolerates a method too and calls it
   only when callable, mirroring the same pattern the BLE code already uses elsewhere.
 
+## Bootstrap Network Safety (system epoch 5)
+
+Rules that keep a `mcapp.sh` run from taking the box off the network, born from the 2026-09-18
+outage (`doc/2026-09-18_2320-wifi-outage-postmortem.md`, raspberrypi/linux#7634): the bootstrap's
+in-session `apt-get upgrade` replaced wpasupplicant with Raspberry Pi's `2:2.10-24+rpt1`, whose
+one patch makes the supplicant advertise WPA3-SAE, NetworkManager 1.52 then forces SAE for every
+`wpa-psk` profile, and the Zero 2 W's brcmfmac43436 never completes it against a WPA2/WPA3
+transition-mode AP. Design: `doc/2026-09-18_2330-bootstrap-network-safety-plan.md`.
+
+- **wpasupplicant and network-manager are never upgraded inline.** `hold_network_packages` puts
+  them on `apt-mark hold` for the apt phase and `report_deferred_network_upgrades` prints what was
+  kept back with the console command. An operator's pre-existing hold is never released. Do not
+  "simplify" this into skipping the upgrade: the rest of the system still upgrades.
+- **wpasupplicant is pinned to Debian `2:2.10-24` on trixie** by `configure_wpasupplicant_pin`
+  (`/etc/apt/preferences.d/mcapp-wpasupplicant`, priority 1001). trixie's NetworkManager has NO
+  configuration-level opt-out from SAE for `wpa-psk` in station mode (the upstream fix b00c6749 is
+  in 1.56+), and Raspberry Pi's own `rpi-brcmfmac.conf` mask (`feature_disable=0x282000`) clears
+  SAE but not `SAE_EXT` (bit 25 in the 6.18 driver), which is the bit that sets
+  `NL80211_FEATURE_SAE`. Removal criteria are in the plan; until one holds, the pin stays.
+- **apt runs under `systemd-run --wait --collect`** (`run_apt_detached`) so a dropped SSH session
+  cannot interrupt dpkg mid-transaction. Exit status is captured with `|| rc=$?`; reading `$?`
+  after an `if` returns 0 and silently swallowed failures in the first version.
+- **Every run is mirrored to `/var/lib/mcapp/bootstrap.log`** via `tee -p` (`start_bootstrap_log`).
+  `-p` is load-bearing: a plain `tee` dies of SIGPIPE when the ssh side goes away and takes the
+  bootstrap down with it. `/tmp` and `/var/log` are tmpfs, so this is the only run output that
+  survives a reboot.
+- **The default route must be back after the apt phase** (`verify_link_state`, 45 s) or the run
+  stops with the last NetworkManager/wpa_supplicant lines. A changed `key_mgmt` is warned about:
+  that one line would have named the 2026-09-18 cause.
+- **The journal is persistent, 16 MB, on `/var/lib/mcapp/journal` bind-mounted to
+  `/var/log/journal`** while `/var/log` stays tmpfs (`configure_journald`, fstab line inside the
+  McApp tmpfs block). Before this the box had no on-disk evidence at all; the only record of the
+  outage was rpizero's shipped copy, which ended at the second the link dropped.
+- **Symptom to cause:** ssh drops during a bootstrap run and the box never comes back on WiFi
+  means a network-critical package was replaced. Read rpizero's peer journal first
+  (`sudo -n journalctl -D /run/journalxship`), then `/var/lib/mcapp/bootstrap.log` on the box.
+
 ## Link Check (`{ping}` / `{pong}`)
 
 Probes whether a station answers on **direct RF**, using the firmware's `v4.35p.07.24.2` ping
