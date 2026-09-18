@@ -373,6 +373,74 @@ def _test_decode_and_filter() -> list[tuple[str, bool]]:
     return results
 
 
+async def _drive_datagram(datagram: bytes) -> dict[str, Any]:
+    """Push one raw datagram through ``UDPHandler._process_received_message``
+    with a fake router and return the last published message (``{}`` if none)."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        router = _CaptureRouter()
+        handler = UDPHandler(
+            listen_port=0,
+            target_host="127.0.0.1",
+            target_port=0,
+            message_router=router,
+            runtime_state_path=Path(tmp_dir) / "runtime.json",
+        )
+        try:
+            await handler._process_received_message(datagram, (_CAPTURE_SENDER_IP, _SENDER_PORT))
+        finally:
+            handler.send_socket.close()
+    return router.calls[-1][2] if router.calls else {}
+
+
+async def _test_hardware_fields_end_to_end() -> list[tuple[str, bool]]:
+    """Firmware handover 2026-09-16: Extern-UDP TEXT frames now carry ``hw_id``,
+    ``lora_mod`` and ``max_hop`` next to ``firmware``/``fw_sub``. Three shapes
+    must all publish cleanly: the new frame (ints, ``lora_mod`` masked to its
+    modulation nibble even if the firmware ships the packed byte), the OLD frame
+    with none of the keys (nothing invented, nothing raised), and junk values
+    (a string, a bool, an explicit null: key dropped, frame kept). Detection is
+    by key presence — there is no protocol version field."""
+    results: list[tuple[str, bool]] = []
+    base = (
+        b'{"src_type":"lora","type":"msg","src":"DL1UDO-12,DO8RE-12,DB0ED-99","dst":"26299",'
+        b'"msg":"hw test","msg_id":"920550A2","firmware":35,"fw_sub":"t","rssi":-121,"snr":-10'
+    )
+    new_frame = base + b',"hw_id":43,"lora_mod":131,"max_hop":4}'
+    old_frame = base + b"}"
+    junk_frame = base + b',"hw_id":"x","lora_mod":true,"max_hop":null}'
+
+    new = await _drive_datagram(new_frame)
+    results.append(
+        (
+            "hw fields e2e: new text frame publishes hw_id/max_hop as ints and lora_mod masked",
+            new.get("hw_id") == 43 and new.get("max_hop") == 4 and new.get("lora_mod") == 3,
+        )
+    )
+    results.append(
+        (
+            "hw fields e2e: the frame's existing fields survive the normaliser",
+            new.get("firmware") == 35 and new.get("rssi") == -121 and new.get("msg") == "hw test",
+        )
+    )
+    old = await _drive_datagram(old_frame)
+    results.append(
+        (
+            "hw fields e2e: old text frame without the keys publishes with none of them present",
+            bool(old)
+            and old.get("msg") == "hw test"
+            and not ({"hw_id", "lora_mod", "max_hop"} & set(old)),
+        )
+    )
+    junk = await _drive_datagram(junk_frame)
+    results.append(
+        (
+            "hw fields e2e: junk hw values drop only the key, the frame still publishes",
+            junk.get("msg") == "hw test" and not ({"hw_id", "lora_mod", "max_hop"} & set(junk)),
+        )
+    )
+    return results
+
+
 async def _test_decode_and_filter_end_to_end() -> list[tuple[str, bool]]:
     """Datagram-level regression: the helper-level cases above only prove
     ``decode_and_filter`` itself is correct, not that the wire path actually
@@ -1394,6 +1462,7 @@ async def run_udp_parsing_tests() -> bool:
     results.extend(await _test_msg_escape_end_to_end())
     results.extend(_test_strip_non_scalar_fields())
     results.extend(await _test_non_scalar_end_to_end())
+    results.extend(await _test_hardware_fields_end_to_end())
     results.extend(_test_normalize_extudp_ack())
     results.extend(await _test_extudp_ack_end_to_end())
     results.extend(await _test_pseudo_callsign())

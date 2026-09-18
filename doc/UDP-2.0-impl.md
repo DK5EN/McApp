@@ -34,31 +34,31 @@ This plan closes that gap in reviewed waves.
 This is the **local app/proxy interface (#2)**, not the HAMNET server uplink (#1, port 1990,
 binary). Do not confuse them.
 
-| Property | Value |
-|---|---|
-| Transport | JSON, one object per UDP datagram, line-delimited |
-| Port | **1799** (`configuration_global.h:60` `EXTERN_PORT`) — bidirectional |
-| Target | node setting `extudpip` = MCProxy host |
-| Enable | node `--extudp on` (`node_sset & 0x2000`) |
+| Property    | Value                                                                    |
+| ----------- | ------------------------------------------------------------------------ |
+| Transport   | JSON, one object per UDP datagram, line-delimited                        |
+| Port        | **1799** (`configuration_global.h:60` `EXTERN_PORT`) — bidirectional     |
+| Target      | node setting `extudpip` = MCProxy host                                   |
+| Enable      | node `--extudp on` (`node_sset & 0x2000`)                                |
 | Source file | `src/extudp_functions.cpp` (build), `src/aprs_functions.cpp` (RF decode) |
 
 ### 2.1 Node → app packet types
 
-| `type` | When | Carries signal? | Notes |
-|---|---|---|---|
-| `pos`  | RF frame `0x21` | **yes** (`rssi`,`snr`) | also `lat/long/alt/batt/hw_id/aprs_symbol…`; `msg:""` |
-| `tele` | alongside a `pos` | no | **separate datagram**; `temp1/temp2/hum/qfe/qnh/gas/co2/batt` |
-| `msg`  | RF frame `0x3A` | **yes** (`rssi`,`snr`) | text; `src/dst/msg/msg_id`; **no** `hw_id` |
+| `type` | When              | Carries signal?        | Notes                                                                                                                  |
+| ------ | ----------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `pos`  | RF frame `0x21`   | **yes** (`rssi`,`snr`) | also `lat/long/alt/batt/hw_id/aprs_symbol…`; `msg:""`                                                                  |
+| `tele` | alongside a `pos` | no                     | **separate datagram**; `temp1/temp2/hum/qfe/qnh/gas/co2/batt`                                                          |
+| `msg`  | RF frame `0x3A`   | **yes** (`rssi`,`snr`) | text; `src/dst/msg/msg_id`; `hw_id`/`lora_mod`/`max_hop` since the 2026-09-16 firmware handover, absent on older nodes |
 
 Frame types other than `0x21`/`0x3A` (HEY `0x40`, ACK `0x41`, …) emit **no** JSON.
 
 ### 2.2 `src_type` semantics — critical
 
-| `src_type` | Meaning | `rssi`/`snr` |
-|---|---|---|
-| `"lora"` | frame **received over RF** by the local node | **real, measured** |
-| `"node"` | the local node's **own** beacon/message | **0 / 0** (sentinel) |
-| `"udp"`  | injected from the HAMNET server | **0 / 0** (sentinel) |
+| `src_type` | Meaning                                      | `rssi`/`snr`         |
+| ---------- | -------------------------------------------- | -------------------- |
+| `"lora"`   | frame **received over RF** by the local node | **real, measured**   |
+| `"node"`   | the local node's **own** beacon/message      | **0 / 0** (sentinel) |
+| `"udp"`    | injected from the HAMNET server              | **0 / 0** (sentinel) |
 
 **Only `src_type == "lora"` carries real signal.** `node`/`udp` send `0/0` — these must never
 enter signal analytics (they fall outside `VALID_RSSI_RANGE` anyway, but gate explicitly).
@@ -94,14 +94,14 @@ firmware (`aprs_functions.cpp`) but **not serialized** to Extern-UDP. So for UDP
 
 ## 3. Current MCProxy behavior
 
-| Concern | State | Location |
-|---|---|---|
-| UDP receive/parse | JSON dict pass-through, dispatch by keys | `udp_handler.py:166-233` |
-| `pos` published | yes — `msg:""` passes the `str` check → `mesh_message` | `udp_handler.py:219-226` |
-| `msg` published | yes → `mesh_message` | `udp_handler.py:225-226` |
-| `tele` published | yes (synthesizes `src=NODE-<octet>` if missing) | `udp_handler.py:173-215` |
-| rssi/snr stored | yes, into `messages.rssi`/`messages.snr`, **unvalidated** | `sqlite_storage.py:1156,1416+` |
-| **rssi/snr → signal analytics** | **NO — BLE MHeard only** | gate at `sqlite_storage.py:1288` |
+| Concern                         | State                                                     | Location                         |
+| ------------------------------- | --------------------------------------------------------- | -------------------------------- |
+| UDP receive/parse               | JSON dict pass-through, dispatch by keys                  | `udp_handler.py:166-233`         |
+| `pos` published                 | yes — `msg:""` passes the `str` check → `mesh_message`    | `udp_handler.py:219-226`         |
+| `msg` published                 | yes → `mesh_message`                                      | `udp_handler.py:225-226`         |
+| `tele` published                | yes (synthesizes `src=NODE-<octet>` if missing)           | `udp_handler.py:173-215`         |
+| rssi/snr stored                 | yes, into `messages.rssi`/`messages.snr`, **unvalidated** | `sqlite_storage.py:1156,1416+`   |
+| **rssi/snr → signal analytics** | **NO — BLE MHeard only**                                  | gate at `sqlite_storage.py:1288` |
 
 ### 3.1 The gate that excludes UDP signal
 
@@ -142,7 +142,7 @@ is_position = msg_type == "pos" and not is_mheard
 ## 4. Design principles
 
 1. **Generalize, don't fork.** Replace the BLE-only `is_mheard` gate with a transport-agnostic
-   *"signal-bearing packet"* predicate. BLE MHeard and UDP-lora are the **same physical measurement**
+   _"signal-bearing packet"_ predicate. BLE MHeard and UDP-lora are the **same physical measurement**
    ("signal at which the local node heard station X") and must feed the **same** tables.
 2. **A `pos` packet can update both field groups.** For `src_type=="lora"` pos with valid signal:
    update the `position` group **and** the `signal` group in the same `store_message` call. The field
@@ -161,14 +161,14 @@ is_position = msg_type == "pos" and not is_mheard
 
 ## 5. Open decisions (defaults chosen; veto before Wave 1 if needed)
 
-| # | Decision | Default (recommended) | Alternative |
-|---|---|---|---|
-| D1 | Feed UDP-lora signal into the **same** signal tables as BLE MHeard? | **Yes** (principle 1) | Separate table — rejected: fragments charts |
-| D2 | Treat `msg` packets as signal observations, not just `pos`? | **Yes** (principle 3) | pos-only — loses ~half the samples |
-| D3 | BLE + UDP both active on one node → double-count risk | **Ingest both**, tag `source`, rely on existing dedup | Prefer one transport |
-| D4 | Add a `source` discriminator column to `signal_log` (`'mheard'`/`'lora'`) | **Yes**, in Wave 2 (forensics + dedup) | Skip — harder to debug overlap |
-| D5 | Historical backfill of `signal_log` from existing `messages` | **Yes**, Wave 3, idempotent + marker | Skip — no history for UDP-only nodes |
-| D6 | Scope | **MCProxy backend only** | + webapp (separate repo, separate effort) |
+| #   | Decision                                                                  | Default (recommended)                                 | Alternative                                 |
+| --- | ------------------------------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------- |
+| D1  | Feed UDP-lora signal into the **same** signal tables as BLE MHeard?       | **Yes** (principle 1)                                 | Separate table — rejected: fragments charts |
+| D2  | Treat `msg` packets as signal observations, not just `pos`?               | **Yes** (principle 3)                                 | pos-only — loses ~half the samples          |
+| D3  | BLE + UDP both active on one node → double-count risk                     | **Ingest both**, tag `source`, rely on existing dedup | Prefer one transport                        |
+| D4  | Add a `source` discriminator column to `signal_log` (`'mheard'`/`'lora'`) | **Yes**, in Wave 2 (forensics + dedup)                | Skip — harder to debug overlap              |
+| D5  | Historical backfill of `signal_log` from existing `messages`              | **Yes**, Wave 3, idempotent + marker                  | Skip — no history for UDP-only nodes        |
+| D6  | Scope                                                                     | **MCProxy backend only**                              | + webapp (separate repo, separate effort)   |
 
 ---
 
@@ -185,6 +185,7 @@ Every wave must leave `uvx ruff check` and `uvx ruff format --check .` clean and
 `signal_buckets`, and `station_positions` signal fields, with validation.
 
 **Changes**
+
 1. `sqlite_storage.py:1288-1289` — replace the gate. Introduce:
    ```python
    has_signal = (
@@ -197,8 +198,8 @@ Every wave must leave `uvx ruff check` and `uvx ruff format --check .` clean and
    is_mheard = not msg_id and src_type == "ble" and msg_type == "pos"  # keep for compat where needed
    is_position = msg_type == "pos" and not is_mheard
    ```
-   (Exact shape at coding agent's discretion — the invariant is: *lora pos/msg with valid signal →
-   signal ingestion; node/udp `0/0` → rejected by range.*)
+   (Exact shape at coding agent's discretion — the invariant is: _lora pos/msg with valid signal →
+   signal ingestion; node/udp `0/0` → rejected by range._)
 2. Signal ingestion (`sqlite_storage.py:1291-1306`) must fire for **`has_signal`**, not just
    `is_mheard`: `signal_log` INSERT + `_accumulate_signal` + `_flush_completed_buckets` +
    `_upsert_station_position(callsign, message, "signal")`.
@@ -209,6 +210,7 @@ Every wave must leave `uvx ruff check` and `uvx ruff format --check .` clean and
 6. Do **not** change `messages.rssi/snr` writes (stay raw).
 
 **Acceptance**
+
 - [ ] UDP `pos` `src_type="lora"` with valid rssi/snr → 1 `signal_log` row, `station_positions`
       row has both `position_ts` and `signal_ts` set, `signal_buckets` accumulates.
 - [ ] UDP `msg` `src_type="lora"` with valid rssi/snr → `signal_log` + `signal_buckets` +
@@ -227,6 +229,7 @@ regression case. **Risks:** double upsert on same callsign; ensure `last_seen`/`
 **Goal:** duplicate-delivered datagrams and BLE+UDP overlap don't corrupt signal analytics.
 
 **Changes**
+
 1. Verify existing `DEDUP_WINDOW_MS` message dedup (`sqlite_storage.py:35`) drops duplicate
    datagrams **before** the signal block. If a dup can still reach signal ingestion, add a guard
    (dedup key `(callsign, msg_id)` within a short window; firmware is known to double-deliver —
@@ -241,6 +244,7 @@ regression case. **Risks:** double upsert on same callsign; ensure `last_seen`/`
    contribute to buckets. Document expected behavior.
 
 **Acceptance**
+
 - [ ] Same datagram delivered twice → **one** signal_log row (or documented dedup behavior).
 - [ ] `signal_log.source` populated correctly for both transports.
 - [ ] Schema at v19; migration idempotent; startup on an old DB succeeds.
@@ -254,6 +258,7 @@ regression case. **Risks:** double upsert on same callsign; ensure `last_seen`/`
 **Goal:** UDP signal drives live SSE + charts; existing history is backfilled once.
 
 **Changes**
+
 1. Verify SSE signal/mHeard events fire for UDP-sourced signal (so a UDP-only deployment updates the
    map + mHeard charts live). Trace the `mesh_message` → SSE path (`sse_handler.py`) and the
    `signal_buckets` broadcast; add an event emission if UDP signal currently produces none.
@@ -265,6 +270,7 @@ regression case. **Risks:** double upsert on same callsign; ensure `last_seen`/`
    safe to re-run.
 
 **Acceptance**
+
 - [ ] Live UDP `pos`/`msg` produces an SSE update observable by a web client.
 - [ ] Backfill populates history, runs once, is idempotent, and does not duplicate on restart.
 - [ ] mHeard chart data non-empty for a UDP-only dataset.
@@ -277,6 +283,7 @@ regression case. **Risks:** double upsert on same callsign; ensure `last_seen`/`
 **Goal:** docs match reality; firmware capability and limitations recorded.
 
 **Changes**
+
 1. **Amend the ADR** `doc/2026-02-11_1400-position-signal-architecture-ADR.md`: position beacons via
    Extern-UDP now carry signal; the "disjoint packet" invariant is relaxed; document the inline-signal
    source and the both-field-groups update. (Amendment note, not a rewrite.)
@@ -288,6 +295,7 @@ regression case. **Risks:** double upsert on same callsign; ensure `last_seen`/`
 5. §8 future firmware asks (mod/hop/mesh flags).
 
 **Acceptance**
+
 - [ ] ADR amendment present and accurate. [ ] dataflow.md updated. [ ] CLAUDE.md schema version
       and gotcha corrected. [ ] this file marked DONE.
 
@@ -312,9 +320,9 @@ regression case. **Risks:** double upsert on same callsign; ensure `last_seen`/`
 
 ## 9. Changelog (updated after each wave)
 
-| Wave | Status | Commit | Advisor notes |
-|---|---|---|---|
-| 1 — core routing | done | `edab1a3` | Approved. `_ingest_signal` extracted per ST-05 coupling; both signal+position branches now run for lora `pos` (no longer if/elif); node/udp excluded by explicit `src_type` check, not just the range check; no SNR/RSSI re-scaling; BLE MHeard path byte-identical (regression test green). |
-| 2 — robustness | done | `edab1a3` | Approved. Time-windowed dedup relocated to run *before* signal ingestion (was: only before the final INSERT) — a duplicate-delivered datagram (same msg_id) no longer double-counts into signal_log. `signal_log.source` ('mheard'/'lora') added via a new `current_version < 19` migration block (older blocks untouched); backfills existing rows as 'mheard'; idempotent (verified against a synthetic v18 DB). Field-group independence verified: `_upsert_station_position`'s "signal" and "position" `ON CONFLICT` clauses touch disjoint column sets (not MAX/COALESCE on the `_ts` fields themselves, as this doc's wording suggested — the actual guarantee is the disjoint columns; the two genuinely shared columns, `last_seen`/`hw_id`, do use MAX/COALESCE) — proven with an interleaved pos→signal→pos test. Non-blocking nitpick noted: an out-of-range lora rssi/snr is still written into `station_positions.rssi/snr/signal_ts` (only `signal_log` is gated by the range check) — this is inherited byte-for-byte from the pre-existing BLE code path, not a regression, and no acceptance criterion requires gating it; left as-is (see fable-verdict.md "Discovered during waves"). |
-| 3 — realtime + backfill | done | `4d03f28` | Approved, no defects. Verified (not implemented) that live UDP-lora signal already reaches SSE clients: `_get_event_type`'s only source-aware branch matches BLE *status* frames (`TYP` field), not MHeard/lora signal beacons — both fall through to the generic `mesh:message` event, so no new SSE event was needed; proved with a synthetic lora `pos` through the real `_broadcast_handler`. Added `SQLiteStorage.backfill_signal_log()` (D5): one-time, marker-guarded (`signal_backfill_done:v1`, shared `get_meta`/`set_meta`), bulk-dedups against existing `signal_log` keys (no N+1 queries), batches with progress logging, and `_rebuild_signal_buckets_since()` recomputes (via `INSERT OR REPLACE`, correct bucket-boundary math matching `_accumulate_signal`) every touched 5-min bucket from all `signal_log` rows so BLE+lora contributions merge correctly. Confirmed no read path (chart/mheard queries) filters `signal_buckets` by source. Background task wired into `main.py` the same way as `_maybe_backfill_classifier` (fire-and-forget, exception-safe, non-blocking). Noted-but-accepted: a theoretical single-row duplicate is possible only during the one-time startup backfill window if a live lora datagram commits between the scan and dedup-key fetch — exposure is one process lifetime, self-corrects on the next bucket rebuild, not worth a lock. |
-| 4 — docs | done | `0e007ba` | Approved after one fix-required round: the ADR amendment, dataflow.md diagram, and CLAUDE.md schema-version/gotcha updates were all verified accurate against the actual code (`_ingest_signal`, `_upsert_station_position`'s disjoint-column design, the v19 migration) on the first pass, but this changelog row and the top-of-file Status line were initially left unmarked — fixed in the same commit. Track U (U1-U4) is now complete. |
+| Wave                    | Status | Commit    | Advisor notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ----------------------- | ------ | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 — core routing        | done   | `edab1a3` | Approved. `_ingest_signal` extracted per ST-05 coupling; both signal+position branches now run for lora `pos` (no longer if/elif); node/udp excluded by explicit `src_type` check, not just the range check; no SNR/RSSI re-scaling; BLE MHeard path byte-identical (regression test green).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 2 — robustness          | done   | `edab1a3` | Approved. Time-windowed dedup relocated to run _before_ signal ingestion (was: only before the final INSERT) — a duplicate-delivered datagram (same msg_id) no longer double-counts into signal_log. `signal_log.source` ('mheard'/'lora') added via a new `current_version < 19` migration block (older blocks untouched); backfills existing rows as 'mheard'; idempotent (verified against a synthetic v18 DB). Field-group independence verified: `_upsert_station_position`'s "signal" and "position" `ON CONFLICT` clauses touch disjoint column sets (not MAX/COALESCE on the `_ts` fields themselves, as this doc's wording suggested — the actual guarantee is the disjoint columns; the two genuinely shared columns, `last_seen`/`hw_id`, do use MAX/COALESCE) — proven with an interleaved pos→signal→pos test. Non-blocking nitpick noted: an out-of-range lora rssi/snr is still written into `station_positions.rssi/snr/signal_ts` (only `signal_log` is gated by the range check) — this is inherited byte-for-byte from the pre-existing BLE code path, not a regression, and no acceptance criterion requires gating it; left as-is (see fable-verdict.md "Discovered during waves").                                                                                                                                                                                      |
+| 3 — realtime + backfill | done   | `4d03f28` | Approved, no defects. Verified (not implemented) that live UDP-lora signal already reaches SSE clients: `_get_event_type`'s only source-aware branch matches BLE _status_ frames (`TYP` field), not MHeard/lora signal beacons — both fall through to the generic `mesh:message` event, so no new SSE event was needed; proved with a synthetic lora `pos` through the real `_broadcast_handler`. Added `SQLiteStorage.backfill_signal_log()` (D5): one-time, marker-guarded (`signal_backfill_done:v1`, shared `get_meta`/`set_meta`), bulk-dedups against existing `signal_log` keys (no N+1 queries), batches with progress logging, and `_rebuild_signal_buckets_since()` recomputes (via `INSERT OR REPLACE`, correct bucket-boundary math matching `_accumulate_signal`) every touched 5-min bucket from all `signal_log` rows so BLE+lora contributions merge correctly. Confirmed no read path (chart/mheard queries) filters `signal_buckets` by source. Background task wired into `main.py` the same way as `_maybe_backfill_classifier` (fire-and-forget, exception-safe, non-blocking). Noted-but-accepted: a theoretical single-row duplicate is possible only during the one-time startup backfill window if a live lora datagram commits between the scan and dedup-key fetch — exposure is one process lifetime, self-corrects on the next bucket rebuild, not worth a lock. |
+| 4 — docs                | done   | `0e007ba` | Approved after one fix-required round: the ADR amendment, dataflow.md diagram, and CLAUDE.md schema-version/gotcha updates were all verified accurate against the actual code (`_ingest_signal`, `_upsert_station_position`'s disjoint-column design, the v19 migration) on the first pass, but this changelog row and the top-of-file Status line were initially left unmarked — fixed in the same commit. Track U (U1-U4) is now complete.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |

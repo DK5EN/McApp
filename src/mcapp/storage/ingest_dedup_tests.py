@@ -423,6 +423,79 @@ async def _test_signal_sentinel_not_stored(results: list[tuple[str, bool]]) -> N
         tmp.cleanup()
 
 
+async def _test_text_frame_hardware_fields(results: list[tuple[str, bool]]) -> None:
+    """Firmware handover 2026-09-16: a UDP/lora TEXT frame may now carry
+    ``hw_id``/``lora_mod``/``max_hop``. With them present they land on the
+    ``messages`` row (and enrich a later BLE copy via COALESCE, not overwrite);
+    with them ABSENT — every node on older firmware — the row stores NULL and
+    ``store_message`` must not raise. Backward compatibility is the contract.
+    """
+    storage, tmp = await _with_storage("hw_fields")
+    try:
+        ts = 1_700_000_000_000
+        await storage.store_message(
+            _chat(
+                "DL1UDO-12,DO8RE-12,DB0ED-99",
+                "HW000001",
+                ts,
+                "lora",
+                hw_id=43,
+                lora_mod=8,
+                max_hop=4,
+            ),
+            "{}",
+        )
+        raised = False
+        try:
+            await storage.store_message(
+                _chat("DL1UDO-12,DO8RE-12,DB0ED-99", "HW000002", ts + 5_000, "lora"), "{}"
+            )
+        except Exception:
+            raised = True
+        rows = await storage._query(
+            "SELECT msg_id, hw_id, lora_mod, max_hop FROM messages"
+            " WHERE msg_id IN ('HW000001', 'HW000002') ORDER BY msg_id"
+        )
+        by_id = {r["msg_id"]: r for r in rows}
+        with_keys = by_id.get("HW000001", {})
+        without = by_id.get("HW000002", {})
+        results.append(
+            (
+                "text frame with hw fields stores hw_id/lora_mod/max_hop on the messages row",
+                with_keys.get("hw_id") == 43
+                and with_keys.get("lora_mod") == 8
+                and with_keys.get("max_hop") == 4,
+            )
+        )
+        results.append(
+            (
+                "text frame without hw fields stores NULLs and raises nothing",
+                not raised
+                and "HW000002" in by_id
+                and without.get("hw_id") is None
+                and without.get("lora_mod") is None
+                and without.get("max_hop") is None,
+            )
+        )
+        # UDP copy first WITH the fields, BLE copy second: the BLE copy must not
+        # blank them (COALESCE keeps the first non-NULL), and the UDP value wins.
+        await storage.store_message(
+            _chat("DL1UDO-12", "HW000001", ts + 100, "ble", hw_id=99, transformer="msg"), "{}"
+        )
+        rows2 = await storage._query(
+            "SELECT COUNT(*) AS n, MAX(hw_id) AS hw FROM messages WHERE msg_id = 'HW000001'"
+        )
+        results.append(
+            (
+                "a later BLE copy neither duplicates the row nor overwrites the UDP hw_id",
+                rows2[0]["n"] == 1 and rows2[0]["hw"] == 43,
+            )
+        )
+    finally:
+        await storage.close()
+        tmp.cleanup()
+
+
 async def run_ingest_dedup_tests() -> bool:
     """Run the ingest dedup regression suite. Returns True iff every case passes."""
     results: list[tuple[str, bool]] = []
@@ -439,6 +512,7 @@ async def run_ingest_dedup_tests() -> bool:
     await _test_restart_backstop_enrichment(results)
     await _test_duplicate_signal_ingested(results)
     await _test_signal_sentinel_not_stored(results)
+    await _test_text_frame_hardware_fields(results)
 
     for label, ok in results:
         logger.info("    %s | %s", "✅ PASS" if ok else "❌ FAIL", label)
