@@ -24,6 +24,7 @@ import asyncio
 import sys
 
 from ble_service_tests import run_ble_service_tests
+from bootstrap_network_safety_tests import run_bootstrap_network_safety_tests
 from bootstrap_pinning_tests import run_bootstrap_pinning_tests
 from caddy_config_tests import run_caddy_config_tests
 from config_migration_tests import run_config_migration_tests
@@ -213,6 +214,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     bootstrap_pinning_ok = run_bootstrap_pinning_tests()
     print(f"bootstrap_pinning: {'PASS' if bootstrap_pinning_ok else 'FAIL'}")
 
+    bootstrap_network_safety_ok = run_bootstrap_network_safety_tests()
+    print(f"bootstrap_network_safety: {'PASS' if bootstrap_network_safety_ok else 'FAIL'}")
+
     release_prep_ok = run_release_prep_tests()
     print(f"release_prep: {'PASS' if release_prep_ok else 'FAIL'}")
 
@@ -284,6 +288,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and system_converge_ok
         and caddy_config_ok
         and bootstrap_pinning_ok
+        and bootstrap_network_safety_ok
         and release_prep_ok
         and webapp_deploy_ok
         and config_migration_ok

@@ -40,7 +40,9 @@ UPDATE_RUNNER_PORT = 2985  # must match scripts/update-runner.py's listen port
 # Epoch 3 (B4): boot memory config, journald 8M, unattended-upgrades hook
 # off, direct venv exec, MALLOC_ARENA_MAX.
 # Epoch 4: Caddy GOMEMLIMIT/GOGC drop-in (the distro unit ignores the template).
-REQUIRED_SYSTEM_EPOCH = 4
+# Epoch 5: wpasupplicant pin (WPA3-SAE regression, raspberrypi/linux#7634),
+# persistent 16M journal on a /var/log/journal bind mount.
+REQUIRED_SYSTEM_EPOCH = 5
 
 SYSTEM_EPOCH_FILE = Path("/var/lib/mcapp/system-epoch")
 CONVERGE_ATTEMPT_FILE = Path("/var/lib/mcapp/converge-attempt")
