@@ -1,12 +1,16 @@
 # McApp production health log — mcapp.local
 
-> **Status:** Current — newest section: §13 (2026-09-16, v2.0.8 promoted to production).
-> Newest sweep: §12 (2026-09-16 10:21 CEST) — box **all green**, zero findings, one new watch
-> point (**W12**, 24 h link uptime 95.4 % across three same-day restarts). Last finding was
-> **F13** (§7, a 6.07 h `{CET}` uplink outage), upstream and resolved 2026-09-01 18:38 CEST.
-> Open watch points: **W1** (zram swap — now 22 MB out after B4, see §12), **W12** (§12), **W2** (live `config.json` stays
-> `0640` by decision), **W3** (Caddy 12 h certs), **W6** and **W7** (§6, accepted residual risks),
-> **W9** (CI `disabled_manually` in both repos) and **W10** (`@lucide/vue` pinned 1.41.0).
+> **Status:** Current — newest section: §16 (2026-09-19 09:15 CEST, the W13/W15 code wave, gated
+> and advisor-APPROVED, **not yet deployed**). Newest sweep: §15 (2026-09-19 07:50 CEST) — box
+> **all green**, zero findings. The stall campaign is confirmed in the field: `handler` stalls fell
+> from ~42–54/day to **1 in 7 h** at flat ingest load. Last finding was **F13** (§7, a 6.07 h
+> `{CET}` uplink outage), upstream and resolved 2026-09-01 18:38 CEST.
+> Open watch points: **W14** (app RSS 88 → 150 MB within one boot, §15), **W16** (short GIL-holding
+> lag episodes attributable only by chance, §16), **W1** (zram swap — 24 MB out, trend watch only),
+> **W12** (§12), **W2** (live `config.json` stays `0640` by decision), **W3** (Caddy 12 h certs),
+> **W6** and **W7** (§6, accepted residual risks), **W9** (CI `disabled_manually` in both repos)
+> and **W10** (`@lucide/vue` pinned 1.41.0).
+> **W13** and **W15** (§15) are addressed in §16 and close once the release is live on the box.
 > **W4** (§3), **W5** (§5), **W8** (§7) and **W11** (§11) are resolved.
 >
 > **Kind:** Recurring ops review; one dated section per run, appended, never edited in place.
@@ -987,3 +991,292 @@ deploy, recorded here because it is what the `v2.0.10` promotion was signed off 
 - **W9 still open:** the test workflows are `disabled_manually` in both repos, so there is no CI
   run for the promoted commit `31186f0` at all — only Dependency Graph. The full gate was run
   locally in both repos instead, after the dependency bumps, and again before publishing.
+
+## 15. 2026-09-19 07:50 CEST — full sweep, first look at the stall instrumentation in the field
+
+**Verdict: all green, zero findings, two new watch points.** First full sweep on production
+`v2.0.10`, ~7 h after the promotion restart. The headline is that the stall work landed: the
+`handler` stall rate dropped by roughly a factor of 13 at constant ingest load, and the residual
+stalls now point at one concrete, new place.
+
+### Anchors
+
+| Anchor         | Value                                                               |
+| -------------- | ------------------------------------------------------------------- |
+| Snapshot       | 2026-09-19 07:43–07:50 CEST                                         |
+| Release        | `v2.0.10` (`/api/status` and `/webapp/version.html` agree)          |
+| Active slot    | **slot-1**                                                          |
+| Service start  | 2026-09-19 00:46:39 CEST, `uptime_seconds` 25123 (~6.99 h)          |
+| Services       | `mcapp`, `mcapp-ble`, `caddy`, `lighttpd` active, `NRestarts` **0** |
+| Schema         | **32** = `LATEST_SCHEMA_VERSION` 32 ✓                               |
+| System epoch   | box **5** = `REQUIRED_SYSTEM_EPOCH` 5 = `SYSTEM_EPOCH` 5 ✓          |
+| Classifier     | version **3**, **38** rules, 0 unclassified in the last hour        |
+| UDP provenance | `identified`, 1 known source, 0 untrusted, 0 suppressed changes     |
+
+### Rate table re-measured
+
+| Signal                     | §1 baseline | This run                                            | Window |
+| -------------------------- | ----------- | --------------------------------------------------- | ------ |
+| `messages` type `msg`      | 11 / h      | **7 / h**                                           | 1 h    |
+| `messages` type `pos`      | 87 / h      | **69 / h**                                          | 1 h    |
+| `signal_log`               | 347 / h     | **289 / h**                                         | 1 h    |
+| journal warnings           | 0 / 24 h    | **0** (`-- No entries --`, `mcapp` and `mcapp-ble`) | 24 h   |
+| unclassified `msg`         | 0           | **0**                                               | 1 h    |
+| `{CET}` rows in `messages` | 0           | **0**                                               | all    |
+
+All three traffic rates sit ~20 % below baseline and well inside the factor-of-two band — early
+Saturday morning, and `pos`/`signal` track each other, so this is diurnal, not a feed problem.
+
+### The stall instrumentation — what it now says
+
+`stall_events` holds 527 rows spanning 2026-09-15 17:17 → 2026-09-19 07:43.
+
+**`handler` stalls per calendar day (non-sample):** 09-15 **28**, 09-16 **54**, 09-17 **46**,
+09-18 **42**, 09-19 **5** — and 4 of those 5 are before the 00:46:39 restart onto `v2.0.10`.
+Since the restart: **1 handler stall in 6.99 h**.
+
+Normalised per hour against ingest volume, so a traffic lull cannot explain it — ingest is flat
+at 58–105 messages/h across the whole window:
+
+| Period                          | handler stalls / h | msgs / h | stalls per 100 msgs |
+| ------------------------------- | ------------------ | -------- | ------------------- |
+| 09-17 12:00 → 09-19 00:46 (old) | **~1.8**           | ~81      | **~2.2**            |
+| 09-19 00:46 → 07:46 (`v2.0.10`) | **0.14**           | ~67      | **0.21**            |
+
+That is the persistent-writer / `synchronous=NORMAL` work from the stall follow-up doing exactly
+what `doc/2026-09-18_2200-stall-followup-plan.md` predicted, confirmed on the box rather than in a
+benchmark. **The ~40 handler stalls/day this campaign set out to remove are gone.**
+
+The one surviving handler stall (03:22:34, 905 ms) is `MessageRouter._storage_handler` on a BLE
+`mh` notification, with `loop_lag_ms` 0.66 and the pool completely idle — an isolated write, not a
+pattern.
+
+**Everything else non-sample since the restart, in full — 16 server rows:**
+
+- **6 rows in 00:46:56–00:47:29** (`loop_lag` 1384/704/252/161/141 ms, one `/api/weather` http
+  stall 580 ms). The lag sampler's stacks are all in `importlib._bootstrap_external` — module
+  import during startup. Expected, not a finding.
+- **1 handler stall at 03:22:34** (above).
+- **A 70-second burst at 07:42:18–07:43:14** while a Safari client was using the app: three
+  `/api/send` http stalls (968 / 833 / 1422 ms) each paired with a `loop_lag` of 353 / 261 /
+  584 ms, then one **`/api/telemetry` http critical at 2975 ms** paired with a 406 ms `loop_lag`.
+
+**Followed up with direct measurement on the box, which moved W13 off `/api/telemetry` and
+onto `/api/send`.** Recorded here in the order it was established, because the first reading was
+wrong and the correction is the useful part.
+
+The `/api/telemetry` `loop_lag` stack ends in `fastapi serialize_response` →
+`pydantic dump_json`, which reads like "the response serialises on the event loop". It does — but
+that is not what cost the 2975 ms:
+
+| Measurement (on the Pi, 1785 rows / 48 h / 395 KB) | Result                             |
+| -------------------------------------------------- | ---------------------------------- |
+| `pydantic TypeAdapter(Any).dump_json`              | **21 ms**                          |
+| `json.dumps` on the same rows                      | 39 ms                              |
+| query + row dicts (`idx_telemetry_cs_ts`, indexed) | 175 ms                             |
+| **live `GET /api/telemetry`, 8 calls on :2981**    | **140–210 ms**, one 870 ms outlier |
+
+So the endpoint's steady state is ~145 ms — under the 0.5 s threshold — and pydantic is _faster_
+than stdlib json here. **The 2975 ms is an unexplained excursion, not the endpoint's cost**, and
+"move the serialisation off-loop" would buy ~21 ms. RSS was at its 150 MB peak at that instant,
+which makes zram pressure the leading hypothesis, but it is a hypothesis. Not worth a code change.
+
+**`/api/send` is the real W13, and the bodies make it unambiguous.** Every `/api/send` stall in
+the whole 527-row table — 11 of 12 — is an mheard chart dump:
+
+```
+07:42:28  1422 ms  {"type":"command","dst":"999","msg":"mheard dump yearly"}
+07:42:24   833 ms  {"type":"command","dst":"999","msg":"mheard dump monthly"}
+07:42:18   968 ms  {"type":"command","dst":"999","msg":"mheard dump"}
+```
+
+The client fires all three at page load; `/api/send` `await`s `route_command`, so the POST does
+not return until the whole report is built and fanned out. The JSON of the _response_ is already
+off-loop (`send_to(..., offload_json=True)`, added by the stall plan). What is still on the loop
+is `_build_chart_series` (`storage/query.py`) — a pure-Python group / sort / gap-marker pass over
+the bucket rows — plus **one SSE progress event per qualified station**, emitted with the default
+sync `json.dumps` from inside that loop:
+
+| Variant   | buckets   | stations | qualified (≥10) = progress events |
+| --------- | --------- | -------- | --------------------------------- |
+| `7day`    | 8169      | 25       | **11**                            |
+| `monthly` | 11936     | 38       | **13**                            |
+| `yearly`  | **20885** | 144      | **65**                            |
+
+A ~21 000-iteration Python pass interleaved with 65 on-loop SSE sends is a coherent explanation
+for 1422 ms wall with 584 ms of measured loop lag, and the thread pool was idle throughout
+(`pool_queued` 0, `pool_running` 0) — the work is simply not being given to it. **W13.**
+
+**W15 — the lag sampler is blind in exactly this band.** 6 of the 10 `loop_lag` rows since the
+restart carry **no stack at all**, including all three `/api/send` rows above and a fresh 625 ms
+one at 08:35:43. The three it did capture were 1384 ms (17 samples), 704 ms (4) and 406 ms (1).
+Two reasons, both in `_lag_sampler_loop` (`src/mcapp/stalls.py`): it arms only once
+`perf_counter() - last_tick - _LAG_LOOP_INTERVAL_S >= config.loop_lag_ms`, i.e. **200 ms after the
+tick began** — more than half the budget of a 353 ms lag is gone before the first possible
+sample — and it is a Python thread, so a stretch that holds the GIL in a C extension starves the
+sampler itself. The events we most need attributed are the ones that arrive with no evidence.
+
+Client-side rows corroborate rather than add: the Safari `client_http` durations (1084 / 848 /
+1440 / 3045 ms) sit 20–70 ms above the matching server rows, so the Caddy/lighttpd hop costs
+nothing measurable. Two client rows are **dismissed as artefacts, not findings**:
+
+- `client_timeout` **142924 ms** on `/api/weather` at 07:33:16 — reported by an iPhone PWA still
+  running **`v2.0.8-7-g8363a1d`**, and there is no server row anywhere near it. A "10 s fetch
+  abort" that reports 143 s is an abort timer that fired after iOS resumed a suspended tab, the
+  same class as the known hidden-tab `sse_heartbeat` noise. Not a server fact.
+- `client_error` on `/api/send` at 07:32:26 followed by `sse_answer_missing` at 07:32:36 from the
+  same iPhone — one failed send, one missing SSE answer, single occurrence, no server-side trace.
+
+**`/api/weather` stays closed** per the 2026-09-18 decision: 16 of 21 calls in the 24 h summary
+cross 0.5 s (p50 580 ms, max 1502 ms), which is the provider's latency from the Pi, off-loop via
+`to_thread`. Re-confirmed, not re-opened.
+
+### Gateway uptime
+
+`/api/uptime?range=24h`: `state: "active"`, **uptime 98.56 %**, coverage 97.42 %, last beacon
+302 s ago, heartbeat age 26 s, 70 segments. One `gap` 22:05:20 → 22:25:34 (20.2 min, the longest
+outage in the window — one missed beacon at the 606 s cadence plus tolerance) and one `dark`
+22:35:09 → 23:12:18 (37 min, a deploy window, counts against coverage only). Both predate the
+current boot. The `gap`/`dark` split is behaving correctly.
+
+### Host and hygiene
+
+| Signal        | Value                                                           |
+| ------------- | --------------------------------------------------------------- |
+| Disk          | 4.5 G of 59 G, **8 %**                                          |
+| RAM           | total 462 MB, used 312 MB, **MemAvailable 149 MB**              |
+| Swap          | **24 MB out** (SwapFree 448836 of 473084 kB)                    |
+| Load / temp   | 0.15 0.10 0.03, **43.5 °C**, up 8:07                            |
+| DB / WAL      | **40.4 MB** / **4.6 MB**                                        |
+| `vapid.json`  | `0600` ✓, raw base64url scalar (`{"private_key": "0fS-..."` ) ✓ |
+| `config.json` | `0640` — **W2**, accepted by decision                           |
+
+**W1 is effectively closed by B4 and stays as a watch only for the trend**: 24 MB swapped out
+against the 142 MB recorded in §2 and the 22 MB in §12. The DB is 4 % of the 1 GB limit.
+
+**New: the app's RSS climbs within a boot.** The `stall_events` context field carries `rss_kb` on
+every row, which makes this visible for the first time: **88 MB at 00:46:56 → 115 MB at 03:22 →
+150 MB at 07:43:14**. Part of the last step is the telemetry payload itself, but 88 → 115 MB with
+no client attached is not. On a box with 149 MB available this is worth a data point per sweep.
+**W14.**
+
+### Watch points
+
+- **W13** — `/api/send` blocks for 0.5–1.4 s on the three `mheard dump` commands, because
+  `_build_chart_series` runs its group/sort/gap pass on the event loop and emits one on-loop SSE
+  progress event per qualified station (65 of them for `yearly`, over 20 885 buckets), with the
+  thread pool idle. Candidates, in order of value: run `_build_chart_series` in
+  `asyncio.to_thread`; throttle or drop the per-station progress events.
+  **Not** `/api/telemetry` — that endpoint measures 140–210 ms steady state and its pydantic
+  serialisation is 21 ms; its single 2975 ms excursion is unexplained and left as-is.
+- **W15** — the loop-lag sampler misses the 100–600 ms band: 6 of 10 `loop_lag` rows since the
+  restart have no stack. It cannot sample before 200 ms into a tick, and a GIL-holding C call
+  starves the sampler thread. Until this is fixed, the next W13-class question is unanswerable
+  from the recorded data. Candidates: arm at a fraction of `loop_lag_ms`; record `samples: 0`
+  explicitly so "never armed" is distinguishable from "no lag".
+- **W14** — mcapp RSS 88 → 150 MB over 7 h within one boot, read off `stall_events.rss_kb`.
+  Record it each sweep; a monotone climb across a longer boot would be the finding.
+
+### Carried forward, unchanged
+
+- **W2** (`config.json` `0640` by decision), **W3** (Caddy 12 h certs), **W6**/**W7** (§6 accepted
+  residual risks), **W9** (CI `disabled_manually` in both repos), **W10** (`@lucide/vue` pinned
+  1.41.0), **W12** (§12 link-uptime across restarts — 98.6 % this run, healthy).
+- **W1** — now a trend watch only, see above.
+- 169 pre-2026-08-13 duplicate telemetry pairs: not re-examined, unchanged.
+- `fcs_ok` field-data verdict due after 2026-09-20 (`doc/backlog.md`).
+
+## 16. 2026-09-19 09:15 CEST — W13 and W15 implemented (wave, not yet deployed)
+
+**Not a sweep.** This is the code change answering §15's two watch points, gated and advisor-reviewed
+but **not yet on the box** — it ships in the dev release that follows. Recorded here so §15's watch
+points are not read as still open.
+
+| Item    | Change                                                                                                                                                                                                                                                                                                          |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **W13** | `QueryMixin._build_chart_series` (`storage/query.py`) split into three pure synchronous `@staticmethod` helpers — `_group_and_qualify`, `_build_series_chunk`, `_finalize_series` — each run via `asyncio.to_thread`; per-station SSE progress throttled to one event per `MHEARD_PROGRESS_CHUNK` (10) stations |
+| **W15** | `_lag_sampler_loop` (`stalls.py`) arms at `_LAG_SAMPLER_ARM_FRACTION` (0.5) of `config.loop_lag_ms` instead of the full threshold; counts its own wakes per episode; `_consume_lag_sample()` always returns a dict                                                                                              |
+
+### Measured, not asserted
+
+**W13 — equivalence.** The pre-wave `_build_chart_series` was extracted from `git show HEAD:` and run
+against the new one on **20 897 real `signal_buckets` rows pulled from mcapp.local**, for all three
+gap-parameter variants. Output **byte-identical** (32 446 / 21 383 / 21 383 rows), `done` event
+identical, stage set identical, `gaps` events **65 → 7**.
+
+**W13 — the actual goal.** Same data, same 5 ms watchdog, deep copies hoisted out of the measured
+region:
+
+|                            | wall  | **max loop-lag** | p95     |
+| -------------------------- | ----- | ---------------- | ------- |
+| pre-wave (on-loop)         | 16 ms | **12.2 ms**      | 12.2 ms |
+| new (chunked, `to_thread`) | 25 ms | **3.2 ms**       | 3.2 ms  |
+
+Loop blocking down 3.8x; wall time up 56 % from seven thread hops. Measured on a Mac, so the absolute
+figures are ~15-30x smaller than the Pi's — the 12.2 ms scales to the 584 ms `loop_lag` actually
+recorded on the box, which is what makes the comparison credible. The hop overhead is fixed and
+therefore relatively cheaper there.
+
+**W15 — and a claim of §15 that turned out to be wrong.** §15 said a missing stack was probably GIL
+starvation. The new diagnostic shows it is **not**, and the first implementation's own docstring
+("`sampler_wakes == 0` is evidence the sampler never woke") was also wrong — the advisor caught it
+and five independent runs confirmed it. A wake before the block and one right after the GIL is
+released are always counted, so the count can never reach 0:
+
+| blocker                        | `sampler_wakes`    | wakes the episode had room for | `samples` |
+| ------------------------------ | ------------------ | ------------------------------ | --------- |
+| GIL-holding C call, 310-557 ms | **3** (all 5 runs) | 8.2-13.1                       | 0-1       |
+
+The counter now increments **only on wakes where the loop is already overdue**, which makes the field
+mean what its name says and the ratio interpretable — and, as a side effect, restores the lock-free
+healthy path the original comment promised:
+
+| blocker                        | `sampler_wakes` | room     | ratio    | `samples`                                |
+| ------------------------------ | --------------- | -------- | -------- | ---------------------------------------- |
+| GIL-holding C call, 310-557 ms | **1**           | 8.2-13.1 | **~0.1** | 0-1                                      |
+| pure Python, 599 ms            | **7**           | ~12      | **~0.6** | 6, with a stack naming the blocking line |
+
+**Read `sampler_wakes` as a ratio against `duration_ms / 50`, never as a flag.** Far below → the
+sampler could not get scheduled during the block (a GIL-holding C call). Near it with `samples: 0` →
+it ran but never resolved a frame in time.
+
+### Gate
+
+`uvx ruff check`, `uvx ruff format --check .`, `uv run mypy src/mcapp ble_service/src` (106 files),
+`uv run python scripts/run_startup_tests.py` **rc=0, 61 suites PASS, 0 FAIL** (`config_migration`
+SKIPPED = the documented macOS bash-3 skip). Advisor pass (independent, higher-capability, against
+the diff and the acceptance criteria): **APPROVED**, four low findings, no correctness defect.
+
+### Advisor findings — disposition
+
+- **F1** (`sampler_wakes` counted healthy wakes, docstring rule unachievable) — **fixed**, verified
+  independently before acting on it. Table above.
+- **F4** (a progress assertion that only checked "a callsign is present") — **fixed**: the test now
+  pins the exact sequence `PROG09 / PROG19 / PROG22` and the counters `(10, 20, 23)`, so a wrong
+  chunk boundary or a wrong last-of-chunk rule fails it.
+- **F2** (a GIL-holding blocker is attributable only by a race at release: `armed=True, samples=0`
+  and `samples=1, sampled_at_ms ≈ duration_ms` share one cause) — **accepted, not fixed.** The
+  staleness re-check that discards a late sample is correct and must stay; the alternative
+  (`asyncio.sleep(0)` before consuming) buys determinism at the cost of touching the lag loop's
+  timing. **W16.**
+- **F3** (`_last_tick = t0` and `_reset_lag_sample()` are two statements, so a wake landing between
+  them is counted then wiped) — **accepted, not fixed.** Undercount of at most 1, never a
+  misattribution; swapping the lines trades it for a wake counted against the old episode.
+
+### What the advisor attacked and could not break
+
+Input mutation (`bucket_rows` byte-identical after the call in both old and new code; no aliasing
+path into the per-callsign lists); no `await` or loop access inside any `to_thread` callable;
+equivalence on input shapes the production replay never covered (empty, single station, all-sparse,
+duplicate `bucket_ts`, exact chunk multiples, non-ASCII callsigns, reversed order, `bucket_ts = 0`);
+every `detail` consumer (`record`, writer thread, `/api/stalls`, `/api/stalls/summary`,
+`replay_stall.py`, `stall_middleware.py`) tolerates the always-present dict, ~45 bytes against the
+5000-row prune budget; the `"stack": None` invariant; chunk size 10 on this hardware. It also read
+the webapp repo directly and confirmed **no consumer parses the `(idx/N)` text or expects one event
+per station** — `MHeardStore.ts` stores `stage`/`detail` as display strings and `callsign` is typed
+optional and never read.
+
+### New watch point
+
+- **W16** — short GIL-holding lag episodes remain attributable only by chance (advisor F2). Not a
+  defect; revisit only if production rows show it mattering.
