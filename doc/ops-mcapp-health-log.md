@@ -1,17 +1,14 @@
 # McApp production health log — mcapp.local
 
-> **Status:** Current — newest section: §16 (2026-09-19 09:15 CEST, the W13/W15 code wave, gated
-> and advisor-APPROVED, **not yet deployed**). Newest sweep: §15 (2026-09-19 07:50 CEST) — box
-> **all green**, zero findings. The stall campaign is confirmed in the field: `handler` stalls fell
-> from ~42–54/day to **1 in 7 h** at flat ingest load. Last finding was **F13** (§7, a 6.07 h
-> `{CET}` uplink outage), upstream and resolved 2026-09-01 18:38 CEST.
-> Open watch points: **W14** (app RSS 88 → 150 MB within one boot, §15), **W16** (short GIL-holding
-> lag episodes attributable only by chance, §16), **W1** (zram swap — 24 MB out, trend watch only),
-> **W12** (§12), **W2** (live `config.json` stays `0640` by decision), **W3** (Caddy 12 h certs),
-> **W6** and **W7** (§6, accepted residual risks), **W9** (CI `disabled_manually` in both repos)
-> and **W10** (`@lucide/vue` pinned 1.41.0).
-> **W13** and **W15** (§15) are addressed in §16 and close once the release is live on the box.
-> **W4** (§3), **W5** (§5), **W8** (§7) and **W11** (§11) are resolved.
+> **Status:** Current — newest section: §17 (2026-09-19 09:12 CEST, `v2.0.11-dev.1` deployed to
+> mcapp.local slot-0 and verified live). **W15 resolved** — every `loop_lag` row is now legible.
+> **W13 reduced, still open** — the mheard dumps no longer block the event loop at all, but still
+> cost ~1 s of wall time, so `/api/send` `http` rows remain and are expected. Newest full sweep:
+> §15 (2026-09-19 07:50) — all green, zero findings; `handler` stalls down from ~42–54/day to
+> 1 in 7 h. Last finding was **F13** (§7), upstream and resolved 2026-09-01.
+> Open watch points: **W13** (reduced, §17), **W14** (§15), **W16** (§16), **W1** (zram swap,
+> trend watch only), **W12** (§12), **W2**, **W3**, **W6**, **W7**, **W9**, **W10**.
+> **W15** (§15/§16/§17), **W4**, **W5**, **W8** and **W11** are resolved.
 >
 > **Kind:** Recurring ops review; one dated section per run, appended, never edited in place.
 > **Produced by:** the `ai-ops` skill (`.claude/skills/ai-ops/SKILL.md`).
@@ -1280,3 +1277,59 @@ optional and never read.
 
 - **W16** — short GIL-holding lag episodes remain attributable only by chance (advisor F2). Not a
   defect; revisit only if production rows show it mattering.
+
+## 17. 2026-09-19 09:12 CEST — v2.0.11-dev.1 deployed and verified live
+
+`v2.0.11-dev.1` (MCProxy + webapp, tag parity confirmed in both repos, tarball sha256
+`af8e2142…` verified by downloading it from the Pi before deploying). Deploy exit 0, 14 × `[OK]`,
+**active slot-0**, service started 09:10:11 CEST, `/api/status` reports `v2.0.11`. The active slot
+was grepped for the symbols only this change introduces — `_LAG_SAMPLER_ARM_FRACTION`,
+`sampler_wakes`, `MHEARD_PROGRESS_CHUNK`, `_finalize_series`, `_build_series_chunk`,
+`_group_and_qualify` — all present.
+
+### W15 — works as designed. Closed.
+
+Every `loop_lag` row written since the restart carries the new keys, and the ratio is readable at a
+glance:
+
+| time     | lag     | `sampler_wakes` | room (`lag/50`) | ratio | `armed` | `samples` | stack |
+| -------- | ------- | --------------- | --------------- | ----- | ------- | --------- | ----- |
+| 09:10:28 | 1215 ms | 16              | 24.3            | 0.66  | true    | 15        | yes   |
+| 09:10:29 | 674 ms  | 6               | 13.5            | 0.44  | true    | 5         | yes   |
+| 09:10:59 | 135 ms  | 0               | 2.7             | 0.00  | false   | 0         | no    |
+| 09:11:01 | 106 ms  | 0               | 2.1             | 0.00  | false   | 0         | no    |
+
+The two startup rows (module imports) are attributed with a stack. The two short ones are now
+**legible instead of blank**: `armed: false` says the loop was never overdue past the arm threshold
+long enough to sample, which is the honest account of a 106 ms lag — it has room for two sampler
+wakes in total. Under the old code all four would have looked identical from the outside.
+
+### W13 — loop blocking removed, wall time not. Reclassified, not closed.
+
+Driving all three dumps through `POST /api/send` on the box:
+
+| command               | before (§15)         | after                                       | `loop_lag` alongside |
+| --------------------- | -------------------- | ------------------------------------------- | -------------------- |
+| `mheard dump`         | 968 ms + 353 ms lag  | **634 ms**                                  | **none**             |
+| `mheard dump monthly` | 833 ms + 261 ms lag  | **377 ms** — below threshold, no row at all | **none**             |
+| `mheard dump yearly`  | 1422 ms + 584 ms lag | **1008 ms**                                 | **none**             |
+
+**The `/api/send` stall rows have NOT disappeared, and saying the fix removed them would be wrong.**
+Two rows were still written (634 ms, 1008 ms) because the `http` recorder measures wall time and the
+work genuinely still takes about a second. What did disappear is the thing that mattered: **not one
+`loop_lag` row accompanies them any more**, where previously every one of the three carried
+261-584 ms of measured event-loop blocking. The request is slow; it no longer makes everything else
+slow. That is exactly the trade the pre-deploy measurement predicted (+56 % wall, −3.8x loop lag)
+and it reproduced on the real hardware.
+
+Consequence for future sweeps: **`/api/send` + `mheard dump*` will keep generating `http` stall rows
+and that is now expected noise, not a regression.** Judge it by whether a `loop_lag` row sits beside
+it. The architectural fix — make the dump command return immediately and deliver the series over SSE
+— is a bigger change and is not scheduled. **W13 stays open in this reduced form.**
+
+### Watch points after this release
+
+- **W13** (reduced) — `mheard dump*` still costs ~1 s of wall time on `/api/send`; only the loop
+  blocking is gone. Expect the `http` rows; alarm only on an accompanying `loop_lag`.
+- **W14**, **W16**, **W1**, **W12**, **W2**, **W3**, **W6**, **W7**, **W9**, **W10** unchanged.
+- **W15** resolved.
