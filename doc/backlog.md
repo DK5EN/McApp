@@ -137,3 +137,28 @@ so this is most likely SQLite page caches on the history queries plus arena frag
 leak. Re-measure PSS a day or two after the 2026-09-14 17:39 restart before treating it as one.
 Also note: `memory.current` reads 0 for every cgroup because `cgroup_enable=memory` is missing
 from `cmdline.txt` — add it alongside item 1 if per-service accounting is wanted.
+
+## B5 — Winlink over MeshCom: account, then the test campaign (blocked on an account)
+
+**Goal:** find out what of Winlink's APRSLink command set actually works over MeshCom from
+`DK5EN-98`, and what our stack does with the traffic. Runbook and the full campaign:
+`doc/2026-09-19_1300-winlink-account-and-test-campaign.md`; command reference and the firmware
+findings: `doc/2026-09-19_1100-winlink-wlnk1-command-test-plan.md`.
+
+**Blocked on:** `DK5EN` has no Winlink account, and there is no web signup — the account is
+created by connecting to the CMS without a password, which then mails you one. Creating it is
+outward-facing and needs the operator's explicit go-ahead. Recommended client is Pat's
+`darwin_amd64` build under the Rosetta already installed on this Mac.
+
+**Not blocked, and worth doing first:** phases 0 and 1 need no account. Phase 1 is the first real
+traffic for three things shipped in v2.0.11-dev.3 that are currently pinned only by tests:
+
+- the bare-APRS-ack filter (`_APRS_ACK_GLOBS`), written from firmware source and never yet
+  validated against a captured frame — zero such rows exist in the live DB;
+- the digit-less pair key (`isValidPairMember`), whose `WLNK` case has no live data behind it;
+- payload truncation, since APRSLink's help reply is longer than `MAX_TEXT_LEN = 120` and would be
+  the first inbound text to exercise the cap in a delivered push.
+
+**Do not** re-open the security posture question casually: APRSLink's challenge/response discloses
+three password characters by position, in clear, across the mesh and APRS-IS on every login. The
+decision taken is to use a password that protects nothing else.
