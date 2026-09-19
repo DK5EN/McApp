@@ -64,6 +64,14 @@ logger = get_logger(__name__)
 # broadcast and history alike.
 HistoryFilter = Callable[[dict[str, Any]], dict[str, Any] | None]
 
+# Progress throttle for _build_chart_series: one "gaps" SSE progress event per
+# this many qualified stations, not one per station. Measured on mcapp.local
+# (2026-09-19, thread pool idle throughout): the yearly mheard dump qualifies
+# 65 stations -> 65 on-loop SSE sends, 1422 ms http duration / 584 ms
+# loop_lag; chunking to 10 cuts that to 7 progress events (monthly: 13 -> 2,
+# 7day: 11 -> 2).
+MHEARD_PROGRESS_CHUNK = 10
+
 
 def _emit_row(data: dict[str, Any], blocklist_filter: HistoryFilter | None) -> str | None:
     """Serialise one built row, or return None when the blocklist drops it."""
@@ -959,20 +967,16 @@ class QueryMixin(StorageBase):
             )
         return rows
 
-    async def _build_chart_series(
-        self,
+    @staticmethod
+    def _group_and_qualify(
         bucket_rows: list[dict[str, Any]],
-        *,
-        gap_threshold_s: int,
-        gap_offset_s: int,
-        progress_callback: Any = None,
-    ) -> list[dict[str, Any]]:
-        """Group bucket rows by callsign, insert gap markers, and sort for Chart.js.
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Group bucket rows by callsign and apply the qualification floor.
 
-        Shared by process_mheard_store_parallel (5-min buckets, both the pre-aggregated
-        and legacy-scan paths), process_mheard_yearly, and process_mheard_monthly (both
-        hourly-rolled-up) — the only differences between callers are the query that
-        produces bucket_rows and the two window-specific gap parameters.
+        Pure and synchronous (no awaits, no I/O beyond a plain logger call) —
+        safe to run via asyncio.to_thread. Split out of _build_chart_series so
+        the CPU-bound grouping pass over up to ~21 000 rows runs off the event
+        loop.
         """
         callsign_data: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in bucket_rows:
@@ -1002,21 +1006,24 @@ class QueryMixin(StorageBase):
                 len(qualified),
             )
 
-        if progress_callback:
-            await progress_callback(
-                "bucketing",
-                f"Processing {len(bucket_rows)} buckets for {len(qualified)} stations...",
-            )
+        return qualified
 
-        final_result = []
-        for idx, (callsign, entries) in enumerate(sorted(qualified.items()), 1):
-            if progress_callback:
-                await progress_callback(
-                    "gaps",
-                    f"Building chart for {callsign} ({idx}/{len(qualified)})...",
-                    callsign,
-                )
+    @staticmethod
+    def _build_series_chunk(
+        items: list[tuple[str, list[dict[str, Any]]]],
+        *,
+        gap_threshold_s: int,
+        gap_offset_s: int,
+    ) -> list[dict[str, Any]]:
+        """Build chart rows (data points + gap markers) for one chunk of
+        already-sorted (callsign, entries) pairs.
 
+        Pure and synchronous (no awaits) — safe to run via asyncio.to_thread.
+        `items` is a slice of `sorted(qualified.items())`, so output order
+        within and across chunks matches the pre-chunking single-pass loop.
+        """
+        chunk_result: list[dict[str, Any]] = []
+        for callsign, entries in items:
             entries.sort(key=lambda x: x["bucket_ts"])
             segment_id = 0
             prev_time = None
@@ -1026,7 +1033,7 @@ class QueryMixin(StorageBase):
                 bucket_time = entry["bucket_ts"] // 1000
 
                 if prev_time and (bucket_time - prev_time) > gap_threshold_s:
-                    final_result.append(
+                    chunk_result.append(
                         {
                             "src_type": "STATS",
                             "timestamp": bucket_time - gap_offset_s,
@@ -1045,7 +1052,7 @@ class QueryMixin(StorageBase):
                     )
                     segment_id += 1
 
-                final_result.append(
+                chunk_result.append(
                     {
                         "src_type": "STATS",
                         "timestamp": bucket_time,
@@ -1062,15 +1069,94 @@ class QueryMixin(StorageBase):
                     }
                 )
                 prev_time = bucket_time
+        return chunk_result
 
+    @staticmethod
+    def _finalize_series(
+        final_result: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], int, int]:
+        """Final sort for Chart.js, plus the "done" progress counters, in one pass.
+
+        Pure and synchronous (no awaits) — safe to run via asyncio.to_thread.
+        For the yearly dump this sort is over ~21 000 rows with a tuple key,
+        which used to be the single largest remaining on-loop pass in
+        _build_chart_series even after the grouping and per-chunk build were
+        moved off it. The two counters are computed unconditionally, not only
+        when a progress_callback is present — branching the thread call on
+        the callback would leave two different code paths over the same data,
+        which is how the returned series and the reported "done" counts could
+        drift apart.
+        """
         result = sorted(final_result, key=lambda x: (x["callsign"], x["timestamp"]))
+        stats_entries = [r for r in result if not r.get("is_gap_marker")]
+        callsign_count = len({e["callsign"] for e in stats_entries}) if stats_entries else 0
+        return result, len(stats_entries), callsign_count
+
+    async def _build_chart_series(
+        self,
+        bucket_rows: list[dict[str, Any]],
+        *,
+        gap_threshold_s: int,
+        gap_offset_s: int,
+        progress_callback: Any = None,
+    ) -> list[dict[str, Any]]:
+        """Group bucket rows by callsign, insert gap markers, and sort for Chart.js.
+
+        Shared by process_mheard_store_parallel (5-min buckets, both the pre-aggregated
+        and legacy-scan paths), process_mheard_yearly, and process_mheard_monthly (both
+        hourly-rolled-up) — the only differences between callers are the query that
+        produces bucket_rows and the two window-specific gap parameters.
+
+        The CPU-bound work (grouping/qualifying up to ~21 000 bucket rows,
+        building chart rows + gap markers per station, and the final sort +
+        "done" counters) runs off the event loop via asyncio.to_thread through
+        the three pure helpers above — measured on mcapp.local, a yearly dump
+        otherwise blocked the loop for ~1.4 s with the thread pool completely
+        idle, and the final sort over ~21 000 rows was the single largest
+        remaining on-loop pass even after the grouping and per-chunk build
+        were moved off it. Progress is throttled to one "gaps" event per
+        MHEARD_PROGRESS_CHUNK stations (was one per station: 65 on-loop SSE
+        sends for a yearly dump).
+        """
+        qualified = await asyncio.to_thread(self._group_and_qualify, bucket_rows)
 
         if progress_callback:
-            stats_entries = [r for r in result if not r.get("is_gap_marker")]
-            callsign_count = len({e["callsign"] for e in stats_entries}) if stats_entries else 0
+            await progress_callback(
+                "bucketing",
+                f"Processing {len(bucket_rows)} buckets for {len(qualified)} stations...",
+            )
+
+        items = sorted(qualified.items())
+        total = len(items)
+        final_result: list[dict[str, Any]] = []
+        done = 0
+        for chunk_start in range(0, total, MHEARD_PROGRESS_CHUNK):
+            chunk = items[chunk_start : chunk_start + MHEARD_PROGRESS_CHUNK]
+            chunk_result = await asyncio.to_thread(
+                self._build_series_chunk,
+                chunk,
+                gap_threshold_s=gap_threshold_s,
+                gap_offset_s=gap_offset_s,
+            )
+            final_result.extend(chunk_result)
+            done += len(chunk)
+
+            if progress_callback:
+                last_callsign = chunk[-1][0]
+                await progress_callback(
+                    "gaps",
+                    f"Building chart for {last_callsign} ({done}/{total})...",
+                    last_callsign,
+                )
+
+        result, stats_count, callsign_count = await asyncio.to_thread(
+            self._finalize_series, final_result
+        )
+
+        if progress_callback:
             await progress_callback(
                 "done",
-                f"{len(stats_entries)} data points for {callsign_count} stations",
+                f"{stats_count} data points for {callsign_count} stations",
             )
         return result
 
