@@ -62,6 +62,7 @@ class PushFilter(BaseModel):
     dm: bool = True
     groups: list[str] = Field(default_factory=list)
     broadcast: bool = False
+    mentions: bool = False
 
     @field_validator("groups", mode="before")
     @classmethod

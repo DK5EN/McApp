@@ -43,15 +43,18 @@ from .commands.constants import has_console
 from .push_delivery import (
     COALESCE_WINDOW_SECONDS,
     DEDUP_WINDOW_SECONDS,
+    MAX_TEXT_LEN,
     PushCoalescer,
     PushDedup,
     PushDispatcher,
     _is_node_local_noise,
+    _push_text,
     build_push_payload,
     is_eligible,
     is_sender_blocked,
     load_or_create_vapid,
     matches,
+    mentions_own,
     user_state_dir,
     vapid_path,
 )
@@ -202,7 +205,9 @@ async def run_push_tests() -> bool:
     #    cover them — it's already data-driven off the fixture).
     own_for_vectors = contract["own_callsign_for_vectors"]
     for vector in contract["match_vectors"]:
-        actual: bool | dict[str, Any] = matches(vector["msg"], own_for_vectors, vector["filter"])
+        actual: bool | dict[str, Any] = matches(
+            vector["msg"], own_for_vectors, vector["filter"], _push_text(vector["msg"])
+        )
         _record(f"match: {vector['name']}", actual == vector["should_push"])
 
     # 1b. eligibility_vectors — pure predicate (type allowlist + own-src exclusion).
@@ -275,6 +280,14 @@ async def run_push_tests() -> bool:
     #     perturb, PushDedup's msg_id-less fallback triple.
     await _test_ack_suffix_stripped_after_gates(_record)
 
+    # 4g. contract v11 `mention_semantics`: the mentions_own() predicate and
+    #     its wiring into matches() as an independent OR disjunct.
+    _test_mentions(_record)
+    # 4h. contract v11 `mention_semantics`: the DISPATCHER feeds the predicate
+    # the full raw text, not the truncated payload (plan A5). Pins the call
+    # site, which `_test_mentions` cannot reach.
+    await _test_mention_uses_full_text_at_the_dispatcher(_record)
+
     # 5. VAPID persistence (injected fake generator — never real crypto).
     _test_vapid_persistence(_record)
 
@@ -314,7 +327,7 @@ def _run_coalesce_scenario(
             continue
         if dedup.is_duplicate(msg):
             continue
-        if not matches(msg, own, filt):
+        if not matches(msg, own, filt, _push_text(msg)):
             continue
         immediate = coalescer.submit(endpoint, {"endpoint": endpoint}, msg)
         if immediate is not None:
@@ -452,7 +465,8 @@ async def _test_subscribe_unsubscribe_upsert(record: _RecordFn) -> None:
                 record(
                     "subscribe: stored filter matches the request",
                     bool(subs)
-                    and subs[0]["filter"] == {"dm": True, "groups": ["232"], "broadcast": False},
+                    and subs[0]["filter"]
+                    == {"dm": True, "groups": ["232"], "broadcast": False, "mentions": False},
                 )
 
                 # Upsert: re-POST the same endpoint with a DIFFERENT filter — must
@@ -470,7 +484,8 @@ async def _test_subscribe_unsubscribe_upsert(record: _RecordFn) -> None:
                 record(
                     "upsert: filter overwritten by the second POST",
                     bool(subs)
-                    and subs[0]["filter"] == {"dm": False, "groups": [], "broadcast": True},
+                    and subs[0]["filter"]
+                    == {"dm": False, "groups": [], "broadcast": True, "mentions": False},
                 )
                 record(
                     "upsert: subscription keys overwritten by the second POST",
@@ -1143,6 +1158,167 @@ async def _test_ack_suffix_stripped_after_gates(record: _RecordFn) -> None:
                 await dispatcher.stop()
         finally:
             await storage.close()
+
+
+async def _test_mention_uses_full_text_at_the_dispatcher(record: _RecordFn) -> None:
+    """Contract v11 `mention_semantics`: the dispatcher must feed the mention
+    test the FULL raw text, not the push payload's.
+
+    `_test_mentions` exercises `matches()` directly, so it pins the predicate
+    but NOT the call site — verified by mutation: changing
+    `handle_mesh_message`'s fourth argument from `full_text` to
+    `payload["text"]` (or to `full_text[:MAX_TEXT_LEN]`) leaves the whole push
+    suite green. That is exactly the trap
+    doc/2026-09-19_1200-mention-push-plan.md A5 exists to prevent:
+    `_payload_fields` truncates to MAX_TEXT_LEN = 120 and BOTH
+    `build_push_payload` and `_build_gate_view` go through it, while a MeshCom
+    message runs to ~149 characters — so a mention late in a long message
+    would silently never push, with no trace anywhere.
+
+    Drives the REAL dispatcher: a broadcast to '*' (which the subscription
+    does NOT want — `broadcast: False`) whose text is longer than
+    MAX_TEXT_LEN and whose '@DK5EN' begins PAST that cap. The only thing that
+    can deliver it is the mention disjunct reading untruncated text.
+    """
+    deliveries: list[dict[str, Any]] = []
+
+    def _stub_webpush(**kwargs: Any) -> None:
+        deliveries.append(json.loads(kwargs["data"]))
+
+    own = "DK5EN-99"
+    prefix = "Lots of preamble text that pads this message out well past the payload cap "
+    text = prefix + ("x" * (MAX_TEXT_LEN - len(prefix) + 10)) + " @DK5EN please read"
+    mention_at = text.index("@DK5EN")
+    record(
+        "mention/full-text: the vector's own premise — '@DK5EN' starts past MAX_TEXT_LEN",
+        mention_at > MAX_TEXT_LEN,
+    )
+    record(
+        "mention/full-text: the vector's own premise — the TRUNCATED text holds no mention",
+        not mentions_own(text[:MAX_TEXT_LEN], own),
+    )
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        storage = await create_sqlite_storage(pathlib.Path(tmp_dir) / "push_mention_fulltext.db")
+        try:
+            endpoint = "https://push.example/mention-full-text"
+            await storage.upsert_push_subscription(
+                endpoint,
+                {"endpoint": endpoint, "keys": {"p256dh": "p", "auth": "a"}},
+                # dm on but irrelevant (dst is '*'), broadcast OFF: only the
+                # mention disjunct can deliver this.
+                {"dm": True, "groups": [], "broadcast": False, "mentions": True},
+            )
+            dispatcher = PushDispatcher(
+                storage=storage,
+                vapid=_FAKE_VAPID,
+                webpush_fn=_stub_webpush,
+            )
+            dispatcher.start()
+            try:
+                await dispatcher.handle_mesh_message(
+                    {
+                        "src": "OE1ABC-1",
+                        "dst": "*",
+                        "type": "msg",
+                        "msg": text,
+                        "msg_id": "MENTIONFT",
+                        "timestamp": 0,
+                    },
+                    own,
+                )
+                for _ in range(150):
+                    if deliveries:
+                        break
+                    await asyncio.sleep(0.02)
+                record(
+                    "mention/full-text: a mention past the 120-char cap still pushes"
+                    " (fails if the call site passes payload['text'] or a truncated view)",
+                    bool(deliveries),
+                )
+            finally:
+                await dispatcher.stop()
+        finally:
+            await storage.close()
+
+
+def _test_mentions(record: _RecordFn) -> None:
+    """Contract v11 `mention_semantics`: the pure `mentions_own()` predicate,
+    and its wiring into `matches()` as a FOURTH, INDEPENDENT disjunct beside
+    dm/broadcast/groups — vectors from the plan
+    (doc/2026-09-19_1200-mention-push-plan.md A2), replayed against mcapp.local
+    traffic before implementation.
+    """
+    own = "DK5EN-98"
+
+    # Positive: the SSID is matched but never compared against own_callsign's
+    # own SSID, and matching is case-insensitive overall (case-sensitive
+    # compare of two uppercased strings).
+    for text in ("hi @DK5EN, thanks", "hi @DK5EN-12, thanks", "hi @dk5en-98, thanks"):
+        record(f"mentions_own: {text!r} mentions {own}", mentions_own(text, own))
+
+    # Negative controls: an e-mail local part, a longer/different callsign.
+    for text in ("sam@dk5en.de", "foo@DK5EN", "@DK5ENX", "@DK5EN2"):
+        record(f"mentions_own: {text!r} does NOT mention {own}", not mentions_own(text, own))
+
+    # Positive controls: ordinary punctuation on either side is a boundary.
+    for text in ("(@DK5EN)", "@DK5EN."):
+        record(f"mentions_own: {text!r} mentions {own}", mentions_own(text, own))
+
+    # Positive: pattern-mechanics quirks the contract calls out explicitly —
+    # not a stated rule, but the pattern's actual behavior, pinned here.
+    for text in ("@DK5EN-123", "@@DK5EN"):
+        record(f"mentions_own: {text!r} mentions {own}", mentions_own(text, own))
+
+    # Empty/malformed inputs never match.
+    record("mentions_own: empty text never matches", not mentions_own("", own))
+    record("mentions_own: empty own_callsign never matches", not mentions_own("@DK5EN", ""))
+    record(
+        "mentions_own: own_callsign with an empty BASE (only a hyphen) never matches",
+        not mentions_own("@DK5EN", "-"),
+    )
+
+    # A mention starting past character 120 of a >120-char message: matches()
+    # must be given the FULL text, never payload["text"] (truncated to
+    # MAX_TEXT_LEN=120 by _payload_fields) — that is the one shape that fails
+    # silently if a caller reaches for the payload instead.
+    padding = "x" * 125
+    long_text = f"{padding} @DK5EN please respond"
+    mention_index = long_text.index("@DK5EN")
+    record(
+        "mentions_own: the vector's own premise — the mention starts past char 120",
+        mention_index > 120,
+    )
+    truncated_payload_text = long_text[:120]
+    record(
+        "mentions_own: sanity — the truncated payload text alone contains no mention "
+        "(proves this exercises the real bug, not a tautology)",
+        "@DK5EN" not in truncated_payload_text,
+    )
+    payload = {"dst": "OE1ABC-1", "text": truncated_payload_text}
+    record(
+        "mentions_own: matches() finds a mention past char 120 when given the FULL text",
+        matches(payload, own, {"mentions": True}, long_text),
+    )
+
+    # A filter with no 'mentions' key at all must not push on a mention
+    # (default False — an existing subscription's behaviour is unchanged
+    # until the operator opts in).
+    record(
+        "mentions_own: a filter with no 'mentions' key does not push on a mention",
+        not matches({"dst": "SOME-GROUP"}, own, {"dm": True}, f"@{own} hello"),
+    )
+
+    # A mention rescues a DM addressed to own_callsign whose filter.dm is
+    # False — independent OR, not a narrowing of dm/groups/broadcast.
+    record(
+        "mentions_own: a mention rescues a DM to own_callsign when filter.dm is False",
+        matches({"dst": own}, own, {"dm": False, "mentions": True}, f"@{own} hi"),
+    )
+    record(
+        "mentions_own: without filter.mentions the same DM (dm False) does not push",
+        not matches({"dst": own}, own, {"dm": False}, f"@{own} hi"),
+    )
 
 
 async def _test_execution_isolation(record: _RecordFn) -> None:
