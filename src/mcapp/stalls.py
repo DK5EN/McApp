@@ -104,6 +104,16 @@ _LAG_LOOP_INTERVAL_S = 0.1
 # How often the sampler thread wakes to check whether the loop is overdue.
 # Cheap when healthy: one float subtraction and compare per tick.
 _LAG_SAMPLER_PERIOD_S = 0.05
+# The sampler arms at this FRACTION of config.loop_lag_ms, not at the full
+# threshold. Arming only once overrun_ms >= loop_lag_ms means the earliest
+# possible sample is ~200ms into a blocking episode (the 100ms nominal
+# `_LAG_LOOP_INTERVAL_S` sleep plus the full overrun threshold itself) — for
+# a lag on the order of the threshold (measured: 261/353/584ms unattributed
+# loop_lag rows on 2026-09-19) more than half the episode was already over
+# before the first sample was even possible. Arming at half the overrun
+# threshold instead buys back most of that blind spot while staying armed
+# only once overrun is genuinely elevated, not on every tick.
+_LAG_SAMPLER_ARM_FRACTION = 0.5
 # Innermost frames kept per stack sample — enough to name the blocking call
 # without storing an unbounded traceback.
 _LAG_SAMPLE_FRAME_LIMIT = 12
@@ -219,6 +229,10 @@ class StallRecorder:
         self._lag_sample_text: str | None = None
         self._lag_sample_count = 0
         self._lag_sample_age_ms: float = 0.0
+        # Per-episode sampler activity, so a missing stack is distinguishable
+        # from a sampler that never ran (see _LAG_SAMPLER_ARM_FRACTION).
+        self._lag_sampler_wakes = 0
+        self._lag_sampler_armed = False
 
         self._dropped = 0
         self._dropped_lock = threading.Lock()
@@ -559,35 +573,88 @@ class StallRecorder:
             self._lag_sample_text = None
             self._lag_sample_count = 0
             self._lag_sample_age_ms = 0.0
+            self._lag_sampler_wakes = 0
+            self._lag_sampler_armed = False
 
-    def _consume_lag_sample(self) -> dict[str, Any] | None:
-        """Return the current episode's sample (if any) and clear it. `None`
-        means `record()`'s `detail` stays whatever the caller passed — never
-        `{"stack": None, ...}` in the stored row.
+    def _consume_lag_sample(self) -> dict[str, Any]:
+        """Return the current episode's sampler outcome and clear it. Only
+        called from `_loop_lag_loop`, i.e. only for an episode that already
+        crossed `config.loop_lag_ms` — so this always has something to
+        report and never returns `None`: with a captured stack, the existing
+        `stack`/`samples`/`sampled_at_ms` keys plus `sampler_wakes`/`armed`;
+        without one, `samples: 0` plus `sampler_wakes`/`armed` and NO
+        `"stack"` key at all — never `{"stack": None, ...}` in the stored
+        row.
+
+        `sampler_wakes` counts only the wakes where the loop was ALREADY
+        overdue, so it is comparable against the number of wakes the episode
+        had room for: `duration_ms / (_LAG_SAMPLER_PERIOD_S * 1000)`. Read it
+        as a ratio, never as a flag — `sampler_wakes` far below that figure
+        means the sampler thread could not get scheduled during the block
+        (a GIL-holding C call), while a count near it plus `samples: 0` means
+        it did run but never resolved a frame in time. Do NOT read
+        `sampler_wakes == 0` as the sole GIL signature: for a blocker that
+        releases the GIL at the very end, the post-release wake still lands
+        inside the episode.
         """
         with self._lag_sample_lock:
             text = self._lag_sample_text
             count = self._lag_sample_count
             age_ms = self._lag_sample_age_ms
+            wakes = self._lag_sampler_wakes
+            armed = self._lag_sampler_armed
             self._lag_sample_text = None
             self._lag_sample_count = 0
             self._lag_sample_age_ms = 0.0
-        if text is None:
-            return None
-        return {"stack": text, "samples": count, "sampled_at_ms": age_ms}
+            self._lag_sampler_wakes = 0
+            self._lag_sampler_armed = False
+        if text is not None:
+            return {
+                "stack": text,
+                "samples": count,
+                "sampled_at_ms": age_ms,
+                "sampler_wakes": wakes,
+                "armed": armed,
+            }
+        return {"samples": 0, "sampler_wakes": wakes, "armed": armed}
 
     def _lag_sampler_loop(self) -> None:
-        """Daemon thread: wakes every `_LAG_SAMPLER_PERIOD_S` and, only once
-        the loop is overdue past `config.loop_lag_ms`, captures the loop
-        thread's stack — cheap (a float compare) on every other tick.
+        """Daemon thread: wakes every `_LAG_SAMPLER_PERIOD_S`, counts the
+        wakes where the loop is already overdue against the current episode,
+        and — only once it is overdue past
+        `_LAG_SAMPLER_ARM_FRACTION * config.loop_lag_ms` — captures the loop
+        thread's stack. Cheap on a healthy tick: one float compare and an
+        early return, no lock. The lock and `format_stack` are reached only
+        while the loop is actually late.
         """
         while not self._lag_sampler_stop.wait(_LAG_SAMPLER_PERIOD_S):
             last_tick = self._last_tick
             if last_tick <= 0.0:
                 continue
             overrun_s = time.perf_counter() - last_tick - _LAG_LOOP_INTERVAL_S
-            if overrun_s * 1000 < self.config.loop_lag_ms:
+            if overrun_s <= 0.0:
+                # The loop is still on schedule: nothing to count and nothing
+                # to sample. Counting these too would make `sampler_wakes`
+                # uninterpretable — a wake before the block starts and one
+                # right after it is released are always there, so the count
+                # could never reach 0 no matter how starved the thread was
+                # (measured: a 541ms GIL-holding block still reported 3).
+                # Bailing here also keeps the healthy path lock-free.
                 continue
+            with self._lag_sample_lock:
+                if self._last_tick != last_tick:
+                    # A new cycle started while we were about to count this
+                    # wake — it belongs to the cycle already filed, not this
+                    # one. Same staleness rule the stack capture below uses.
+                    continue
+                self._lag_sampler_wakes += 1
+            arm_threshold_ms = self.config.loop_lag_ms * _LAG_SAMPLER_ARM_FRACTION
+            if overrun_s * 1000 < arm_threshold_ms:
+                continue
+            with self._lag_sample_lock:
+                if self._last_tick != last_tick:
+                    continue
+                self._lag_sampler_armed = True
             ident = self._loop_thread_ident
             if ident is None:
                 continue
