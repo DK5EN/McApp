@@ -72,6 +72,59 @@ HistoryFilter = Callable[[dict[str, Any]], dict[str, Any] | None]
 # 7day: 11 -> 2).
 MHEARD_PROGRESS_CHUNK = 10
 
+# --- ack payload shapes on the read path ---------------------------------
+# The firmware emits TWO ack payloads and only one carries a callsign prefix.
+#
+#   '%-9.9s:ack%03i'  the ordinary peer ack. The cross-repo predicate, defined
+#                     by ack_predicate_vectors.json v2 and replayed by MCProxy,
+#                     mc-chat and the webapp alike.
+#   'ack%04i'         no prefix, nothing but 'ack' + the APRS message id padded
+#                     to at least 4 ASCII digits. SendAckMessage()
+#                     (loop_functions.cpp) switches to this shape for exactly
+#                     one destination: Winlink's 'WLNK-1' gateway, which speaks
+#                     APRS ack conventions rather than MeshCom's.
+#
+# Both are machine-to-machine protocol chatter, so both are excluded from every
+# message/history query. They are NOT symmetric on the way back in: a peer ack
+# feeds the client's delivery-status matching and is served by the acks query
+# below, while a bare APRS ack carries no correlator a client could use (no
+# callsign prefix, and the number is the correspondent's APRS message id, not
+# our echo_id) and is served to nobody. The read path is therefore a THREE-way
+# split — messages / peer acks / dropped noise — not the two-way complement it
+# was before; `_NOT_ACK_SQL` is deliberately wider than the negation of
+# `_PEER_ACK_SQL`.
+#
+# Deliberately NOT folded into ack_predicate_vectors.json: that corpus governs
+# the ':ack<N>' predicate in three repos, and mc-chat has no RF path that can
+# produce the bare shape. Kept MCProxy-local and SQL-side for that reason; the
+# webapp mirrors it in its own view filter (isAprsAckMessage).
+#
+# GLOB, not LIKE: case-sensitive and ASCII-only, same reasoning as the peer
+# shape. The bare globs are anchored (no leading or trailing '*'), so they match
+# the WHOLE payload and a human message that merely starts 'ack1234 ...' stays
+# visible. Four and five digits are the whole reachable range: '%04i' pads to
+# four, and an APRS message id is at most five characters.
+_PEER_ACK_GLOBS = ("*:ack[0-9]*",)
+_APRS_ACK_GLOBS = ("ack[0-9][0-9][0-9][0-9]", "ack[0-9][0-9][0-9][0-9][0-9]")
+
+
+def _ack_sql(globs: tuple[str, ...], col: str = "msg", *, negate: bool = False) -> str:
+    """Render `globs` as one SQL boolean over `col`.
+
+    `negate=True` yields the AND-of-NOT form (De Morgan), so an exclusion can
+    never drift from the shape list it is built from.
+    """
+    if negate:
+        return " AND ".join(f"{col} NOT GLOB '{g}'" for g in globs)
+    return "(" + " OR ".join(f"{col} GLOB '{g}'" for g in globs) + ")"
+
+
+# Every message/history query excludes both shapes; the acks query serves only
+# the peer shape (see the three-way split above).
+_NOT_ACK_SQL = _ack_sql(_PEER_ACK_GLOBS + _APRS_ACK_GLOBS, negate=True)
+_NOT_ACK_SQL_M = _ack_sql(_PEER_ACK_GLOBS + _APRS_ACK_GLOBS, "m.msg", negate=True)
+_PEER_ACK_SQL = _ack_sql(_PEER_ACK_GLOBS)
+
 
 def _emit_row(data: dict[str, Any], blocklist_filter: HistoryFilter | None) -> str | None:
     """Serialise one built row, or return None when the blocklist drops it."""
@@ -406,7 +459,7 @@ class QueryMixin(StorageBase):
                     f"    PARTITION BY COALESCE(conversation_key, dst)"
                     f"    ORDER BY timestamp DESC"
                     f"  ) AS rn FROM messages"
-                    f"  WHERE type = 'msg' AND msg NOT GLOB '*:ack[0-9]*' AND timestamp >= ?"
+                    f"  WHERE type = 'msg' AND {_NOT_ACK_SQL} AND timestamp >= ?"
                     f") ranked WHERE rn <= ?"
                     f" ORDER BY timestamp ASC",
                     (window_cutoff_ms, limit_per_dst),
@@ -427,18 +480,20 @@ class QueryMixin(StorageBase):
                     if (emitted := _emit_row(build_pos(dict(row)), blocklist_filter)) is not None
                 ]
 
-                # 3. ACK messages. GLOB, not LIKE, and the EXACT complement of
-                # the `msg NOT GLOB '*:ack[0-9]*'` exclusion every message/
-                # history query in this file applies, so messages and acks
-                # partition cleanly. SQLite GLOB is case-sensitive and [0-9]
-                # is ASCII-only — that is the point: the firmware emits
-                # '%-9.9s:ack%03i' (lowercase, 3 ASCII digits), while LIKE's
-                # ASCII case-insensitivity silently swallowed human messages
-                # containing ':ACK99' from history sync
+                # 3. ACK messages — the PEER shape only, deliberately NOT the
+                # complement of the exclusion the message queries apply: a bare
+                # APRS 'ack%04i' is excluded from history AND served here to
+                # nobody, because it carries no correlator a client could match
+                # (see _PEER_ACK_GLOBS / _APRS_ACK_GLOBS at the top of this
+                # module for the three-way split). GLOB, not LIKE: SQLite GLOB
+                # is case-sensitive and [0-9] is ASCII-only — that is the point:
+                # the firmware emits '%-9.9s:ack%03i' (lowercase, 3 ASCII
+                # digits), while LIKE's ASCII case-insensitivity silently
+                # swallowed human messages containing ':ACK99' from history sync
                 # (ack_predicate_vectors.json v2, strict tier).
                 ack_rows = conn.execute(
                     f"SELECT {_MSG_SELECT} FROM messages"  # noqa: S608 - identifiers from fixed set; values parameterized
-                    " WHERE type = 'msg' AND msg GLOB '*:ack[0-9]*'"
+                    f" WHERE type = 'msg' AND {_PEER_ACK_SQL}"
                     f" ORDER BY timestamp DESC LIMIT {INITIAL_ACK_LIMIT}",
                 ).fetchall()
                 acks = [
@@ -455,19 +510,19 @@ class QueryMixin(StorageBase):
                 # paid for when there is something to filter.
                 if blocklist_filter is None:
                     summary_rows = conn.execute(
-                        "SELECT COALESCE(conversation_key, dst) AS key, COUNT(*) as cnt"
+                        "SELECT COALESCE(conversation_key, dst) AS key, COUNT(*) as cnt"  # noqa: S608 - ack predicate is a module constant; values parameterized
                         " FROM messages"
-                        " WHERE type = 'msg' AND msg NOT GLOB '*:ack[0-9]*' AND timestamp >= ?"
+                        f" WHERE type = 'msg' AND {_NOT_ACK_SQL} AND timestamp >= ?"
                         " GROUP BY key",
                         (window_cutoff_ms,),
                     ).fetchall()
                     summary = {row["key"]: row["cnt"] for row in summary_rows if row["key"]}
                 else:
                     summary_rows = conn.execute(
-                        "SELECT COALESCE(conversation_key, dst) AS key, src, dst,"
+                        "SELECT COALESCE(conversation_key, dst) AS key, src, dst,"  # noqa: S608 - ack predicate is a module constant; values parameterized
                         " COUNT(*) as cnt"
                         " FROM messages"
-                        " WHERE type = 'msg' AND msg NOT GLOB '*:ack[0-9]*' AND timestamp >= ?"
+                        f" WHERE type = 'msg' AND {_NOT_ACK_SQL} AND timestamp >= ?"
                         " GROUP BY key, src, dst",
                         (window_cutoff_ms,),
                     ).fetchall()
@@ -527,8 +582,8 @@ class QueryMixin(StorageBase):
         this conversation last see any traffic", not "when did I last hear
         from someone else".
 
-        Same window cutoff and the same `type='msg' AND msg NOT GLOB
-        '*:ack[0-9]*'` predicate as `get_smart_initial_with_summary`, and the
+        Same window cutoff and the same `type='msg' AND {_NOT_ACK_SQL}`
+        predicate as `get_smart_initial_with_summary`, and the
         same blocklist re-bucketing (a quarantined group post is counted under
         SPAM_GROUP, matching where the message itself now shows up) — see that
         method's docstring for why this must run on the way OUT of storage to
@@ -585,7 +640,7 @@ class QueryMixin(StorageBase):
                     " FROM ("
                     "   SELECT MIN(m.timestamp) AS ts, m.src, m.dst, m.conversation_key"
                     "   FROM messages m"
-                    "   WHERE m.type = 'msg' AND m.msg NOT GLOB '*:ack[0-9]*'"
+                    f"   WHERE m.type = 'msg' AND {_NOT_ACK_SQL_M}"
                     "   AND m.timestamp >= ?"
                     + key_clause
                     + "   GROUP BY COALESCE(NULLIF(m.msg_id, ''), 'row:' || m.rowid)"
@@ -695,7 +750,7 @@ class QueryMixin(StorageBase):
             # belong to the virtual Time chat
             query = (
                 f"SELECT {_MSG_SELECT} FROM messages"  # noqa: S608 - identifiers from fixed set; values parameterized
-                " WHERE type = 'msg' AND msg NOT GLOB '*:ack[0-9]*'"
+                f" WHERE type = 'msg' AND {_NOT_ACK_SQL}"
                 # (msg IS NULL OR ...) mirrors delete_messages_by_dst: in SQLite
                 # `NULL NOT LIKE x` is NULL, not true, so a NULL-msg broadcast row was
                 # invisible on this page while the '*' DELETE happily removed it.
@@ -721,7 +776,7 @@ class QueryMixin(StorageBase):
             # NULL conversation_key, which this arm could never match.
             query = (
                 f"SELECT {_MSG_SELECT} FROM messages"  # noqa: S608 - identifiers from fixed set; values parameterized
-                " WHERE type = 'msg' AND msg NOT GLOB '*:ack[0-9]*'"
+                f" WHERE type = 'msg' AND {_NOT_ACK_SQL}"
                 " AND conversation_key = ? AND timestamp < ?"
                 " ORDER BY timestamp DESC LIMIT ?"
             )
@@ -734,7 +789,7 @@ class QueryMixin(StorageBase):
             # on the resolved tag verbatim (conversation_key_vectors.json v4).
             query = (
                 f"SELECT {_MSG_SELECT} FROM messages"  # noqa: S608 - identifiers from fixed set; values parameterized
-                " WHERE type = 'msg' AND msg NOT GLOB '*:ack[0-9]*'"
+                f" WHERE type = 'msg' AND {_NOT_ACK_SQL}"
                 " AND conversation_key = ? AND timestamp < ?"
                 " ORDER BY timestamp DESC LIMIT ?"
             )
@@ -748,7 +803,7 @@ class QueryMixin(StorageBase):
             # remains for rows a pre-v18 mcdump import left unkeyed.
             query = (
                 f"SELECT {_MSG_SELECT} FROM messages"  # noqa: S608 - identifiers from fixed set; values parameterized
-                " WHERE type = 'msg' AND msg NOT GLOB '*:ack[0-9]*'"
+                f" WHERE type = 'msg' AND {_NOT_ACK_SQL}"
                 " AND dst = ? AND timestamp < ?"
                 " ORDER BY timestamp DESC LIMIT ?"
             )
@@ -756,7 +811,7 @@ class QueryMixin(StorageBase):
         else:
             query = (
                 f"SELECT {_MSG_SELECT} FROM messages"  # noqa: S608 - identifiers from fixed set; values parameterized
-                " WHERE type = 'msg' AND msg NOT GLOB '*:ack[0-9]*'"
+                f" WHERE type = 'msg' AND {_NOT_ACK_SQL}"
                 " AND timestamp < ?"
                 " ORDER BY timestamp DESC LIMIT ?"
             )

@@ -81,7 +81,7 @@ from .constants import (
     TELEMETRY_DEDUP_WINDOW_MS,
     compute_conversation_key,
 )
-from .query import MHEARD_PROGRESS_CHUNK
+from .query import _NOT_ACK_SQL, _PEER_ACK_SQL, MHEARD_PROGRESS_CHUNK
 
 logger = get_logger(__name__)
 
@@ -486,13 +486,13 @@ async def run_query_tests() -> bool:  # noqa: PLR0915 - test suite lists one cas
                     (msg_id, "TESTCALL-1", "232", vector["text"], "msg", now_ms() + i, "lora"),
                 )
                 not_glob_rows = await storage._query(
-                    "SELECT COUNT(*) AS c FROM messages"
-                    " WHERE msg_id = ? AND msg NOT GLOB '*:ack[0-9]*'",
+                    f"SELECT COUNT(*) AS c FROM messages"  # noqa: S608 - constant from this package
+                    f" WHERE msg_id = ? AND {_NOT_ACK_SQL}",
                     (msg_id,),
                 )
                 glob_rows = await storage._query(
-                    "SELECT COUNT(*) AS c FROM messages"
-                    " WHERE msg_id = ? AND msg GLOB '*:ack[0-9]*'",
+                    f"SELECT COUNT(*) AS c FROM messages"  # noqa: S608 - constant from this package
+                    f" WHERE msg_id = ? AND {_PEER_ACK_SQL}",
                     (msg_id,),
                 )
                 survives_exclusion = not_glob_rows[0]["c"] == 1
@@ -532,6 +532,57 @@ async def run_query_tests() -> bool:  # noqa: PLR0915 - test suite lists one cas
                     (
                         f"ack predicate ingest.py-mirror regex: {vector['name']} ack_number",
                         actual_number == vector["ack_number"],
+                    )
+                )
+
+            # --- (d3) bare APRS ack 'ack%04i' (MCProxy-local, NOT in the corpus) ---
+            # SendAckMessage() (firmware loop_functions.cpp) drops the callsign
+            # prefix for one destination, Winlink's 'WLNK-1', and emits nothing
+            # but 'ack' + the APRS message id padded to at least 4 digits. Every
+            # node in RF range of such a conversation hears it and forwards it
+            # to us over Extern-UDP (lora_functions.cpp:989 has no destination
+            # filter), so it lands in `messages` like any other frame — and the
+            # peer-ack predicate does not match it, which used to make it render
+            # as an ordinary chat message.
+            #
+            # Excluded from history, and served to NOBODY: unlike a peer ack it
+            # carries no correlator a client could match, so it must NOT appear
+            # on the acks side either. That asymmetry is the whole point of the
+            # three-way split, so both directions are asserted per vector.
+            #
+            # Not folded into ack_predicate_vectors.json on purpose: that corpus
+            # governs the ':ack<N>' predicate across three repos and mc-chat has
+            # no RF path that can produce this shape.
+            aprs_ack_vectors = [
+                ("ack0087", True, "the real shape: '%04i' of the 3-digit MeshCom counter"),
+                ("ack12345", True, "five digits — the longest an APRS message id can be"),
+                ("ack087", False, "three digits: '%04i' pads to four, so this is not our frame"),
+                ("ack1234 hello", False, "anchored glob: a human message merely STARTING 'ack'"),
+                ("Ack1234", False, "GLOB is case-sensitive; the firmware emits lowercase"),
+                ("back1234", False, "anchored glob: no leading wildcard"),
+                ("ack12 34", False, "digits interrupted"),
+            ]
+            for i, (text, is_noise, why) in enumerate(aprs_ack_vectors):
+                msg_id = f"APRSACK-{i}"
+                await storage._mutate(
+                    "INSERT INTO messages (msg_id, src, dst, msg, type, timestamp, src_type)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (msg_id, "TESTCALL-1", "WLNK-1", text, "msg", now_ms() + 100 + i, "lora"),
+                )
+                kept = await storage._query(
+                    f"SELECT COUNT(*) AS c FROM messages"  # noqa: S608 - constant from this package
+                    f" WHERE msg_id = ? AND {_NOT_ACK_SQL}",
+                    (msg_id,),
+                )
+                on_ack_side = await storage._query(
+                    f"SELECT COUNT(*) AS c FROM messages"  # noqa: S608 - constant from this package
+                    f" WHERE msg_id = ? AND {_PEER_ACK_SQL}",
+                    (msg_id,),
+                )
+                results.append(
+                    (
+                        f"bare APRS ack: {text!r} {'hidden' if is_noise else 'kept'} — {why}",
+                        (kept[0]["c"] == 1) == (not is_noise) and on_ack_side[0]["c"] == 0,
                     )
                 )
 
