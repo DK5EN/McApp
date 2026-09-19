@@ -2574,6 +2574,18 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
     inserted, updated = await seed_defaults(storage_handler)
     if inserted or updated:
         logger.info("Seeded classifier rules: %d inserted, %d updated", inserted, updated)
+        # A seed edit reaches STORED rows only through a version bump.
+        # seed_defaults() matches a builtin rule by name and updates its
+        # pattern/category/priority in place, but leaves classifier_version
+        # alone -- so without this bump a changed rule would apply to new
+        # messages only and every row already in the DB would keep its stale
+        # category (the 2026-09-19 "URL advert" -> other change is exactly
+        # that case). Bumping here makes _maybe_backfill_classifier() find no
+        # backfill_done:v{N} marker for the new version and reclassify every
+        # row below it as a batched background job. Same postlude
+        # sse_handler.after_rule_mutation() already uses for UI rule edits,
+        # and idempotent: the next start sees updated == 0 and does not bump.
+        await storage_handler.bump_classifier_version()
     await classifier.load()
     storage_handler.set_classifier(classifier)
 
