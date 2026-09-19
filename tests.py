@@ -32,7 +32,7 @@ from typing import Any, cast
 from .classify import Classifier
 from .rules import load_rules, match_rules
 from .score import compute as score_compute
-from .seed import DEFAULT_RULES
+from .seed import DEFAULT_RULES, seed_defaults
 from .template import check_only, fingerprint, is_exempt, update_and_check
 from .types import CATEGORIES, DIRECTED_DST_PATTERN, DIRECTED_DST_RE, StorageProtocol
 
@@ -298,6 +298,70 @@ async def _suite_rules(storage: StorageProtocol, results: list[tuple[str, bool]]
         (
             "seed: every seed.py rule category is a member of types.CATEGORIES",
             unknown_categories == [],
+        )
+    )
+
+    # ── "URL advert" regression: a bare link is 'other', not 'node_advert' ──
+    # (mcapp.local, HB9VQQ-1's plain URL in group 20 was hidden as a node
+    # advert, while his URL-plus-text message in the same thread scored 1.0).
+    # Seeds the real DEFAULT_RULES so this exercises the shipped priorities,
+    # not a hand-picked subset.
+    await seed_defaults(storage)
+    default_rules = await load_rules(storage)
+
+    bare_url = "https://www.varac-hamradio.com/group/varac-hf-discussion-forum/discussion/f20f80cc"
+    category_bare_url, tags_bare_url = match_rules(_msg(text=bare_url), default_rules)
+    results.append(
+        (
+            "seed: a bare URL classifies as 'other', not 'node_advert'",
+            category_bare_url == "other",
+        )
+    )
+    results.append(
+        (
+            "seed: a bare URL still carries the 'has_url' tag",
+            "has_url" in tags_bare_url,
+        )
+    )
+
+    bare_www_url = "www.varac-hamradio.com/group/varac-hf-discussion-forum/discussion/f20f80cc"
+    category_bare_www, tags_bare_www = match_rules(_msg(text=bare_www_url), default_rules)
+    results.append(
+        (
+            "seed: a bare www.-prefixed URL behaves identically ('other' + has_url)",
+            category_bare_www == "other" and "has_url" in tags_bare_www,
+        )
+    )
+
+    embedded_url = (
+        "VARA HF gab ja immer wieder Anlass zu Diskussionen --> closed source "
+        "https://rosmodem.wordpress.com/"
+    )
+    url_advert_rule = next(r for r in default_rules if r.name == "URL advert")
+    results.append(
+        (
+            "seed: 'URL advert' does not match a URL embedded in real text",
+            url_advert_rule.regex.search(embedded_url) is None,
+        )
+    )
+
+    html_advert_category, _ = match_rules(
+        _msg(text="<div>Check out my new node!</div>"), default_rules
+    )
+    results.append(
+        (
+            "seed: decorated 'HTML advert' still claims 'node_advert'",
+            html_advert_category == "node_advert",
+        )
+    )
+
+    emoji_url_advert_category, _ = match_rules(
+        _msg(text="🚀 check out my new node at https://example.com"), default_rules
+    )
+    results.append(
+        (
+            "seed: decorated 'Emoji URL advert' still claims 'node_advert'",
+            emoji_url_advert_category == "node_advert",
         )
     )
 
