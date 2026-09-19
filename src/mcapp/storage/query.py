@@ -54,6 +54,13 @@ from .constants import (
     db_read,
     escape_like,
 )
+from .suppression import (
+    SuppressionPolicy,
+    is_suppressed,
+    load_policy,
+    policy_is_noop,
+    view_from_row,
+)
 
 logger = get_logger(__name__)
 
@@ -124,6 +131,170 @@ def _ack_sql(globs: tuple[str, ...], col: str = "msg", *, negate: bool = False) 
 _NOT_ACK_SQL = _ack_sql(_PEER_ACK_GLOBS + _APRS_ACK_GLOBS, negate=True)
 _NOT_ACK_SQL_M = _ack_sql(_PEER_ACK_GLOBS + _APRS_ACK_GLOBS, "m.msg", negate=True)
 _PEER_ACK_SQL = _ack_sql(_PEER_ACK_GLOBS)
+
+# --- get_conversation_summary shared SQL fragments -------------------------
+# Factored so the aggregate SUM(CASE...) query and the per-row suppression
+# candidate query (doc/2026-09-19_2140-unread-suppression-plan.md §D1) can
+# never drift: both are built from the SAME dedup subquery text and the SAME
+# two boolean "is this row unread" expressions. If the candidate predicate
+# and the aggregate's counting condition ever disagreed, the suppression
+# subtraction in get_conversation_summary would silently corrupt `unread`.
+_CONV_DEDUP_COLS = (
+    "MIN(m.timestamp) AS ts, m.src, m.dst, m.conversation_key,"
+    " m.msg, m.category, m.tags, m.info_score, m.template_hash"
+)
+
+
+def _conv_dedup_subquery(key_clause: str) -> str:
+    """The distinct-message dedup subquery (aliased `d` by both callers)
+    shared by get_conversation_summary's two queries.
+
+    Exactly one MIN()/MAX() aggregate (`MIN(m.timestamp)`) appears in this
+    subquery, which is what makes every other, bare column in
+    `_CONV_DEDUP_COLS` well-defined under SQLite's documented
+    aggregate-query extension: a bare column takes its value from the SAME
+    input row that produced the min()/max() result, not an arbitrary row of
+    the group (https://sqlite.org/lang_select.html, "Bare columns in an
+    aggregate query"). `m.src`/`m.dst` already relied on this before the
+    suppression wave (see get_conversation_summary's docstring on transport
+    duplicates); `m.msg`/`m.category`/`m.tags`/`m.info_score`/
+    `m.template_hash` ride the IDENTICAL guarantee — they come from the same
+    earliest stored copy of a transport-duplicated message as `ts`, `src`
+    and `dst`, not from an arbitrary sibling row of the same msg_id group.
+    """
+    return (
+        f"SELECT {_CONV_DEDUP_COLS}"  # noqa: S608 - key_clause is a fixed literal; values parameterized
+        " FROM messages m"
+        f" WHERE m.type = 'msg' AND {_NOT_ACK_SQL_M}"
+        " AND m.timestamp >= ?"
+        + key_clause
+        + " GROUP BY COALESCE(NULLIF(m.msg_id, ''), 'row:' || m.rowid)"
+    )
+
+
+_CONV_CURSOR_JOINS = (
+    " LEFT JOIN read_cursors rc"
+    "   ON rc.key = COALESCE(d.conversation_key, d.dst)"
+    " LEFT JOIN read_cursors rc2"
+    "   ON rc2.key = ?"
+)
+
+# The two per-row "is this message unread" conditions, shared verbatim by the
+# aggregate SUM(CASE...) and the candidate query's SELECT + WHERE. `newer`
+# judges against the row's own key's cursor; `newer_spam` judges against
+# MAX(that cursor, the SPAM_GROUP cursor) for a row that might get
+# rebucketed there (see get_conversation_summary's docstring for the
+# MAX-of-both-cursors rule).
+_CONV_NEWER_EXPR = "d.ts > COALESCE(rc.ts, 0)"
+_CONV_NEWER_SPAM_EXPR = "d.ts > MAX(COALESCE(rc.ts, 0), COALESCE(rc2.ts, 0))"
+
+
+def _apply_conversation_row(
+    row: sqlite3.Row,
+    summary: dict[str, dict[str, int]],
+    blocklist_filter: HistoryFilter | None,
+    my_base: str,
+) -> None:
+    """One aggregate row from get_conversation_summary's main query -> an
+    update of summary[key]'s count/last_ts/unread. Split out of `_run` only
+    to keep that closure under the statement/branch lint budget; the logic
+    itself is unchanged from before the suppression wave.
+    """
+    key = row["key"]
+    if not key:
+        return
+    src = row["src"] or ""
+    dst = row["dst"] or ""
+    rebucketed = False
+    if blocklist_filter is not None:
+        kept = blocklist_filter({"src": src, "dst": dst})
+        if kept is None:
+            return  # dropped outright
+        if kept.get("dst") == SPAM_GROUP:
+            # Rebucketed to the quarantine group, matching where the message
+            # itself now shows up. Every quarantined group shares ONE cursor
+            # (rc2, keyed on SPAM_GROUP itself): a row only counts as unread
+            # when it is newer than BOTH the original key's cursor and the
+            # SPAM_GROUP cursor (MAX semantics), so marking 9999 read
+            # actually clears the badge instead of it re-lighting from the
+            # untouched original cursor.
+            key = SPAM_GROUP
+            rebucketed = True
+
+    entry = summary.setdefault(key, {"count": 0, "last_ts": 0, "unread": 0})
+    entry["count"] += row["cnt"]
+    entry["last_ts"] = max(entry["last_ts"], row["last_ts"] or 0)
+
+    sender_base = src.split(",", maxsplit=1)[0].split("-", maxsplit=1)[0].upper()
+    if sender_base != my_base:
+        entry["unread"] += (row["newer_spam"] if rebucketed else row["newer"]) or 0
+
+
+def _subtract_suppressed_row(
+    row: sqlite3.Row,
+    summary: dict[str, dict[str, int]],
+    blocklist_filter: HistoryFilter | None,
+    my_base: str,
+    policy: SuppressionPolicy,
+) -> None:
+    """One per-message candidate row -> at most one unit subtracted from
+    summary[key]['unread'], mirroring `_apply_conversation_row`'s blocklist/
+    rebucket/own-message decisions IN THE SAME ORDER (not a second
+    convention), then applying the suppression predicate as the final gate.
+    """
+    key = row["key"]
+    if not key:
+        return
+    src = row["src"] or ""
+    dst = row["dst"] or ""
+    rebucketed = False
+    if blocklist_filter is not None:
+        kept = blocklist_filter({"src": src, "dst": dst})
+        if kept is None:
+            return  # dropped outright, same as _apply_conversation_row
+        if kept.get("dst") == SPAM_GROUP:
+            key = SPAM_GROUP
+            rebucketed = True
+
+    # Same "which flag applies" rule as _apply_conversation_row's
+    # `entry["unread"] +=` line: a rebucketed row's unread-ness is judged
+    # against newer_spam (MAX of both cursors), not newer. If the applicable
+    # flag is false, this candidate was never counted as unread under this
+    # (possibly rebucketed) key in the first place, so there is nothing to
+    # subtract.
+    applicable = row["newer_spam"] if rebucketed else row["newer"]
+    if not applicable:
+        return
+
+    sender_base = src.split(",", maxsplit=1)[0].split("-", maxsplit=1)[0].upper()
+    if sender_base == my_base:
+        return  # own traffic was never added to unread by _apply_conversation_row
+
+    entry = summary.get(key)
+    if entry is None:
+        # Unreachable in practice: the aggregate query groups the SAME
+        # underlying rows by the SAME (post-rebucketing) key, so any
+        # candidate that reaches here already has an entry. Guard anyway
+        # rather than raise out of a read path.
+        return
+
+    view = view_from_row(dict(row))
+    if not is_suppressed(view, policy):
+        return
+
+    # unread must never go below 0. This clamp should be unreachable: every
+    # suppressed candidate row was already counted into `newer`/`newer_spam`
+    # (and thus into entry["unread"]) by the identical predicate above, so
+    # there is always at least one unit left to subtract. Kept as a hard
+    # floor, not an assertion, because a future change to either query is a
+    # data bug, not a crash-worthy one on a read path.
+    if entry["unread"] > 0:
+        entry["unread"] -= 1
+    else:
+        logger.warning(
+            "get_conversation_summary: unread clamp hit for key=%r (should be unreachable)",
+            key,
+        )
 
 
 def _emit_row(data: dict[str, Any], blocklist_filter: HistoryFilter | None) -> str | None:
@@ -600,6 +771,24 @@ class QueryMixin(StorageBase):
         blocklist rebucketing below, so a `key = SPAM_GROUP` predicate would
         match nothing — callers pass `key=None` for it and read the bucket out
         of the full scan.
+
+        Suppression (doc/2026-09-19_2140-unread-suppression-plan.md §D1):
+        `unread` additionally excludes any row the client's own spam filter
+        or blocklist would hide, via the shared predicate in
+        `storage.suppression`. Without this, a conversation whose NEWEST
+        message is one the client never renders carries a badge no client
+        action can ever clear — the read cursor only advances over rendered
+        bubbles, so a hidden trailing message is unreachable by any "mark
+        read". The policy (`load_policy`) is loaded once per call on the same
+        connection; `policy_is_noop` short-circuits the common case (an
+        install that never touched the spam-filter settings or blocklist) so
+        it costs nothing beyond that one load — the second query below runs
+        only when something could actually be suppressed. `count` and
+        `last_ts` are DELIBERATELY NOT filtered by this predicate: they
+        answer "how many messages does this conversation hold" and must
+        match the client's own total (a hidden message still belongs to the
+        conversation), while only `unread`'s meaning narrows to "unread AND
+        visible to you".
         """
         window_cutoff_ms = now_ms() - LONG_RETENTION_DAYS * SECONDS_PER_DAY * 1000
         my_base = my_callsign.split("-", maxsplit=1)[0].upper()
@@ -607,12 +796,16 @@ class QueryMixin(StorageBase):
         params: tuple[Any, ...] = (
             (window_cutoff_ms, SPAM_GROUP) if key is None else (window_cutoff_ms, key, SPAM_GROUP)
         )
+        dedup_sql = _conv_dedup_subquery(key_clause)
 
         def _run() -> dict[str, dict[str, int]]:
             with db_read(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
                 conn.execute("PRAGMA journal_mode=WAL")
                 conn.execute("PRAGMA query_only=ON")
+
+                policy = load_policy(conn)
+
                 # One row per DISTINCT message first (subquery `d`), then per
                 # conversation. The same message is stored once per transport
                 # it arrived over — the UDP datagram and the BLE copy land as two
@@ -626,68 +819,57 @@ class QueryMixin(StorageBase):
                 # (v2.0.4-dev.1, 2026-09-06). A message is therefore judged by
                 # its EARLIEST copy, which is the one the client holds. Rows
                 # without a msg_id never collapse into each other (rowid
-                # fallback). src/dst are taken from the earliest copy too: the
-                # relay-path prefix can differ between copies, but the resolved
-                # sender (first comma component) is the same.
+                # fallback). src/dst (and, since the suppression wave, the
+                # classifier columns) are taken from the earliest copy too —
+                # see `_conv_dedup_subquery`'s docstring for why that is
+                # guaranteed, not incidental.
                 rows = conn.execute(
-                    "SELECT COALESCE(d.conversation_key, d.dst) AS key, d.src, d.dst,"  # noqa: S608 - key_clause is a fixed literal; values parameterized
+                    "SELECT COALESCE(d.conversation_key, d.dst) AS key, d.src, d.dst,"  # noqa: S608 - dedup_sql/key_clause are fixed literals; values parameterized
                     " COUNT(*) AS cnt, MAX(d.ts) AS last_ts,"
-                    " SUM(CASE WHEN d.ts > COALESCE(rc.ts, 0) THEN 1 ELSE 0 END)"
-                    "   AS newer,"
-                    " SUM(CASE WHEN d.ts >"
-                    "   MAX(COALESCE(rc.ts, 0), COALESCE(rc2.ts, 0))"
-                    "   THEN 1 ELSE 0 END) AS newer_spam"
-                    " FROM ("
-                    "   SELECT MIN(m.timestamp) AS ts, m.src, m.dst, m.conversation_key"
-                    "   FROM messages m"
-                    f"   WHERE m.type = 'msg' AND {_NOT_ACK_SQL_M}"
-                    "   AND m.timestamp >= ?"
-                    + key_clause
-                    + "   GROUP BY COALESCE(NULLIF(m.msg_id, ''), 'row:' || m.rowid)"
-                    " ) d"
-                    " LEFT JOIN read_cursors rc"
-                    "   ON rc.key = COALESCE(d.conversation_key, d.dst)"
-                    " LEFT JOIN read_cursors rc2"
-                    "   ON rc2.key = ?"
+                    f" SUM(CASE WHEN {_CONV_NEWER_EXPR} THEN 1 ELSE 0 END) AS newer,"
+                    f" SUM(CASE WHEN {_CONV_NEWER_SPAM_EXPR} THEN 1 ELSE 0 END)"
+                    "   AS newer_spam"
+                    f" FROM ({dedup_sql}) d"
+                    + _CONV_CURSOR_JOINS
                     # Positional GROUP BY, not "GROUP BY key": with the two
                     # read_cursors joins a bare "key" is ambiguous between the
                     # SELECT alias and rc.key/rc2.key and SQLite rejects the
                     # query outright with "ambiguous column name: key".
-                    " GROUP BY 1, d.src, d.dst",
+                    + " GROUP BY 1, d.src, d.dst",
                     params,
                 ).fetchall()
 
                 summary: dict[str, dict[str, int]] = {}
                 for row in rows:
-                    key = row["key"]
-                    if not key:
-                        continue
-                    src = row["src"] or ""
-                    dst = row["dst"] or ""
-                    rebucketed = False
-                    if blocklist_filter is not None:
-                        kept = blocklist_filter({"src": src, "dst": dst})
-                        if kept is None:
-                            continue  # dropped outright
-                        if kept.get("dst") == SPAM_GROUP:
-                            # Rebucketed to the quarantine group, matching where
-                            # the message itself now shows up. Every quarantined
-                            # group shares ONE cursor (rc2, keyed on SPAM_GROUP
-                            # itself): a row only counts as unread when it is
-                            # newer than BOTH the original key's cursor and the
-                            # SPAM_GROUP cursor (MAX semantics), so marking 9999
-                            # read actually clears the badge instead of it
-                            # re-lighting from the untouched original cursor.
-                            key = SPAM_GROUP
-                            rebucketed = True
+                    _apply_conversation_row(row, summary, blocklist_filter, my_base)
 
-                    entry = summary.setdefault(key, {"count": 0, "last_ts": 0, "unread": 0})
-                    entry["count"] += row["cnt"]
-                    entry["last_ts"] = max(entry["last_ts"], row["last_ts"] or 0)
+                if policy_is_noop(policy):
+                    # Common case (an install that never touched the spam
+                    # filter or blocklist): zero extra query cost, byte-
+                    # identical to pre-suppression behaviour.
+                    return summary
 
-                    sender_base = src.split(",", maxsplit=1)[0].split("-", maxsplit=1)[0].upper()
-                    if sender_base != my_base:
-                        entry["unread"] += (row["newer_spam"] if rebucketed else row["newer"]) or 0
+                # Second pass: per-row candidates only (not grouped), so each
+                # can be individually judged by `is_suppressed` and, if
+                # hidden, subtracted from the `unread` the loop above already
+                # added it to. Built from the SAME dedup subquery and the
+                # SAME two boolean expressions as the aggregate query above
+                # (`_conv_dedup_subquery`, `_CONV_NEWER_EXPR`,
+                # `_CONV_NEWER_SPAM_EXPR`) — see the module-level comment by
+                # those definitions for why that sharing is load-bearing.
+                candidate_rows = conn.execute(
+                    "SELECT COALESCE(d.conversation_key, d.dst) AS key, d.src, d.dst,"  # noqa: S608 - dedup_sql/key_clause are fixed literals; values parameterized
+                    " d.msg, d.category, d.tags, d.info_score, d.template_hash,"
+                    f" ({_CONV_NEWER_EXPR}) AS newer,"
+                    f" ({_CONV_NEWER_SPAM_EXPR}) AS newer_spam"
+                    f" FROM ({dedup_sql}) d"
+                    + _CONV_CURSOR_JOINS
+                    + f" WHERE ({_CONV_NEWER_EXPR}) OR ({_CONV_NEWER_SPAM_EXPR})",
+                    params,
+                ).fetchall()
+
+                for row in candidate_rows:
+                    _subtract_suppressed_row(row, summary, blocklist_filter, my_base, policy)
 
                 return summary
 

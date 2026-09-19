@@ -72,6 +72,7 @@ from mcapp.storage.read_cursor_tests import run_read_cursor_tests
 from mcapp.storage.signal_via_tests import run_signal_via_tests
 from mcapp.storage.suppression_tests import run_suppression_predicate_tests
 from mcapp.storage.telemetry_reconcile_tests import run_telemetry_reconcile_tests
+from mcapp.storage.unread_suppression_tests import run_unread_suppression_tests
 from mcapp.storage.uptime_tests import run_uptime_tests
 from mcapp.udp_handler import run_startup_tests as run_udp_handler_tests
 from mcapp.udp_parsing_tests import run_udp_parsing_tests
@@ -188,6 +189,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     suppression_predicate_ok = await run_suppression_predicate_tests()
     print(f"suppression_predicate: {'PASS' if suppression_predicate_ok else 'FAIL'}")
 
+    unread_suppression_ok = await run_unread_suppression_tests()
+    print(f"unread_suppression: {'PASS' if unread_suppression_ok else 'FAIL'}")
+
     ingest_dedup_ok = await run_ingest_dedup_tests()
     print(f"ingest_dedup: {'PASS' if ingest_dedup_ok else 'FAIL'}")
 
@@ -283,6 +287,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and uptime_ok
         and read_cursor_ok
         and suppression_predicate_ok
+        and unread_suppression_ok
         and ingest_dedup_ok
         and meteo_ok
         and push_ok
