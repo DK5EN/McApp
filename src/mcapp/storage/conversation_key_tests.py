@@ -9,7 +9,7 @@ router_tests.run_suppression_tests(): a results list, PASS/FAIL lines, a summary
 and a bool return.
 
 In addition to the hand-written cases below, this suite replays the vendored
-cross-repo contract at ./conversation_key_vectors.json (v3 — drift-resolution
+cross-repo contract at ./conversation_key_vectors.json (v5 — drift-resolution
 campaign 2026-07-27; originally docs/code-simpl-v2.md item 4b in the webapp
 repo). THIS file is the canonical copy — compute_conversation_key is
 authoritative here. The webapp vendors a parse-equal copy at
@@ -24,6 +24,11 @@ yields None. v3 (webapp decision D4, Wave C) RESOLVED the former self-DM
 divergence: the webapp adopted self-pairs, so the degenerate 'X<>X' key this
 function has always produced for a self-DM is now pinned as the ONE unified
 result (two self-DM vectors added; this function's behavior is unchanged).
+v5 adds the non-person-alias branch (NON_PERSON_DST_ALIASES in
+storage/constants.py): 'ALL'/'TIME' as dst key on themselves, case-
+insensitively and string-preserving, instead of falling into the DM branch
+and producing a degenerate pair the webapp's NON_PERSON_PAIR_MEMBERS then
+refuses.
 """
 
 import json
@@ -41,8 +46,8 @@ def _load_conversation_key_vectors() -> list[dict[str, str | None]]:
     parse-equal to this one (the webapp's Prettier may reformat it)."""
     with _VECTORS_PATH.open(encoding="utf-8") as f:
         contract = json.load(f)
-    if contract["version"] != 4:
-        msg = f"conversation_key_vectors.json version {contract['version']!r} != 4"
+    if contract["version"] != 5:
+        msg = f"conversation_key_vectors.json version {contract['version']!r} != 5"
         raise AssertionError(msg)
     vectors: list[dict[str, str | None]] = contract["vectors"]
     return vectors
@@ -73,6 +78,42 @@ def _replay_shared_vectors(results: list[bool]) -> None:
             f"     compute_conversation_key({v_src!r}, {v_dst!r}) = {v_actual!r}"
             f" (expected: {v_expected!r})"
         )
+
+
+def _test_non_person_alias_branch(results: list[bool]) -> None:
+    """Direct assertions for the v5 non-person-alias branch ('ALL'/'TIME' as
+    dst): case-insensitivity and string-preservation, plus the regression
+    shape ('X<>ALIAS') the branch exists to prevent. Split out from
+    run_conversation_key_tests for the same PLR0915 reason as
+    _replay_shared_vectors above."""
+    key_all = compute_conversation_key("DK6GC-1", "ALL")
+    ok = key_all == "ALL"
+    status = "✅ PASS" if ok else "❌ FAIL"
+    results.append(ok)
+    print(f"{status} | 'ALL' dst keys on itself, not a degenerate DM pair")
+    print(f"     compute_conversation_key('DK6GC-1', 'ALL') = {key_all!r} (expected: 'ALL')")
+
+    key_time = compute_conversation_key("DK6GC-1", "TIME")
+    ok = key_time == "TIME"
+    status = "✅ PASS" if ok else "❌ FAIL"
+    results.append(ok)
+    print(f"{status} | 'TIME' dst keys on itself, not a degenerate DM pair")
+    print(f"     compute_conversation_key('DK6GC-1', 'TIME') = {key_time!r} (expected: 'TIME')")
+
+    key_all_lower = compute_conversation_key("DK5EN-9", "all")
+    ok = key_all_lower == "all"
+    status = "✅ PASS" if ok else "❌ FAIL"
+    results.append(ok)
+    print(f"{status} | Alias check is case-insensitive: lowercase 'all' still matches")
+    print(f"     compute_conversation_key('DK5EN-9', 'all') = {key_all_lower!r} (expected: 'all')")
+
+    key_time_mixed = compute_conversation_key("DK5EN-9", "Time")
+    ok = key_time_mixed == "Time"
+    status = "✅ PASS" if ok else "❌ FAIL"
+    results.append(ok)
+    print(f"{status} | Alias key is string-preserving: 'Time' stays 'Time', not 'TIME'")
+    print(f"     compute_conversation_key('DK5EN-9', 'Time') = {key_time_mixed!r}")
+    print("     (expected: 'Time')")
 
 
 def run_conversation_key_tests() -> bool:
@@ -202,6 +243,7 @@ def run_conversation_key_tests() -> bool:
     print(f"{status} | Empty dst → None (no conversation key)")
     print(f"     compute_conversation_key('DK5EN-9', '') = {no_key!r} (expected: None)")
 
+    _test_non_person_alias_branch(results)
     _replay_shared_vectors(results)
 
     passed = sum(1 for r in results if r)

@@ -1,7 +1,7 @@
 {
-  "description": "MeshCom conversation-key contract, shared by two independent implementations: MCProxy's compute_conversation_key (src/mcapp/storage/constants.py -- the authoritative function; conversation history, pagination and delete are all keyed on its output) and the webapp, which never recomputes a server key from scratch but consumes and locally re-derives one via three helpers in src/utils/callsignUtils.ts: effectiveDst (the via-routed-dst 'last comma component' extraction), makePairKey (the SSID-stripped, sorted DM pair, joined with the webapp's LOCAL PAIR_SEPARATOR '~' instead of this contract's SERVER_PAIR_SEPARATOR '<>'), and translateServerSummaryKey (translates a raw '<>'-joined server key -- exactly this contract's server_key -- into the webapp's local sidebar key). mc-chat mirrors compute_conversation_key in meshcom_mock/storage.py and replays these vectors from its vendored copy. `server_key` below is the exact return value of compute_conversation_key(src, dst); null when it returns None (no conversation key at all). Pins: (1) group/'TEST'/'*' dst -> the last via-routed comma component, VERBATIM, with no SSID stripping -- exactly effectiveDst's output; (2) DMs -> both sides' SSID-stripped base callsigns, sorted, joined '<>' -- exactly makePairKey's sort, modulo separator translation ('<>' vs '~'). CHANGED IN v2 (drift-resolution campaign 2026-07-27, webapp docs/code-simpl-v2.md): the group branch no longer buckets ANY digit string verbatim -- it delegates to the unified group predicate (group_dst_vectors.json: ASCII digits with integer value 1..99999, or 'TEST' case-insensitively). An all-ASCII-digit target OUTSIDE 1..99999 ('0', '100000') now yields NO conversation key (null) instead of a verbatim degenerate bucket; storage callers fall back to their existing COALESCE(conversation_key, dst) path. Leading-zero in-range targets remain groups and keep their RAW string as the key ('00232' -> '00232', deliberately string-preserving). Non-digit, non-callsign garbage is NOT pinned here and keeps its previous DM-branch behavior. Does NOT pin: SSID-shape/plausibility validation for DM members. compute_conversation_key sorts and joins unconditionally, with no notion of 'is this a real callsign'; the webapp's makePairKey/isValidPairMember layer still returns null when either SSID-stripped base is not a plausible callsign -- that remaining asymmetry is deliberate and stays unpinned. RESOLVED IN v3 (Wave C, drift-resolution campaign 2026-07-27, webapp docs/code-simpl-v2.md decision D4): the historical self-DM divergence is gone. The maintainer chose to adopt self-pairs in the webapp: makePairKey no longer rejects a pair whose two SSID-stripped bases are identical and derives the degenerate 'X~X' (server 'X<>X') like any other pair, so a self-DM (a station messaging its own callsign -- 'note to self'; observed in production: DG7RJ<>DG7RJ, DD7MH<>DD7MH) gets a stable webapp bucket matching the server's storage bucket. The webapp's OWN self-DM stays keyed under the own callsign (the translateServerSummaryKey own-side check runs before pair derivation); the pair form covers THIRD-PARTY self-DMs, which previously had no webapp bucket at all. The self-DM vectors below replay identically on both sides modulo separator translation. Also not pinned: character case. compute_conversation_key never uppercases src/dst (real wire traffic is always uppercase already); the webapp's normalizeCallsign forcibly uppercases. No vector below exercises lowercase input, so this asymmetry is never triggered here -- it would need its own vectors (and a decision on which side is 'right') before being pinned. SYNC RULE: canonical source is THIS file (compute_conversation_key is authoritative and lives in this repo). The vendored copies at webapp/src/utils/__tests__/conversation_key_vectors.json and mc-chat/tests/fixtures/conversation_key_vectors.json must stay parse-equal -- the webapp's Prettier reformats its copy, so whitespace/quoting differences are expected and fine; only content drift is a failure. v4 adds the hashtag branch: a '#TAG' destination keys on the resolved tag VERBATIM, exactly like the numeric-group branch, and is evaluated BEFORE the DM fallback. Previously a hashtag fell into the DM branch and was split on its first hyphen, so '#OE-SOTA' and '#OE-FIELD' collapsed into one bucket while a single tag fragmented into one bucket per sender. A malformed '#' destination yields None (no bucket) rather than a degenerate DM pair.",
+  "description": "MeshCom conversation-key contract, shared by two independent implementations: MCProxy's compute_conversation_key (src/mcapp/storage/constants.py -- the authoritative function; conversation history, pagination and delete are all keyed on its output) and the webapp, which never recomputes a server key from scratch but consumes and locally re-derives one via three helpers in src/utils/callsignUtils.ts: effectiveDst (the via-routed-dst 'last comma component' extraction), makePairKey (the SSID-stripped, sorted DM pair, joined with the webapp's LOCAL PAIR_SEPARATOR '~' instead of this contract's SERVER_PAIR_SEPARATOR '<>'), and translateServerSummaryKey (translates a raw '<>'-joined server key -- exactly this contract's server_key -- into the webapp's local sidebar key). mc-chat mirrors compute_conversation_key in meshcom_mock/storage.py and replays these vectors from its vendored copy. `server_key` below is the exact return value of compute_conversation_key(src, dst); null when it returns None (no conversation key at all). Pins: (1) group/'TEST'/'*' dst -> the last via-routed comma component, VERBATIM, with no SSID stripping -- exactly effectiveDst's output; (2) DMs -> both sides' SSID-stripped base callsigns, sorted, joined '<>' -- exactly makePairKey's sort, modulo separator translation ('<>' vs '~'). CHANGED IN v2 (drift-resolution campaign 2026-07-27, webapp docs/code-simpl-v2.md): the group branch no longer buckets ANY digit string verbatim -- it delegates to the unified group predicate (group_dst_vectors.json: ASCII digits with integer value 1..99999, or 'TEST' case-insensitively). An all-ASCII-digit target OUTSIDE 1..99999 ('0', '100000') now yields NO conversation key (null) instead of a verbatim degenerate bucket; storage callers fall back to their existing COALESCE(conversation_key, dst) path. Leading-zero in-range targets remain groups and keep their RAW string as the key ('00232' -> '00232', deliberately string-preserving). Non-digit, non-callsign garbage is NOT pinned here and keeps its previous DM-branch behavior. Does NOT pin: SSID-shape/plausibility validation for DM members. compute_conversation_key sorts and joins unconditionally, with no notion of 'is this a real callsign'; the webapp's makePairKey/isValidPairMember layer still returns null when either SSID-stripped base is not a plausible callsign -- that remaining asymmetry is deliberate and stays unpinned. RESOLVED IN v3 (Wave C, drift-resolution campaign 2026-07-27, webapp docs/code-simpl-v2.md decision D4): the historical self-DM divergence is gone. The maintainer chose to adopt self-pairs in the webapp: makePairKey no longer rejects a pair whose two SSID-stripped bases are identical and derives the degenerate 'X~X' (server 'X<>X') like any other pair, so a self-DM (a station messaging its own callsign -- 'note to self'; observed in production: DG7RJ<>DG7RJ, DD7MH<>DD7MH) gets a stable webapp bucket matching the server's storage bucket. The webapp's OWN self-DM stays keyed under the own callsign (the translateServerSummaryKey own-side check runs before pair derivation); the pair form covers THIRD-PARTY self-DMs, which previously had no webapp bucket at all. The self-DM vectors below replay identically on both sides modulo separator translation. Also not pinned: character case. compute_conversation_key never uppercases src/dst (real wire traffic is always uppercase already); the webapp's normalizeCallsign forcibly uppercases. No vector below exercises lowercase input, so this asymmetry is never triggered here -- it would need its own vectors (and a decision on which side is 'right') before being pinned. SYNC RULE: canonical source is THIS file (compute_conversation_key is authoritative and lives in this repo). The vendored copies at webapp/src/utils/__tests__/conversation_key_vectors.json and mc-chat/tests/fixtures/conversation_key_vectors.json must stay parse-equal -- the webapp's Prettier reformats its copy, so whitespace/quoting differences are expected and fine; only content drift is a failure. v4 adds the hashtag branch: a '#TAG' destination keys on the resolved tag VERBATIM, exactly like the numeric-group branch, and is evaluated BEFORE the DM fallback. Previously a hashtag fell into the DM branch and was split on its first hyphen, so '#OE-SOTA' and '#OE-FIELD' collapsed into one bucket while a single tag fragmented into one bucket per sender. A malformed '#' destination yields None (no bucket) rather than a degenerate DM pair. v5 adds the non-person-alias branch: a dst of 'ALL' or 'TIME', checked case-insensitively (NON_PERSON_DST_ALIASES in storage/constants.py; counterpart is the webapp's NON_PERSON_PAIR_MEMBERS in src/utils/callsignUtils.ts, which refuses both as DM pair members), keys on the resolved target VERBATIM -- string-preserving like the group/hashtag branches -- and is evaluated BEFORE the malformed-hashtag/all-ASCII-digit branch. Previously such a dst fell into the DM branch and was keyed as an ordinary DM pair ('ALL<>DK6GC', 'DK6GC<>TIME'), which the server would advertise and the webapp would silently drop as an invalid pair member -- never observed in production, so this closes a latent trap rather than an active bug. 'TEST' is deliberately excluded from this set: is_group already claims it case-insensitively.",
   "canonical": "MCProxy/src/mcapp/storage/conversation_key_vectors.json",
-  "version": 4,
+  "version": 5,
   "vectors": [
     {
       "name": "group numeric dst",
@@ -182,6 +182,48 @@
       "src": "DK5EN-9",
       "dst": "#",
       "server_key": null
+    },
+    {
+      "name": "ALL alias dst keys on itself, not as a DM pair (v5)",
+      "src": "DK5EN-9",
+      "dst": "ALL",
+      "server_key": "ALL"
+    },
+    {
+      "name": "ALL alias is case-insensitive, lowercase (v5)",
+      "src": "DK5EN-9",
+      "dst": "all",
+      "server_key": "all"
+    },
+    {
+      "name": "TIME alias dst keys on itself, not as a DM pair (v5)",
+      "src": "DK5EN-9",
+      "dst": "TIME",
+      "server_key": "TIME"
+    },
+    {
+      "name": "TIME alias is case-insensitive, mixed case, string-preserving (v5)",
+      "src": "DK5EN-9",
+      "dst": "Time",
+      "server_key": "Time"
+    },
+    {
+      "name": "TIME alias is case-insensitive, lowercase (v5)",
+      "src": "DK5EN-9",
+      "dst": "time",
+      "server_key": "time"
+    },
+    {
+      "name": "regression: ALL as dst must never produce a degenerate DM pair (v5)",
+      "src": "DK6GC-1",
+      "dst": "ALL",
+      "server_key": "ALL"
+    },
+    {
+      "name": "regression: TIME as dst must never produce a degenerate DM pair (v5)",
+      "src": "DK6GC-1",
+      "dst": "TIME",
+      "server_key": "TIME"
     }
   ]
 }
