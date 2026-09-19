@@ -158,3 +158,51 @@ the whole-suite run belongs to the gate (`orchestrate-waves` §1.1).
 Gate 1 after W1a+W1b: subtree pull, corpus fan-out, both repos' full gates. Gate 2 after
 W2a-W2d: all three repos' full gates, then ONE advisor pass over the whole campaign diff, then
 commits — per repo, explicit paths.
+
+## Outcome — implemented 2026-09-19
+
+Both parts shipped, all three repos, advisor-gated. Unreleased.
+
+| Wave | Repo    | Commit                                       |
+| ---- | ------- | -------------------------------------------- |
+| B    | MCProxy | `c52dd1a` non-person alias branch, corpus v5 |
+| W1a  | mc-chat | `0c1dc7e` contract v11                       |
+| W2d  | mc-chat | `227333e` conversation-key mirror            |
+| W2a  | MCProxy | `57c85b3` mentions disjunct                  |
+| —    | MCProxy | `e2665fc` subtree pull of v11 + sha re-pin   |
+| W2b  | webapp  | `7c14727` mention predicate, filter, toggle  |
+| W2c  | webapp  | `198fd5f` ALL/TIME pass-through, both gates  |
+
+**Deviations from the plan as written.**
+
+- The normative matcher is **lookaround-free** and uppercases both sides, rather than the
+  case-insensitive lookbehind form §A2 specified. Two reasons, both found at the advisor gate:
+  `(?<!…)` is Safari 16.4+ only and throws at regex CONSTRUCTION on older iOS, which would take
+  the webapp's whole `pushFilter` module down rather than just the mention branch; and under
+  case-insensitive matching the ASCII boundary classes stop being ASCII, where Python and JS
+  disagree. Verified equivalent to the original form on every case before adopting it.
+- **`mentions` defaulting to false was unpinned** by the first 24 vectors — an implementation
+  defaulting a missing key to `true` passed all of them, because every mention vector spelled the
+  key explicitly. That is exactly the shape of a stored pre-v11 subscription row. A vector with the
+  key ABSENT now pins it; 27 vectors in total.
+- **The `isGroupOrBroadcastKey` half of Part B was not in the plan at all.** `serverKeyForSidebarKey`
+  is only one of the two client-side places that decide "is this key a person"; the other gates
+  which server summary keys are surfaced with no local traffic yet and knew only the exact-case
+  `Time`. Found by the wave-2 writer as an escalation and fixed by the orchestrator.
+- **§A5's trap was stated but unenforced.** Both backends' tests exercised `matches()` directly, so
+  the dispatcher call site was free to pass the truncated payload text: mutating it left both
+  suites fully green. Each backend now has a dispatcher-level test driving a >120-char message
+  whose mention starts past the cap, and both mutants are confirmed dead.
+
+**Left open, deliberately.**
+
+- `sidebarKeyFor` (`stores/messages/sidebar.ts`) still uses the older group/broadcast test without
+  the alias check, so a LIVE third-party `→ ALL` message keys to null while the server summary now
+  surfaces `ALL`. Pre-existing, out of this campaign's scope, but the two predicates no longer
+  mirror each other — worth a follow-up.
+- A legacy `ALL<>X` row written before `c52dd1a` would not round-trip. Zero such rows exist on
+  mcapp.local, which is why this is a note and not a migration.
+- `dst_kind("TIME")` (`commands/parsing.py`) returns `"direct"` while the conversation-key branch
+  treats it as non-person. Pre-dates this work; its own change if it ever matters.
+- `@mentions` are matched against the operator's OWN base callsign only. A user-editable watch list
+  was never in scope for v1.
