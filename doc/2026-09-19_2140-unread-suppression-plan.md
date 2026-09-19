@@ -1,6 +1,6 @@
 # Unread badge counts messages the webapp hides (group 20 `+1`)
 
-Status: IN PROGRESS — wave 1 closed and committed; wave 2 dispatched.
+Status: DONE — all waves committed on `development` in both repos. Not yet released or deployed.
 Reported 2026-09-19 against v2.0.11-dev.3 on mcapp.local.
 
 ## BLUF
@@ -219,3 +219,14 @@ Narrowed (`key=`) and full-scan `count` disagree for 10 keys on the live snapsho
 conversation key, with spans of DAYS (firmware msg_id reuse — `690F6284` appears in `20`, `262`
 and `*` over 9 days), while the dedup subquery groups by `msg_id` across the whole window with no
 key or time fence. `unread` agreed for all 400 keys probed. Its own wave.
+
+## Open follow-ups (not part of this campaign)
+
+1. **Put the classifier fields on the live broadcast payload.** See the advisor note above: a
+   message currently looks unclassified live and classified after a reload. Wire-payload change,
+   own blast radius.
+2. **`msg_id` groups that span conversation keys.** 71 groups on the live DB, spans of days, from
+   firmware msg_id reuse. Makes narrowed and full-scan `count` disagree for 10 keys. Pre-existing,
+   identical at HEAD, `unread` unaffected.
+3. **Deploy.** Nothing is released. Reaching mcapp.local needs a dev release in both repos; the
+   startup bump then backfills the stored `node_advert` rows once on first start.
