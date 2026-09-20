@@ -49,6 +49,7 @@ from .constants import (
     VALID_SNR_RANGE,
     BucketTuple,
     compute_conversation_key,
+    sender_base_sql,
 )
 from .telemetry_reconcile import (
     ALL_FIELDS,
@@ -238,6 +239,50 @@ _DELIVERY_STATUS_RANK_CASE_SQL = (
 )
 
 
+def _classifier_fields(
+    category: Any,
+    tags: list[Any] | None,
+    info_score: Any,
+    template_hash: Any,
+    classifier_ver: Any,
+) -> dict[str, Any]:
+    """Shape classifier fields with the ONE set of presence rules both
+    `store_message`'s live-broadcast annotation and `_build_message_dict`'s
+    history reconstruction use (doc/2026-09-20_1000-live-classifier-and-
+    dedup-plan.md F1), so live and reloaded views of the same message cannot
+    drift apart by construction:
+
+        category        emitted when not None
+        tags            emitted when not None, as a Python LIST (never the
+                         JSON string SQLite's `tags` column holds — decoding
+                         that string is the caller's job, not this helper's)
+        info_score      emitted when not None
+        template_hash   emitted when truthy
+        classifier_ver  emitted when not None
+
+    `tags` is presence-gated, NOT truthiness-gated, and that distinction is
+    load-bearing: an EMPTY tag list is the common case (19644 of 21048
+    classified rows on the live DB carry `tags = '[]'`), and mc-chat's
+    `meshcom_mock/wire.py` — the other backend on this same wire contract —
+    emits `tags: []` for exactly those rows. Dropping the key on `[]` would
+    have silently changed the history payload of 93% of classified messages
+    and diverged the two backends. A NULL/undecodable column still omits the
+    key, because the caller passes None for it.
+    """
+    fields: dict[str, Any] = {}
+    if category is not None:
+        fields["category"] = category
+    if tags is not None:
+        fields["tags"] = tags
+    if info_score is not None:
+        fields["info_score"] = info_score
+    if template_hash:
+        fields["template_hash"] = template_hash
+    if classifier_ver is not None:
+        fields["classifier_ver"] = classifier_ver
+    return fields
+
+
 class IngestMixin(StorageBase):
     def _claim_recent_ingest(self, callsign: str, msg_id: str, timestamp: int) -> bool:
         """Race-free half of the message dedup gate. Returns True when this
@@ -272,9 +317,8 @@ class IngestMixin(StorageBase):
         touch the wrong message.
         """
         rows = await self._query(
-            "SELECT id FROM messages WHERE msg_id = ? AND timestamp > ?"
-            " AND UPPER(TRIM(CASE WHEN instr(src, ',') > 0"
-            "   THEN substr(src, 1, instr(src, ',') - 1) ELSE src END)) = ?"
+            "SELECT id FROM messages WHERE msg_id = ? AND timestamp > ?"  # noqa: S608 - sender_base_sql returns a fixed literal; every value is parameterized
+            f" AND {sender_base_sql('src')} = ?"
             " ORDER BY timestamp ASC, id ASC LIMIT 1",
             (msg_id, timestamp - DEDUP_WINDOW_MS, callsign.upper()),
         )
@@ -1862,6 +1906,28 @@ class IngestMixin(StorageBase):
                     cls.template_hash,
                     cls.classifier_version,
                 )
+                # Annotate the INBOUND `message` dict, not just the INSERT
+                # params: `MessageRouter.publish` hands this exact object to
+                # every "mesh_message" subscriber in subscription order, and
+                # `main.py:_storage_handler` (which called us) runs BEFORE
+                # `SSEManager._broadcast_handler` — see StorageBase's
+                # `_classifier` note and doc/2026-09-20_1000-live-classifier-
+                # and-dedup-plan.md F1. Mutating it here is what puts these
+                # fields on the LIVE SSE payload; without it a message is
+                # classified live only after a reload re-reads the row. This
+                # is purely additive (new keys only) — it does not touch
+                # `dst` or anything `_broadcast_handler`'s own "shallow COPY,
+                # never the shared dict" comment guards; that comment is
+                # about a different, non-additive mutation and stands as-is.
+                message.update(
+                    _classifier_fields(
+                        cls.category,
+                        list(cls.tags),
+                        cls.info_score,
+                        cls.template_hash,
+                        cls.classifier_version,
+                    )
+                )
             except Exception:
                 logger.exception("Classifier failed for msg from %s; storing unclassified", src)
 
@@ -1941,19 +2007,25 @@ class IngestMixin(StorageBase):
             data["acked"] = 1
         if row.get("send_success"):
             data["send_success"] = 1
-        # Classifier fields
-        if row.get("category") is not None:
-            data["category"] = row["category"]
+        # Classifier fields. Decoding the stored JSON string is this call
+        # site's own job (a stored row is the only caller that has a string
+        # to decode); the presence rules that decide which keys land on the
+        # dict are shared with the live-broadcast annotation in
+        # `store_message` via `_classifier_fields` so the two cannot drift.
         tags_raw = row.get("tags")
+        tags_decoded: list[Any] | None = None
         if tags_raw:
             with contextlib.suppress(ValueError, TypeError):
-                data["tags"] = json.loads(tags_raw) if isinstance(tags_raw, str) else tags_raw
-        if row.get("info_score") is not None:
-            data["info_score"] = row["info_score"]
-        if row.get("template_hash"):
-            data["template_hash"] = row["template_hash"]
-        if row.get("classifier_ver") is not None:
-            data["classifier_ver"] = row["classifier_ver"]
+                tags_decoded = json.loads(tags_raw) if isinstance(tags_raw, str) else tags_raw
+        data.update(
+            _classifier_fields(
+                row.get("category"),
+                tags_decoded,
+                row.get("info_score"),
+                row.get("template_hash"),
+                row.get("classifier_ver"),
+            )
+        )
         return data
 
     # Keys in telemetry dicts that are NOT sensor readings (used for extras extraction)
