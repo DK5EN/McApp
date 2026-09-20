@@ -1,5 +1,80 @@
 # Release History
 
+## v2.0.11 (2026-09-20)
+
+Two reported bugs fixed — an unread badge that could never be cleared, and a plain link in a
+group being hidden as an advert — plus push notifications for `@`-mentions and two ingest-path
+performance fixes. Schema stays at 32 and `SYSTEM_EPOCH` at 5, so no migration and no bootstrap
+convergence. **The push contract moves to v11**: see the upgrade notes.
+
+### Highlights
+
+- **A red `+1` that no amount of reading could clear.** If the newest message in a conversation
+  was one the app hides — a spam-filtered category, or a blocked text — the server still counted
+  it as unread, while the client never drew it. The read mark only advances over messages that
+  are actually rendered, so nothing the operator could do would clear that badge. Group `20` on
+  the production node sat at `+1` from 20:28 one evening with no way out. The server now applies
+  the same "would the app show this?" test the app itself applies, so `unread` means "unread
+  **and** visible to you". Message totals are unchanged on purpose — a hidden message still
+  belongs to its conversation.
+- **A bare link is no longer treated as an advert.** Classifier rule 42 labelled any message
+  consisting of nothing but a URL as `node_advert`, which is a hidden category for most
+  operators. That is how HB9VQQ's plain link in group `20` disappeared, while his link-plus-text
+  message in the same thread scored a full 1.0. Shape alone is not evidence of an advert;
+  repetition is, and that detection is untouched — decorated adverts (HTML markup, emoji plus
+  URL) are still caught. A bare link keeps its `has_url` tag and its low information score, so it
+  can still be filtered by score if you want it gone.
+- **`@`-mentions now raise a push notification** wherever they appear — in a group, in a
+  broadcast, not only in a direct message. Off by default; enable it in the notification
+  settings.
+
+### Backend (MCProxy)
+
+- `unread` excludes messages the client suppresses, via a server-side mirror of the app's own
+  spam-filter and blocked-text predicate. The two implementations are held to one shared,
+  checksum-pinned corpus so they cannot drift apart silently.
+- Classifier rule 42 now assigns `other` instead of `node_advert` for a URL-only message.
+- **A seed-rule change now reaches messages already in the database.** Rule edits were applied to
+  the rule table but never bumped the classifier version, so stored rows kept their old category
+  indefinitely. Startup now bumps it when a rule actually changed, which triggers the one-time
+  backfill — see the upgrade notes.
+- `@`-mention push eligibility, independent of the destination (push contract v11).
+- `ALL` and `TIME` are recognised as non-person destinations rather than being mistaken for
+  direct-message partners.
+- The bare APRS `ack%04i` frame is hidden from history and conversation summaries — it addresses
+  a gateway, carries nothing a client can match, and was only ever noise on screen.
+- Two event-loop fixes: mheard chart building moved off the loop, and an unattributed `loop_lag`
+  record now explains its own missing attribution instead of looking like a bug.
+- `DJ4XI-12` removed from the curated blocklist.
+
+### Frontend (webapp)
+
+- The three local unread counters — live arrivals, the optimistic recount when a conversation is
+  marked read, and the sidebar fallback — now skip spam-filtered messages, matching the server.
+  Conversation totals stay unfiltered, as on the server.
+- Push notifications for `@`-mentions, with a settings toggle.
+- `ALL` and `TIME` treated as conversation keys, not partners.
+- A digit-less service alias (for example `WLNK-1`) can anchor a third-party pair key.
+- The bare APRS ack is hidden in every chat branch, matching the backend.
+
+### Upgrade notes
+
+- **No migration.** Schema stays at 32, `SYSTEM_EPOCH` stays at 5.
+- **First start runs a one-time classifier backfill.** Because rule 42 changed, the classifier
+  version bumps and every stored message is re-categorised once, as a batched background job. On
+  the production Pi Zero 2 W this took a few minutes for ~20 000 rows, with the service answering
+  normally throughout. It runs once per version and is skipped on every later restart.
+- **Messages that were hidden as `node_advert` because they are bare links will reappear** after
+  that backfill. That is the fix, not a regression: they are ordinary chat and were never
+  adverts.
+- **Push contract v11 adds a `mentions` field to the subscription filter**, defaulting to
+  `false`. A subscribe request replaces the stored filter wholesale, so a client that does not
+  send the field leaves mentions off — existing subscriptions keep working unchanged and nobody
+  needs to re-subscribe. Turn it on in the notification settings.
+- **A badge that clears itself moments after a hidden message arrives is expected.** Live
+  broadcasts do not carry classification, so a hidden message briefly counts on the client until
+  it is drawn and read. The server's count is correct throughout.
+
 ## v2.0.10 (2026-09-19)
 
 Stall-tracking follow-up, bootstrap network safety after the 2026-09-18 WiFi outage, and two
