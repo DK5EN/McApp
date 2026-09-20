@@ -572,6 +572,20 @@ def run_webapp_deploy_tests() -> bool:
         print("webapp_deploy: SKIPPED - bash not on PATH")
         return True
 
+    if not _RELEASE_SH.exists():
+        # release.sh is developer-machine tooling and is deliberately NOT in
+        # any tarball -- a dev build ships scripts/*.py so the gate can run on
+        # the box, but the release script itself has no business on a Pi. These
+        # cases drive the real release.sh, so without it there is nothing to
+        # verify. "NOT VERIFIED" wording, like config_migration's bash-4 skip,
+        # so this can never be misread as coverage. On a source checkout the
+        # file is always present, so a skip here is itself the signal.
+        print(
+            "webapp_deploy: SKIPPED - NOT VERIFIED "
+            "(no scripts/release.sh in this tree; expected when run from a deployed slot)"
+        )
+        return True
+
     tally = {"passed": 0, "failed": 0}
 
     def record(label: str, ok: bool, detail: str = "") -> None:
