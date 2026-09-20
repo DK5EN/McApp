@@ -339,6 +339,22 @@ def _write_minimal_release_fixture(tmp: Path) -> tuple[Path, Path]:
 
     (project / "src" / "mcapp").mkdir(parents=True)
     (project / "src" / "mcapp" / "__init__.py").write_text("", encoding="utf-8")
+    # Package DATA, not code: the corpora and wire contracts that ship inside
+    # the package and that its *_tests.py modules read by path. build_tarball()
+    # used to copy `*.py` only, so it shipped every test module and none of
+    # their data -- all eleven .json files were silently absent from every
+    # deployed slot (found on mcapp.local at v2.0.11).
+    (project / "src" / "mcapp" / "contract").mkdir(parents=True)
+    (project / "src" / "mcapp" / "contract" / "push_contract.json").write_text(
+        '{"version": 11}', encoding="utf-8"
+    )
+    (project / "src" / "mcapp" / "storage").mkdir(parents=True)
+    (project / "src" / "mcapp" / "storage" / "suppression_vectors.json").write_text(
+        '{"version": 1}', encoding="utf-8"
+    )
+    # A decoy: __pycache__ stays excluded, for data as well as for code.
+    (project / "src" / "mcapp" / "__pycache__").mkdir(parents=True)
+    (project / "src" / "mcapp" / "__pycache__" / "cached.json").write_text("{}", encoding="utf-8")
     (project / "pyproject.toml").write_text('[project]\nname = "x"\n', encoding="utf-8")
 
     (project / "ble_service" / "src").mkdir(parents=True)
@@ -415,6 +431,21 @@ def _case_build_tarball_excludes_appledouble(record: Recorder) -> None:
         record(
             "the produced tarball DOES contain the real webapp file beside it",
             any(Path(n).name == "index.html" and "webapp" in n for n in names),
+            f"(names: {names})",
+        )
+        record(
+            "the produced tarball ships package DATA, not just *.py (contract/push_contract.json)",
+            any(n.endswith("src/mcapp/contract/push_contract.json") for n in names),
+            f"(names: {names})",
+        )
+        record(
+            "package data is shipped from nested packages too (storage/suppression_vectors.json)",
+            any(n.endswith("src/mcapp/storage/suppression_vectors.json") for n in names),
+            f"(names: {names})",
+        )
+        record(
+            "__pycache__ data is still excluded, like __pycache__ code",
+            not any("__pycache__" in n for n in names),
             f"(names: {names})",
         )
 
