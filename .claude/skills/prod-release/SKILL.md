@@ -352,10 +352,16 @@ The deploy takes several minutes on a Pi Zero 2W. **Do not poll it turn by turn.
 background wait with a terminal condition and do something else until it fires:
 
 ```bash
-until [ "$(curl -sk --max-time 5 https://mcapp.local/api/status \
-  | python3 -c 'import sys,json;print(json.load(sys.stdin)["version"])' 2>/dev/null)" = "vX.Y.Z" ]; \
-  do sleep 15; done; echo DONE
+until [ "$(curl -sk --max-time 5 https://mcapp.local/webapp/version.html | tr -d '[:space:]')" \
+  = "vX.Y.Z" ]; do sleep 15; done; echo DONE
 ```
+
+**Key that loop on `version.html`, never on `/api/status`.** `/api/status`'s `version` field is
+the **pyproject version**, not the deployed tag — and a dev pre-release is built from the same
+`pyproject` version as the production release it becomes. Promoting `v2.0.11-dev.4` to `v2.0.11`,
+the box reported `version: v2.0.11` **before the deploy had started**, so a loop keyed on that
+field fires instantly and reports success against the old code. `version.html` carries the actual
+tag and is the only field that tells a dev tag from its release.
 
 Auto-rollback is armed: if the health checks fail the previous slot stays active and the service
 keeps running the old code.
@@ -365,14 +371,22 @@ keeps running the old code.
 The modal's DONE is not verification. Check the box:
 
 ```bash
-curl -sk https://mcapp.local/api/status | python3 -m json.tool     # version == vX.Y.Z
-curl -sk https://mcapp.local/webapp/version.html                   # NOT /version.html — that 404s
+curl -sk https://mcapp.local/webapp/version.html                   # THE tag check; NOT /version.html — that 404s
+curl -sk https://mcapp.local/api/status | python3 -m json.tool     # pyproject version, not the tag (see above)
 ssh mcapp.local '
   readlink -f ~/mcapp-slots/current
   systemctl is-active mcapp mcapp-ble caddy lighttpd
   systemctl show mcapp -p NRestarts --value          # still 0
-  grep -h "^LATEST_SCHEMA_VERSION" ~/mcapp-slots/current/src/mcapp/storage/constants.py'
+  grep -h "^LATEST_SCHEMA_VERSION" ~/mcapp-slots/current/src/mcapp/storage/constants.py
+  find ~/mcapp-slots/current/src/mcapp -name "*.json" | wc -l'   # 11, not 0 — see below
 ```
+
+The last line guards the packaging: `build_tarball` copies **code and package data**, and until
+v2.0.11 it copied `*.py` only — shipping every `*_tests.py` module while dropping all eleven
+`.json` files they read, so `src/mcapp/contract/` did not exist in any slot. Nothing breaks at
+runtime (no production path reads a packaged `.json`), but a suite run on the box fails on missing
+data rather than on anything real. `scripts/webapp_deploy_tests.py` drives the real
+`build_tarball()` and pins this; a zero here means the predicate regressed.
 
 - `version.html` reports what was **deployed**, not what the browser is running. Reload past the
   service worker (the "Update available — Reload" banner) before believing a frontend change is live.

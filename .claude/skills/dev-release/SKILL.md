@@ -140,18 +140,32 @@ Other flags worth knowing: `--check` (dry run), `--skip` (deploy only, no system
 
 ## Step 6 — Verify
 
-A "complete" banner is not verification. Check three things:
+A "complete" banner is not verification. Check these:
 
 ```bash
 ssh mcapp.local '
   readlink -f ~/mcapp-slots/current                      # which slot is live now
   systemctl is-active mcapp mcapp-ble                    # both active
   systemctl show mcapp -p ActiveEnterTimestamp --value   # restarted just now, not days ago
+  curl -s http://127.0.0.1/webapp/version.html           # the TAG; /api/status is not (see below)
+  find ~/mcapp-slots/current/src/mcapp -name "*.json" | wc -l   # 11, not 0
   grep -c "<a symbol from your change>" ~/mcapp-slots/current/src/mcapp/<file>.py'
 ```
 
 The last one is the check that actually matters: grep the **active slot** for a symbol only your
 change introduces. Everything else can look healthy while the service still runs the old code.
+
+**`/api/status`'s `version` is the pyproject version, not the deployed tag.** Every
+`vX.Y.Z-dev.N` is built from the same `X.Y.Z`, so that field reads identically for dev.1, dev.4
+and the eventual `vX.Y.Z` — it cannot tell you which one is installed, and a wait loop keyed on it
+succeeds instantly against the old code. Use `webapp/version.html`.
+
+**The `.json` count guards the packaging.** `build_tarball` copies code **and package data**;
+until v2.0.11 it copied `*.py` only, shipping every `*_tests.py` module while dropping all eleven
+`.json` files they read — `src/mcapp/contract/` did not exist in any slot. No runtime path reads a
+packaged `.json`, so nothing broke in production, but a suite run on the box failed on missing
+data instead of on anything real. Pinned by `scripts/webapp_deploy_tests.py`, which drives the
+real `build_tarball()`; a zero here means that predicate regressed.
 
 Do not expect a fixed slot order. `get_target_slot` picks the empty-or-oldest of `slot-{0,1,2}`,
 and a re-deploy of a version the active slot already holds deploys **in place** with no rotation at
