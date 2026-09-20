@@ -505,11 +505,30 @@ Server-authoritative "what has the operator seen" state behind the webapp's side
 the PWA app-icon badge. Plan and the field evidence: `doc/2026-09-06_1200-unread-cursor-plan.md`.
 
 - **A cursor is a timestamp, never a count.** `read_cursors(key, ts)` holds the ingest `timestamp`
-  of the newest message seen; `unread = COUNT(timestamp > cursor AND base(src) != base(me))`.
+  of the newest message seen; `unread = COUNT(timestamp > cursor AND base(src) != base(me)
+  AND NOT suppressed)`.
   The previous scheme (`read_counts`, v7: "the total was N when I looked") broke every time the
   count shrank under retention, the blocklist filter or the webapp's 2000-row cap, and was stale
   on every device except the one that did the reading. `read_counts` is still emitted and served
   for one release (v2.0.4) and is dead weight after that.
+- **`unread` excludes what the client would never render; `count` does not.** The read cursor only
+  advances over RENDERED bubbles, so a conversation whose NEWEST message the webapp hides had a
+  badge no client action could clear (group 20 on mcapp.local, stuck at +1 against a `node_advert`
+  link — `doc/2026-09-19_2140-unread-suppression-plan.md`). `get_conversation_summary` therefore
+  runs `storage/suppression.py`, a server-side mirror of the webapp's `isSpamByClassifier` plus the
+  unconditional `isTextBlocked` half of `passesBaseGuards` (`enabled: false` disables the classifier
+  half, NEVER the blocklist). `count`/`last_ts` stay unfiltered on purpose — a hidden message still
+  belongs to its conversation. The predicate is pinned by `suppression_vectors.json`, canonical
+  here and hand-copied to the webapp with a sha256 on both sides; it is a **fifth** corpus on top of
+  the four in Key Gotchas, and nothing syncs it for you. The aggregate and candidate queries in
+  `query.py` MUST keep sharing `_conv_dedup_subquery` / `_CONV_NEWER_EXPR` / `_CONV_NEWER_SPAM_EXPR`
+  — if their predicates disagree the subtraction silently corrupts the count, and three mutations
+  that break it are pinned by `unread_suppression_tests.py`.
+- **The LIVE broadcast carries no classifier fields**, so the webapp's own suppression gate cannot
+  fire on a live message — `store_message` uses them as INSERT parameters only. The message is
+  rendered, the read marker advances, the badge resolves itself. **Symptom → cause:** a transient
+  `+1` on a live hidden message that clears by itself is this, not a cursor regression; do not chase
+  it on the client.
 - **Keys are `conversation_key`, on both ends of the wire.** DMs are `A<>B` (sorted base
   callsigns), groups/hashtags/`*` verbatim. The webapp translates to its sidebar key at exactly
   one boundary (`translateServerSummaryKey` / `serverKeyForSidebarKey`). `read_counts.dst` stored

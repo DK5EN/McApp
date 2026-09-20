@@ -144,6 +144,15 @@ HOURS_PER_YEAR = 8760
 INVALID_CHARACTER_MSG = "-- invalid character --"
 CORE_DUMP_FILTER_TEXT = "No core dump"
 
+# Non-person destination aliases: never a DM partner, even though they are
+# not group numbers, 'TEST', '*' or a hashtag. Counterpart is the webapp's
+# NON_PERSON_PAIR_MEMBERS (src/utils/callsignUtils.ts), which refuses these as
+# DM pair members — compute_conversation_key's DM branch below has no such
+# check, so without this set 'ALL'/'TIME' as dst would key as an ordinary DM
+# pair ('ALL<>DK6GC'), which the webapp then silently drops. Checked
+# case-insensitively; the key itself is the raw target string, unchanged.
+NON_PERSON_DST_ALIASES = frozenset({"ALL", "TIME"})
+
 # Columns to SELECT when building message JSON (avoids fetching raw_json).
 # delivery_status/holder (schema v31) carry store-and-forward DM status;
 # _build_message_dict omits both when NULL, so selecting them here costs
@@ -217,6 +226,22 @@ def compute_conversation_key(src: str, dst: str) -> str | None:
     dst that fails the tag charset (bare '#', '#OE_SOTA') yields None — no
     bucket at all, NOT a degenerate DM pair — mirroring dst_kind's 'unknown'
     classification for the same input.
+
+    v5 adds the non-person-alias branch (NON_PERSON_DST_ALIASES; contract
+    ./conversation_key_vectors.json v5): a dst of 'ALL' or 'TIME', checked
+    case-insensitively, keys on the resolved target VERBATIM — string-
+    preserving exactly like the group/hashtag branches above ('Time' keys
+    'Time', not 'TIME') — and this check runs AFTER is_group/'*'/is_hashtag
+    but BEFORE the malformed-hashtag/all-ASCII-digit branch, so neither alias
+    ever reaches the DM fallback below. Before this fix such a dst fell into
+    the DM branch and was keyed as an ordinary DM pair ('ALL<>DK6GC',
+    'DK6GC<>TIME'); the webapp refuses both as pair members
+    (NON_PERSON_PAIR_MEMBERS in src/utils/callsignUtils.ts), so the server
+    would advertise a conversation the client silently drops. Never observed
+    in production (zero rows in 5488 messages) — this closes a latent trap,
+    not an active bug. 'TEST' is deliberately NOT in this set: is_group
+    already claims it case-insensitively on the branch above, so adding it
+    here would be dead code.
     """
     if not dst:
         return None
@@ -224,6 +249,8 @@ def compute_conversation_key(src: str, dst: str) -> str | None:
     if is_group(target) or target == "*":
         return target
     if is_hashtag(target):
+        return target
+    if target.upper() in NON_PERSON_DST_ALIASES:
         return target
     if target.startswith("#") or (target.isascii() and target.isdigit()):
         # Malformed hashtag ('#OE_SOTA', bare '#') or an all-ASCII-digit

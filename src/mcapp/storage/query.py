@@ -54,6 +54,13 @@ from .constants import (
     db_read,
     escape_like,
 )
+from .suppression import (
+    SuppressionPolicy,
+    is_suppressed,
+    load_policy,
+    policy_is_noop,
+    view_from_row,
+)
 
 logger = get_logger(__name__)
 
@@ -63,6 +70,231 @@ logger = get_logger(__name__)
 # blocklist of its own, so the same shared decision governs ingest, live
 # broadcast and history alike.
 HistoryFilter = Callable[[dict[str, Any]], dict[str, Any] | None]
+
+# Progress throttle for _build_chart_series: one "gaps" SSE progress event per
+# this many qualified stations, not one per station. Measured on mcapp.local
+# (2026-09-19, thread pool idle throughout): the yearly mheard dump qualifies
+# 65 stations -> 65 on-loop SSE sends, 1422 ms http duration / 584 ms
+# loop_lag; chunking to 10 cuts that to 7 progress events (monthly: 13 -> 2,
+# 7day: 11 -> 2).
+MHEARD_PROGRESS_CHUNK = 10
+
+# --- ack payload shapes on the read path ---------------------------------
+# The firmware emits TWO ack payloads and only one carries a callsign prefix.
+#
+#   '%-9.9s:ack%03i'  the ordinary peer ack. The cross-repo predicate, defined
+#                     by ack_predicate_vectors.json v2 and replayed by MCProxy,
+#                     mc-chat and the webapp alike.
+#   'ack%04i'         no prefix, nothing but 'ack' + the APRS message id padded
+#                     to at least 4 ASCII digits. SendAckMessage()
+#                     (loop_functions.cpp) switches to this shape for exactly
+#                     one destination: Winlink's 'WLNK-1' gateway, which speaks
+#                     APRS ack conventions rather than MeshCom's.
+#
+# Both are machine-to-machine protocol chatter, so both are excluded from every
+# message/history query. They are NOT symmetric on the way back in: a peer ack
+# feeds the client's delivery-status matching and is served by the acks query
+# below, while a bare APRS ack carries no correlator a client could use (no
+# callsign prefix, and the number is the correspondent's APRS message id, not
+# our echo_id) and is served to nobody. The read path is therefore a THREE-way
+# split — messages / peer acks / dropped noise — not the two-way complement it
+# was before; `_NOT_ACK_SQL` is deliberately wider than the negation of
+# `_PEER_ACK_SQL`.
+#
+# Deliberately NOT folded into ack_predicate_vectors.json: that corpus governs
+# the ':ack<N>' predicate in three repos, and mc-chat has no RF path that can
+# produce the bare shape. Kept MCProxy-local and SQL-side for that reason; the
+# webapp mirrors it in its own view filter (isAprsAckMessage).
+#
+# GLOB, not LIKE: case-sensitive and ASCII-only, same reasoning as the peer
+# shape. The bare globs are anchored (no leading or trailing '*'), so they match
+# the WHOLE payload and a human message that merely starts 'ack1234 ...' stays
+# visible. Four and five digits are the whole reachable range: '%04i' pads to
+# four, and an APRS message id is at most five characters.
+_PEER_ACK_GLOBS = ("*:ack[0-9]*",)
+_APRS_ACK_GLOBS = ("ack[0-9][0-9][0-9][0-9]", "ack[0-9][0-9][0-9][0-9][0-9]")
+
+
+def _ack_sql(globs: tuple[str, ...], col: str = "msg", *, negate: bool = False) -> str:
+    """Render `globs` as one SQL boolean over `col`.
+
+    `negate=True` yields the AND-of-NOT form (De Morgan), so an exclusion can
+    never drift from the shape list it is built from.
+    """
+    if negate:
+        return " AND ".join(f"{col} NOT GLOB '{g}'" for g in globs)
+    return "(" + " OR ".join(f"{col} GLOB '{g}'" for g in globs) + ")"
+
+
+# Every message/history query excludes both shapes; the acks query serves only
+# the peer shape (see the three-way split above).
+_NOT_ACK_SQL = _ack_sql(_PEER_ACK_GLOBS + _APRS_ACK_GLOBS, negate=True)
+_NOT_ACK_SQL_M = _ack_sql(_PEER_ACK_GLOBS + _APRS_ACK_GLOBS, "m.msg", negate=True)
+_PEER_ACK_SQL = _ack_sql(_PEER_ACK_GLOBS)
+
+# --- get_conversation_summary shared SQL fragments -------------------------
+# Factored so the aggregate SUM(CASE...) query and the per-row suppression
+# candidate query (doc/2026-09-19_2140-unread-suppression-plan.md §D1) can
+# never drift: both are built from the SAME dedup subquery text and the SAME
+# two boolean "is this row unread" expressions. If the candidate predicate
+# and the aggregate's counting condition ever disagreed, the suppression
+# subtraction in get_conversation_summary would silently corrupt `unread`.
+_CONV_DEDUP_COLS = (
+    "MIN(m.timestamp) AS ts, m.src, m.dst, m.conversation_key,"
+    " m.msg, m.category, m.tags, m.info_score, m.template_hash"
+)
+
+
+def _conv_dedup_subquery(key_clause: str) -> str:
+    """The distinct-message dedup subquery (aliased `d` by both callers)
+    shared by get_conversation_summary's two queries.
+
+    Exactly one MIN()/MAX() aggregate (`MIN(m.timestamp)`) appears in this
+    subquery, which is what makes every other, bare column in
+    `_CONV_DEDUP_COLS` well-defined under SQLite's documented
+    aggregate-query extension: a bare column takes its value from the SAME
+    input row that produced the min()/max() result, not an arbitrary row of
+    the group (https://sqlite.org/lang_select.html, "Bare columns in an
+    aggregate query"). `m.src`/`m.dst` already relied on this before the
+    suppression wave (see get_conversation_summary's docstring on transport
+    duplicates); `m.msg`/`m.category`/`m.tags`/`m.info_score`/
+    `m.template_hash` ride the IDENTICAL guarantee — they come from the same
+    earliest stored copy of a transport-duplicated message as `ts`, `src`
+    and `dst`, not from an arbitrary sibling row of the same msg_id group.
+    """
+    return (
+        f"SELECT {_CONV_DEDUP_COLS}"  # noqa: S608 - key_clause is a fixed literal; values parameterized
+        " FROM messages m"
+        f" WHERE m.type = 'msg' AND {_NOT_ACK_SQL_M}"
+        " AND m.timestamp >= ?"
+        + key_clause
+        + " GROUP BY COALESCE(NULLIF(m.msg_id, ''), 'row:' || m.rowid)"
+    )
+
+
+_CONV_CURSOR_JOINS = (
+    " LEFT JOIN read_cursors rc"
+    "   ON rc.key = COALESCE(d.conversation_key, d.dst)"
+    " LEFT JOIN read_cursors rc2"
+    "   ON rc2.key = ?"
+)
+
+# The two per-row "is this message unread" conditions, shared verbatim by the
+# aggregate SUM(CASE...) and the candidate query's SELECT + WHERE. `newer`
+# judges against the row's own key's cursor; `newer_spam` judges against
+# MAX(that cursor, the SPAM_GROUP cursor) for a row that might get
+# rebucketed there (see get_conversation_summary's docstring for the
+# MAX-of-both-cursors rule).
+_CONV_NEWER_EXPR = "d.ts > COALESCE(rc.ts, 0)"
+_CONV_NEWER_SPAM_EXPR = "d.ts > MAX(COALESCE(rc.ts, 0), COALESCE(rc2.ts, 0))"
+
+
+def _apply_conversation_row(
+    row: sqlite3.Row,
+    summary: dict[str, dict[str, int]],
+    blocklist_filter: HistoryFilter | None,
+    my_base: str,
+) -> None:
+    """One aggregate row from get_conversation_summary's main query -> an
+    update of summary[key]'s count/last_ts/unread. Split out of `_run` only
+    to keep that closure under the statement/branch lint budget; the logic
+    itself is unchanged from before the suppression wave.
+    """
+    key = row["key"]
+    if not key:
+        return
+    src = row["src"] or ""
+    dst = row["dst"] or ""
+    rebucketed = False
+    if blocklist_filter is not None:
+        kept = blocklist_filter({"src": src, "dst": dst})
+        if kept is None:
+            return  # dropped outright
+        if kept.get("dst") == SPAM_GROUP:
+            # Rebucketed to the quarantine group, matching where the message
+            # itself now shows up. Every quarantined group shares ONE cursor
+            # (rc2, keyed on SPAM_GROUP itself): a row only counts as unread
+            # when it is newer than BOTH the original key's cursor and the
+            # SPAM_GROUP cursor (MAX semantics), so marking 9999 read
+            # actually clears the badge instead of it re-lighting from the
+            # untouched original cursor.
+            key = SPAM_GROUP
+            rebucketed = True
+
+    entry = summary.setdefault(key, {"count": 0, "last_ts": 0, "unread": 0})
+    entry["count"] += row["cnt"]
+    entry["last_ts"] = max(entry["last_ts"], row["last_ts"] or 0)
+
+    sender_base = src.split(",", maxsplit=1)[0].split("-", maxsplit=1)[0].upper()
+    if sender_base != my_base:
+        entry["unread"] += (row["newer_spam"] if rebucketed else row["newer"]) or 0
+
+
+def _subtract_suppressed_row(
+    row: sqlite3.Row,
+    summary: dict[str, dict[str, int]],
+    blocklist_filter: HistoryFilter | None,
+    my_base: str,
+    policy: SuppressionPolicy,
+) -> None:
+    """One per-message candidate row -> at most one unit subtracted from
+    summary[key]['unread'], mirroring `_apply_conversation_row`'s blocklist/
+    rebucket/own-message decisions IN THE SAME ORDER (not a second
+    convention), then applying the suppression predicate as the final gate.
+    """
+    key = row["key"]
+    if not key:
+        return
+    src = row["src"] or ""
+    dst = row["dst"] or ""
+    rebucketed = False
+    if blocklist_filter is not None:
+        kept = blocklist_filter({"src": src, "dst": dst})
+        if kept is None:
+            return  # dropped outright, same as _apply_conversation_row
+        if kept.get("dst") == SPAM_GROUP:
+            key = SPAM_GROUP
+            rebucketed = True
+
+    # Same "which flag applies" rule as _apply_conversation_row's
+    # `entry["unread"] +=` line: a rebucketed row's unread-ness is judged
+    # against newer_spam (MAX of both cursors), not newer. If the applicable
+    # flag is false, this candidate was never counted as unread under this
+    # (possibly rebucketed) key in the first place, so there is nothing to
+    # subtract.
+    applicable = row["newer_spam"] if rebucketed else row["newer"]
+    if not applicable:
+        return
+
+    sender_base = src.split(",", maxsplit=1)[0].split("-", maxsplit=1)[0].upper()
+    if sender_base == my_base:
+        return  # own traffic was never added to unread by _apply_conversation_row
+
+    entry = summary.get(key)
+    if entry is None:
+        # Unreachable in practice: the aggregate query groups the SAME
+        # underlying rows by the SAME (post-rebucketing) key, so any
+        # candidate that reaches here already has an entry. Guard anyway
+        # rather than raise out of a read path.
+        return
+
+    view = view_from_row(dict(row))
+    if not is_suppressed(view, policy):
+        return
+
+    # unread must never go below 0. This clamp should be unreachable: every
+    # suppressed candidate row was already counted into `newer`/`newer_spam`
+    # (and thus into entry["unread"]) by the identical predicate above, so
+    # there is always at least one unit left to subtract. Kept as a hard
+    # floor, not an assertion, because a future change to either query is a
+    # data bug, not a crash-worthy one on a read path.
+    if entry["unread"] > 0:
+        entry["unread"] -= 1
+    else:
+        logger.warning(
+            "get_conversation_summary: unread clamp hit for key=%r (should be unreachable)",
+            key,
+        )
 
 
 def _emit_row(data: dict[str, Any], blocklist_filter: HistoryFilter | None) -> str | None:
@@ -398,7 +630,7 @@ class QueryMixin(StorageBase):
                     f"    PARTITION BY COALESCE(conversation_key, dst)"
                     f"    ORDER BY timestamp DESC"
                     f"  ) AS rn FROM messages"
-                    f"  WHERE type = 'msg' AND msg NOT GLOB '*:ack[0-9]*' AND timestamp >= ?"
+                    f"  WHERE type = 'msg' AND {_NOT_ACK_SQL} AND timestamp >= ?"
                     f") ranked WHERE rn <= ?"
                     f" ORDER BY timestamp ASC",
                     (window_cutoff_ms, limit_per_dst),
@@ -419,18 +651,20 @@ class QueryMixin(StorageBase):
                     if (emitted := _emit_row(build_pos(dict(row)), blocklist_filter)) is not None
                 ]
 
-                # 3. ACK messages. GLOB, not LIKE, and the EXACT complement of
-                # the `msg NOT GLOB '*:ack[0-9]*'` exclusion every message/
-                # history query in this file applies, so messages and acks
-                # partition cleanly. SQLite GLOB is case-sensitive and [0-9]
-                # is ASCII-only — that is the point: the firmware emits
-                # '%-9.9s:ack%03i' (lowercase, 3 ASCII digits), while LIKE's
-                # ASCII case-insensitivity silently swallowed human messages
-                # containing ':ACK99' from history sync
+                # 3. ACK messages — the PEER shape only, deliberately NOT the
+                # complement of the exclusion the message queries apply: a bare
+                # APRS 'ack%04i' is excluded from history AND served here to
+                # nobody, because it carries no correlator a client could match
+                # (see _PEER_ACK_GLOBS / _APRS_ACK_GLOBS at the top of this
+                # module for the three-way split). GLOB, not LIKE: SQLite GLOB
+                # is case-sensitive and [0-9] is ASCII-only — that is the point:
+                # the firmware emits '%-9.9s:ack%03i' (lowercase, 3 ASCII
+                # digits), while LIKE's ASCII case-insensitivity silently
+                # swallowed human messages containing ':ACK99' from history sync
                 # (ack_predicate_vectors.json v2, strict tier).
                 ack_rows = conn.execute(
                     f"SELECT {_MSG_SELECT} FROM messages"  # noqa: S608 - identifiers from fixed set; values parameterized
-                    " WHERE type = 'msg' AND msg GLOB '*:ack[0-9]*'"
+                    f" WHERE type = 'msg' AND {_PEER_ACK_SQL}"
                     f" ORDER BY timestamp DESC LIMIT {INITIAL_ACK_LIMIT}",
                 ).fetchall()
                 acks = [
@@ -447,19 +681,19 @@ class QueryMixin(StorageBase):
                 # paid for when there is something to filter.
                 if blocklist_filter is None:
                     summary_rows = conn.execute(
-                        "SELECT COALESCE(conversation_key, dst) AS key, COUNT(*) as cnt"
+                        "SELECT COALESCE(conversation_key, dst) AS key, COUNT(*) as cnt"  # noqa: S608 - ack predicate is a module constant; values parameterized
                         " FROM messages"
-                        " WHERE type = 'msg' AND msg NOT GLOB '*:ack[0-9]*' AND timestamp >= ?"
+                        f" WHERE type = 'msg' AND {_NOT_ACK_SQL} AND timestamp >= ?"
                         " GROUP BY key",
                         (window_cutoff_ms,),
                     ).fetchall()
                     summary = {row["key"]: row["cnt"] for row in summary_rows if row["key"]}
                 else:
                     summary_rows = conn.execute(
-                        "SELECT COALESCE(conversation_key, dst) AS key, src, dst,"
+                        "SELECT COALESCE(conversation_key, dst) AS key, src, dst,"  # noqa: S608 - ack predicate is a module constant; values parameterized
                         " COUNT(*) as cnt"
                         " FROM messages"
-                        " WHERE type = 'msg' AND msg NOT GLOB '*:ack[0-9]*' AND timestamp >= ?"
+                        f" WHERE type = 'msg' AND {_NOT_ACK_SQL} AND timestamp >= ?"
                         " GROUP BY key, src, dst",
                         (window_cutoff_ms,),
                     ).fetchall()
@@ -519,8 +753,8 @@ class QueryMixin(StorageBase):
         this conversation last see any traffic", not "when did I last hear
         from someone else".
 
-        Same window cutoff and the same `type='msg' AND msg NOT GLOB
-        '*:ack[0-9]*'` predicate as `get_smart_initial_with_summary`, and the
+        Same window cutoff and the same `type='msg' AND {_NOT_ACK_SQL}`
+        predicate as `get_smart_initial_with_summary`, and the
         same blocklist re-bucketing (a quarantined group post is counted under
         SPAM_GROUP, matching where the message itself now shows up) — see that
         method's docstring for why this must run on the way OUT of storage to
@@ -537,6 +771,24 @@ class QueryMixin(StorageBase):
         blocklist rebucketing below, so a `key = SPAM_GROUP` predicate would
         match nothing — callers pass `key=None` for it and read the bucket out
         of the full scan.
+
+        Suppression (doc/2026-09-19_2140-unread-suppression-plan.md §D1):
+        `unread` additionally excludes any row the client's own spam filter
+        or blocklist would hide, via the shared predicate in
+        `storage.suppression`. Without this, a conversation whose NEWEST
+        message is one the client never renders carries a badge no client
+        action can ever clear — the read cursor only advances over rendered
+        bubbles, so a hidden trailing message is unreachable by any "mark
+        read". The policy (`load_policy`) is loaded once per call on the same
+        connection; `policy_is_noop` short-circuits the common case (an
+        install that never touched the spam-filter settings or blocklist) so
+        it costs nothing beyond that one load — the second query below runs
+        only when something could actually be suppressed. `count` and
+        `last_ts` are DELIBERATELY NOT filtered by this predicate: they
+        answer "how many messages does this conversation hold" and must
+        match the client's own total (a hidden message still belongs to the
+        conversation), while only `unread`'s meaning narrows to "unread AND
+        visible to you".
         """
         window_cutoff_ms = now_ms() - LONG_RETENTION_DAYS * SECONDS_PER_DAY * 1000
         my_base = my_callsign.split("-", maxsplit=1)[0].upper()
@@ -544,12 +796,16 @@ class QueryMixin(StorageBase):
         params: tuple[Any, ...] = (
             (window_cutoff_ms, SPAM_GROUP) if key is None else (window_cutoff_ms, key, SPAM_GROUP)
         )
+        dedup_sql = _conv_dedup_subquery(key_clause)
 
         def _run() -> dict[str, dict[str, int]]:
             with db_read(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
                 conn.execute("PRAGMA journal_mode=WAL")
                 conn.execute("PRAGMA query_only=ON")
+
+                policy = load_policy(conn)
+
                 # One row per DISTINCT message first (subquery `d`), then per
                 # conversation. The same message is stored once per transport
                 # it arrived over — the UDP datagram and the BLE copy land as two
@@ -563,68 +819,57 @@ class QueryMixin(StorageBase):
                 # (v2.0.4-dev.1, 2026-09-06). A message is therefore judged by
                 # its EARLIEST copy, which is the one the client holds. Rows
                 # without a msg_id never collapse into each other (rowid
-                # fallback). src/dst are taken from the earliest copy too: the
-                # relay-path prefix can differ between copies, but the resolved
-                # sender (first comma component) is the same.
+                # fallback). src/dst (and, since the suppression wave, the
+                # classifier columns) are taken from the earliest copy too —
+                # see `_conv_dedup_subquery`'s docstring for why that is
+                # guaranteed, not incidental.
                 rows = conn.execute(
-                    "SELECT COALESCE(d.conversation_key, d.dst) AS key, d.src, d.dst,"  # noqa: S608 - key_clause is a fixed literal; values parameterized
+                    "SELECT COALESCE(d.conversation_key, d.dst) AS key, d.src, d.dst,"  # noqa: S608 - dedup_sql/key_clause are fixed literals; values parameterized
                     " COUNT(*) AS cnt, MAX(d.ts) AS last_ts,"
-                    " SUM(CASE WHEN d.ts > COALESCE(rc.ts, 0) THEN 1 ELSE 0 END)"
-                    "   AS newer,"
-                    " SUM(CASE WHEN d.ts >"
-                    "   MAX(COALESCE(rc.ts, 0), COALESCE(rc2.ts, 0))"
-                    "   THEN 1 ELSE 0 END) AS newer_spam"
-                    " FROM ("
-                    "   SELECT MIN(m.timestamp) AS ts, m.src, m.dst, m.conversation_key"
-                    "   FROM messages m"
-                    "   WHERE m.type = 'msg' AND m.msg NOT GLOB '*:ack[0-9]*'"
-                    "   AND m.timestamp >= ?"
-                    + key_clause
-                    + "   GROUP BY COALESCE(NULLIF(m.msg_id, ''), 'row:' || m.rowid)"
-                    " ) d"
-                    " LEFT JOIN read_cursors rc"
-                    "   ON rc.key = COALESCE(d.conversation_key, d.dst)"
-                    " LEFT JOIN read_cursors rc2"
-                    "   ON rc2.key = ?"
+                    f" SUM(CASE WHEN {_CONV_NEWER_EXPR} THEN 1 ELSE 0 END) AS newer,"
+                    f" SUM(CASE WHEN {_CONV_NEWER_SPAM_EXPR} THEN 1 ELSE 0 END)"
+                    "   AS newer_spam"
+                    f" FROM ({dedup_sql}) d"
+                    + _CONV_CURSOR_JOINS
                     # Positional GROUP BY, not "GROUP BY key": with the two
                     # read_cursors joins a bare "key" is ambiguous between the
                     # SELECT alias and rc.key/rc2.key and SQLite rejects the
                     # query outright with "ambiguous column name: key".
-                    " GROUP BY 1, d.src, d.dst",
+                    + " GROUP BY 1, d.src, d.dst",
                     params,
                 ).fetchall()
 
                 summary: dict[str, dict[str, int]] = {}
                 for row in rows:
-                    key = row["key"]
-                    if not key:
-                        continue
-                    src = row["src"] or ""
-                    dst = row["dst"] or ""
-                    rebucketed = False
-                    if blocklist_filter is not None:
-                        kept = blocklist_filter({"src": src, "dst": dst})
-                        if kept is None:
-                            continue  # dropped outright
-                        if kept.get("dst") == SPAM_GROUP:
-                            # Rebucketed to the quarantine group, matching where
-                            # the message itself now shows up. Every quarantined
-                            # group shares ONE cursor (rc2, keyed on SPAM_GROUP
-                            # itself): a row only counts as unread when it is
-                            # newer than BOTH the original key's cursor and the
-                            # SPAM_GROUP cursor (MAX semantics), so marking 9999
-                            # read actually clears the badge instead of it
-                            # re-lighting from the untouched original cursor.
-                            key = SPAM_GROUP
-                            rebucketed = True
+                    _apply_conversation_row(row, summary, blocklist_filter, my_base)
 
-                    entry = summary.setdefault(key, {"count": 0, "last_ts": 0, "unread": 0})
-                    entry["count"] += row["cnt"]
-                    entry["last_ts"] = max(entry["last_ts"], row["last_ts"] or 0)
+                if policy_is_noop(policy):
+                    # Common case (an install that never touched the spam
+                    # filter or blocklist): zero extra query cost, byte-
+                    # identical to pre-suppression behaviour.
+                    return summary
 
-                    sender_base = src.split(",", maxsplit=1)[0].split("-", maxsplit=1)[0].upper()
-                    if sender_base != my_base:
-                        entry["unread"] += (row["newer_spam"] if rebucketed else row["newer"]) or 0
+                # Second pass: per-row candidates only (not grouped), so each
+                # can be individually judged by `is_suppressed` and, if
+                # hidden, subtracted from the `unread` the loop above already
+                # added it to. Built from the SAME dedup subquery and the
+                # SAME two boolean expressions as the aggregate query above
+                # (`_conv_dedup_subquery`, `_CONV_NEWER_EXPR`,
+                # `_CONV_NEWER_SPAM_EXPR`) — see the module-level comment by
+                # those definitions for why that sharing is load-bearing.
+                candidate_rows = conn.execute(
+                    "SELECT COALESCE(d.conversation_key, d.dst) AS key, d.src, d.dst,"  # noqa: S608 - dedup_sql/key_clause are fixed literals; values parameterized
+                    " d.msg, d.category, d.tags, d.info_score, d.template_hash,"
+                    f" ({_CONV_NEWER_EXPR}) AS newer,"
+                    f" ({_CONV_NEWER_SPAM_EXPR}) AS newer_spam"
+                    f" FROM ({dedup_sql}) d"
+                    + _CONV_CURSOR_JOINS
+                    + f" WHERE ({_CONV_NEWER_EXPR}) OR ({_CONV_NEWER_SPAM_EXPR})",
+                    params,
+                ).fetchall()
+
+                for row in candidate_rows:
+                    _subtract_suppressed_row(row, summary, blocklist_filter, my_base, policy)
 
                 return summary
 
@@ -687,7 +932,7 @@ class QueryMixin(StorageBase):
             # belong to the virtual Time chat
             query = (
                 f"SELECT {_MSG_SELECT} FROM messages"  # noqa: S608 - identifiers from fixed set; values parameterized
-                " WHERE type = 'msg' AND msg NOT GLOB '*:ack[0-9]*'"
+                f" WHERE type = 'msg' AND {_NOT_ACK_SQL}"
                 # (msg IS NULL OR ...) mirrors delete_messages_by_dst: in SQLite
                 # `NULL NOT LIKE x` is NULL, not true, so a NULL-msg broadcast row was
                 # invisible on this page while the '*' DELETE happily removed it.
@@ -713,7 +958,7 @@ class QueryMixin(StorageBase):
             # NULL conversation_key, which this arm could never match.
             query = (
                 f"SELECT {_MSG_SELECT} FROM messages"  # noqa: S608 - identifiers from fixed set; values parameterized
-                " WHERE type = 'msg' AND msg NOT GLOB '*:ack[0-9]*'"
+                f" WHERE type = 'msg' AND {_NOT_ACK_SQL}"
                 " AND conversation_key = ? AND timestamp < ?"
                 " ORDER BY timestamp DESC LIMIT ?"
             )
@@ -726,7 +971,7 @@ class QueryMixin(StorageBase):
             # on the resolved tag verbatim (conversation_key_vectors.json v4).
             query = (
                 f"SELECT {_MSG_SELECT} FROM messages"  # noqa: S608 - identifiers from fixed set; values parameterized
-                " WHERE type = 'msg' AND msg NOT GLOB '*:ack[0-9]*'"
+                f" WHERE type = 'msg' AND {_NOT_ACK_SQL}"
                 " AND conversation_key = ? AND timestamp < ?"
                 " ORDER BY timestamp DESC LIMIT ?"
             )
@@ -740,7 +985,7 @@ class QueryMixin(StorageBase):
             # remains for rows a pre-v18 mcdump import left unkeyed.
             query = (
                 f"SELECT {_MSG_SELECT} FROM messages"  # noqa: S608 - identifiers from fixed set; values parameterized
-                " WHERE type = 'msg' AND msg NOT GLOB '*:ack[0-9]*'"
+                f" WHERE type = 'msg' AND {_NOT_ACK_SQL}"
                 " AND dst = ? AND timestamp < ?"
                 " ORDER BY timestamp DESC LIMIT ?"
             )
@@ -748,7 +993,7 @@ class QueryMixin(StorageBase):
         else:
             query = (
                 f"SELECT {_MSG_SELECT} FROM messages"  # noqa: S608 - identifiers from fixed set; values parameterized
-                " WHERE type = 'msg' AND msg NOT GLOB '*:ack[0-9]*'"
+                f" WHERE type = 'msg' AND {_NOT_ACK_SQL}"
                 " AND timestamp < ?"
                 " ORDER BY timestamp DESC LIMIT ?"
             )
@@ -959,20 +1204,16 @@ class QueryMixin(StorageBase):
             )
         return rows
 
-    async def _build_chart_series(
-        self,
+    @staticmethod
+    def _group_and_qualify(
         bucket_rows: list[dict[str, Any]],
-        *,
-        gap_threshold_s: int,
-        gap_offset_s: int,
-        progress_callback: Any = None,
-    ) -> list[dict[str, Any]]:
-        """Group bucket rows by callsign, insert gap markers, and sort for Chart.js.
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Group bucket rows by callsign and apply the qualification floor.
 
-        Shared by process_mheard_store_parallel (5-min buckets, both the pre-aggregated
-        and legacy-scan paths), process_mheard_yearly, and process_mheard_monthly (both
-        hourly-rolled-up) — the only differences between callers are the query that
-        produces bucket_rows and the two window-specific gap parameters.
+        Pure and synchronous (no awaits, no I/O beyond a plain logger call) —
+        safe to run via asyncio.to_thread. Split out of _build_chart_series so
+        the CPU-bound grouping pass over up to ~21 000 rows runs off the event
+        loop.
         """
         callsign_data: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in bucket_rows:
@@ -1002,21 +1243,24 @@ class QueryMixin(StorageBase):
                 len(qualified),
             )
 
-        if progress_callback:
-            await progress_callback(
-                "bucketing",
-                f"Processing {len(bucket_rows)} buckets for {len(qualified)} stations...",
-            )
+        return qualified
 
-        final_result = []
-        for idx, (callsign, entries) in enumerate(sorted(qualified.items()), 1):
-            if progress_callback:
-                await progress_callback(
-                    "gaps",
-                    f"Building chart for {callsign} ({idx}/{len(qualified)})...",
-                    callsign,
-                )
+    @staticmethod
+    def _build_series_chunk(
+        items: list[tuple[str, list[dict[str, Any]]]],
+        *,
+        gap_threshold_s: int,
+        gap_offset_s: int,
+    ) -> list[dict[str, Any]]:
+        """Build chart rows (data points + gap markers) for one chunk of
+        already-sorted (callsign, entries) pairs.
 
+        Pure and synchronous (no awaits) — safe to run via asyncio.to_thread.
+        `items` is a slice of `sorted(qualified.items())`, so output order
+        within and across chunks matches the pre-chunking single-pass loop.
+        """
+        chunk_result: list[dict[str, Any]] = []
+        for callsign, entries in items:
             entries.sort(key=lambda x: x["bucket_ts"])
             segment_id = 0
             prev_time = None
@@ -1026,7 +1270,7 @@ class QueryMixin(StorageBase):
                 bucket_time = entry["bucket_ts"] // 1000
 
                 if prev_time and (bucket_time - prev_time) > gap_threshold_s:
-                    final_result.append(
+                    chunk_result.append(
                         {
                             "src_type": "STATS",
                             "timestamp": bucket_time - gap_offset_s,
@@ -1045,7 +1289,7 @@ class QueryMixin(StorageBase):
                     )
                     segment_id += 1
 
-                final_result.append(
+                chunk_result.append(
                     {
                         "src_type": "STATS",
                         "timestamp": bucket_time,
@@ -1062,15 +1306,94 @@ class QueryMixin(StorageBase):
                     }
                 )
                 prev_time = bucket_time
+        return chunk_result
 
+    @staticmethod
+    def _finalize_series(
+        final_result: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], int, int]:
+        """Final sort for Chart.js, plus the "done" progress counters, in one pass.
+
+        Pure and synchronous (no awaits) — safe to run via asyncio.to_thread.
+        For the yearly dump this sort is over ~21 000 rows with a tuple key,
+        which used to be the single largest remaining on-loop pass in
+        _build_chart_series even after the grouping and per-chunk build were
+        moved off it. The two counters are computed unconditionally, not only
+        when a progress_callback is present — branching the thread call on
+        the callback would leave two different code paths over the same data,
+        which is how the returned series and the reported "done" counts could
+        drift apart.
+        """
         result = sorted(final_result, key=lambda x: (x["callsign"], x["timestamp"]))
+        stats_entries = [r for r in result if not r.get("is_gap_marker")]
+        callsign_count = len({e["callsign"] for e in stats_entries}) if stats_entries else 0
+        return result, len(stats_entries), callsign_count
+
+    async def _build_chart_series(
+        self,
+        bucket_rows: list[dict[str, Any]],
+        *,
+        gap_threshold_s: int,
+        gap_offset_s: int,
+        progress_callback: Any = None,
+    ) -> list[dict[str, Any]]:
+        """Group bucket rows by callsign, insert gap markers, and sort for Chart.js.
+
+        Shared by process_mheard_store_parallel (5-min buckets, both the pre-aggregated
+        and legacy-scan paths), process_mheard_yearly, and process_mheard_monthly (both
+        hourly-rolled-up) — the only differences between callers are the query that
+        produces bucket_rows and the two window-specific gap parameters.
+
+        The CPU-bound work (grouping/qualifying up to ~21 000 bucket rows,
+        building chart rows + gap markers per station, and the final sort +
+        "done" counters) runs off the event loop via asyncio.to_thread through
+        the three pure helpers above — measured on mcapp.local, a yearly dump
+        otherwise blocked the loop for ~1.4 s with the thread pool completely
+        idle, and the final sort over ~21 000 rows was the single largest
+        remaining on-loop pass even after the grouping and per-chunk build
+        were moved off it. Progress is throttled to one "gaps" event per
+        MHEARD_PROGRESS_CHUNK stations (was one per station: 65 on-loop SSE
+        sends for a yearly dump).
+        """
+        qualified = await asyncio.to_thread(self._group_and_qualify, bucket_rows)
 
         if progress_callback:
-            stats_entries = [r for r in result if not r.get("is_gap_marker")]
-            callsign_count = len({e["callsign"] for e in stats_entries}) if stats_entries else 0
+            await progress_callback(
+                "bucketing",
+                f"Processing {len(bucket_rows)} buckets for {len(qualified)} stations...",
+            )
+
+        items = sorted(qualified.items())
+        total = len(items)
+        final_result: list[dict[str, Any]] = []
+        done = 0
+        for chunk_start in range(0, total, MHEARD_PROGRESS_CHUNK):
+            chunk = items[chunk_start : chunk_start + MHEARD_PROGRESS_CHUNK]
+            chunk_result = await asyncio.to_thread(
+                self._build_series_chunk,
+                chunk,
+                gap_threshold_s=gap_threshold_s,
+                gap_offset_s=gap_offset_s,
+            )
+            final_result.extend(chunk_result)
+            done += len(chunk)
+
+            if progress_callback:
+                last_callsign = chunk[-1][0]
+                await progress_callback(
+                    "gaps",
+                    f"Building chart for {last_callsign} ({done}/{total})...",
+                    last_callsign,
+                )
+
+        result, stats_count, callsign_count = await asyncio.to_thread(
+            self._finalize_series, final_result
+        )
+
+        if progress_callback:
             await progress_callback(
                 "done",
-                f"{len(stats_entries)} data points for {callsign_count} stations",
+                f"{stats_count} data points for {callsign_count} stations",
             )
         return result
 

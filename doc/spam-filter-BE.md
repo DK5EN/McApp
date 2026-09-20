@@ -119,12 +119,14 @@ CREATE INDEX IF NOT EXISTS idx_beacon_templates_last_seen  ON beacon_templates(l
 ```
 
 ### Why JSON in a TEXT column for `tags` / `srcs`
+
 At the target volume (~700 messages / day, ~7k / 10 days) the simpler
 storage wins: no join table, straightforward serialization. If we ever
 need server-side tag-based queries beyond the primary `category`, we'll
 promote to a join table in a follow-up migration.
 
 ### `classifier_ver`
+
 Small monotonic integer. Bumped whenever rules are created / edited /
 deleted or the classifier code itself changes its hashing / scoring
 formula. Stored on each classified row so we can cheaply find rows that
@@ -228,28 +230,30 @@ the pipeline never blocks on classifier bugs.
 - `scope='combined'` — against `f"{msg['src']}|{msg['dst']}|{msg['msg']}"`
 
 ### Compilation
+
 Compile once, cache in memory (`re.Pattern`). Invalidate cache on
 `POST/PATCH/DELETE /api/classifier/rules`.
 
 ### Evaluation
+
 Sort by `(priority ASC, id ASC)` once at load time. For each enabled
 rule in order, run `regex.search()`. The **first** match sets
 `category`. **All** matching rules contribute `extra_tags`.
 
 ### Default rules (seeded on first run — `builtin=1`)
 
-| Priority | Name | Scope | Pattern | Category | Extra tags |
-|---|---|---|---|---|---|
-| 10 | CET timestamp | msg | `^\{CET\}\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}` | `timestamp_beacon` | `beacon` |
-| 20 | WX emoji block | msg | `🌡.*(📊|💧)` | `wx_beacon` | `beacon,emoji_heavy` |
-| 21 | WX text | msg | `(?i)(WX\s|Temp[:= ]).*(QNH|hPa)` | `wx_beacon` | `beacon` |
-| 22 | WX short emoji | msg | `🌡️\d+.*\[` | `wx_beacon` | `beacon,emoji_heavy` |
-| 30 | MeshCom WebDesk advert | msg | `MeshComWebDesk V\d` | `sw_advert` | `beacon` |
-| 31 | MeshCom WebDesk banner | msg | `\*\*\*MeshCom WebDesk` | `sw_advert` | `beacon` |
-| 40 | URL advert | msg | `https?://\S+` | `node_advert` | `has_url` |
-| 50 | Greeting DE | msg | `(?i)^(73|hallo|servus|moin|nabend|ahoi|guten (morgen|abend|tag))` | `greeting` | — |
-| 60 | Earthquake DE/EN | msg | `(?i)(erdbeben|earthquake|magnitude\s+\d)` | `alert` | — |
-| 90 | Direct callsign | dst | `^[A-Z0-9]+-\d+$` | `directed` | — |
+| Priority | Name                   | Scope | Pattern                                       | Category           | Extra tags           |
+| -------- | ---------------------- | ----- | --------------------------------------------- | ------------------ | -------------------- |
+| 10       | CET timestamp          | msg   | `^\{CET\}\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}` | `timestamp_beacon` | `beacon`             |
+| 20       | WX emoji block         | msg   | `🌡.*(📊                                       | 💧)`               | `wx_beacon`          | `beacon,emoji_heavy` |
+| 21       | WX text                | msg   | `(?i)(WX\s                                    | Temp[:= ]).*(QNH   | hPa)`                | `wx_beacon`          | `beacon` |
+| 22       | WX short emoji         | msg   | `🌡️\d+.*\[`                                   | `wx_beacon`        | `beacon,emoji_heavy` |
+| 30       | MeshCom WebDesk advert | msg   | `MeshComWebDesk V\d`                          | `sw_advert`        | `beacon`             |
+| 31       | MeshCom WebDesk banner | msg   | `\*\*\*MeshCom WebDesk`                       | `sw_advert`        | `beacon`             |
+| 42       | URL advert             | msg   | `^\s*(https?://\|www\.)[^\s]+\s*$`            | `other`            | `has_url`            |
+| 50       | Greeting DE            | msg   | `(?i)^(73                                     | hallo              | servus               | moin                 | nabend   | ahoi | guten (morgen | abend | tag))` | `greeting` | —   |
+| 60       | Earthquake DE/EN       | msg   | `(?i)(erdbeben                                | earthquake         | magnitude\s+\d)`     | `alert`              | —        |
+| 90       | Direct callsign        | dst   | `^[A-Z0-9]+-\d+$`                             | `directed`         | —                    |
 
 `builtin=1` rules cannot be deleted via API (returns 404), but can be
 edited (pattern, priority, enabled). This lets the user tune defaults
@@ -281,6 +285,7 @@ Regex defs:
 ### Stats update (`template.update_stats()`)
 
 UPSERT into `beacon_templates`:
+
 - `count += 1`
 - `last_seen = now`
 - `first_seen = now` on insert
@@ -312,6 +317,7 @@ AUTO_BEACON_WINDOW_SEC = 24 * 60 * 60
 ### User overrides
 
 `user_action` has three values:
+
 - `'promote'` — force this template to behave like an auto-beacon even
   if it hasn't crossed the threshold. UI hides it.
 - `'demote'` — this template is **never** marked `auto_beacon`, even if
@@ -367,6 +373,7 @@ All live in `api.py`. Use the existing FastAPI app and the existing auth
 middleware (if any).
 
 ### Rules
+
 ```
 GET    /api/classifier/rules
 POST   /api/classifier/rules
@@ -384,6 +391,7 @@ POST   /api/classifier/rules/test        # dry-run over last 500 messages
   with the full list.
 
 ### Templates
+
 ```
 GET    /api/classifier/templates?min_count=5&auto_only=false&limit=100
 PATCH  /api/classifier/templates/{hash}                 # {user_action}
@@ -391,6 +399,7 @@ POST   /api/classifier/templates/{hash}/preview         # last 20 messages
 ```
 
 ### Reclassify
+
 ```
 POST /api/classifier/reclassify           # {since?, category?}
 GET  /api/classifier/status
@@ -398,6 +407,7 @@ GET  /api/classifier/status
 
 `reclassify` returns immediately with
 `{job_id, estimated_rows}` and runs as an asyncio task. It:
+
 1. Selects target rows (`classifier_ver < current_ver` or all, filtered).
 2. Iterates in batches of 500.
 3. Runs the classifier on each row, UPDATEs the row.
@@ -421,12 +431,12 @@ JSON-serializable dicts / lists that **exactly** match the types in
 
 ## 10. SSE events (emit points)
 
-| Event | When | Payload |
-|---|---|---|
-| `proxy:classifier_rules` | on connect + after any rule mutation | `ClassifierRule[]` |
-| `proxy:classifier_stats` | on connect + every 60 s | `{counts, recent_24h, top_templates}` |
-| `proxy:classifier_template_event` | a template transitions to `auto_beacon=1` | `BeaconTemplate` |
-| `proxy:reclassify_progress` | every batch while reclassify job runs + final | `{job_id, processed, total, done}` |
+| Event                             | When                                          | Payload                               |
+| --------------------------------- | --------------------------------------------- | ------------------------------------- |
+| `proxy:classifier_rules`          | on connect + after any rule mutation          | `ClassifierRule[]`                    |
+| `proxy:classifier_stats`          | on connect + every 60 s                       | `{counts, recent_24h, top_templates}` |
+| `proxy:classifier_template_event` | a template transitions to `auto_beacon=1`     | `BeaconTemplate`                      |
+| `proxy:reclassify_progress`       | every batch while reclassify job runs + final | `{job_id, processed, total, done}`    |
 
 ### Periodic stats
 
@@ -540,13 +550,13 @@ Parked for after the first rollout.
 These are sensible first-pass defaults, not edicts. Change any of them
 if real data shows they are wrong.
 
-| Decision | Default | Where to tune |
-|---|---|---|
-| Multi-tag storage | JSON array in `messages.tags` TEXT column | schema revision if query load grows |
-| When classification runs | at `store_message()` + on-demand reclassify endpoint | — |
-| Auto-beacon threshold | 5 messages / same src / same template / 24 h | `classifier/template.py` constants |
-| Default-hidden category (FE pref) | `timestamp_beacon` only | webapp `useUserSettingsStore` defaults |
-| Backfill on first migration | automatic, in background, progress via SSE | `auto_backfill_on_start` config flag |
+| Decision                          | Default                                              | Where to tune                          |
+| --------------------------------- | ---------------------------------------------------- | -------------------------------------- |
+| Multi-tag storage                 | JSON array in `messages.tags` TEXT column            | schema revision if query load grows    |
+| When classification runs          | at `store_message()` + on-demand reclassify endpoint | —                                      |
+| Auto-beacon threshold             | 5 messages / same src / same template / 24 h         | `classifier/template.py` constants     |
+| Default-hidden category (FE pref) | `timestamp_beacon` only                              | webapp `useUserSettingsStore` defaults |
+| Backfill on first migration       | automatic, in background, progress via SSE           | `auto_backfill_on_start` config flag   |
 
 ---
 

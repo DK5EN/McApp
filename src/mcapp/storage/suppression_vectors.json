@@ -1,0 +1,414 @@
+{
+  "description": "Canonical corpus for the message-suppression predicate (is_suppressed / is_spam_by_classifier / is_text_blocked). This mirrors the webapp's isSpamByClassifier (src/stores/messages/predicates.ts, decision order: disabled -> promoted hash -> demoted hash -> hidden category -> hide_auto_beacons -> min_info_score) combined with the unconditional isTextBlocked half of passesBaseGuards. It exists because the server's unread-badge count used to count every stored message, including ones the client's own spam filter or blocklist would never render, which left a badge unclearable whenever the newest message in a conversation was hidden (doc/2026-09-19_2140-unread-suppression-plan.md). Field names in `policies` and `message` are the webapp's wire names (camelCase) so this file can be hand-copied there unchanged; MCProxy's own predicate uses snake_case internally and translates via policy_from_parts/view_from_row.",
+  "canonical": "MCProxy/src/mcapp/storage/suppression_vectors.json",
+  "version": 1,
+  "policies": {
+    "disabled_hides_category": {
+      "enabled": false,
+      "hiddenCategories": ["node_advert"],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "disabled_with_blocked_text": {
+      "enabled": false,
+      "hiddenCategories": [],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": ["spamword"]
+    },
+    "promoted_only": {
+      "enabled": true,
+      "hiddenCategories": [],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": ["promo123abc1"],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "promoted_but_disabled": {
+      "enabled": false,
+      "hiddenCategories": [],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": ["promo123abc1"],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "demoted_beats_category": {
+      "enabled": true,
+      "hiddenCategories": ["spam_cat"],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": ["demo456def12"],
+      "blockedTexts": []
+    },
+    "group20_regression": {
+      "enabled": true,
+      "hiddenCategories": ["timestamp_beacon", "bot_command", "node_advert", "sw_advert"],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "group20_category_not_hidden": {
+      "enabled": true,
+      "hiddenCategories": [],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "auto_beacon_hidden": {
+      "enabled": true,
+      "hiddenCategories": [],
+      "minInfoScore": null,
+      "hideAutoBeacons": true,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "auto_beacon_shown": {
+      "enabled": true,
+      "hiddenCategories": [],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "info_score_threshold": {
+      "enabled": true,
+      "hiddenCategories": [],
+      "minInfoScore": 0.5,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "no_threshold": {
+      "enabled": true,
+      "hiddenCategories": [],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "blocked_text_case_insensitive": {
+      "enabled": true,
+      "hiddenCategories": [],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": ["BadWord"]
+    },
+    "blocked_text_empty_list": {
+      "enabled": true,
+      "hiddenCategories": [],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "degenerate_nonempty_hash_sets": {
+      "enabled": true,
+      "hiddenCategories": [],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": ["real123abc12"],
+      "demotedHashes": ["other456def1"],
+      "blockedTexts": []
+    },
+    "empty_hash_in_promoted": {
+      "enabled": true,
+      "hiddenCategories": [],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [""],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "empty_hash_in_demoted_with_hidden_category": {
+      "enabled": true,
+      "hiddenCategories": ["catX"],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [""],
+      "blockedTexts": []
+    },
+    "populated_hidden_categories": {
+      "enabled": true,
+      "hiddenCategories": ["cat1", "cat2"],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    }
+  },
+  "vectors": [
+    {
+      "name": "enabled false: hiddenCategories match is ignored (clause 1 wins)",
+      "policy": "disabled_hides_category",
+      "message": {
+        "msg": "plain text",
+        "category": "node_advert",
+        "tags": [],
+        "info_score": 1.0,
+        "template_hash": "abc123abc123"
+      },
+      "suppressed": false
+    },
+    {
+      "name": "enabled false: blocked text still suppresses (unconditional, asymmetric with spam prefs)",
+      "policy": "disabled_with_blocked_text",
+      "message": {
+        "msg": "this message contains SPAMWORD in it",
+        "category": "other",
+        "tags": [],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": true
+    },
+    {
+      "name": "promoted hash suppresses even though category/score/tags would not",
+      "policy": "promoted_only",
+      "message": {
+        "msg": "hello world",
+        "category": "other",
+        "tags": [],
+        "info_score": 1.0,
+        "template_hash": "promo123abc1"
+      },
+      "suppressed": true
+    },
+    {
+      "name": "promoted hash with enabled false is not suppressed (clause 1 wins)",
+      "policy": "promoted_but_disabled",
+      "message": {
+        "msg": "hello world",
+        "category": "other",
+        "tags": [],
+        "info_score": 1.0,
+        "template_hash": "promo123abc1"
+      },
+      "suppressed": false
+    },
+    {
+      "name": "demoted hash beats a hidden category",
+      "policy": "demoted_beats_category",
+      "message": {
+        "msg": "hello world",
+        "category": "spam_cat",
+        "tags": [],
+        "info_score": 1.0,
+        "template_hash": "demo456def12"
+      },
+      "suppressed": false
+    },
+    {
+      "name": "group 20 regression: node_advert + low info_score + has_url, hidden -> suppressed",
+      "policy": "group20_regression",
+      "message": {
+        "msg": "https://www.varac-hamradio.com/group/varac-hf-discussion-forum/discussion",
+        "category": "node_advert",
+        "tags": ["has_url"],
+        "info_score": 0.3,
+        "template_hash": ""
+      },
+      "suppressed": true
+    },
+    {
+      "name": "same group 20 message with hiddenCategories empty -> not suppressed",
+      "policy": "group20_category_not_hidden",
+      "message": {
+        "msg": "https://www.varac-hamradio.com/group/varac-hf-discussion-forum/discussion",
+        "category": "node_advert",
+        "tags": ["has_url"],
+        "info_score": 0.3,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "hideAutoBeacons true + auto_beacon tag -> suppressed",
+      "policy": "auto_beacon_hidden",
+      "message": {
+        "msg": "beacon text",
+        "category": "other",
+        "tags": ["auto_beacon"],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": true
+    },
+    {
+      "name": "hideAutoBeacons false + same auto_beacon tag -> not suppressed",
+      "policy": "auto_beacon_shown",
+      "message": {
+        "msg": "beacon text",
+        "category": "other",
+        "tags": ["auto_beacon"],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "info_score strictly below minInfoScore -> suppressed",
+      "policy": "info_score_threshold",
+      "message": {
+        "msg": "low info",
+        "category": "other",
+        "tags": [],
+        "info_score": 0.4,
+        "template_hash": ""
+      },
+      "suppressed": true
+    },
+    {
+      "name": "info_score exactly equal to minInfoScore -> not suppressed",
+      "policy": "info_score_threshold",
+      "message": {
+        "msg": "boundary info",
+        "category": "other",
+        "tags": [],
+        "info_score": 0.5,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "info_score above minInfoScore -> not suppressed",
+      "policy": "info_score_threshold",
+      "message": {
+        "msg": "good info",
+        "category": "other",
+        "tags": [],
+        "info_score": 0.6,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "minInfoScore null -> never suppressed by that clause even at info_score 0.0",
+      "policy": "no_threshold",
+      "message": {
+        "msg": "zero info",
+        "category": "other",
+        "tags": [],
+        "info_score": 0.0,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "info_score null with a threshold set -> not suppressed by that clause",
+      "policy": "info_score_threshold",
+      "message": {
+        "msg": "unscored",
+        "category": "other",
+        "tags": [],
+        "info_score": null,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "blocked text: case-insensitive substring match",
+      "policy": "blocked_text_case_insensitive",
+      "message": {
+        "msg": "this text contains badword right here",
+        "category": "other",
+        "tags": [],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": true
+    },
+    {
+      "name": "blocked text: non-matching list -> not suppressed",
+      "policy": "blocked_text_case_insensitive",
+      "message": {
+        "msg": "totally unrelated text",
+        "category": "other",
+        "tags": [],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "blocked text: empty list -> never suppressed by that clause",
+      "policy": "blocked_text_empty_list",
+      "message": {
+        "msg": "anything at all",
+        "category": "other",
+        "tags": [],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "degenerate: empty category/template_hash/tags, info_score null -> not suppressed, no raise",
+      "policy": "degenerate_nonempty_hash_sets",
+      "message": {
+        "msg": "",
+        "category": "",
+        "tags": [],
+        "info_score": null,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "an empty entry in promotedHashes must not match an empty template_hash",
+      "policy": "empty_hash_in_promoted",
+      "message": {
+        "msg": "hello",
+        "category": "other",
+        "tags": [],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "an empty entry in demotedHashes must not match an empty template_hash (hidden category still applies)",
+      "policy": "empty_hash_in_demoted_with_hidden_category",
+      "message": {
+        "msg": "hello",
+        "category": "catX",
+        "tags": [],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": true
+    },
+    {
+      "name": "degenerate: empty category never matches a populated hiddenCategories list",
+      "policy": "populated_hidden_categories",
+      "message": {
+        "msg": "hello",
+        "category": "",
+        "tags": [],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": false
+    }
+  ]
+}

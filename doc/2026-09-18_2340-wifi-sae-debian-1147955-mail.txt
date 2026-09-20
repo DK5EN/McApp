@@ -1,0 +1,28 @@
+To: 1147955@bugs.debian.org
+Subject: Re: wpasupplicant: Fix SAE reporting over dbus, upstream patch available
+
+Control: severity -1 important
+
+Please do not apply this patch to trixie on its own. Raspberry Pi OS shipped it on
+2026-09-17 as 2:2.10-24+rpt1 and it takes a Raspberry Pi Zero 2 W (brcmfmac,
+BCM43430/1) off Wi-Fi permanently on any WPA2/WPA3 transition-mode AP. Full analysis
+with logs and the exact mechanism: https://github.com/raspberrypi/linux/issues/7634
+
+Short version: brcmfmac sets NL80211_FEATURE_SAE (external SAE auth) although the
+43430/1 firmware cannot complete the handshake. With the patch, wpa_supplicant reports
+"sae" over D-Bus, and NetworkManager 1.52.1 (trixie) then appends SAE to key_mgmt for
+every wpa-psk profile in station mode. wpa_supplicant prefers SAE over PSK, the
+association fails, and there is no fallback. The NetworkManager escape hatch
+(wifi-sec.pmf=disable) only works in station mode since upstream commit b00c6749
+(2025-06-05), which is in 1.56+ and not in trixie's 1.52.1.
+
+So in trixie the patch is safe only together with one of:
+  - a NetworkManager stable update carrying b00c6749, so pmf=disable opts out, or
+  - brcmfmac not advertising NL80211_FEATURE_SAE on chips where it does not work.
+
+Affected: Debian trixie on Raspberry Pi Zero 2 W / 3B / Zero W (43430 family) with the
+Debian kernel, and Raspberry Pi OS trixie. Workaround on the box: hold wpasupplicant at
+2:2.10-24, or brcmfmac.feature_disable with the SAE_EXT bit for the running kernel.
+
+-- 
+Martin Werner, DK5EN

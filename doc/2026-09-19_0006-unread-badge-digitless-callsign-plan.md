@@ -189,11 +189,11 @@ once his box takes the update — worth saying so when answering the issue.
 
 Waves 1a and 1b are **done and gated**. Wave 2 remains **deferred** as recommended above.
 
-| Wave | Scope                                | State                 |
-| ---- | ------------------------------------ | --------------------- |
-| 1a   | Backend normalise + one-shot repair  | done                  |
-| 1b   | Webapp round-trip invariant          | done                  |
-| 2    | `makePairKey` third-party digit-less | deferred, not started |
+| Wave | Scope                                | State                   |
+| ---- | ------------------------------------ | ----------------------- |
+| 1a   | Backend normalise + one-shot repair  | done                    |
+| 1b   | Webapp round-trip invariant          | done                    |
+| 2    | `makePairKey` third-party digit-less | done (webapp `11581e5`) |
 
 Shipped as specified, with one addition forced by the advisor gate.
 
@@ -234,3 +234,44 @@ only where the bug actually deposited a bare key.
 
 **Still open:** a dev release and deploy, and the reply to issue #11 — including the
 confirmation that HB9VQQ is on v2.0.4 or later (§ Assumptions).
+
+## Wave 2 — implemented 2026-09-19 (webapp `11581e5`)
+
+Taken after all, on the back of the Winlink thread: `WLNK-1` is the production case the
+deferral note predicted, and the bare-APRS-ack filter shipped the same day (MCProxy `7a41453`,
+webapp `faf1ec2`) removes the noise that would otherwise have filled the bucket this wave opens.
+
+**The rule.** `isValidPairMember` drops the digit requirement and widens the bound to 9 — the
+MeshCom wire cap on a destination (`schemas.py` accepts `dst` of 1..9). The letter requirement
+stays and is what still rejects all-digit ids. A new `NON_PERSON_PAIR_MEMBERS` set
+(`ALL`, `TIME`, `TEST`) is derived from `NON_PERSON_DST_ALIASES` **without mutating it**, so
+`isDirectedDst` — that set's only other consumer — is behaviourally unchanged.
+
+**Why the digit test was wrong, stated properly.** `compute_conversation_key`
+(`storage/constants.py`) applies no plausibility test at all on its DM branch. Checked directly:
+the backend keys `DK5DM` + `WLNK-1` as `DK5DM<>WLNK` and `DL8FMA` + `APRS2SOTA` as
+`APRS2SOTA<>DL8FMA`. The webapp was discarding summaries the server had already produced — a
+client-side gap, not a disagreement the client was winning.
+
+**`TEST` is defence in depth, not load-bearing.** `isGroupDst` claims it on both call paths
+before `makePairKey` is reached, so it cannot arrive. The unit-level pins on
+`makePairKey('TEST', ...)` exist regardless and still pass.
+
+**Field replay.** Of mcapp.local's 65 third-party conversation keys, exactly **one** becomes
+visible — `APRS2SOTA<>DL8FMA` — and **none** are still refused. `WLNK` contributes nothing yet
+because no Winlink traffic is in RF range, so that case is pinned by test rather than by data.
+
+**Known asymmetry, deliberately left open.** The backend keys `ALL<>X` and `X<>TIME` as DM pairs
+while this denylist refuses them. That predates the wave; it shrinks the webapp/backend
+disagreement set without emptying it. Closing it belongs upstream, in `compute_conversation_key`,
+not in a client denylist.
+
+**Gate.** eslint, `vue-tsc --noEmit`, `prettier --check .`, 3383 tests in 216 files — all clean;
+`conversation_key_vectors.json` byte-unchanged (sha256 `8c9b3b39…`). Fail-before reproduced by
+reverting the predicate line: the two alias cases and the round-trip case go red (142/145).
+Advisor gate **APPROVED**, checked against Wave 1b's non-regression criteria — the own-DM round
+trip and the refusal branch for keys the backend will not key are untouched, with the diff hunks
+confined to lines 34-57 and 156-175.
+
+**Still open:** a dev release carrying it, which is also what puts the bare-ack filter's webapp
+half on the box.

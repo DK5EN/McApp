@@ -29,8 +29,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import functools
 import json
 import os
+import re
 import stat
 import time
 from collections import OrderedDict
@@ -328,13 +330,87 @@ def is_sender_blocked(payload: dict[str, Any], blocked_callsigns: set[str]) -> b
     return resolved_src.upper() in {c.upper() for c in blocked_callsigns}
 
 
-def matches(payload: dict[str, Any], own_callsign: str, filt: dict[str, Any]) -> bool:
-    """Pure predicate: contract `match_semantics`.
+# ── @-mention matching (contract v11 `mention_semantics`) ───────────────────
+#
+# (^|[^A-Za-z0-9])@BASE(-[0-9]{1,2})?([^A-Za-z0-9]|$), matched CASE-SENSITIVELY
+# against the UPPERCASED text with an UPPERCASED BASE (own_callsign with any
+# trailing '-SSID' removed). Deliberately LOOKAROUND-FREE — do not "simplify"
+# this to a lookbehind or to `\b`. Two reasons, both load-bearing: (1) the
+# lookbehind form (`(?<![A-Za-z0-9])`) is unsupported before Safari 16.4, and
+# the webapp's filter module compiles its regex at load time, so a lookbehind
+# here would throw SyntaxError and take the whole module down for an older
+# iOS PWA, not just this clause. (2) matching case-INsensitively instead of
+# uppercasing first would make the ASCII boundary classes stop being ASCII —
+# Python's re.IGNORECASE also folds U+017F/U+212A into [A-Za-z0-9], and
+# JavaScript's /i without /u disagrees again — so two independent
+# implementations would silently diverge on exotic Unicode input.
+# Uppercase-then-compare-case-sensitively is exactly reproducible everywhere.
+#
+# The leading boundary class keeps an e-mail address ('sam@dk5en.de') from
+# mentioning whoever the local part spells; the trailing one keeps a longer,
+# different callsign ('@DK5ENX', '@DK5EN2') from mentioning `own`. The
+# optional '-SSID' is matched but never compared — the operator is the
+# station, not the SSID. Two shapes fall out of the pattern's mechanics
+# rather than any stated rule: '@DK5EN-123' matches (the SSID group's {1,2}
+# cannot consume all three digits, so it backtracks to matching nothing, and
+# the literal '-' itself then satisfies the trailing boundary class);
+# '@@DK5EN' matches (the first '@' satisfies the leading boundary class, the
+# second '@' is the literal preceding BASE).
+_MENTION_PATTERN_TEMPLATE = r"(^|[^A-Za-z0-9])@{base}(-[0-9]{{1,2}})?([^A-Za-z0-9]|$)"
+
+
+@functools.lru_cache(maxsize=32)
+def _compiled_mention_pattern(base_callsign_upper: str) -> re.Pattern[str]:
+    """Compiled once per distinct BASE (own_callsign is fixed for the
+    lifetime of a running node, so this is effectively compiled once in
+    production, never per call). Case-SENSITIVE by construction — callers
+    uppercase both the text and BASE before matching; see `mentions_own`."""
+    return re.compile(_MENTION_PATTERN_TEMPLATE.format(base=re.escape(base_callsign_upper)))
+
+
+def _base_callsign(callsign: str) -> str:
+    """`callsign` with any trailing '-SSID' suffix removed."""
+    return callsign.split("-", 1)[0]
+
+
+def mentions_own(text: str, own_callsign: str) -> bool:
+    """Pure predicate: contract v11 `mention_semantics`. True iff `text`
+    mentions `own_callsign` — an '@' followed by own_callsign's BASE (SSID
+    stripped), optionally followed by '-SSID', bounded on both sides so
+    neither an e-mail's local part nor a longer/different callsign counts.
+    See `_MENTION_PATTERN_TEMPLATE` above for the pattern and why it is
+    lookaround-free.
+
+    An absent/empty `text` never matches. If BASE is empty after stripping
+    the SSID (a malformed `own_callsign`), nothing ever matches.
+    """
+    if not text:
+        return False
+    base = _base_callsign(own_callsign)
+    if not base:
+        return False
+    return _compiled_mention_pattern(base.upper()).search(text.upper()) is not None
+
+
+def matches(payload: dict[str, Any], own_callsign: str, filt: dict[str, Any], text: str) -> bool:
+    """Pure predicate: contract `match_semantics` (mentions: contract v11).
 
     First resolve `dst` to `target` per dst_resolution, then push IFF
     ( target == own AND filter.dm ) OR ( target == '*' AND filter.broadcast )
-    OR ( target is an element of filter.groups, compared as trimmed strings ).
-    A DM whose target is any other callsign never pushes.
+    OR ( target is an element of filter.groups, compared as trimmed strings )
+    OR ( filter.mentions AND `text` mentions `own` per `mentions_own` ).
+    The mentions clause is an INDEPENDENT disjunct, never a narrowing of the
+    other three — a message can push on a mention alone regardless of
+    dm/broadcast/groups.
+
+    `text` MUST be the FULL, untruncated message text (contract
+    `mention_semantics`) — never `payload["text"]`, which `_payload_fields`
+    truncates to `MAX_TEXT_LEN` (120) chars. Callers pass the same raw
+    msg-or-text extraction the gates already use
+    (`raw_message.get("msg") or raw_message.get("text")`), taken BEFORE
+    truncation — see `PushDispatcher.handle_mesh_message`, which computes it
+    once per message and passes it through to every subscription's match
+    check.
     """
     target = _resolve_target(str(payload.get("dst") or ""))
     if target == own_callsign and filt.get("dm", True):
@@ -343,7 +419,9 @@ def matches(payload: dict[str, Any], own_callsign: str, filt: dict[str, Any]) ->
         return True
     groups = filt.get("groups") or []
     trimmed_groups = {str(g).strip() for g in groups}
-    return target in trimmed_groups
+    if target in trimmed_groups:
+        return True
+    return bool(filt.get("mentions", False)) and mentions_own(text, own_callsign)
 
 
 # ── Coalescing state machine (contract `coalesce`) ──────────────────────────
@@ -706,10 +784,20 @@ class PushDispatcher:
         STRIPPED, delivered payload) is only constructed after every gate has
         passed — do not reorder this: stripping first would widen dedup's
         msg_id-less fallback key. See `_build_gate_view`'s docstring.
+
+        contract v11 `mention_semantics`: the mention test needs the FULL,
+        untruncated message text — `_payload_fields` (used by both the gate
+        view and the delivered payload) truncates to `MAX_TEXT_LEN` (120)
+        chars, and a mention starting past that cap would otherwise silently
+        never fire. `full_text` is the same raw msg-or-text extraction as
+        `build_push_payload`, computed here BEFORE `strip_ack_suffix` and
+        BEFORE truncation, and passed to every subscription's `matches()`
+        check below.
         """
         if not own_callsign:
             return
         gate_view = _build_gate_view(raw_message)
+        full_text = str(raw_message.get("msg") or raw_message.get("text") or "")
         if not is_eligible(gate_view, own_callsign):
             return
         # contract `blocklist`: gate on the node's GLOBAL blocked_callsigns set
@@ -724,7 +812,7 @@ class PushDispatcher:
         payload = build_push_payload(raw_message)
         subs = await self._storage.list_push_subscriptions()
         for sub in subs:
-            if not matches(payload, own_callsign, sub["filter"]):
+            if not matches(payload, own_callsign, sub["filter"], full_text):
                 continue
             immediate = self.coalescer.submit(sub["endpoint"], sub, payload)
             if immediate is not None:

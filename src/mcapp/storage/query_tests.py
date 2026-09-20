@@ -63,6 +63,7 @@ All timestamps are MILLISECONDS (project-wide DB convention).
 """
 
 import json
+import math
 import re
 import tempfile
 from pathlib import Path
@@ -75,9 +76,12 @@ from .constants import (
     BUCKET_SECONDS,
     DEFAULT_POS_RETENTION_HOURS,
     HOURLY_BUCKET_MS,
+    MIN_DATAPOINTS_FOR_STATS,
+    SPARSE_MIN_DATAPOINTS,
     TELEMETRY_DEDUP_WINDOW_MS,
     compute_conversation_key,
 )
+from .query import _NOT_ACK_SQL, _PEER_ACK_SQL, MHEARD_PROGRESS_CHUNK
 
 logger = get_logger(__name__)
 
@@ -114,6 +118,149 @@ def _load_ack_vectors() -> list[dict[str, Any]]:
     with _ACK_VECTORS_PATH.open(encoding="utf-8") as f:
         contract = json.load(f)
     return list(contract["vectors"])
+
+
+# --- fixtures/reference for _build_chart_series chunking regression (below) ---
+# _build_chart_series was restructured (2026-09-19) to run its CPU-bound work
+# via asyncio.to_thread and throttle progress events to one per
+# MHEARD_PROGRESS_CHUNK stations instead of one per station (measured on
+# mcapp.local: a yearly mheard dump blocked the event loop for ~1.4 s with the
+# thread pool otherwise idle). These helpers build a bucket_rows fixture and an
+# independently-written expected series (NOT calling _build_chart_series,
+# _group_and_qualify or _build_series_chunk) to pin exact output equivalence.
+_CHART_GAP_THRESHOLD_S = 1800  # 30 min
+_CHART_GAP_OFFSET_S = BUCKET_SECONDS  # 300s, matches the production 5-min-bucket call
+
+
+def _chart_bucket_row(callsign: str, ts_s: int, idx: int) -> dict[str, Any]:
+    """One synthetic signal_buckets row. Values vary deterministically by
+    `idx` only so the independent reference below can recompute them without
+    depending on insertion order.
+    """
+    return {
+        "callsign": callsign,
+        "bucket_ts": ts_s * 1000,
+        "rssi_avg": -100.0 + idx,
+        "rssi_min": -105 - idx,
+        "rssi_max": -95 + idx,
+        "snr_avg": 5.0 + idx,
+        "snr_min": 3.0 + idx,
+        "snr_max": 7.0 + idx,
+        "count": idx + 1,
+    }
+
+
+def _reference_chart_rows_for_station(
+    callsign: str,
+    offsets_s: list[int],
+    base_ts_s: int,
+    *,
+    gap_threshold_s: int = _CHART_GAP_THRESHOLD_S,
+    gap_offset_s: int = _CHART_GAP_OFFSET_S,
+) -> list[dict[str, Any]]:
+    """Independent (not production-code-calling) expected-rows builder for one
+    station's offsets, mirroring the documented gap-marker/segment-id contract
+    of _build_chart_series/_build_series_chunk.
+    """
+    rows: list[dict[str, Any]] = []
+    segment_id = 0
+    prev_time: int | None = None
+    for idx, off_s in enumerate(offsets_s):
+        bucket_time = base_ts_s + off_s
+        if prev_time and (bucket_time - prev_time) > gap_threshold_s:
+            rows.append(
+                {
+                    "src_type": "STATS",
+                    "timestamp": bucket_time - gap_offset_s,
+                    "callsign": callsign,
+                    "rssi": None,
+                    "snr": None,
+                    "rssi_min": None,
+                    "rssi_max": None,
+                    "snr_min": None,
+                    "snr_max": None,
+                    "count": None,
+                    "segment_id": f"{callsign}_gap_{segment_id}_to_{segment_id + 1}",
+                    "segment_size": 1,
+                    "is_gap_marker": True,
+                }
+            )
+            segment_id += 1
+        rows.append(
+            {
+                "src_type": "STATS",
+                "timestamp": bucket_time,
+                "callsign": callsign,
+                "rssi": -100.0 + idx,
+                "snr": 5.0 + idx,
+                "rssi_min": -105 - idx,
+                "rssi_max": -95 + idx,
+                "snr_min": 3.0 + idx,
+                "snr_max": 7.0 + idx,
+                "count": idx + 1,
+                "segment_id": f"{callsign}_seg_{segment_id}",
+                "segment_size": 1,
+            }
+        )
+        prev_time = bucket_time
+    return rows
+
+
+def _build_dense_gap_sparse_fixture() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Builds (bucket_rows, expected_result) for the output-equivalence test.
+
+    - 11 "dense" stations (STA00..STA10), each with exactly
+      MIN_DATAPOINTS_FOR_STATS (10) consecutive 5-min buckets, no gap.
+    - 1 station (STAGAP) with 10 buckets and one gap wider than
+      _CHART_GAP_THRESHOLD_S (a gap marker must appear).
+    - 1 station (STASPARSE) with only 5 buckets — below
+      MIN_DATAPOINTS_FOR_STATS, and since the other 12 stations qualify
+      strictly, the sparse floor must NOT engage: STASPARSE is dropped
+      entirely.
+    - Qualified station count is 12 (STA00..STA10 + STAGAP) — NOT a multiple
+      of MHEARD_PROGRESS_CHUNK (10), so chunking splits it 10 + 2 (partial
+      last chunk), crossing one chunk boundary.
+    """
+    base_ts_s = 2_000_000_000
+    bucket_rows: list[dict[str, Any]] = []
+    expected: list[dict[str, Any]] = []
+
+    dense_offsets = [i * BUCKET_SECONDS for i in range(MIN_DATAPOINTS_FOR_STATS)]
+    for i in range(11):
+        callsign = f"STA{i:02d}"
+        for idx, off_s in enumerate(dense_offsets):
+            bucket_rows.append(_chart_bucket_row(callsign, base_ts_s + off_s, idx))
+        expected.extend(_reference_chart_rows_for_station(callsign, dense_offsets, base_ts_s))
+
+    # Gap station: 5 consecutive buckets, then a 1-hour jump (> 1800s
+    # threshold), then 5 more consecutive buckets. 10 entries total, so it
+    # qualifies strictly like the dense stations.
+    gap_offsets = [
+        0,
+        300,
+        600,
+        900,
+        1200,
+        1200 + 3600,
+        1200 + 3900,
+        1200 + 4200,
+        1200 + 4500,
+        1200 + 4800,
+    ]
+    bucket_rows.extend(
+        _chart_bucket_row("STAGAP", base_ts_s + off_s, idx) for idx, off_s in enumerate(gap_offsets)
+    )
+    expected.extend(_reference_chart_rows_for_station("STAGAP", gap_offsets, base_ts_s))
+
+    # Below-threshold station: must be dropped (other stations qualify strictly).
+    sparse_offsets = [i * BUCKET_SECONDS for i in range(SPARSE_MIN_DATAPOINTS + 4)]
+    bucket_rows.extend(
+        _chart_bucket_row("STASPARSE", base_ts_s + off_s, idx)
+        for idx, off_s in enumerate(sparse_offsets)
+    )
+
+    expected.sort(key=lambda x: (x["callsign"], x["timestamp"]))
+    return bucket_rows, expected
 
 
 async def run_query_tests() -> bool:  # noqa: PLR0915 - test suite lists one case per assertion
@@ -339,13 +486,13 @@ async def run_query_tests() -> bool:  # noqa: PLR0915 - test suite lists one cas
                     (msg_id, "TESTCALL-1", "232", vector["text"], "msg", now_ms() + i, "lora"),
                 )
                 not_glob_rows = await storage._query(
-                    "SELECT COUNT(*) AS c FROM messages"
-                    " WHERE msg_id = ? AND msg NOT GLOB '*:ack[0-9]*'",
+                    f"SELECT COUNT(*) AS c FROM messages"  # noqa: S608 - constant from this package
+                    f" WHERE msg_id = ? AND {_NOT_ACK_SQL}",
                     (msg_id,),
                 )
                 glob_rows = await storage._query(
-                    "SELECT COUNT(*) AS c FROM messages"
-                    " WHERE msg_id = ? AND msg GLOB '*:ack[0-9]*'",
+                    f"SELECT COUNT(*) AS c FROM messages"  # noqa: S608 - constant from this package
+                    f" WHERE msg_id = ? AND {_PEER_ACK_SQL}",
                     (msg_id,),
                 )
                 survives_exclusion = not_glob_rows[0]["c"] == 1
@@ -385,6 +532,57 @@ async def run_query_tests() -> bool:  # noqa: PLR0915 - test suite lists one cas
                     (
                         f"ack predicate ingest.py-mirror regex: {vector['name']} ack_number",
                         actual_number == vector["ack_number"],
+                    )
+                )
+
+            # --- (d3) bare APRS ack 'ack%04i' (MCProxy-local, NOT in the corpus) ---
+            # SendAckMessage() (firmware loop_functions.cpp) drops the callsign
+            # prefix for one destination, Winlink's 'WLNK-1', and emits nothing
+            # but 'ack' + the APRS message id padded to at least 4 digits. Every
+            # node in RF range of such a conversation hears it and forwards it
+            # to us over Extern-UDP (lora_functions.cpp:989 has no destination
+            # filter), so it lands in `messages` like any other frame — and the
+            # peer-ack predicate does not match it, which used to make it render
+            # as an ordinary chat message.
+            #
+            # Excluded from history, and served to NOBODY: unlike a peer ack it
+            # carries no correlator a client could match, so it must NOT appear
+            # on the acks side either. That asymmetry is the whole point of the
+            # three-way split, so both directions are asserted per vector.
+            #
+            # Not folded into ack_predicate_vectors.json on purpose: that corpus
+            # governs the ':ack<N>' predicate across three repos and mc-chat has
+            # no RF path that can produce this shape.
+            aprs_ack_vectors = [
+                ("ack0087", True, "the real shape: '%04i' of the 3-digit MeshCom counter"),
+                ("ack12345", True, "five digits — the longest an APRS message id can be"),
+                ("ack087", False, "three digits: '%04i' pads to four, so this is not our frame"),
+                ("ack1234 hello", False, "anchored glob: a human message merely STARTING 'ack'"),
+                ("Ack1234", False, "GLOB is case-sensitive; the firmware emits lowercase"),
+                ("back1234", False, "anchored glob: no leading wildcard"),
+                ("ack12 34", False, "digits interrupted"),
+            ]
+            for i, (text, is_noise, why) in enumerate(aprs_ack_vectors):
+                msg_id = f"APRSACK-{i}"
+                await storage._mutate(
+                    "INSERT INTO messages (msg_id, src, dst, msg, type, timestamp, src_type)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (msg_id, "TESTCALL-1", "WLNK-1", text, "msg", now_ms() + 100 + i, "lora"),
+                )
+                kept = await storage._query(
+                    f"SELECT COUNT(*) AS c FROM messages"  # noqa: S608 - constant from this package
+                    f" WHERE msg_id = ? AND {_NOT_ACK_SQL}",
+                    (msg_id,),
+                )
+                on_ack_side = await storage._query(
+                    f"SELECT COUNT(*) AS c FROM messages"  # noqa: S608 - constant from this package
+                    f" WHERE msg_id = ? AND {_PEER_ACK_SQL}",
+                    (msg_id,),
+                )
+                results.append(
+                    (
+                        f"bare APRS ack: {text!r} {'hidden' if is_noise else 'kept'} — {why}",
+                        (kept[0]["c"] == 1) == (not is_noise) and on_ack_side[0]["c"] == 0,
                     )
                 )
 
@@ -888,6 +1086,218 @@ async def run_query_tests() -> bool:  # noqa: PLR0915 - test suite lists one cas
                 (
                     "qnh: station_positions.qnh keeps the prior value via COALESCE",
                     await _station_qnh("QNHTEST-3") == 1009.5,
+                )
+            )
+
+            # --- _build_chart_series chunking regression (2026-09-19) ---------------
+            # Restructured into async _build_chart_series + sync _group_and_qualify /
+            # _build_series_chunk run via asyncio.to_thread, with progress throttled
+            # to one "gaps" event per MHEARD_PROGRESS_CHUNK stations instead of one
+            # per station (fixes /api/send blocking 0.5-1.4s on the mheard dump).
+
+            # (1) Output equivalence: the new chunked/threaded implementation must
+            # return an IDENTICAL series to an independently-written reference for a
+            # fixture covering several callsigns, a below-threshold station (dropped),
+            # a gap wider than gap_threshold_s (gap marker), and a qualified station
+            # count (12) that is NOT a multiple of MHEARD_PROGRESS_CHUNK (10) — so the
+            # last progress chunk is partial and one chunk boundary is crossed.
+            chart_bucket_rows, chart_expected = _build_dense_gap_sparse_fixture()
+            chart_progress_calls: list[tuple[Any, ...]] = []
+
+            async def _capture_chart_progress(*args: Any) -> None:
+                chart_progress_calls.append(args)
+
+            chart_actual = await storage._build_chart_series(
+                chart_bucket_rows,
+                gap_threshold_s=_CHART_GAP_THRESHOLD_S,
+                gap_offset_s=_CHART_GAP_OFFSET_S,
+                progress_callback=_capture_chart_progress,
+            )
+            results.append(
+                (
+                    (
+                        "chart series: chunked/threaded output is byte-identical to the"
+                        " independent reference (dense + gap + below-threshold stations)"
+                    ),
+                    chart_actual == chart_expected,
+                )
+            )
+            results.append(
+                (
+                    (
+                        "chart series: below-threshold STASPARSE is dropped"
+                        " (other stations qualify strictly, sparse floor does not engage)"
+                    ),
+                    "STASPARSE" not in {e["callsign"] for e in chart_actual},
+                )
+            )
+            results.append(
+                (
+                    "chart series: STAGAP's gap marker is present",
+                    any(e["callsign"] == "STAGAP" and e.get("is_gap_marker") for e in chart_actual),
+                )
+            )
+
+            # (1b) "done" event text, pinned exactly: this fixture has BOTH gap
+            # markers (1, in STAGAP) and real data points (11 dense * 10 + STAGAP's
+            # 10 = 120), so the is_gap_marker exclusion in _finalize_series is
+            # actually exercised — a version that forgot the exclusion would report
+            # 121 data points, not 120. 12 qualified stations (11 dense + STAGAP).
+            chart_done_calls = [c for c in chart_progress_calls if c[0] == "done"]
+            results.append(
+                (
+                    (
+                        'chart series progress: "done" event reports 120 data points'
+                        " for 12 stations (excludes the 1 gap marker)"
+                    ),
+                    chart_done_calls == [("done", "120 data points for 12 stations")],
+                )
+            )
+
+            # (2) Progress throttling: N=23 qualified stations (not a multiple of
+            # MHEARD_PROGRESS_CHUNK) must emit exactly ceil(N/CHUNK) "gaps" events,
+            # each carrying a callsign, with the idx counter reaching N on the last
+            # one. Before the fix this emitted N (23) events, one per station.
+            progress_n_stations = 23
+            progress_base_ts_s = 3_000_000_000
+            progress_offsets = [i * BUCKET_SECONDS for i in range(MIN_DATAPOINTS_FOR_STATS)]
+            progress_bucket_rows = [
+                _chart_bucket_row(f"PROG{i:02d}", progress_base_ts_s + off_s, idx)
+                for i in range(progress_n_stations)
+                for idx, off_s in enumerate(progress_offsets)
+            ]
+            progress_calls: list[tuple[Any, ...]] = []
+
+            async def _capture_progress(*args: Any) -> None:
+                progress_calls.append(args)
+
+            await storage._build_chart_series(
+                progress_bucket_rows,
+                gap_threshold_s=_CHART_GAP_THRESHOLD_S,
+                gap_offset_s=_CHART_GAP_OFFSET_S,
+                progress_callback=_capture_progress,
+            )
+            gaps_calls = [c for c in progress_calls if c[0] == "gaps"]
+            expected_gap_events = math.ceil(progress_n_stations / MHEARD_PROGRESS_CHUNK)
+            results.append(
+                (
+                    (
+                        f"chart series progress: {progress_n_stations} stations emit"
+                        f" exactly ceil(N/{MHEARD_PROGRESS_CHUNK}) = {expected_gap_events}"
+                        ' "gaps" events (was one per station before the fix)'
+                    ),
+                    len(gaps_calls) == expected_gap_events,
+                )
+            )
+            # Pin the exact callsign and counter of EVERY "gaps" event, not just
+            # that one is present: with PROG00..PROG22 chunked 10/10/3, each event
+            # must carry its chunk's LAST station and the running total. A weaker
+            # "a callsign is present, and the last counter is N" pair still passes
+            # if the chunk boundaries or the last-of-chunk rule are wrong.
+            idx_pattern = re.compile(r"\((\d+)/(\d+)\)")
+            gaps_callsigns = [c[2] if len(c) == 3 else None for c in gaps_calls]
+            gaps_counters = [
+                (int(m.group(1)), int(m.group(2)))
+                for m in (idx_pattern.search(c[1]) for c in gaps_calls)
+                if m is not None
+            ]
+            results.append(
+                (
+                    (
+                        'chart series progress: each "gaps" event carries its chunk\'s'
+                        " LAST callsign (PROG09/PROG19/PROG22)"
+                    ),
+                    gaps_callsigns == ["PROG09", "PROG19", "PROG22"],
+                )
+            )
+            results.append(
+                (
+                    (
+                        'chart series progress: the "gaps" counters advance by chunk'
+                        f" (10, 20, {progress_n_stations}), each out of"
+                        f" {progress_n_stations}"
+                    ),
+                    gaps_counters
+                    == [
+                        (MHEARD_PROGRESS_CHUNK, progress_n_stations),
+                        (2 * MHEARD_PROGRESS_CHUNK, progress_n_stations),
+                        (progress_n_stations, progress_n_stations),
+                    ],
+                )
+            )
+
+            # (3) Sparse fallback still works through the restructured pipeline: a
+            # fixture where NOBODY reaches MIN_DATAPOINTS_FOR_STATS still returns the
+            # SPARSE_MIN_DATAPOINTS-floor stations, none dropped.
+            sparse_only_base_ts_s = 4_000_000_000
+            sparse_only_callsigns = ["SP1", "SP2", "SP3"]
+            sparse_only_offsets = [i * BUCKET_SECONDS for i in range(SPARSE_MIN_DATAPOINTS + 1)]
+            sparse_only_rows = [
+                _chart_bucket_row(cs, sparse_only_base_ts_s + off_s, idx)
+                for cs in sparse_only_callsigns
+                for idx, off_s in enumerate(sparse_only_offsets)
+            ]
+            sparse_only_result = await storage._build_chart_series(
+                sparse_only_rows,
+                gap_threshold_s=_CHART_GAP_THRESHOLD_S,
+                gap_offset_s=_CHART_GAP_OFFSET_S,
+            )
+            results.append(
+                (
+                    (
+                        "chart series: sparse fallback (nobody reaches"
+                        " MIN_DATAPOINTS_FOR_STATS) still returns every station"
+                    ),
+                    {e["callsign"] for e in sparse_only_result} == set(sparse_only_callsigns),
+                )
+            )
+
+            # (4) No-progress-callback path returns the identical series to the
+            # with-callback path (reuses the dense+gap+sparse fixture from (1)).
+            chart_actual_no_cb = await storage._build_chart_series(
+                chart_bucket_rows,
+                gap_threshold_s=_CHART_GAP_THRESHOLD_S,
+                gap_offset_s=_CHART_GAP_OFFSET_S,
+                progress_callback=None,
+            )
+            results.append(
+                (
+                    (
+                        "chart series: no-progress-callback path returns the same series"
+                        " as the with-callback path"
+                    ),
+                    chart_actual_no_cb == chart_actual,
+                )
+            )
+
+            # (5) Empty input: _finalize_series must not raise on an empty
+            # final_result (the `if stats_entries else 0` guard) and must report
+            # 0/0 rather than a ZeroDivisionError or a KeyError from an empty set.
+            empty_progress_calls: list[tuple[Any, ...]] = []
+
+            async def _capture_empty_progress(*args: Any) -> None:
+                empty_progress_calls.append(args)
+
+            empty_result = await storage._build_chart_series(
+                [],
+                gap_threshold_s=_CHART_GAP_THRESHOLD_S,
+                gap_offset_s=_CHART_GAP_OFFSET_S,
+                progress_callback=_capture_empty_progress,
+            )
+            empty_done_calls = [c for c in empty_progress_calls if c[0] == "done"]
+            results.append(
+                (
+                    "chart series: empty input returns an empty result, no exception",
+                    empty_result == [],
+                )
+            )
+            results.append(
+                (
+                    (
+                        'chart series progress: empty input still emits a "done" event'
+                        ' with "0 data points for 0 stations"'
+                    ),
+                    empty_done_calls == [("done", "0 data points for 0 stations")],
                 )
             )
         finally:

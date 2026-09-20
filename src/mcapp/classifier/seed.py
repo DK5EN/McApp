@@ -306,13 +306,26 @@ DEFAULT_RULES: list[dict[str, Any]] = [
         "category": "node_advert",
         "extra_tags": ["beacon"],
     },
-    # priority 42 — broadens the original "URL advert" (was https?:// only, priority 40)
+    # Shape alone is not evidence of an advert. A bare link posted by a human
+    # inside a group thread is the regression this fixes: on mcapp.local
+    # HB9VQQ-1's plain URL in group 20 was hidden as a node advert, while his
+    # URL-plus-text message in the same thread scored 1.0. What identifies a
+    # real beacon is REPETITION, not shape, and that path is untouched — the
+    # decorated-advert rules "HTML advert" (priority 36) and "Emoji URL
+    # advert" (priority 37) still claim node_advert. The remaining honest
+    # signal for a bare link is the score, not a category: it normalises to
+    # the single token "URL", so is_exempt treats it as too short to
+    # auto-promote to a beacon (template.py, _AUTO_BEACON_MIN_TOKENS=2), and
+    # _MINIMAL_CONTENT_CAP pins it at 0.30 (score.py), which the operator
+    # governs with minInfoScore. "other" is the fallback category and is NOT
+    # in _HUMAN_CATEGORIES, so nothing about beacon promotion is weakened by
+    # the choice.
     {
         "priority": 42,
         "name": "URL advert",
         "scope": "msg",
         "pattern": r"^\s*(https?://|www\.)[^\s]+\s*$",
-        "category": "node_advert",
+        "category": "other",
         "extra_tags": ["has_url"],
     },
     # ── Test messages ───────────────────────────────────────────────────

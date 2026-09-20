@@ -419,6 +419,114 @@ async def _blocking_coro_stub() -> None:
     _block_the_loop_for_attribution_test()
 
 
+def _test_consume_lag_sample_no_stack_reports_wakes(_record: RecordFn) -> None:
+    """F4 follow-up: an episode where the sampler thread woke but never
+    captured a stack (GIL-starved before it could act, or the loop thread's
+    frame vanished between the check and the read) must still surface how
+    many times the sampler woke — a bare `None` detail is indistinguishable
+    from a sampler that never ran at all, which is exactly what made this
+    morning's 261/353/584ms unattributed loop_lag rows unanswerable.
+    `_consume_lag_sample` is pure state manipulation, never start()ed.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        recorder = StallRecorder(Path(tmp) / "unused.db", StallsConfig(), version="v7d", slot="s7d")
+
+        # The sampler woke 4 times this episode but never captured a stack
+        # (e.g. the loop thread's frame vanished between check and read).
+        recorder._lag_sampler_wakes = 4
+        recorder._lag_sampler_armed = True
+        detail = recorder._consume_lag_sample()
+        _record(
+            "consume_lag_sample: no stack still returns a detail dict, not None",
+            detail is not None,
+        )
+        _record(
+            "consume_lag_sample: no-stack detail carries samples=0 and the wake count",
+            isinstance(detail, dict)
+            and detail.get("samples") == 0
+            and detail.get("sampler_wakes") == 4
+            and detail.get("armed") is True,
+        )
+
+        # The sampler never woke at all this episode (fully GIL-starved) —
+        # the diagnostic case the whole feature exists for.
+        _record(
+            "consume_lag_sample: sampler_wakes=0 (GIL starvation) is reported, not silently None",
+            recorder._consume_lag_sample() == {"samples": 0, "sampler_wakes": 0, "armed": False},
+        )
+
+
+def _test_consume_lag_sample_stack_shape_and_never_none(_record: RecordFn) -> None:
+    """The existing three `detail` keys (`stack`, `samples`, `sampled_at_ms`)
+    must round-trip unchanged for `/api/stalls` consumers and
+    scripts/replay_stall.py, with `sampler_wakes`/`armed` added alongside —
+    and a stored row must never carry `"stack": None` in either shape.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        recorder = StallRecorder(Path(tmp) / "unused.db", StallsConfig(), version="v7e", slot="s7e")
+
+        recorder._lag_sample_text = 'File "stalls.py", line 1\n'
+        recorder._lag_sample_count = 3
+        recorder._lag_sample_age_ms = 250.5
+        recorder._lag_sampler_wakes = 6
+        recorder._lag_sampler_armed = True
+        detail = recorder._consume_lag_sample()
+        _record(
+            "consume_lag_sample: with-stack detail keeps the existing 3 keys plus the 2 new ones",
+            detail
+            == {
+                "stack": 'File "stalls.py", line 1\n',
+                "samples": 3,
+                "sampled_at_ms": 250.5,
+                "sampler_wakes": 6,
+                "armed": True,
+            },
+        )
+        _record(
+            "consume_lag_sample: a captured stack is never stored as None",
+            detail is not None and detail.get("stack") is not None,
+        )
+
+        # An empty episode (as _reset_lag_sample leaves it) must never
+        # surface a "stack" key at all, let alone one set to None.
+        recorder._lag_sample_text = None
+        recorder._lag_sample_count = 0
+        recorder._lag_sample_age_ms = 0.0
+        recorder._lag_sampler_wakes = 0
+        recorder._lag_sampler_armed = False
+        empty_detail = recorder._consume_lag_sample()
+        _record(
+            "consume_lag_sample: an empty episode never contains a stack key at all",
+            empty_detail is None or "stack" not in empty_detail,
+        )
+
+
+def _test_lag_sampler_arm_fraction(_record: RecordFn) -> None:
+    """F4 follow-up: the sampler must arm at HALF of `config.loop_lag_ms`,
+    not the full threshold — arming only at the full threshold left a
+    ~200ms blind spot (the 100ms nominal `_LAG_LOOP_INTERVAL_S` sleep plus
+    the full overrun threshold) that swallowed more than half of a measured
+    353ms lag before the first sample was even possible. Threshold
+    arithmetic only, deliberately no wall-clock race.
+    """
+    from . import stalls as stalls_module
+
+    arm_fraction = getattr(stalls_module, "_LAG_SAMPLER_ARM_FRACTION", None)
+    _record(
+        "lag sampler: _LAG_SAMPLER_ARM_FRACTION exists and is 0.5",
+        arm_fraction == 0.5,
+    )
+
+    for loop_lag_ms in (1, 50, 100, 5000):
+        config = StallsConfig(loop_lag_ms=loop_lag_ms)
+        arm_threshold_ms = config.loop_lag_ms * (arm_fraction or 0)
+        _record(
+            f"lag sampler: arm threshold is strictly below loop_lag_ms={loop_lag_ms}, "
+            "not equal to it",
+            arm_fraction is not None and 0 < arm_threshold_ms < loop_lag_ms,
+        )
+
+
 async def _test_time_handler(_record: RecordFn) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "stalls.db"
@@ -676,6 +784,9 @@ async def run_stall_tests() -> bool:
     await _test_install_executor(_record)
     await _test_loop_lag(_record)
     await _test_loop_lag_stack_attributed(_record)
+    _test_consume_lag_sample_no_stack_reports_wakes(_record)
+    _test_consume_lag_sample_stack_shape_and_never_none(_record)
+    _test_lag_sampler_arm_fraction(_record)
     await _test_time_handler(_record)
     await _test_time_handler_sampling(_record)
     await _test_ingest_client(_record)
