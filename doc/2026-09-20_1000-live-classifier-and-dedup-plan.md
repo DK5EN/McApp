@@ -153,6 +153,22 @@ Cost, median of 9 runs on mcapp.local's Pi Zero 2W against the live database
 | `RANGE` window function     |    699 ms |            156 ms |
 | correlated anchor (shipped) |    517 ms |            126 ms |
 
+**Those are the dedup subquery in isolation and they understate the real cost by about
+half.** Measured end-to-end through `get_conversation_summary` on the deployed box
+(slot-0 = old, slot-2 = shipped, same live snapshot, 2026-09-20):
+
+| slot            | full scan | narrowed `key=20` | narrowed != full | total `count` |
+| --------------- | --------: | ----------------: | ---------------: | ------------: |
+| slot-0 (before) |    460 ms |            178 ms |               10 |          4876 |
+| slot-2 (after)  |    990 ms |            266 ms |            **0** |          5014 |
+
+The gap is structural: the dedup subquery costs 313 ms and **both** the aggregate and the
+candidate query execute it, so it is paid twice per call (480 ms + 427 ms measured
+separately). Materialising it once — a temp table, or one query instead of two — is the
+lever if this needs to come down. Not done here: it is a separate change with its own
+blast radius, and the two queries sharing one `dedup_sql` string is exactly what keeps
+their predicates from drifting.
+
 The full scan runs once per client connect (the SSE burst, which `StallMiddleware`
 deliberately does not time) and off-loop in a worker thread. The narrowed form is
 the per-`POST /api/read_cursor` refresh. Watch `pool_wait` after deploy.

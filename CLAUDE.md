@@ -553,8 +553,13 @@ the PWA app-icon badge. Plan and the field evidence: `doc/2026-09-06_1200-unread
   unread messages — a reuse group took its OLDEST copy's timestamp, so a recent message under an
   11-day-old msg_id sat before the read cursor and never lit the badge. The time fence is anchored
   on the data (`_CONV_ANCHOR_SQL`), NEVER a `timestamp / W` bucket: a fixed boundary falling between
-  a 172 ms pair splits it and recreates the unclearable `+1`. Cost on the Pi: 275 ms → 517 ms full
-  scan, 87 ms → 126 ms narrowed.
+  a 172 ms pair splits it and recreates the unclearable `+1`. **Cost, measured end-to-end through
+  `get_conversation_summary` on mcapp.local against the live DB: 460 ms → 990 ms** for the full
+  scan (once per client connect, off-loop; `/events` is exempt from `StallMiddleware`) and
+  178 ms → 266 ms narrowed. The dedup subquery alone is 313 ms and **both** the aggregate and the
+  candidate query execute it, so its cost is paid TWICE per call — measuring the subquery in
+  isolation understates the real figure by about half, which is how the first recorded number
+  (517 ms) came out low. Materialising it once is the obvious lever if this needs to come down.
 - **Keys are `conversation_key`, on both ends of the wire.** DMs are `A<>B` (sorted base
   callsigns), groups/hashtags/`*` verbatim. The webapp translates to its sidebar key at exactly
   one boundary (`translateServerSummaryKey` / `serverKeyForSidebarKey`). `read_counts.dst` stored
