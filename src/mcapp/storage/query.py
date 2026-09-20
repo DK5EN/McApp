@@ -24,6 +24,7 @@ from .constants import (
     _MSG_SELECT,
     BUCKET_SECONDS,
     CORE_DUMP_FILTER_TEXT,
+    DEDUP_WINDOW_MS,
     DEFAULT_PAGE_SIZE,
     DEFAULT_POS_RETENTION_HOURS,
     EIGHT_DAYS_MS,
@@ -53,6 +54,7 @@ from .constants import (
     compute_conversation_key,
     db_read,
     escape_like,
+    sender_base_sql,
 )
 from .suppression import (
     SuppressionPolicy,
@@ -130,6 +132,9 @@ def _ack_sql(globs: tuple[str, ...], col: str = "msg", *, negate: bool = False) 
 # the peer shape (see the three-way split above).
 _NOT_ACK_SQL = _ack_sql(_PEER_ACK_GLOBS + _APRS_ACK_GLOBS, negate=True)
 _NOT_ACK_SQL_M = _ack_sql(_PEER_ACK_GLOBS + _APRS_ACK_GLOBS, "m.msg", negate=True)
+# Same predicate for the dedup anchor's correlated subquery alias, so the
+# anchor is computed over exactly the rows `_conv_dedup_subquery` groups.
+_NOT_ACK_SQL_P = _ack_sql(_PEER_ACK_GLOBS + _APRS_ACK_GLOBS, "p.msg", negate=True)
 _PEER_ACK_SQL = _ack_sql(_PEER_ACK_GLOBS)
 
 # --- get_conversation_summary shared SQL fragments -------------------------
@@ -144,10 +149,69 @@ _CONV_DEDUP_COLS = (
     " m.msg, m.category, m.tags, m.info_score, m.template_hash"
 )
 
+# The three identity legs of a distinct message. `_CONV_GID_SQL` is the
+# msg_id-or-rowid group `_conv_dedup_subquery` always used; the other two are
+# the fences added in 2026-09-20 (see the docstring below).
+_CONV_GID_SQL = "COALESCE(NULLIF(m.msg_id, ''), 'row:' || m.rowid)"
+_CONV_SBASE_SQL = sender_base_sql("m.src")
+_CONV_CKEY_SQL = "COALESCE(m.conversation_key, m.dst)"
+
+# The time fence: the timestamp of the EARLIEST copy of this message within
+# DEDUP_WINDOW_MS before this row, or this row's own timestamp when it is the
+# earliest. Two rows land in the same group only when they resolve to the same
+# anchor, so a group closes as soon as a gap wider than the window opens.
+#
+# It is deliberately NOT a modulo/division bucket (`m.timestamp / W`): a fixed
+# boundary can fall between the two copies of one real transport pair (measured
+# spacing <= 172 ms) and split them into two "messages" — which is exactly the
+# unclearable +1 badge doc/2026-09-19_2140-unread-suppression-plan.md exists to
+# fix. An anchor derived from the data itself can never do that.
+#
+# A `MIN(m.timestamp) OVER (... RANGE BETWEEN W PRECEDING AND CURRENT ROW)`
+# window function was the first implementation and returned a byte-identical
+# result set on the live DB, but it costs a second sort (699 ms vs 517 ms full
+# scan on mcapp.local's Pi Zero 2W, 2026-09-20) where this form is an index
+# seek on `idx_messages_msgid_timestamp`. The two are NOT equivalent in
+# general: a RANGE frame INCLUDES the row exactly `W` back, this predicate is
+# STRICT. Strict is the correct one — `_find_duplicate_row_id` is also
+# `timestamp > ?`, so the read-time and ingest fences agree at the boundary.
+#
+# `p` carries the SAME universe filters as the outer query (`type = 'msg'`,
+# non-ack) so the anchor is computed over exactly the rows being grouped. That
+# is the one narrowing relative to `_find_duplicate_row_id`, which asks a
+# different question ("is this inbound frame a duplicate of ANY stored row").
+_CONV_ANCHOR_SQL = (
+    "(SELECT MIN(p.timestamp) FROM messages p"  # noqa: S608 - every interpolated fragment is a fixed literal; no value is interpolated
+    f" WHERE p.msg_id = m.msg_id AND p.type = 'msg' AND {_NOT_ACK_SQL_P}"
+    " AND p.timestamp <= m.timestamp"
+    f" AND p.timestamp > m.timestamp - {DEDUP_WINDOW_MS}"
+    f" AND {sender_base_sql('p.src')} = {_CONV_SBASE_SQL}"
+    " AND COALESCE(p.conversation_key, p.dst)"
+    f" = {_CONV_CKEY_SQL})"
+)
+
 
 def _conv_dedup_subquery(key_clause: str) -> str:
     """The distinct-message dedup subquery (aliased `d` by both callers)
     shared by get_conversation_summary's two queries.
+
+    doc/2026-09-20_1000-live-classifier-and-dedup-plan.md F2: a bare `msg_id`
+    (or rowid-fallback) group is not enough to call two rows "the same
+    message" — a firmware `msg_id` is a node-local counter that gets reused
+    across stations, conversations and days. Measured on the live snapshot,
+    572 multi-row msg_id groups split cleanly in two: 454 real transport
+    pairs <= 172 ms apart (max size 2, never spanning a sender, a dst or a
+    conversation key) and 118 reuse groups >= 3.33 h apart, 71 of them across
+    more than one conversation key and one across more than one sender.
+    Nothing lands in between.
+
+    A message is therefore identified by FOUR legs, mirroring the INGEST
+    dedup rule (`_find_duplicate_row_id`, storage/ingest.py): the msg_id
+    group, the resolved sender base (`sender_base_sql`, the single shared
+    source for that expression so the ingest and read-time boundaries cannot
+    drift), the conversation key, and `_CONV_ANCHOR_SQL`'s 60-minute time
+    fence — which sits with a 3.3x margin between the measured real-pair
+    ceiling and the measured reuse floor.
 
     Exactly one MIN()/MAX() aggregate (`MIN(m.timestamp)`) appears in this
     subquery, which is what makes every other, bare column in
@@ -155,20 +219,26 @@ def _conv_dedup_subquery(key_clause: str) -> str:
     aggregate-query extension: a bare column takes its value from the SAME
     input row that produced the min()/max() result, not an arbitrary row of
     the group (https://sqlite.org/lang_select.html, "Bare columns in an
-    aggregate query"). `m.src`/`m.dst` already relied on this before the
+    aggregate query"). SQLite does NOT extend that guarantee to TIES — with
+    two rows sharing the minimum, "bare values might be selected from any of
+    those rows" — so a same-millisecond transport pair resolves arbitrarily;
+    the live DB's 10 such pairs all carry identical text, and
+    `conv_dedup_tests.py` case 7 pins the observed behaviour rather than a
+    promise. `m.src`/`m.dst` already relied on this before the
     suppression wave (see get_conversation_summary's docstring on transport
     duplicates); `m.msg`/`m.category`/`m.tags`/`m.info_score`/
     `m.template_hash` ride the IDENTICAL guarantee — they come from the same
     earliest stored copy of a transport-duplicated message as `ts`, `src`
-    and `dst`, not from an arbitrary sibling row of the same msg_id group.
+    and `dst`, not from an arbitrary sibling row of the same group. The
+    correlated subquery in the GROUP BY is not an aggregate of THIS query, so
+    it does not disturb that guarantee.
     """
     return (
-        f"SELECT {_CONV_DEDUP_COLS}"  # noqa: S608 - key_clause is a fixed literal; values parameterized
+        f"SELECT {_CONV_DEDUP_COLS}"  # noqa: S608 - key_clause/fragments are fixed literals; values parameterized
         " FROM messages m"
         f" WHERE m.type = 'msg' AND {_NOT_ACK_SQL_M}"
-        " AND m.timestamp >= ?"
-        + key_clause
-        + " GROUP BY COALESCE(NULLIF(m.msg_id, ''), 'row:' || m.rowid)"
+        " AND m.timestamp >= ?" + key_clause + f" GROUP BY {_CONV_GID_SQL}, {_CONV_SBASE_SQL},"
+        f" {_CONV_CKEY_SQL}, {_CONV_ANCHOR_SQL}"
     )
 
 

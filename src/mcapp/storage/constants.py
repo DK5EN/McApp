@@ -196,6 +196,32 @@ def escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+def sender_base_sql(col: str) -> str:
+    """SQL expression for "which station sent this", from a src-shaped column.
+
+    Strips a via-relay path (a src of 'DK5EN-10,DK5EN-98' is the relay-first,
+    originator-second shape `compute_conversation_key` documents; only the
+    first, FRONT component is the sender) and normalises case/whitespace.
+    Byte-for-byte the same expression `_find_duplicate_row_id`
+    (storage/ingest.py) uses to resolve the sender base for the ingest dedup
+    backstop SELECT, parameterised here on the column reference so
+    `storage.query`'s conversation-dedup subquery (`_conv_dedup_subquery`,
+    doc/2026-09-20_1000-live-classifier-and-dedup-plan.md §F2) can share the
+    identical rule instead of re-deriving it. The two boundaries — "is this a
+    duplicate frame" at ingest and "is this a distinct message" at read time
+    — must never drift apart, or a query-side fence narrower or wider than
+    the ingest one would either split a real transport pair or collapse two
+    genuinely different senders who happen to reuse a firmware msg_id.
+
+    Both call sites go through this function, so the expression exists in
+    exactly one place.
+    """
+    return (
+        f"UPPER(TRIM(CASE WHEN instr({col}, ',') > 0"
+        f" THEN substr({col}, 1, instr({col}, ',') - 1) ELSE {col} END))"
+    )
+
+
 def compute_conversation_key(src: str, dst: str) -> str | None:
     """Compute conversation key for message grouping.
 
