@@ -524,11 +524,37 @@ the PWA app-icon badge. Plan and the field evidence: `doc/2026-09-06_1200-unread
   `query.py` MUST keep sharing `_conv_dedup_subquery` / `_CONV_NEWER_EXPR` / `_CONV_NEWER_SPAM_EXPR`
   — if their predicates disagree the subtraction silently corrupts the count, and three mutations
   that break it are pinned by `unread_suppression_tests.py`.
-- **The LIVE broadcast carries no classifier fields**, so the webapp's own suppression gate cannot
-  fire on a live message — `store_message` uses them as INSERT parameters only. The message is
-  rendered, the read marker advances, the badge resolves itself. **Symptom → cause:** a transient
-  `+1` on a live hidden message that clears by itself is this, not a cursor regression; do not chase
-  it on the client.
+- **The live broadcast carries the classifier fields, and it does so by MUTATING the shared dict.**
+  `MessageRouter.publish` hands ONE `data` object to every subscriber in subscription order;
+  `_storage_handler` is subscribed in `MessageRouter.__init__` and therefore runs before
+  `SSEManager._broadcast_handler`, so `store_message` annotating `message` in place is what puts
+  `category`/`tags`/`info_score`/`template_hash`/`classifier_ver` on the live SSE payload. Both that
+  annotation and `_build_message_dict`'s history reconstruction go through `_classifier_fields`, so
+  live and reloaded views cannot drift. **That ordering is load-bearing** — invert it and the live
+  payload silently loses the fields again; `live_classification_tests.py` asserts the two
+  subscribers' indices. `_broadcast_handler`'s own "shallow COPY, never the shared dict" comment is
+  about the `dst` rebucketing, a different and non-additive mutation, and still stands. Until
+  2026-09-20 the fields were INSERT parameters only, so a hidden message rendered live, the read
+  marker advanced over it, and the badge resolved itself — self-healing, but live and history
+  disagreed about the same message.
+- **`tags` is presence-gated, not truthiness-gated, and that is not a style choice.** An EMPTY tag
+  list is the common case — 19644 of 21048 classified rows on the live DB carry `tags = '[]'` — and
+  mc-chat's `meshcom_mock/wire.py` emits `tags: []` for exactly those rows. Dropping the key on `[]`
+  changes the history payload of 93% of classified messages and diverges the two backends on a wire
+  contract they share. A NULL or undecodable column still omits the key.
+- **A distinct message is FOUR legs, not just `msg_id`.** `_conv_dedup_subquery` groups by the
+  msg_id-or-rowid group AND the resolved sender base AND the conversation key AND a
+  `DEDUP_WINDOW_MS` time fence, mirroring the ingest rule (`_find_duplicate_row_id`); both call
+  `sender_base_sql` (`storage/constants.py`) so the ingest and read-time boundaries cannot drift. A
+  firmware `msg_id` is a node-local counter that gets REUSED: on the live DB 572 multi-row groups
+  split cleanly into 454 real transport pairs (≤ 172 ms apart, max size 2, never spanning a sender,
+  dst or key) and 118 reuse groups (≥ 3.33 h apart, 71 across more than one conversation key).
+  Grouping on `msg_id` alone made narrowed and full-scan `count` disagree for 10 keys AND hid real
+  unread messages — a reuse group took its OLDEST copy's timestamp, so a recent message under an
+  11-day-old msg_id sat before the read cursor and never lit the badge. The time fence is anchored
+  on the data (`_CONV_ANCHOR_SQL`), NEVER a `timestamp / W` bucket: a fixed boundary falling between
+  a 172 ms pair splits it and recreates the unclearable `+1`. Cost on the Pi: 275 ms → 517 ms full
+  scan, 87 ms → 126 ms narrowed.
 - **Keys are `conversation_key`, on both ends of the wire.** DMs are `A<>B` (sorted base
   callsigns), groups/hashtags/`*` verbatim. The webapp translates to its sidebar key at exactly
   one boundary (`translateServerSummaryKey` / `serverKeyForSidebarKey`). `read_counts.dst` stored

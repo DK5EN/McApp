@@ -193,7 +193,7 @@ Confirmed rather than assumed, and worth keeping:
   candidate `WHERE` adds no placeholders, `read_cursors.key` is a PRIMARY KEY so the joins cannot
   fan out, and `newer_spam` implies `newer`.
 
-### Known, accepted: the live broadcast carries no classifier fields
+### Known, accepted: the live broadcast carries no classifier fields (SUPERSEDED 2026-09-20)
 
 `store_message` uses `cls_cols` as INSERT parameters only (`storage/ingest.py:1846/1858/1892`) and
 never writes `category`/`tags`/`info_score`/`template_hash` back into the dict
@@ -222,11 +222,15 @@ key or time fence. `unread` agreed for all 400 keys probed. Its own wave.
 
 ## Open follow-ups (not part of this campaign)
 
-1. **Put the classifier fields on the live broadcast payload.** See the advisor note above: a
-   message currently looks unclassified live and classified after a reload. Wire-payload change,
-   own blast radius.
-2. **`msg_id` groups that span conversation keys.** 71 groups on the live DB, spans of days, from
-   firmware msg_id reuse. Makes narrowed and full-scan `count` disagree for 10 keys. Pre-existing,
-   identical at HEAD, `unread` unaffected.
+1. ~~**Put the classifier fields on the live broadcast payload.**~~ DONE 2026-09-20 —
+   `doc/2026-09-20_1000-live-classifier-and-dedup-plan.md` F1. The "Known, accepted" section above
+   is therefore HISTORY, not current behaviour: `store_message` now annotates the shared router
+   dict, so the webapp's `liveUnread` gate does fire on a live message and the transient `+1` it
+   describes no longer occurs.
+2. ~~**`msg_id` groups that span conversation keys.**~~ DONE 2026-09-20 — same doc, F2. The
+   conclusion "`unread` unaffected" turned out to be **wrong**: the reuse groups also HID unread
+   messages, because a group took its oldest copy's timestamp and a recent message under an
+   11-day-old `msg_id` sat before the read cursor. One such conversation on the live snapshot
+   (key 26386).
 3. **Deploy.** Nothing is released. Reaching mcapp.local needs a dev release in both repos; the
    startup bump then backfills the stored `node_advert` rows once on first start.
