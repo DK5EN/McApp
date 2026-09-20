@@ -378,15 +378,20 @@ ssh mcapp.local '
   systemctl is-active mcapp mcapp-ble caddy lighttpd
   systemctl show mcapp -p NRestarts --value          # still 0
   grep -h "^LATEST_SCHEMA_VERSION" ~/mcapp-slots/current/src/mcapp/storage/constants.py
-  find ~/mcapp-slots/current/src/mcapp -name "*.json" | wc -l'   # 11, not 0 — see below
+  find ~/mcapp-slots/current/src/mcapp -name "*_tests.py" -o -name "*.json" | wc -l'   # 0 — see below
 ```
 
-The last line guards the packaging: `build_tarball` copies **code and package data**, and until
-v2.0.11 it copied `*.py` only — shipping every `*_tests.py` module while dropping all eleven
-`.json` files they read, so `src/mcapp/contract/` did not exist in any slot. Nothing breaks at
-runtime (no production path reads a packaged `.json`), but a suite run on the box fails on missing
-data rather than on anything real. `scripts/webapp_deploy_tests.py` drives the real
-`build_tarball()` and pins this; a zero here means the predicate regressed.
+**A production tarball carries no test harness, by design.** `build_tarball`'s second argument
+selects the shape: production ships runtime code only — no `*_tests.py`, no `tests.py`, none of
+the eleven `.json` corpora (nothing but those test modules reads them), and not
+`run_startup_tests.py`. A dev pre-release ships all four, which is why the gate can be run on the
+box against a dev tag but not against a production one. So the count above is **0 on production
+and non-zero on dev** — if a production slot has either, the predicate regressed.
+
+This is also why `main.py` must never import a test module at import time: it loads `router_tests`
+lazily and the one caller treats `ImportError` as "skipped, no harness in this build". A
+module-level import makes every production build refuse to start. Both shapes and that import
+discipline are pinned by `scripts/webapp_deploy_tests.py`, which drives the real `build_tarball()`.
 
 - `version.html` reports what was **deployed**, not what the browser is running. Reload past the
   service worker (the "Update available — Reload" banner) before believing a frontend change is live.

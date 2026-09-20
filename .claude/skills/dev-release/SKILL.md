@@ -160,12 +160,23 @@ change introduces. Everything else can look healthy while the service still runs
 and the eventual `vX.Y.Z` — it cannot tell you which one is installed, and a wait loop keyed on it
 succeeds instantly against the old code. Use `webapp/version.html`.
 
-**The `.json` count guards the packaging.** `build_tarball` copies code **and package data**;
-until v2.0.11 it copied `*.py` only, shipping every `*_tests.py` module while dropping all eleven
-`.json` files they read — `src/mcapp/contract/` did not exist in any slot. No runtime path reads a
-packaged `.json`, so nothing broke in production, but a suite run on the box failed on missing
-data instead of on anything real. Pinned by `scripts/webapp_deploy_tests.py`, which drives the
-real `build_tarball()`; a zero here means that predicate regressed.
+**The `.json` count guards the packaging, and a DEV build is the shape that has them.**
+`build_tarball`'s second argument selects the shape: a dev pre-release ships the test harness —
+`*_tests.py`, `tests.py`, the eleven `.json` corpora and `run_startup_tests.py` — while a
+production tarball ships runtime code only. So 11 here is right for a dev tag and 0 is right for a
+production one; a zero on a dev slot means the predicate regressed. Until v2.0.11 it was the worst
+of both, shipping every test module while dropping all the data they read, so
+`src/mcapp/contract/` did not exist in any slot.
+
+Because production carries no harness, `main.py` must never import a test module at import time —
+it loads `router_tests` lazily and the one caller treats `ImportError` as "skipped". Pinned, with
+both shapes, by `scripts/webapp_deploy_tests.py`.
+
+**A dev build can run the real gate on the box**, against the exact tree it is running:
+
+```bash
+ssh mcapp.local 'cd ~/mcapp-slots/current && ./.venv/bin/python scripts/run_startup_tests.py'
+```
 
 Do not expect a fixed slot order. `get_target_slot` picks the empty-or-oldest of `slot-{0,1,2}`,
 and a re-deploy of a version the active slot already holds deploys **in place** with no rotation at

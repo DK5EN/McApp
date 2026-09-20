@@ -323,7 +323,7 @@ log_warn() {{ echo "WARN: $*" >&2; }}
 _CLEANUP_TMPDIR=""
 _CLEANUP_TARBALL=""
 {function}
-build_tarball "{version}"
+build_tarball "{version}" {include_tests}
 """
 
 
@@ -367,8 +367,17 @@ def _write_minimal_release_fixture(tmp: Path) -> tuple[Path, Path]:
     (project / "bootstrap").mkdir()
     (project / "bootstrap" / "mcapp.sh").write_text("#!/bin/bash\n", encoding="utf-8")
 
+    # A test module beside the runtime code, and the gate runner beside the
+    # update runner: production must carry neither, a dev build both.
+    (project / "src" / "mcapp" / "storage" / "suppression_tests.py").write_text(
+        "", encoding="utf-8"
+    )
+    (project / "src" / "mcapp" / "commands").mkdir(parents=True)
+    (project / "src" / "mcapp" / "commands" / "tests.py").write_text("", encoding="utf-8")
+
     (project / "scripts").mkdir()
     (project / "scripts" / "update-runner.py").write_text("", encoding="utf-8")
+    (project / "scripts" / "run_startup_tests.py").write_text("", encoding="utf-8")
 
     (webapp / "dist").mkdir(parents=True)
     (webapp / "dist" / "index.html").write_text("<html></html>", encoding="utf-8")
@@ -402,7 +411,11 @@ def _case_build_tarball_excludes_appledouble(record: Recorder) -> None:
         driver = tmp / "driver.sh"
         driver.write_text(
             _TARBALL_DRIVER.format(
-                project_dir=project, webapp_dir=webapp, function=function, version=version
+                project_dir=project,
+                webapp_dir=webapp,
+                function=function,
+                version=version,
+                include_tests="true",
             ),
             encoding="utf-8",
         )
@@ -448,6 +461,13 @@ def _case_build_tarball_excludes_appledouble(record: Recorder) -> None:
             not any("__pycache__" in n for n in names),
             f"(names: {names})",
         )
+        record(
+            "a dev tarball ships the test harness: *_tests.py, tests.py and the gate runner",
+            any(Path(n).name.endswith("_tests.py") for n in names)
+            and any(Path(n).name == "tests.py" for n in names)
+            and any(Path(n).name == "run_startup_tests.py" for n in names),
+            f"(names: {names})",
+        )
 
 
 def _case_release_sh_guards(record: Recorder) -> None:
@@ -465,6 +485,85 @@ def _case_release_sh_guards(record: Recorder) -> None:
         found == 2,
         f"(found {found})",
     )
+
+
+def _case_build_tarball_production_is_runtime_only(record: Recorder) -> None:
+    """A production tarball carries no test harness at all — no `*_tests.py`,
+    no `tests.py`, none of the .json corpora, and not the gate runner. The dev
+    shape (pinned in the case above) carries all four.
+
+    This is the pair that matters: the two shapes are produced by ONE function
+    whose only difference is its second argument, so a predicate edit that
+    collapses them shows up here rather than on a box three releases later.
+    """
+    if _BASH is None:
+        record("bash is available to drive build_tarball()", False, "")
+        return
+
+    release_src = _RELEASE_SH.read_text(encoding="utf-8")
+    function = _safe_extract(record, release_src, "build_tarball")
+    if function is None:
+        return
+
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        project, webapp = _write_minimal_release_fixture(tmp)
+        version = "v0.0.0-prod"
+        driver = tmp / "driver.sh"
+        driver.write_text(
+            _TARBALL_DRIVER.format(
+                project_dir=project,
+                webapp_dir=webapp,
+                function=function,
+                version=version,
+                include_tests="false",
+            ),
+            encoding="utf-8",
+        )
+        result = subprocess.run(  # noqa: S603 - fixed argv, absolute binaries
+            [_BASH, str(driver)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        tarball_path = project / f"mcapp-{version}.tar.gz"
+        record(
+            "build_tarball succeeds in production mode",
+            result.returncode == 0 and tarball_path.exists(),
+            f"(rc={result.returncode} {result.stderr.strip()[:200]})",
+        )
+        if not tarball_path.exists():
+            return
+
+        with tarfile.open(tarball_path) as tar:
+            names = tar.getnames()
+
+        record(
+            "production tarball ships NO *_tests.py",
+            not any(Path(n).name.endswith("_tests.py") for n in names),
+            f"(names: {names})",
+        )
+        record(
+            "production tarball ships NO tests.py (the commands suite)",
+            not any(Path(n).name == "tests.py" for n in names),
+            f"(names: {names})",
+        )
+        record(
+            "production tarball ships NO .json package data (only tests read it)",
+            not any(n.endswith(".json") and "/src/" in n for n in names),
+            f"(names: {names})",
+        )
+        record(
+            "production tarball ships NO gate runner",
+            not any(Path(n).name == "run_startup_tests.py" for n in names),
+            f"(names: {names})",
+        )
+        record(
+            "production tarball STILL ships the runtime code and update-runner",
+            any(n.endswith("src/mcapp/__init__.py") for n in names)
+            and any(Path(n).name == "update-runner.py" for n in names),
+            f"(names: {names})",
+        )
 
 
 def run_webapp_deploy_tests() -> bool:
@@ -490,6 +589,7 @@ def run_webapp_deploy_tests() -> bool:
         _case_chown_failure_is_safe,
         _case_chmod_failure_is_safe,
         _case_build_tarball_excludes_appledouble,
+        _case_build_tarball_production_is_runtime_only,
         _case_release_sh_guards,
     ):
         case(record)
