@@ -983,7 +983,7 @@ wheels = [
 
 [[package]]
 name = "mcapp"
-version = "2.0.12"
+version = "2.0.13"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -1008,7 +1008,7 @@ requires-dist = [
     { name = "pywebpush", specifier = ">=2.3.0" },
     { name = "sse-starlette", specifier = ">=3.4.4" },
     { name = "timezonefinder", specifier = ">=6.5.0" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.52.4" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.53.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -1016,7 +1016,7 @@ dev = [{ name = "mypy", specifier = ">=2.3.0" }]
 
 [[package]]
 name = "mcapp-ble-service"
-version = "2.0.12"
+version = "2.0.13"
 source = { editable = "ble_service" }
 dependencies = [
     { name = "dbus-next" },
@@ -1044,7 +1044,7 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
     { name = "sse-starlette", specifier = ">=3.4.4" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.52.4" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.53.0" },
 ]
 provides-extras = ["dev"]
 
