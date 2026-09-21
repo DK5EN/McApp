@@ -33,6 +33,7 @@ from ..util import (
 from ._base import StorageBase
 from .constants import (
     ACK_DIAG_WINDOW_MS,
+    ACK_MSG_ID_WINDOW_MS,
     BARO_EXPONENT,
     BARO_LAPSE_RATE_K_PER_M,
     BARO_STD_TEMP_K,
@@ -1109,20 +1110,27 @@ class IngestMixin(StorageBase):
         # still ends up meaning the same thing either way ("does a matching
         # original row exist"), which is what the diagnostic below and every
         # branch's "publish/record only on an actual row match" rule need.
+        # ONE resolution of "which message is this ack for", shared by every
+        # branch below, clamped to ACK_MSG_ID_WINDOW_MS. Resolving per branch
+        # by msg_id alone is what let a reused counter bind an ack to the
+        # previous message that held the same id (see the constant).
+        target = await self._resolve_ack_target(ack_for_msg_id, timestamp)
+        # A match INSIDE the 4 h window evicts this msg_id's older ledger rows
+        # first: they belong to whatever message last held this counter value,
+        # and leaving them there makes `INSERT OR IGNORE` drop the acks recorded
+        # below as duplicates. A match made only by the `held` carve-out sits
+        # outside the window by definition and is skipped — there the older rows
+        # ARE this message's own, the `held` record this late ack completes.
+        if target is not None and target["timestamp"] > timestamp - ACK_MSG_ID_WINDOW_MS:
+            await self._prune_stale_message_acks(ack_for_msg_id, timestamp - ACK_MSG_ID_WINDOW_MS)
         if ack_type == 0x03:  # noqa: PLR2004 - firmware wire constant (failed), named in ble_protocol.py
-            existing = await self._query(
-                "SELECT id FROM messages WHERE msg_id = ? AND type = 'msg'"
-                " ORDER BY timestamp DESC LIMIT 1",
-                (ack_for_msg_id,),
-            )
-            rows = len(existing)
+            rows = 1 if target is not None else 0
+        elif target is None:
+            rows = 0
         else:
             rows = await self._mutate(
-                "UPDATE messages SET send_success = 1 WHERE id = ("
-                "  SELECT id FROM messages WHERE msg_id = ? AND type = 'msg'"
-                "  ORDER BY timestamp DESC LIMIT 1"
-                ")",
-                (ack_for_msg_id,),
+                "UPDATE messages SET send_success = 1 WHERE id = ?",
+                (target["id"],),
             )
         if rows == 0:
             # Show nearby msg_ids to help diagnose ACK correlation
@@ -1146,17 +1154,18 @@ class IngestMixin(StorageBase):
             # decode reads it straight from the frame, already 08X hex — the same
             # format `_insert_message_row` stores), so no extra lookup is needed,
             # unlike the inline path which resolves it via echo_id.
-            acked_rows = await self._mutate(
-                "UPDATE messages SET acked = 1 WHERE id = ("
-                "  SELECT id FROM messages WHERE msg_id = ? AND type = 'msg'"
-                "  ORDER BY timestamp DESC LIMIT 1"
-                ")",
-                (ack_for_msg_id,),
+            acked_rows = (
+                await self._mutate(
+                    "UPDATE messages SET acked = 1 WHERE id = ?",
+                    (target["id"],),
+                )
+                if target is not None
+                else 0
             )
             # Publish only on an actual match, exactly like the inline path — an
             # ack for a msg_id we never sent must never claim a delivery. Never let
             # a publish failure break ingestion (hot path).
-            if acked_rows:
+            if acked_rows and target is not None:
                 await self._record_message_ack(ack_for_msg_id, "peer", ack_from, ack_via, timestamp)
                 # `acked` is rank 4, the top of the store-forward precedence
                 # scale (plan §4) — always wins over a stored `held`/`failed`,
@@ -1164,7 +1173,9 @@ class IngestMixin(StorageBase):
                 # addressee here; COALESCE inside the helper means an
                 # unattributed peer ack (no appendix) leaves a previously
                 # stored holder alone rather than blanking it.
-                await self._write_delivery_status(ack_for_msg_id, "acked", ack_from)
+                await self._write_delivery_status(
+                    ack_for_msg_id, "acked", ack_from, row_id=target["id"]
+                )
             if acked_rows and self._message_router:
                 try:
                     await self._message_router.publish(
@@ -1192,8 +1203,10 @@ class IngestMixin(StorageBase):
             # anything. Record + publish only on an actual row match, exactly
             # like every other branch; never let a publish failure break
             # ingestion (hot path).
-            if rows:
-                await self._write_delivery_status(ack_for_msg_id, "failed", ack_from)
+            if rows and target is not None:
+                await self._write_delivery_status(
+                    ack_for_msg_id, "failed", ack_from, row_id=target["id"]
+                )
                 await self._record_message_ack(
                     ack_for_msg_id, "failed", ack_from, ack_via, timestamp
                 )
@@ -1234,8 +1247,10 @@ class IngestMixin(StorageBase):
             # node), matching the `holder` column's name directly. Record +
             # publish only on an actual row match; never let a publish failure
             # break ingestion (hot path).
-            if rows:
-                await self._write_delivery_status(ack_for_msg_id, "held", ack_from)
+            if rows and target is not None:
+                await self._write_delivery_status(
+                    ack_for_msg_id, "held", ack_from, row_id=target["id"]
+                )
                 await self._record_message_ack(ack_for_msg_id, "held", ack_from, ack_via, timestamp)
             if rows and self._message_router:
                 try:
@@ -1288,8 +1303,43 @@ class IngestMixin(StorageBase):
                 },
             )
 
+    async def _resolve_ack_target(self, msg_id: str, ack_ts: int) -> dict[str, Any] | None:
+        """The message row a binary ACK belongs to, or None when there is none.
+
+        ONE place decides that binding for every branch of `_handle_ack` —
+        `send_success`, `acked`, `delivery_status` and the `message_acks`
+        ledger — so they cannot land on different rows for the same frame.
+
+        The lookup is clamped to `ACK_MSG_ID_WINDOW_MS` (4 h). A firmware
+        msg_id is `((_GW_ID & 0x3FFFFF) << 10) | node_msgid` with `node_msgid`
+        wrapping at 999, so one station's ids repeat every ~1000 originated
+        frames — a frame count, not a period, measured at a median 24.8 h on
+        DK5EN-98. Without the clamp `ORDER BY timestamp DESC LIMIT 1` cheerfully
+        matched the previous owner of the counter: on 2026-09-21 a group-20
+        broadcast displayed "Acknowledged by OE5HWN-12", the peer ack of an
+        unrelated DM sent 24.75 h earlier under the same msg_id 1AE1E066.
+
+        A row already at `delivery_status = 'held'` keeps `HELD_ACK_WINDOW_MS`
+        instead, exactly like the inline `:ackNNN` path: a store node holds a DM
+        until the destination reappears, so its ack legitimately arrives days
+        later and a flat 4 h clamp would strand it at `held` forever.
+
+        Returns the newest match — `id`, `msg_id`, `timestamp` and
+        `delivery_status` — which is also what the caller needs to tell a
+        normal match from one made only by the held carve-out.
+        """
+        rows = await self._query(
+            "SELECT id, msg_id, timestamp, delivery_status FROM messages"
+            " WHERE msg_id = ? AND type = 'msg'"
+            "   AND (timestamp > ?"
+            "        OR (delivery_status = 'held' AND timestamp > ?))"
+            " ORDER BY timestamp DESC LIMIT 1",
+            (msg_id, ack_ts - ACK_MSG_ID_WINDOW_MS, ack_ts - HELD_ACK_WINDOW_MS),
+        )
+        return dict(rows[0]) if rows else None
+
     async def _write_delivery_status(
-        self, msg_id: str, status: str, holder: str | None, *, row_id: int | None = None
+        self, msg_id: str, status: str, holder: str | None, *, row_id: int
     ) -> None:
         """Persist `messages.delivery_status`/`holder` with the store-forward
         plan's §4 monotone-rank precedence (`_DELIVERY_STATUS_RANK`).
@@ -1319,40 +1369,53 @@ class IngestMixin(StorageBase):
         `acked` write, since an `:ackNNN`/peer-ack with no appendix must not
         erase a `held`/`failed` holder that was already known.
 
-        `row_id` pins the write to ONE row instead of resolving it from
-        `msg_id`. The inline `:ackNNN` path needs that: it finds the original
-        by `echo_id` and sets `acked` on THAT row's id, while this method's
-        own lookup takes the newest row for the msg_id — and the same message
-        legitimately lands as two rows with one msg_id (the UDP and BLE copies
-        ~100 ms apart, see the unread-cursor notes in CLAUDE.md). Resolving
-        independently could therefore mark `acked` on one copy and
-        `delivery_status` on the other. Callers holding a row id pass it;
-        `_handle_ack`, which has only the msg_id, does not.
+        `row_id` is REQUIRED and pins the write to ONE row — this method never
+        resolves `msg_id` itself. Both callers already hold the row they acted
+        on: the inline `:ackNNN` path finds it by `echo_id`, and `_handle_ack`
+        by `_resolve_ack_target`. Re-resolving here would be a second, possibly
+        different answer: the same message legitimately lands as two rows under
+        one msg_id (the UDP and BLE copies ~100 ms apart, see the unread-cursor
+        notes in CLAUDE.md), and a msg_id is reused outright once the node's
+        counter wraps, so an independent lookup could mark `acked` on one row
+        and `delivery_status` on another — or on a message from a day earlier.
+        `msg_id` stays a parameter for the log line only.
 
         Never raises into the ingest hot path — mirrors `_record_message_ack`.
         """
         # CASE clause built from the fixed module-level _DELIVERY_STATUS_RANK
         # dict, never user input.
-        if row_id is None:
-            target_sql = (
-                " WHERE id = ("
-                "  SELECT id FROM messages WHERE msg_id = ? AND type = 'msg'"
-                "  ORDER BY timestamp DESC LIMIT 1"
-                " )"
-            )
-            target_param: Any = msg_id
-        else:
-            target_sql = " WHERE id = ?"
-            target_param = row_id
         query = (
             "UPDATE messages SET delivery_status = ?, holder = COALESCE(?, holder)"  # noqa: S608
-            + target_sql
-            + f" AND ? > {_DELIVERY_STATUS_RANK_CASE_SQL}"
+            " WHERE id = ?"
+            f" AND ? > {_DELIVERY_STATUS_RANK_CASE_SQL}"
         )
         try:
-            await self._mutate(query, (status, holder, target_param, _DELIVERY_STATUS_RANK[status]))
+            await self._mutate(query, (status, holder, row_id, _DELIVERY_STATUS_RANK[status]))
         except sqlite3.Error:
             logger.exception("Failed to write delivery_status=%s for msg_id=%s", status, msg_id)
+
+    async def _prune_stale_message_acks(self, msg_id: str, cutoff: int) -> None:
+        """Drop `message_acks` rows for this msg_id recorded before `cutoff`.
+
+        The ledger key is (msg_id, kind, from_call) and carries no timestamp, so
+        it cannot tell two messages apart once the sending node's 10-bit counter
+        wraps and hands the same msg_id out again (~1000 originated frames, a
+        median 24.8 h on DK5EN-98 — see `ACK_MSG_ID_WINDOW_MS`). The previous
+        message's rows then sit under the new message's key and
+        `INSERT OR IGNORE` discards the new acks as duplicates: on 2026-09-21
+        the group-20 broadcast lost all three of its node acks and displayed the
+        four belonging to a DM sent 24.75 h earlier.
+
+        Called once per binary ack frame from `_handle_ack`, and only when the
+        ack bound inside the window. Never raises into the ingest hot path.
+        """
+        try:
+            await self._mutate(
+                "DELETE FROM message_acks WHERE msg_id = ? AND timestamp < ?",
+                (msg_id, cutoff),
+            )
+        except sqlite3.Error:
+            logger.exception("Failed to prune stale acks for msg_id=%s", msg_id)
 
     async def _record_message_ack(
         self,
@@ -1369,6 +1432,13 @@ class IngestMixin(StorageBase):
         station's repeat is a no-op and an unattributed repeat ('' placeholder)
         collapses into the one row per kind that is already there. Never raises
         into the ingest hot path.
+
+        Stale rows under a REUSED msg_id must already be gone by the time this
+        runs — `_prune_stale_message_acks` is what does that, and `_handle_ack`
+        calls it once per frame before any branch records. The key holds no
+        message identity beyond the msg_id, so without that prune the previous
+        owner of the counter is still sitting under it and `INSERT OR IGNORE`
+        silently discards the NEW message's acks as duplicates.
         """
         try:
             await self._mutate(
@@ -1665,7 +1735,7 @@ class IngestMixin(StorageBase):
                 # UPDATE uses, so the published event names the message the
                 # frontend actually rendered, not the echo suffix.
                 candidates = await self._query(
-                    "SELECT id, msg_id, src, dst FROM messages"
+                    "SELECT id, msg_id, src, dst, timestamp FROM messages"
                     " WHERE echo_id = ? AND type = 'msg'"
                     "   AND (timestamp > ?"
                     "        OR (delivery_status = 'held' AND timestamp > ?))"
@@ -1695,6 +1765,34 @@ class IngestMixin(StorageBase):
                         # writes must not land on different ones.
                         await self._write_delivery_status(
                             original["msg_id"], "acked", None, row_id=original["id"]
+                        )
+                        # ...and the same ledger row the binary 0x02 branch
+                        # writes. This path was the ONLY "the addressee
+                        # answered" route that recorded nothing, so a peer ack
+                        # that arrived as TEXT rendered ✓✓ Delivered with an
+                        # empty "Acknowledged by" in the bubble's details
+                        # popover — and text is the only form of it on the
+                        # extUDP path and in mc-chat, neither of which has a
+                        # binary ack at all. The acking station is this frame's
+                        # own sender (`_inline_ack_original` matched on exactly
+                        # that), normalised through the same grammar the BLE
+                        # appendix uses so the two writers cannot drift; `via`
+                        # is the transport the ack reached us on, coerced with
+                        # the same closed vocabulary (BLE yields None).
+                        # The published `msg_status` payload is deliberately
+                        # NOT extended with `from`/`via`: it is byte-pinned by
+                        # ack_status_tests and shared with mc-chat, and the
+                        # popover reads the ledger, not the event.
+                        if original["timestamp"] > timestamp - ACK_MSG_ID_WINDOW_MS:
+                            await self._prune_stale_message_acks(
+                                original["msg_id"], timestamp - ACK_MSG_ID_WINDOW_MS
+                            )
+                        await self._record_message_ack(
+                            original["msg_id"],
+                            "peer",
+                            normalise_ack_callsign(callsign),
+                            _coerce_ack_via(src_type),
+                            timestamp,
                         )
                     # Publish only on an actual match — an unmatched :ackNNN from
                     # foreign traffic must never claim a delivery. Never let a

@@ -62,6 +62,28 @@ ACK_DIAG_WINDOW_MS = 300_000
 # messages to that station in the meantime. The general case keeps the 1 h
 # horizon; only a message we already know is waiting gets the long one.
 HELD_ACK_WINDOW_MS = 168 * 3600 * 1000  # 168 h = the firmware's --storetime max
+
+# Binding window for a BINARY ack (`_handle_ack`) — the msg_id half of the same
+# problem HELD_ACK_WINDOW_MS solves for `echo_id`.
+#
+# A firmware msg_id is `((_GW_ID & 0x3FFFFF) << 10) | node_msgid` with
+# `node_msgid` wrapping at 999 (`msgid_counter.h`), so it is unique ACROSS
+# stations but REPEATS every ~1000 frames one node originates. That is a frame
+# count, not a period: measured on DK5EN-98 the same id came back after a
+# median of 24.8 h (min 24.75 h, max 499 h), and it shortens as traffic grows.
+# Binding an ack by msg_id alone therefore attached one message's acks to a
+# completely different message sent a day earlier — a group broadcast rendered
+# "Acknowledged by OE5HWN-12" from the peer ack of an unrelated DM (2026-09-21,
+# msg_id 1AE1E066; 13 of 85 ledger ids on the live DB matched more than one
+# message row).
+#
+# 4 h sits ~6x below the measured reuse gap and far above any real ack latency
+# (seconds to minutes), so it discriminates without refusing anything genuine.
+# The ONE exception is a row already at `delivery_status = 'held'`, which keeps
+# HELD_ACK_WINDOW_MS for exactly the reason spelled out above — a held DM is
+# legitimately acked days later, and clamping it to 4 h would strand it at
+# `held` forever.
+ACK_MSG_ID_WINDOW_MS = 4 * 3600 * 1000  # 4 h
 TELEMETRY_DEDUP_WINDOW_MS = 60_000
 
 # Gateway-uptime ledger (schema v25) — see

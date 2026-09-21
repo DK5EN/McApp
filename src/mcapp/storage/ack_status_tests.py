@@ -47,7 +47,7 @@ from typing import Any
 
 from ..logging_setup import get_logger
 from ..sqlite_storage import create_sqlite_storage
-from .constants import DEDUP_WINDOW_MS, HELD_ACK_WINDOW_MS
+from .constants import ACK_MSG_ID_WINDOW_MS, DEDUP_WINDOW_MS, HELD_ACK_WINDOW_MS
 
 logger = get_logger(__name__)
 
@@ -1289,6 +1289,301 @@ async def run_ack_status_tests() -> bool:  # noqa: PLR0915 - seven independent A
                     and held_gone_row.get("delivery_status") == "held",
                 )
             )
+
+            # 17. msg_id REUSE (the 2026-09-21 group-20 report). A firmware
+            #     msg_id is ((_GW_ID & 0x3FFFFF) << 10) | node_msgid with
+            #     node_msgid wrapping at 999, so one node's ids repeat every
+            #     ~1000 originated frames — a median 24.8 h on DK5EN-98. Every
+            #     ack binding used `WHERE msg_id = ? ORDER BY timestamp DESC
+            #     LIMIT 1` with no time bound, and the ledger key
+            #     (msg_id, kind, from_call) carries no message identity at all,
+            #     so a group broadcast rendered "Acknowledged by OE5HWN-12" from
+            #     the peer ack of an unrelated DM sent a day earlier under the
+            #     same msg_id, while losing its own three node acks to
+            #     INSERT OR IGNORE. Both halves are pinned here.
+            router.published.clear()
+            reuse_gap = 24 * 3600 * 1000 + 45 * 60 * 1000  # 24.75 h, the observed gap
+            await storage.store_message(
+                {
+                    "msg_id": "REUSE001",
+                    "src": "DK5EN-98",
+                    "dst": "OE5HWN-12",
+                    "msg": "the DM that owned this counter first",
+                    "type": "msg",
+                    "src_type": "ble",
+                    "timestamp": _BASE_TS + 100,
+                },
+                "{}",
+            )
+            for kind_from, ack_type_ in (("DB0ED-99", 0x00), ("OE5HWN-12", 0x02)):
+                await storage.store_message(
+                    {
+                        "type": "ack",
+                        "msg_id": "REUSE001",
+                        "ack_type": ack_type_,
+                        "ack_type_text": "ACK",
+                        "ack_from": kind_from,
+                        "timestamp": _BASE_TS + 101,
+                    },
+                    "{}",
+                )
+            old_dm_row = await _row("REUSE001")
+            old_dm_id = old_dm_row["id"] if old_dm_row is not None else None
+            # A day later the counter comes back around on a GROUP message.
+            await storage.store_message(
+                {
+                    "msg_id": "REUSE001",
+                    "src": "DK5EN-98",
+                    "dst": "20",
+                    "msg": "GA aus Freising",
+                    "type": "msg",
+                    "src_type": "ble",
+                    "timestamp": _BASE_TS + 100 + reuse_gap,
+                },
+                "{}",
+            )
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "REUSE001",
+                    "ack_type": 0x00,
+                    "ack_type_text": "Node ACK",
+                    "ack_from": "DB0ED-99",
+                    "timestamp": _BASE_TS + 101 + reuse_gap,
+                },
+                "{}",
+            )
+            reuse_acks = await storage.get_message_acks("REUSE001")
+            results.append(
+                (
+                    (
+                        "msg_id reuse: the new message shows ONLY its own ack,"
+                        " never the previous owner's peer ack"
+                    ),
+                    [(a["kind"], a["from"]) for a in reuse_acks] == [("node", "DB0ED-99")],
+                )
+            )
+            results.append(
+                (
+                    (
+                        "msg_id reuse: the new ack is NOT swallowed by the old row's"
+                        " identical (msg_id, kind, from_call) key"
+                    ),
+                    len(reuse_acks) == 1
+                    and reuse_acks[0]["timestamp"] == _BASE_TS + 101 + reuse_gap,
+                )
+            )
+            old_dm_after = await storage._query(
+                "SELECT acked, send_success, delivery_status FROM messages WHERE id = ?",
+                (old_dm_id,),
+            )
+            results.append(
+                (
+                    "msg_id reuse: the day-old DM row is untouched by the new message's ack",
+                    len(old_dm_after) == 1
+                    and old_dm_after[0]["acked"] == 1
+                    and old_dm_after[0]["delivery_status"] == "acked",
+                )
+            )
+            new_group_row = await _row("REUSE001")
+            results.append(
+                (
+                    "msg_id reuse: the new group message gets send_success, never acked",
+                    new_group_row is not None
+                    and new_group_row.get("dst") == "20"
+                    and new_group_row.get("send_success") == 1
+                    and new_group_row.get("acked") != 1,
+                )
+            )
+
+            # 17b. The read clamp alone, on rows written BEFORE the prune
+            #      existed: a stale ledger row under a reused msg_id is hidden
+            #      without any migration or backfill.
+            await storage._mutate(
+                "INSERT OR REPLACE INTO message_acks"
+                " (msg_id, kind, from_call, via, timestamp) VALUES (?, ?, ?, ?, ?)",
+                ("REUSE001", "peer", "OE5HWN-12", None, _BASE_TS + 101),
+            )
+            results.append(
+                (
+                    "read clamp: a pre-fix ledger row older than ACK_MSG_ID_WINDOW_MS is hidden",
+                    [(a["kind"], a["from"]) for a in await storage.get_message_acks("REUSE001")]
+                    == [("node", "DB0ED-99")],
+                )
+            )
+
+            # 17c. The `held` carve-out survives the clamp: a store-and-forward
+            #      DM is legitimately acked days later, so neither the binding
+            #      nor the ledger may be clamped to 4 h for it.
+            await storage.store_message(
+                {
+                    "msg_id": "HELDWIN1",
+                    "src": "DK5EN-98",
+                    "dst": "DL3NCU-7",
+                    "msg": "held for a long time",
+                    "type": "msg",
+                    "src_type": "ble",
+                    "timestamp": _BASE_TS + 200,
+                },
+                "{}",
+            )
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "HELDWIN1",
+                    "ack_type": 0x04,
+                    "ack_type_text": "Store Held",
+                    "ack_from": "DK5EN-90",
+                    "timestamp": _BASE_TS + 201,
+                },
+                "{}",
+            )
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "HELDWIN1",
+                    "ack_type": 0x02,
+                    "ack_type_text": "Peer ACK",
+                    "ack_from": "DL3NCU-7",
+                    "timestamp": _BASE_TS + 200 + 72 * 3600 * 1000,
+                },
+                "{}",
+            )
+            held_win_row = await _row("HELDWIN1")
+            results.append(
+                (
+                    "held carve-out: a binary 0x02 at +72 h still binds past the 4 h clamp",
+                    held_win_row is not None
+                    and held_win_row.get("acked") == 1
+                    and held_win_row.get("delivery_status") == "acked",
+                )
+            )
+            results.append(
+                (
+                    "held carve-out: the ledger keeps BOTH the held row and the late peer ack",
+                    [(a["kind"], a["from"]) for a in await storage.get_message_acks("HELDWIN1")]
+                    == [("held", "DK5EN-90"), ("peer", "DL3NCU-7")],
+                )
+            )
+
+            # 17d. The window boundary itself, both sides.
+            for msg_id_, offset, expect_bound in (
+                ("EDGEIN01", ACK_MSG_ID_WINDOW_MS - 6 * 60 * 1000, True),
+                ("EDGEOUT1", ACK_MSG_ID_WINDOW_MS + 6 * 60 * 1000, False),
+            ):
+                await storage.store_message(
+                    {
+                        "msg_id": msg_id_,
+                        "src": "DK5EN-98",
+                        "dst": "DL3NCU-8",
+                        "msg": "boundary probe",
+                        "type": "msg",
+                        "src_type": "ble",
+                        "timestamp": _BASE_TS + 300,
+                    },
+                    "{}",
+                )
+                await storage.store_message(
+                    {
+                        "type": "ack",
+                        "msg_id": msg_id_,
+                        "ack_type": 0x00,
+                        "ack_type_text": "Node ACK",
+                        "ack_from": "DB0ED-99",
+                        "timestamp": _BASE_TS + 300 + offset,
+                    },
+                    "{}",
+                )
+                edge_row = await _row(msg_id_)
+                bound = (
+                    edge_row is not None
+                    and edge_row.get("send_success") == 1
+                    and len(await storage.get_message_acks(msg_id_)) == 1
+                )
+                results.append(
+                    (
+                        (
+                            f"window boundary: an ack at {offset / 3600000:.1f} h"
+                            f" {'binds' if expect_bound else 'is refused'}"
+                        ),
+                        bound is expect_bound,
+                    )
+                )
+
+            # 18. The inline `:ackNNN` path writes the ledger too. It was the
+            #     one "the addressee answered" route that recorded nothing, so
+            #     a text peer ack rendered ✓✓ Delivered with an empty
+            #     "Acknowledged by" — and text is the ONLY form of a peer ack
+            #     on the extUDP path and in mc-chat, neither of which has a
+            #     binary 0x02 frame.
+            await storage.store_message(
+                {
+                    "msg_id": "INLLED01",
+                    "src": "DK5EN-98",
+                    "dst": "DL3NCU-6",
+                    "msg": "did you get this {077",
+                    "type": "msg",
+                    "src_type": "ble",
+                    "timestamp": _BASE_TS + 400,
+                },
+                "{}",
+            )
+            await storage.store_message(
+                {
+                    "msg_id": "PEERTXT1",
+                    "src": "DL3NCU-6",
+                    "dst": "DK5EN-98",
+                    "msg": "DK5EN-98 :ack077",
+                    "type": "msg",
+                    "src_type": "lora",
+                    "timestamp": _BASE_TS + 401,
+                },
+                "{}",
+            )
+            inline_ledger = await storage.get_message_acks("INLLED01")
+            results.append(
+                (
+                    (
+                        "inline :ackNNN records a peer ledger row attributed to the"
+                        " answering station, with the ack's transport as via"
+                    ),
+                    [(a["kind"], a["from"], a["via"]) for a in inline_ledger]
+                    == [("peer", "DL3NCU-6", "lora")],
+                )
+            )
+            # The scoping rules still gate it: an unmatched :ackNNN records
+            # nothing, exactly like the publish it sits beside.
+            await storage.store_message(
+                {
+                    "msg_id": "INLLED02",
+                    "src": "DK5EN-98",
+                    "dst": "DL3NCU-5",
+                    "msg": "unanswered {078",
+                    "type": "msg",
+                    "src_type": "ble",
+                    "timestamp": _BASE_TS + 402,
+                },
+                "{}",
+            )
+            await storage.store_message(
+                {
+                    "msg_id": "PEERTXT2",
+                    "src": "DL9ZZZ-1",
+                    "dst": "DK5EN-98",
+                    "msg": "DK5EN-98 :ack078",
+                    "type": "msg",
+                    "src_type": "lora",
+                    "timestamp": _BASE_TS + 403,
+                },
+                "{}",
+            )
+            results.append(
+                (
+                    "inline :ackNNN from an unrelated station records NO ledger row",
+                    await storage.get_message_acks("INLLED02") == [],
+                )
+            )
+
         finally:
             await storage.close()
 

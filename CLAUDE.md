@@ -439,6 +439,25 @@ firmware side: `MeshCom-Firmware-DEV-Main/docs/ack-wer-hat-quittiert.md`.
   already-held rows keeps the ambiguity small: a false match needs the same pair, the same
   counter, AND the older message still held — and since the counter is ours, reusing it means
   1000 messages to that station in between.
+- **A `msg_id` identifies a message only for 4 hours — `ACK_MSG_ID_WINDOW_MS`.** It is
+  `((_GW_ID & 0x3FFFFF) << 10) | node_msgid` with `node_msgid` wrapping at 999
+  (`msgid_counter.h`), so it is unique across STATIONS but repeats every ~1000 frames one node
+  originates — a frame count, not a period: median **24.8 h** on DK5EN-98 (min 24.75 h, max
+  499 h), and it shortens as traffic grows. Every binary-ack binding goes through
+  `_resolve_ack_target` (`storage/ingest.py`), which clamps the `msg_id` lookup to 4 h, and
+  `_write_delivery_status` now takes a REQUIRED `row_id` so nothing re-resolves independently.
+  Unclamped, a group-20 broadcast displayed "Acknowledged by OE5HWN-12" from the peer ack of an
+  unrelated DM sent 24.75 h earlier under the same msg_id 1AE1E066 (2026-09-21; 13 of 85 ledger
+  ids on the live DB matched more than one message row). Same carve-out as the inline path: a row
+  at `delivery_status = 'held'` keeps `HELD_ACK_WINDOW_MS`.
+- **The `message_acks` key carries no message identity, so a reused msg_id SWALLOWS the new
+  message's acks.** `(msg_id, kind, from_call)` has no timestamp, so the previous owner of the
+  counter is still sitting under the key and `INSERT OR IGNORE` drops the new rows as duplicates —
+  the 2026-09-21 message lost all three of its node acks that way. `_prune_stale_message_acks`
+  runs once per ack frame in `_handle_ack`, before any branch records, and only when the ack bound
+  INSIDE the window (a held-carve-out match's older rows are that message's own). `get_message_acks`
+  applies the same clamp on READ, anchored on the newest ack for the id, which is what makes rows
+  written before the prune existed read correctly without a migration or backfill.
 - **Never key the inline match on the ack payload's padded callsign.** `%-9.9s:ack%03i` TRUNCATES
   at 9 chars (`OE1ABCD-12` arrives as `OE1ABCD-1`) and real traffic shows the no-separator case
   (`DK1TCP-77:ack622`). The frame's `src`/`dst` carry the same identities untruncated. The padded
@@ -477,6 +496,15 @@ Plan and the decisions: `doc/2026-09-14_1153-store-forward-dm-status-plan.md`; f
   such guard: its `sent: true` takes the transport branch, which is already the honest rendering.
 - **`holder` is a deliberate duplicate of `from` on the `held` event.** The spec names it; the
   webapp reads it without knowing this repo's attribution convention.
+- **Both "the addressee answered" paths write the `message_acks` ledger, and the inline one does
+  NOT extend its published payload.** The inline `:ackNNN` branch recorded no ledger row until
+  2026-09-21, so a text peer ack rendered ✓✓ Delivered with an empty "Acknowledged by" — and text
+  is the only form of a peer ack on the extUDP path and in mc-chat, neither of which has a binary
+  `0x02` frame. It now records `kind="peer"` attributed to the ack frame's own sender (through
+  `normalise_ack_callsign`, the same grammar the BLE appendix uses) with `via` = the ack's
+  `src_type` through `_coerce_ack_via` (BLE yields None). The `msg_status` event stays
+  `{msg_id, acked, ack_kind}` with no `from`/`via`: it is byte-pinned by `ack_status_tests` and
+  shared with mc-chat, and the popover reads the ledger, not the event.
 - **There are TWO paths that mean "the addressee answered", and both must write the rank.** The
   binary `0x02` branch in `_handle_ack` and the inline `:ackNNN` TEXT match further down
   `store_message` are independent; wiring only the first left a `held` message acked by text

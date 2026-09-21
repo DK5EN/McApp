@@ -22,6 +22,7 @@ from ..util import now_ms
 from ._base import StorageBase
 from .constants import (
     _MSG_SELECT,
+    ACK_MSG_ID_WINDOW_MS,
     BUCKET_SECONDS,
     CORE_DUMP_FILTER_TEXT,
     DEDUP_WINDOW_MS,
@@ -30,6 +31,7 @@ from .constants import (
     EIGHT_DAYS_MS,
     EST_BYTES_PER_ROW,
     GAP_THRESHOLD_MULTIPLIER,
+    HELD_ACK_WINDOW_MS,
     HOURLY_BUCKET_MS,
     HOURLY_BUCKET_S,
     HOURLY_GAP_THRESHOLD,
@@ -1767,11 +1769,29 @@ class QueryMixin(StorageBase):
         `from` and mapped to `None` when the ledger holds the '' placeholder —
         the storage-side sentinel is an implementation detail of the UNIQUE
         constraint and must not leak to the API.
+
+        The result is clamped to `ACK_MSG_ID_WINDOW_MS` before the NEWEST ack
+        recorded for this msg_id, because the ledger key carries no message
+        identity beyond the msg_id and a firmware msg_id is reused every ~1000
+        frames the sending node originates (see the constant). Without the
+        clamp a bubble showed the acks of whichever earlier message last held
+        the same counter value. `_record_message_ack` already prunes those rows
+        as it writes, so this is what makes ledger rows written BEFORE that
+        prune existed read correctly too — no backfill, no migration. A msg_id
+        with a `held` row gets `HELD_ACK_WINDOW_MS` instead, for the same reason
+        the binding does: a store-and-forward ack arrives days after the node
+        and gateway acks, and all of them belong to the one message.
         """
         rows = await self._query(
             "SELECT kind, from_call, via, timestamp FROM message_acks"
-            " WHERE msg_id = ? ORDER BY timestamp ASC",
-            (msg_id,),
+            " WHERE msg_id = ?"
+            "   AND timestamp >= ("
+            "        SELECT MAX(timestamp) FROM message_acks WHERE msg_id = ?"
+            "   ) - CASE WHEN EXISTS ("
+            "        SELECT 1 FROM message_acks WHERE msg_id = ? AND kind = 'held'"
+            "   ) THEN ? ELSE ? END"
+            " ORDER BY timestamp ASC",
+            (msg_id, msg_id, msg_id, HELD_ACK_WINDOW_MS, ACK_MSG_ID_WINDOW_MS),
         )
         return [
             {
