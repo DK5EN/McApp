@@ -439,6 +439,25 @@ firmware side: `MeshCom-Firmware-DEV-Main/docs/ack-wer-hat-quittiert.md`.
   already-held rows keeps the ambiguity small: a false match needs the same pair, the same
   counter, AND the older message still held — and since the counter is ours, reusing it means
   1000 messages to that station in between.
+- **A `msg_id` identifies a message only for 4 hours — `ACK_MSG_ID_WINDOW_MS`.** It is
+  `((_GW_ID & 0x3FFFFF) << 10) | node_msgid` with `node_msgid` wrapping at 999
+  (`msgid_counter.h`), so it is unique across STATIONS but repeats every ~1000 frames one node
+  originates — a frame count, not a period: median **24.8 h** on DK5EN-98 (min 24.75 h, max
+  499 h), and it shortens as traffic grows. Every binary-ack binding goes through
+  `_resolve_ack_target` (`storage/ingest.py`), which clamps the `msg_id` lookup to 4 h, and
+  `_write_delivery_status` now takes a REQUIRED `row_id` so nothing re-resolves independently.
+  Unclamped, a group-20 broadcast displayed "Acknowledged by OE5HWN-12" from the peer ack of an
+  unrelated DM sent 24.75 h earlier under the same msg_id 1AE1E066 (2026-09-21; 13 of 85 ledger
+  ids on the live DB matched more than one message row). Same carve-out as the inline path: a row
+  at `delivery_status = 'held'` keeps `HELD_ACK_WINDOW_MS`.
+- **The `message_acks` key carries no message identity, so a reused msg_id SWALLOWS the new
+  message's acks.** `(msg_id, kind, from_call)` has no timestamp, so the previous owner of the
+  counter is still sitting under the key and `INSERT OR IGNORE` drops the new rows as duplicates —
+  the 2026-09-21 message lost all three of its node acks that way. `_prune_stale_message_acks`
+  runs once per ack frame in `_handle_ack`, before any branch records, and only when the ack bound
+  INSIDE the window (a held-carve-out match's older rows are that message's own). `get_message_acks`
+  applies the same clamp on READ, anchored on the newest ack for the id, which is what makes rows
+  written before the prune existed read correctly without a migration or backfill.
 - **Never key the inline match on the ack payload's padded callsign.** `%-9.9s:ack%03i` TRUNCATES
   at 9 chars (`OE1ABCD-12` arrives as `OE1ABCD-1`) and real traffic shows the no-separator case
   (`DK1TCP-77:ack622`). The frame's `src`/`dst` carry the same identities untruncated. The padded
@@ -477,6 +496,15 @@ Plan and the decisions: `doc/2026-09-14_1153-store-forward-dm-status-plan.md`; f
   such guard: its `sent: true` takes the transport branch, which is already the honest rendering.
 - **`holder` is a deliberate duplicate of `from` on the `held` event.** The spec names it; the
   webapp reads it without knowing this repo's attribution convention.
+- **Both "the addressee answered" paths write the `message_acks` ledger, and the inline one does
+  NOT extend its published payload.** The inline `:ackNNN` branch recorded no ledger row until
+  2026-09-21, so a text peer ack rendered ✓✓ Delivered with an empty "Acknowledged by" — and text
+  is the only form of a peer ack on the extUDP path and in mc-chat, neither of which has a binary
+  `0x02` frame. It now records `kind="peer"` attributed to the ack frame's own sender (through
+  `normalise_ack_callsign`, the same grammar the BLE appendix uses) with `via` = the ack's
+  `src_type` through `_coerce_ack_via` (BLE yields None). The `msg_status` event stays
+  `{msg_id, acked, ack_kind}` with no `from`/`via`: it is byte-pinned by `ack_status_tests` and
+  shared with mc-chat, and the popover reads the ledger, not the event.
 - **There are TWO paths that mean "the addressee answered", and both must write the rank.** The
   binary `0x02` branch in `_handle_ack` and the inline `:ackNNN` TEXT match further down
   `store_message` are independent; wiring only the first left a `held` message acked by text
@@ -524,11 +552,42 @@ the PWA app-icon badge. Plan and the field evidence: `doc/2026-09-06_1200-unread
   `query.py` MUST keep sharing `_conv_dedup_subquery` / `_CONV_NEWER_EXPR` / `_CONV_NEWER_SPAM_EXPR`
   — if their predicates disagree the subtraction silently corrupts the count, and three mutations
   that break it are pinned by `unread_suppression_tests.py`.
-- **The LIVE broadcast carries no classifier fields**, so the webapp's own suppression gate cannot
-  fire on a live message — `store_message` uses them as INSERT parameters only. The message is
-  rendered, the read marker advances, the badge resolves itself. **Symptom → cause:** a transient
-  `+1` on a live hidden message that clears by itself is this, not a cursor regression; do not chase
-  it on the client.
+- **The live broadcast carries the classifier fields, and it does so by MUTATING the shared dict.**
+  `MessageRouter.publish` hands ONE `data` object to every subscriber in subscription order;
+  `_storage_handler` is subscribed in `MessageRouter.__init__` and therefore runs before
+  `SSEManager._broadcast_handler`, so `store_message` annotating `message` in place is what puts
+  `category`/`tags`/`info_score`/`template_hash`/`classifier_ver` on the live SSE payload. Both that
+  annotation and `_build_message_dict`'s history reconstruction go through `_classifier_fields`, so
+  live and reloaded views cannot drift. **That ordering is load-bearing** — invert it and the live
+  payload silently loses the fields again; `live_classification_tests.py` asserts the two
+  subscribers' indices. `_broadcast_handler`'s own "shallow COPY, never the shared dict" comment is
+  about the `dst` rebucketing, a different and non-additive mutation, and still stands. Until
+  2026-09-20 the fields were INSERT parameters only, so a hidden message rendered live, the read
+  marker advanced over it, and the badge resolved itself — self-healing, but live and history
+  disagreed about the same message.
+- **`tags` is presence-gated, not truthiness-gated, and that is not a style choice.** An EMPTY tag
+  list is the common case — 19644 of 21048 classified rows on the live DB carry `tags = '[]'` — and
+  mc-chat's `meshcom_mock/wire.py` emits `tags: []` for exactly those rows. Dropping the key on `[]`
+  changes the history payload of 93% of classified messages and diverges the two backends on a wire
+  contract they share. A NULL or undecodable column still omits the key.
+- **A distinct message is FOUR legs, not just `msg_id`.** `_conv_dedup_subquery` groups by the
+  msg_id-or-rowid group AND the resolved sender base AND the conversation key AND a
+  `DEDUP_WINDOW_MS` time fence, mirroring the ingest rule (`_find_duplicate_row_id`); both call
+  `sender_base_sql` (`storage/constants.py`) so the ingest and read-time boundaries cannot drift. A
+  firmware `msg_id` is a node-local counter that gets REUSED: on the live DB 572 multi-row groups
+  split cleanly into 454 real transport pairs (≤ 172 ms apart, max size 2, never spanning a sender,
+  dst or key) and 118 reuse groups (≥ 3.33 h apart, 71 across more than one conversation key).
+  Grouping on `msg_id` alone made narrowed and full-scan `count` disagree for 10 keys AND hid real
+  unread messages — a reuse group took its OLDEST copy's timestamp, so a recent message under an
+  11-day-old msg_id sat before the read cursor and never lit the badge. The time fence is anchored
+  on the data (`_CONV_ANCHOR_SQL`), NEVER a `timestamp / W` bucket: a fixed boundary falling between
+  a 172 ms pair splits it and recreates the unclearable `+1`. **Cost, measured end-to-end through
+  `get_conversation_summary` on mcapp.local against the live DB: 460 ms → 990 ms** for the full
+  scan (once per client connect, off-loop; `/events` is exempt from `StallMiddleware`) and
+  178 ms → 266 ms narrowed. The dedup subquery alone is 313 ms and **both** the aggregate and the
+  candidate query execute it, so its cost is paid TWICE per call — measuring the subquery in
+  isolation understates the real figure by about half, which is how the first recorded number
+  (517 ms) came out low. Materialising it once is the obvious lever if this needs to come down.
 - **Keys are `conversation_key`, on both ends of the wire.** DMs are `A<>B` (sorted base
   callsigns), groups/hashtags/`*` verbatim. The webapp translates to its sidebar key at exactly
   one boundary (`translateServerSummaryKey` / `serverKeyForSidebarKey`). `read_counts.dst` stored

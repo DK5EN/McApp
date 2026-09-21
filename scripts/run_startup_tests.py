@@ -62,9 +62,11 @@ from mcapp.stall_http_tests import run_stall_http_tests
 from mcapp.stall_tests import run_stall_tests
 from mcapp.storage.ack_status_tests import run_ack_status_tests
 from mcapp.storage.connection_lifecycle_tests import run_connection_lifecycle_tests
+from mcapp.storage.conv_dedup_tests import run_conv_dedup_tests
 from mcapp.storage.conversation_key_tests import run_conversation_key_tests
 from mcapp.storage.ingest_dedup_tests import run_ingest_dedup_tests
 from mcapp.storage.linkcheck_ingest_tests import run_linkcheck_ingest_tests
+from mcapp.storage.live_classification_tests import run_live_classification_tests
 from mcapp.storage.mheard_attribution_tests import run_mheard_attribution_tests
 from mcapp.storage.migration_chain_tests import run_migration_chain_tests
 from mcapp.storage.query_tests import run_query_tests
@@ -192,6 +194,12 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     unread_suppression_ok = await run_unread_suppression_tests()
     print(f"unread_suppression: {'PASS' if unread_suppression_ok else 'FAIL'}")
 
+    conv_dedup_ok = await run_conv_dedup_tests()
+    print(f"conv_dedup: {'PASS' if conv_dedup_ok else 'FAIL'}")
+
+    live_classification_ok = await run_live_classification_tests()
+    print(f"live_classification: {'PASS' if live_classification_ok else 'FAIL'}")
+
     ingest_dedup_ok = await run_ingest_dedup_tests()
     print(f"ingest_dedup: {'PASS' if ingest_dedup_ok else 'FAIL'}")
 
@@ -288,6 +296,8 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and read_cursor_ok
         and suppression_predicate_ok
         and unread_suppression_ok
+        and conv_dedup_ok
+        and live_classification_ok
         and ingest_dedup_ok
         and meteo_ok
         and push_ok

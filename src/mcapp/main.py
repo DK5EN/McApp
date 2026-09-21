@@ -39,7 +39,6 @@ from .config_loader import (
 from .logging_setup import get_logger, setup_logging
 from .logging_setup import has_console as check_console
 from .meteo import is_valid_position
-from .router_tests import run_suppression_tests
 
 # Re-exported (import-as-itself) so identity_tests.py can monkeypatch
 # main.save_runtime_state as a module attribute under mypy --strict's
@@ -488,7 +487,17 @@ class MessageRouter:
 
     def test_suppression_logic(self) -> bool:
         """Test suppression logic based on the table scenarios (CO-05: body lives
-        in router_tests.py; kept here as a thin delegate so callers don't change)."""
+        in router_tests.py; kept here as a thin delegate so callers don't change).
+
+        The import is deliberately LAZY, matching CommandHandler.run_all_tests().
+        A production tarball ships no `*_tests.py` at all, so `router_tests` is
+        simply absent there and this raises ImportError — which the one caller
+        catches and reports as "skipped", never as a failure. A module-level
+        import here would instead make `main` unimportable and the service
+        refuse to start on every production build.
+        """
+        from .router_tests import run_suppression_tests  # noqa: PLC0415 - harness loaded on demand
+
         return run_suppression_tests(self)
 
     def log_message_routing_decision(
@@ -3210,15 +3219,23 @@ async def main() -> None:
     # `scripts/run_startup_tests.py` instead.
     if check_console():
         logger.info("Running suppression logic smoke check...")
-        suppression_passed = ctx.message_router.test_suppression_logic()
-
-        if suppression_passed:
-            logger.info("Suppression smoke check passed. System ready.")
-        else:
-            logger.warning(
-                "Suppression smoke check failed — proceeding anyway (non-fatal). "
-                "Run scripts/run_startup_tests.py for the authoritative gate."
+        try:
+            suppression_passed = ctx.message_router.test_suppression_logic()
+        except ImportError:
+            # A production tarball ships no test harness by design. "Not
+            # present" is not "failed" and must never be logged as one.
+            logger.info(
+                "Suppression smoke check skipped: no test harness in this build "
+                "(expected on a production tarball; dev builds ship one)."
             )
+        else:
+            if suppression_passed:
+                logger.info("Suppression smoke check passed. System ready.")
+            else:
+                logger.warning(
+                    "Suppression smoke check failed — proceeding anyway (non-fatal). "
+                    "Run scripts/run_startup_tests.py for the authoritative gate."
+                )
 
     ### unit tests
 

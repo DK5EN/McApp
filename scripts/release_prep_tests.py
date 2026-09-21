@@ -360,6 +360,20 @@ def run_release_prep_tests() -> bool:
         print("release_prep: SKIPPED - jq not on PATH (release.sh requires it)")
         return True
 
+    if not _RELEASE_SH.exists():
+        # release.sh is developer-machine tooling and is deliberately NOT in
+        # any tarball -- a dev build ships scripts/*.py so the gate can run on
+        # the box, but the release script itself has no business on a Pi. These
+        # cases drive the real release.sh, so without it there is nothing to
+        # verify. "NOT VERIFIED" wording, like config_migration's bash-4 skip,
+        # so this can never be misread as coverage. On a source checkout the
+        # file is always present, so a skip here is itself the signal.
+        print(
+            "release_prep: SKIPPED - NOT VERIFIED "
+            "(no scripts/release.sh in this tree; expected when run from a deployed slot)"
+        )
+        return True
+
     passed = 0
     failed = 0
 

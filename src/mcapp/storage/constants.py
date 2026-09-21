@@ -62,6 +62,28 @@ ACK_DIAG_WINDOW_MS = 300_000
 # messages to that station in the meantime. The general case keeps the 1 h
 # horizon; only a message we already know is waiting gets the long one.
 HELD_ACK_WINDOW_MS = 168 * 3600 * 1000  # 168 h = the firmware's --storetime max
+
+# Binding window for a BINARY ack (`_handle_ack`) — the msg_id half of the same
+# problem HELD_ACK_WINDOW_MS solves for `echo_id`.
+#
+# A firmware msg_id is `((_GW_ID & 0x3FFFFF) << 10) | node_msgid` with
+# `node_msgid` wrapping at 999 (`msgid_counter.h`), so it is unique ACROSS
+# stations but REPEATS every ~1000 frames one node originates. That is a frame
+# count, not a period: measured on DK5EN-98 the same id came back after a
+# median of 24.8 h (min 24.75 h, max 499 h), and it shortens as traffic grows.
+# Binding an ack by msg_id alone therefore attached one message's acks to a
+# completely different message sent a day earlier — a group broadcast rendered
+# "Acknowledged by OE5HWN-12" from the peer ack of an unrelated DM (2026-09-21,
+# msg_id 1AE1E066; 13 of 85 ledger ids on the live DB matched more than one
+# message row).
+#
+# 4 h sits ~6x below the measured reuse gap and far above any real ack latency
+# (seconds to minutes), so it discriminates without refusing anything genuine.
+# The ONE exception is a row already at `delivery_status = 'held'`, which keeps
+# HELD_ACK_WINDOW_MS for exactly the reason spelled out above — a held DM is
+# legitimately acked days later, and clamping it to 4 h would strand it at
+# `held` forever.
+ACK_MSG_ID_WINDOW_MS = 4 * 3600 * 1000  # 4 h
 TELEMETRY_DEDUP_WINDOW_MS = 60_000
 
 # Gateway-uptime ledger (schema v25) — see
@@ -194,6 +216,32 @@ def escape_like(value: str) -> str:
     site — it was hand-inlined in some and simply forgotten in others.
     """
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def sender_base_sql(col: str) -> str:
+    """SQL expression for "which station sent this", from a src-shaped column.
+
+    Strips a via-relay path (a src of 'DK5EN-10,DK5EN-98' is the relay-first,
+    originator-second shape `compute_conversation_key` documents; only the
+    first, FRONT component is the sender) and normalises case/whitespace.
+    Byte-for-byte the same expression `_find_duplicate_row_id`
+    (storage/ingest.py) uses to resolve the sender base for the ingest dedup
+    backstop SELECT, parameterised here on the column reference so
+    `storage.query`'s conversation-dedup subquery (`_conv_dedup_subquery`,
+    doc/2026-09-20_1000-live-classifier-and-dedup-plan.md §F2) can share the
+    identical rule instead of re-deriving it. The two boundaries — "is this a
+    duplicate frame" at ingest and "is this a distinct message" at read time
+    — must never drift apart, or a query-side fence narrower or wider than
+    the ingest one would either split a real transport pair or collapse two
+    genuinely different senders who happen to reuse a firmware msg_id.
+
+    Both call sites go through this function, so the expression exists in
+    exactly one place.
+    """
+    return (
+        f"UPPER(TRIM(CASE WHEN instr({col}, ',') > 0"
+        f" THEN substr({col}, 1, instr({col}, ',') - 1) ELSE {col} END))"
+    )
 
 
 def compute_conversation_key(src: str, dst: str) -> str | None:

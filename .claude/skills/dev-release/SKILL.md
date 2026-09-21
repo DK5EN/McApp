@@ -140,18 +140,43 @@ Other flags worth knowing: `--check` (dry run), `--skip` (deploy only, no system
 
 ## Step 6 — Verify
 
-A "complete" banner is not verification. Check three things:
+A "complete" banner is not verification. Check these:
 
 ```bash
 ssh mcapp.local '
   readlink -f ~/mcapp-slots/current                      # which slot is live now
   systemctl is-active mcapp mcapp-ble                    # both active
   systemctl show mcapp -p ActiveEnterTimestamp --value   # restarted just now, not days ago
+  curl -s http://127.0.0.1/webapp/version.html           # the TAG; /api/status is not (see below)
+  find ~/mcapp-slots/current/src/mcapp -name "*.json" | wc -l   # 11, not 0
   grep -c "<a symbol from your change>" ~/mcapp-slots/current/src/mcapp/<file>.py'
 ```
 
 The last one is the check that actually matters: grep the **active slot** for a symbol only your
 change introduces. Everything else can look healthy while the service still runs the old code.
+
+**`/api/status`'s `version` is the pyproject version, not the deployed tag.** Every
+`vX.Y.Z-dev.N` is built from the same `X.Y.Z`, so that field reads identically for dev.1, dev.4
+and the eventual `vX.Y.Z` — it cannot tell you which one is installed, and a wait loop keyed on it
+succeeds instantly against the old code. Use `webapp/version.html`.
+
+**The `.json` count guards the packaging, and a DEV build is the shape that has them.**
+`build_tarball`'s second argument selects the shape: a dev pre-release ships the test harness —
+`*_tests.py`, `tests.py`, the eleven `.json` corpora and `run_startup_tests.py` — while a
+production tarball ships runtime code only. So 11 here is right for a dev tag and 0 is right for a
+production one; a zero on a dev slot means the predicate regressed. Until v2.0.11 it was the worst
+of both, shipping every test module while dropping all the data they read, so
+`src/mcapp/contract/` did not exist in any slot.
+
+Because production carries no harness, `main.py` must never import a test module at import time —
+it loads `router_tests` lazily and the one caller treats `ImportError` as "skipped". Pinned, with
+both shapes, by `scripts/webapp_deploy_tests.py`.
+
+**A dev build can run the real gate on the box**, against the exact tree it is running:
+
+```bash
+ssh mcapp.local 'cd ~/mcapp-slots/current && ./.venv/bin/python scripts/run_startup_tests.py'
+```
 
 Do not expect a fixed slot order. `get_target_slot` picks the empty-or-oldest of `slot-{0,1,2}`,
 and a re-deploy of a version the active slot already holds deploys **in place** with no rotation at

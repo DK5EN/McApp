@@ -323,7 +323,7 @@ log_warn() {{ echo "WARN: $*" >&2; }}
 _CLEANUP_TMPDIR=""
 _CLEANUP_TARBALL=""
 {function}
-build_tarball "{version}"
+build_tarball "{version}" {include_tests}
 """
 
 
@@ -339,6 +339,22 @@ def _write_minimal_release_fixture(tmp: Path) -> tuple[Path, Path]:
 
     (project / "src" / "mcapp").mkdir(parents=True)
     (project / "src" / "mcapp" / "__init__.py").write_text("", encoding="utf-8")
+    # Package DATA, not code: the corpora and wire contracts that ship inside
+    # the package and that its *_tests.py modules read by path. build_tarball()
+    # used to copy `*.py` only, so it shipped every test module and none of
+    # their data -- all eleven .json files were silently absent from every
+    # deployed slot (found on mcapp.local at v2.0.11).
+    (project / "src" / "mcapp" / "contract").mkdir(parents=True)
+    (project / "src" / "mcapp" / "contract" / "push_contract.json").write_text(
+        '{"version": 11}', encoding="utf-8"
+    )
+    (project / "src" / "mcapp" / "storage").mkdir(parents=True)
+    (project / "src" / "mcapp" / "storage" / "suppression_vectors.json").write_text(
+        '{"version": 1}', encoding="utf-8"
+    )
+    # A decoy: __pycache__ stays excluded, for data as well as for code.
+    (project / "src" / "mcapp" / "__pycache__").mkdir(parents=True)
+    (project / "src" / "mcapp" / "__pycache__" / "cached.json").write_text("{}", encoding="utf-8")
     (project / "pyproject.toml").write_text('[project]\nname = "x"\n', encoding="utf-8")
 
     (project / "ble_service" / "src").mkdir(parents=True)
@@ -351,8 +367,17 @@ def _write_minimal_release_fixture(tmp: Path) -> tuple[Path, Path]:
     (project / "bootstrap").mkdir()
     (project / "bootstrap" / "mcapp.sh").write_text("#!/bin/bash\n", encoding="utf-8")
 
+    # A test module beside the runtime code, and the gate runner beside the
+    # update runner: production must carry neither, a dev build both.
+    (project / "src" / "mcapp" / "storage" / "suppression_tests.py").write_text(
+        "", encoding="utf-8"
+    )
+    (project / "src" / "mcapp" / "commands").mkdir(parents=True)
+    (project / "src" / "mcapp" / "commands" / "tests.py").write_text("", encoding="utf-8")
+
     (project / "scripts").mkdir()
     (project / "scripts" / "update-runner.py").write_text("", encoding="utf-8")
+    (project / "scripts" / "run_startup_tests.py").write_text("", encoding="utf-8")
 
     (webapp / "dist").mkdir(parents=True)
     (webapp / "dist" / "index.html").write_text("<html></html>", encoding="utf-8")
@@ -386,7 +411,11 @@ def _case_build_tarball_excludes_appledouble(record: Recorder) -> None:
         driver = tmp / "driver.sh"
         driver.write_text(
             _TARBALL_DRIVER.format(
-                project_dir=project, webapp_dir=webapp, function=function, version=version
+                project_dir=project,
+                webapp_dir=webapp,
+                function=function,
+                version=version,
+                include_tests="true",
             ),
             encoding="utf-8",
         )
@@ -417,6 +446,28 @@ def _case_build_tarball_excludes_appledouble(record: Recorder) -> None:
             any(Path(n).name == "index.html" and "webapp" in n for n in names),
             f"(names: {names})",
         )
+        record(
+            "the produced tarball ships package DATA, not just *.py (contract/push_contract.json)",
+            any(n.endswith("src/mcapp/contract/push_contract.json") for n in names),
+            f"(names: {names})",
+        )
+        record(
+            "package data is shipped from nested packages too (storage/suppression_vectors.json)",
+            any(n.endswith("src/mcapp/storage/suppression_vectors.json") for n in names),
+            f"(names: {names})",
+        )
+        record(
+            "__pycache__ data is still excluded, like __pycache__ code",
+            not any("__pycache__" in n for n in names),
+            f"(names: {names})",
+        )
+        record(
+            "a dev tarball ships the test harness: *_tests.py, tests.py and the gate runner",
+            any(Path(n).name.endswith("_tests.py") for n in names)
+            and any(Path(n).name == "tests.py" for n in names)
+            and any(Path(n).name == "run_startup_tests.py" for n in names),
+            f"(names: {names})",
+        )
 
 
 def _case_release_sh_guards(record: Recorder) -> None:
@@ -436,10 +487,103 @@ def _case_release_sh_guards(record: Recorder) -> None:
     )
 
 
+def _case_build_tarball_production_is_runtime_only(record: Recorder) -> None:
+    """A production tarball carries no test harness at all — no `*_tests.py`,
+    no `tests.py`, none of the .json corpora, and not the gate runner. The dev
+    shape (pinned in the case above) carries all four.
+
+    This is the pair that matters: the two shapes are produced by ONE function
+    whose only difference is its second argument, so a predicate edit that
+    collapses them shows up here rather than on a box three releases later.
+    """
+    if _BASH is None:
+        record("bash is available to drive build_tarball()", False, "")
+        return
+
+    release_src = _RELEASE_SH.read_text(encoding="utf-8")
+    function = _safe_extract(record, release_src, "build_tarball")
+    if function is None:
+        return
+
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        project, webapp = _write_minimal_release_fixture(tmp)
+        version = "v0.0.0-prod"
+        driver = tmp / "driver.sh"
+        driver.write_text(
+            _TARBALL_DRIVER.format(
+                project_dir=project,
+                webapp_dir=webapp,
+                function=function,
+                version=version,
+                include_tests="false",
+            ),
+            encoding="utf-8",
+        )
+        result = subprocess.run(  # noqa: S603 - fixed argv, absolute binaries
+            [_BASH, str(driver)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        tarball_path = project / f"mcapp-{version}.tar.gz"
+        record(
+            "build_tarball succeeds in production mode",
+            result.returncode == 0 and tarball_path.exists(),
+            f"(rc={result.returncode} {result.stderr.strip()[:200]})",
+        )
+        if not tarball_path.exists():
+            return
+
+        with tarfile.open(tarball_path) as tar:
+            names = tar.getnames()
+
+        record(
+            "production tarball ships NO *_tests.py",
+            not any(Path(n).name.endswith("_tests.py") for n in names),
+            f"(names: {names})",
+        )
+        record(
+            "production tarball ships NO tests.py (the commands suite)",
+            not any(Path(n).name == "tests.py" for n in names),
+            f"(names: {names})",
+        )
+        record(
+            "production tarball ships NO .json package data (only tests read it)",
+            not any(n.endswith(".json") and "/src/" in n for n in names),
+            f"(names: {names})",
+        )
+        record(
+            "production tarball ships NO gate runner",
+            not any(Path(n).name == "run_startup_tests.py" for n in names),
+            f"(names: {names})",
+        )
+        record(
+            "production tarball STILL ships the runtime code and update-runner",
+            any(n.endswith("src/mcapp/__init__.py") for n in names)
+            and any(Path(n).name == "update-runner.py" for n in names),
+            f"(names: {names})",
+        )
+
+
 def run_webapp_deploy_tests() -> bool:
     """Return True if every invariant holds."""
     if _BASH is None:
         print("webapp_deploy: SKIPPED - bash not on PATH")
+        return True
+
+    if not _RELEASE_SH.exists():
+        # release.sh is developer-machine tooling and is deliberately NOT in
+        # any tarball -- a dev build ships scripts/*.py so the gate can run on
+        # the box, but the release script itself has no business on a Pi. These
+        # cases drive the real release.sh, so without it there is nothing to
+        # verify. "NOT VERIFIED" wording, like config_migration's bash-4 skip,
+        # so this can never be misread as coverage. On a source checkout the
+        # file is always present, so a skip here is itself the signal.
+        print(
+            "webapp_deploy: SKIPPED - NOT VERIFIED "
+            "(no scripts/release.sh in this tree; expected when run from a deployed slot)"
+        )
         return True
 
     tally = {"passed": 0, "failed": 0}
@@ -459,6 +603,7 @@ def run_webapp_deploy_tests() -> bool:
         _case_chown_failure_is_safe,
         _case_chmod_failure_is_safe,
         _case_build_tarball_excludes_appledouble,
+        _case_build_tarball_production_is_runtime_only,
         _case_release_sh_guards,
     ):
         case(record)
