@@ -600,6 +600,13 @@ the PWA app-icon badge. Plan and the field evidence: `doc/2026-09-06_1200-unread
   the cursor moves.
 - **Own traffic is excluded by BASE callsign**, not exact SSID: `DK5EN-98` and `DK5EN-14` are
   both the operator. A message you send from another node must not light a badge here.
+- **The own-message whitelist (spam filter, blocked texts, blocklist verdict) is a webapp
+  display-side rule, not an unread-count rule.** It exempts a self-sent message from
+  `isSpamByClassifier`/`isTextBlocked`/the blocklist verdict at the webapp's call sites only, so it
+  never silently vanishes from the chat view. `storage/suppression.py` mirrors those two predicate
+  functions verbatim and is deliberately unaware of the exemption — `unread` already excludes own
+  traffic by base callsign above. Do not add it to `suppression.py` or to
+  `suppression_vectors.json`.
 - **`proxy:read_cursors` is emitted unconditionally, `{}` included**, for the same reason as
   `blocked_callsigns`: the client max-merges, so an empty burst is harmless and a gated one leaves
   a reconnecting client stuck with stale local cursors.

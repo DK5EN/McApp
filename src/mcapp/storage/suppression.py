@@ -28,6 +28,17 @@ Mirrors, verbatim in decision order, two independent webapp functions
 `is_suppressed` combines the two exactly as the webapp's two call sites do:
 a message is hidden if EITHER the text is blocked OR the classifier calls it
 spam.
+
+Own-message whitelist (webapp, not mirrored here): the webapp exempts a
+message whose `src` base callsign equals the operator's own base callsign
+from BOTH halves of this predicate, at its call sites, one level ABOVE
+`isSpamByClassifier`/`isTextBlocked` — a self-sent message must never
+silently vanish behind the operator's own spam filter or blocklist. This
+module deliberately does NOT mirror that exemption: `get_conversation_summary`
+already excludes own traffic by base callsign before `is_suppressed` ever
+runs (see Unread Cursors in CLAUDE.md), so adding it here would be dead code
+that only widens the shared corpus. The mirrored contract is the two
+predicate FUNCTIONS below, not the client's call-site policy around them.
 """
 
 from __future__ import annotations
