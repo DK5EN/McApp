@@ -1,6 +1,7 @@
 # Own-Message Whitelist — campaign state
 
-Status: Wave 1 gated and advisor-reviewed 2026-09-21 (APPROVED with rework); Wave 2 running.
+Status: COMPLETE 2026-09-21. Wave 1 + Wave 2 landed, advisor APPROVED, both repos committed
+(MCProxy `4ccabf1`, webapp `e2b84b5`). Pending: dev release + deploy.
 
 ## Problem
 
@@ -60,3 +61,10 @@ run; the ones that SURVIVED became Wave 2.
 
 Accepted untested: the `getFilteredMessagesFor` ownCall fallback (reachable only from a caller that
 omits ownCall; ChatContainer always passes one).
+
+Wave 2 result: group, hashtag and pair-key branches pinned; `purgeBlockedCallsigns`, the hydrate
+path and `purgeBlockedPositions` pinned; `purgeBlockedPositions` gained the missing own-guard.
+Every new test proved by deleting the guard it pins and watching it fail. Final gate: webapp
+217 files / 3507 tests, lint + typecheck + format:check + build clean; MCProxy ruff/mypy clean,
+`run_startup_tests.py` exit 0. The group-branch mutation was re-run independently by the
+orchestrator before commit.
