@@ -1,5 +1,62 @@
 # Release History
 
+## v2.0.12 (2026-09-21)
+
+One reported bug, with a root cause that reaches further than the symptom: the firmware message id
+a node stamps on every frame it originates is not unique over time, and the backend was treating it
+as though it were. Schema stays at 32 and `SYSTEM_EPOCH` at 5 — no migration, no bootstrap
+convergence, no contract change.
+
+### Highlights
+
+- **A group broadcast reported "Acknowledged by OE5HWN-12" — a station that cannot acknowledge a
+  group message.** The details popover was showing the acknowledgements of a completely different
+  message: a direct message sent 24 hours and 45 minutes earlier that happened to carry the same
+  `msg_id`. A firmware message id is the node's address in the upper 22 bits plus a counter in the
+  lower 10, and that counter wraps at 999 — so every node reuses its ids roughly every 1000 frames
+  it originates. On the production node that measured as a **median of 24.8 hours** between
+  reuses (shortest 24.75 h, longest 499 h), and 13 of 85 ids in the acknowledgement ledger already
+  matched more than one message. Every acknowledgement is now bound to a message sent within the
+  last **4 hours**, which sits about six times below the measured reuse gap and far above any real
+  acknowledgement latency.
+- **The same collision was also losing acknowledgements.** Because the ledger is keyed on the
+  message id alone, the previous owner of a reused counter was still occupying the key and the new
+  message's acknowledgements were silently discarded as duplicates. The broadcast above did not
+  merely display the wrong four — it lost all three of its own.
+- **A peer acknowledgement that arrives as text now shows who sent it.** The `:ackNNN` reply — the
+  only form of "the addressee answered" that exists on the UDP path and in the mock backend, which
+  have no binary acknowledgement frame at all — set the delivered tick but recorded nothing, so the
+  popover read "✓✓ Delivered" with an empty attribution.
+
+### Backend (MCProxy)
+
+- One clamped lookup now resolves which message an acknowledgement belongs to, shared by the
+  transport flag, the delivered flag, the store-and-forward state and the attribution ledger, so
+  they can no longer land on different messages for the same frame.
+- A message a store-and-forward node is holding keeps the long 168-hour window, unchanged: such a
+  message is legitimately acknowledged days later, and clamping it to 4 hours would strand it as
+  "held" forever.
+- Stale ledger entries under a reused id are evicted as the new acknowledgement is recorded, and
+  the read path applies the same window — so entries written before this release are no longer
+  displayed against a later message that reused the id.
+- Inline `:ackNNN` acknowledgements are recorded with the answering station and the transport they
+  arrived on. The event the app receives live is deliberately unchanged.
+- Dependencies refreshed. `multidict` is held at 6.9.0: the 6.9.1 release ships wheels for Python
+  3.11 only and no source distribution, so it cannot install on the node's Python 3.13.
+
+### Frontend (webapp)
+
+- Dependencies refreshed; no functional change.
+
+### Upgrade notes
+
+- Nothing to do. No schema migration, no system convergence, no contract version change.
+- Acknowledgement attribution recorded **before** this release can still be wrong for a message id
+  that was reused before the fix shipped, in the narrow case where the newer message never received
+  an acknowledgement of its own — there is nothing newer to correct the display against. On the
+  production node this affects three day-old messages. Everything from this release onward is
+  correct, and the entries expire with the normal 8-day acknowledgement retention.
+
 ## v2.0.11 (2026-09-20)
 
 Two reported bugs fixed — an unread badge that could never be cleared, and a plain link in a
