@@ -667,6 +667,27 @@ SSE. Design notes for the retroactive fix: `doc/2026-08-30_0930-blocklist-retroa
 - **The ETag is only stored for a payload that validated.** Caching the tag of a malformed list
   turns every later refresh into a 304 and pins the node to its last good list forever.
 
+## RF Monitor (`wire:frame`, `/api/monitor/frames`)
+
+`wire_monitor.py` keeps an in-memory ring (2000 envelopes, per process, not persisted) of every
+frame this backend saw or sent, and broadcasts each one as the bare SSE event `wire:frame`. The
+contract is canonical in the webapp repo (`docs/rf-monitor-plan.md`); mc-chat implements the same
+one, so change both together.
+
+- **One verdict source.** `sse_handler.broadcast_verdict()` decides what `_broadcast_handler`
+  delivers (link-check drop, command-echo drop, blocklist drop/redirect), and the monitor calls the
+  same function, so the live stream and the monitor can never disagree. Add a new SSE filter there,
+  never inline in `_broadcast_handler`.
+- **RX** subscribes to `mesh_message` (source `udp` only), `ble_notification` (mesh `type`s
+  msg/pos/tele/ack only; register frames and the synthetic `source == "self"` echo are skipped)
+  and `ble_status` (captured as SYS; `type: "sys"` is forced last). The envelope carries the
+  ORIGINAL frame, before any spam-group `dst` rewrite.
+- **TX has exactly one capture point**: `MessageRouter._handle_outbound`, one envelope per attempt
+  (`sent` / `failed` / `suppressed`), link `app`. `_send_via_udp` / `_send_via_ble` return `None` on
+  success or a short failure reason for that purpose. Command replies travel through the same point,
+  so a resolved `!wx` is `suppressed` (the raw command) plus `sent` (the reply).
+- `capture()` deep-copies and never raises into the publish path.
+
 ## Web Push
 
 Web Push to browser / iOS-PWA clients, sharing one wire contract with mc-chat so both backends behave identically.

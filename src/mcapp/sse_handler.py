@@ -23,7 +23,7 @@ import tempfile
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from . import __version__
 from .ble_client import ConnectionState
@@ -42,6 +42,12 @@ from .system_converge import (
     read_installed_epoch,
 )
 from .util import now_ms
+
+if TYPE_CHECKING:
+    # RF Monitor wire contract (docs/rf-monitor-plan.md); import deferred to
+    # TYPE_CHECKING only — wire_monitor.py imports broadcast_verdict from
+    # THIS module at runtime, so a real top-level import here would cycle.
+    from .wire_monitor import WireMonitor
 
 SSE_CLIENT_QUEUE_SIZE = 256
 SLOT_COUNT = 3  # ⚠ must match scripts/update-runner.py's NUM_SLOTS
@@ -133,6 +139,45 @@ def is_auto_command_echo(payload: dict[str, Any]) -> bool:
     return isinstance(msg, str) and msg.strip() in _AUTO_COMMAND_ECHOES
 
 
+def broadcast_verdict(
+    router: Any, message_data: dict[str, Any]
+) -> tuple[str, str | None, dict[str, Any] | None]:
+    """Decide what one routed mesh/BLE payload gets: shown, dropped (and
+    why), or redirected to the spam group. The single source of truth for
+    that decision — `SSEManager._broadcast_handler` calls it to decide what
+    actually reaches SSE clients, and `wire_monitor.WireMonitor`'s RX
+    capture calls the SAME function, so the live stream and the `/monitor`
+    ring can never disagree (RF Monitor wire contract, webapp
+    `docs/rf-monitor-plan.md`, "Wire contract v1" verdict table).
+
+    Returns `(verdict, reason, data_to_broadcast)`:
+      - `("dropped", "linkcheck", None)` — a `{ping}`/`{pong}` protocol frame
+        (linkcheck ADR §1.2): never shown, matching storage/push.
+      - `("dropped", "command_echo", None)` — MCProxy's own connect-time
+        `--ackinfo` session-command echo (see `is_auto_command_echo`).
+      - `("dropped", "blocklist", None)` — blocked personal/position/
+        telemetry traffic.
+      - `("redirected", "blocklist", data)` — blocked group/broadcast/
+        hashtag traffic, quarantined: `data` is a NEW dict with `dst`
+        rewritten to `SPAM_GROUP` (the caller's `message_data` is never
+        mutated).
+      - `("shown", None, message_data)` — delivered as-is, unchanged.
+
+    `data_to_broadcast` is `None` for every verdict a caller must not
+    broadcast/display; `_broadcast_handler` treats that as "return early".
+    """
+    if is_link_check_payload(message_data.get("msg", "")):
+        return "dropped", "linkcheck", None
+    if is_auto_command_echo(message_data):
+        return "dropped", "command_echo", None
+    decision = router.blocklist_decision(message_data) if router is not None else "pass"
+    if decision == "drop":
+        return "dropped", "blocklist", None
+    if decision == "redirect":
+        return "redirected", "blocklist", {**message_data, "dst": SPAM_GROUP}
+    return "shown", None, message_data
+
+
 logger = get_logger(__name__)
 
 # Import FastAPI and related modules
@@ -145,6 +190,7 @@ try:
     from .sse_routes.classifier import build_classifier_router
     from .sse_routes.deploy import build_deploy_router
     from .sse_routes.linkcheck import build_linkcheck_router
+    from .sse_routes.monitor import build_monitor_router
     from .sse_routes.prefs import build_prefs_router
     from .sse_routes.push import build_push_router
     from .sse_routes.stalls import build_stalls_router
@@ -227,6 +273,12 @@ class SSEManager:
         # Set by build_app (main.py); None keeps the middleware and /api/stalls off
         # (startup tests build a manager without one).
         self.stall_recorder: Any = None
+        # Set by build_app (main.py); None keeps /api/monitor/frames at a 503
+        # (startup tests build a manager without one). Quoted forward ref:
+        # WireMonitor is only imported under TYPE_CHECKING above (avoids a
+        # runtime import cycle — wire_monitor.py imports broadcast_verdict
+        # from this module).
+        self.wire_monitor: WireMonitor | None = None
 
         # Subscribe to messages from the router
         if message_router:
@@ -557,6 +609,7 @@ class SSEManager:
         app.include_router(build_deploy_router(self))
         app.include_router(build_push_router(self))
         app.include_router(build_linkcheck_router(self))
+        app.include_router(build_monitor_router(self))
         app.include_router(build_uptime_router(self))
         app.include_router(build_acks_router(self))
         app.include_router(build_stalls_router(self))
@@ -770,37 +823,25 @@ class SSEManager:
     async def _broadcast_handler(self, routed_message: dict[str, Any]) -> None:
         """Handle messages from the router and broadcast to SSE clients.
 
-        Blocklist-aware via the shared MessageRouter.blocklist_decision():
-        blocked personal/position traffic is not delivered at all, and blocked
-        group/broadcast traffic is quarantined to SPAM_GROUP so it stays out of
-        normal views but remains inspectable. The dst rewrite is applied to a
-        shallow COPY — never the shared routed_message["data"] — so the
-        storage/command subscribers of the same message are unaffected.
+        The verdict (show / drop+why / redirect) is decided by the shared
+        `broadcast_verdict()` — see its docstring; this method's job is only
+        to act on that decision and broadcast. {ping}/{pong} protocol frames
+        (linkcheck ADR §1.2) and MCProxy's own `--ackinfo` connect-time
+        command echo are dropped the same way blocked personal/position
+        traffic is; blocked group/broadcast/hashtag traffic is quarantined
+        to SPAM_GROUP via a NEW dict — the shared `routed_message["data"]` is
+        never mutated, so the storage/command subscribers of the same
+        message are unaffected.
         """
         message_data = routed_message["data"]
-        # {ping}/{pong} are protocol frames, not chat (linkcheck ADR §1.2):
-        # storage refuses to persist them and push eligibility clause (d)
-        # refuses to announce them, so the live stream must not show them
-        # either — the SAME shared predicate, so all three user-visible
-        # surfaces (history, push, SSE) agree by construction. The webapp's
-        # link-check UI is fed by _linkcheck_handler's `proxy:linkcheck_*`
-        # events, which carry everything these raw frames do and more.
-        if is_link_check_payload(message_data.get("msg", "")):
-            return
-        # Drop MCProxy's own `--ackinfo on` connect-time command echo (see
-        # is_auto_command_echo) — every other `response` reply keeps flowing.
-        if is_auto_command_echo(message_data):
-            return
         router = self.message_router
-        decision = router.blocklist_decision(message_data) if router is not None else "pass"
-        if decision == "drop":
+        _verdict, _reason, data_to_broadcast = broadcast_verdict(router, message_data)
+        if data_to_broadcast is None:
             return
-        if decision == "redirect":
-            message_data = {**message_data, "dst": SPAM_GROUP}
-        await self.broadcast_message(message_data)
+        await self.broadcast_message(data_to_broadcast)
 
         if logger.isEnabledFor(10):  # DEBUG level
-            truncated = str(message_data)[:120]
+            truncated = str(data_to_broadcast)[:120]
             logger.debug(
                 "SSE broadcast %s from %s: %s",
                 routed_message["type"],

@@ -78,6 +78,7 @@ from mcapp.storage.unread_suppression_tests import run_unread_suppression_tests
 from mcapp.storage.uptime_tests import run_uptime_tests
 from mcapp.udp_handler import run_startup_tests as run_udp_handler_tests
 from mcapp.udp_parsing_tests import run_udp_parsing_tests
+from mcapp.wire_monitor_tests import run_wire_monitor_tests
 
 
 async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible line per suite is the point
@@ -169,6 +170,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     linkcheck_sse_ok = await run_linkcheck_sse_tests()
     print(f"linkcheck_sse: {'PASS' if linkcheck_sse_ok else 'FAIL'}")
+
+    wire_monitor_ok = await run_wire_monitor_tests()
+    print(f"wire_monitor: {'PASS' if wire_monitor_ok else 'FAIL'}")
 
     signal_via_ok = await run_signal_via_tests()
     print(f"signal_via: {'PASS' if signal_via_ok else 'FAIL'}")
@@ -271,6 +275,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and linkcheck_ingest_ok
         and ack_status_ok
         and linkcheck_sse_ok
+        and wire_monitor_ok
         and aprs_symbol_ok
         and identity_ok
         and ble_service_ok
