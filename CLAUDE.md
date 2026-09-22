@@ -53,7 +53,7 @@ The in-app startup path (when `has_console()` is true) runs only a **non-fatal s
 
 The whole workspace is `mypy --strict` clean — **both source roots must stay at zero errors** (no WIP baseline; regressions are failures, not warnings). `uv run mypy src/mcapp ble_service/src` must print "Success: no issues found".
 
-- **Run it through the project env (`uv run mypy`), NEVER `uvx mypy`/`pipx run mypy`.** mypy parses with the *running interpreter's* grammar; an ephemeral runner can pull a different Python and emit bogus `[syntax]` errors on version-gated stubs (e.g. numpy's `type` statements). In a workspace the env must contain every member's deps — run `uv sync --all-packages` first.
+- **Run it through the project env (`uv run mypy`), NEVER `uvx mypy`/`pipx run mypy`.** mypy parses with the _running interpreter's_ grammar; an ephemeral runner can pull a different Python and emit bogus `[syntax]` errors on version-gated stubs (e.g. numpy's `type` statements). In a workspace the env must contain every member's deps — run `uv sync --all-packages` first.
 - Config in root `pyproject.toml` `[tool.mypy]`. Untyped third-party libs (`pywebpush`, `py_vapid`, `timezonefinder`) are silenced via `ignore_missing_imports`; numpy (transitive) uses `follow_imports = "skip"` because its py.typed stubs need 3.12+ grammar. **Prefer an `ignore_missing_imports` override over installing `*-stubs` for libs you don't control.**
 - Test files are strict-clean too and stay that way.
 - `# type: ignore` is a documented last resort: always `# type: ignore[code]  # reason` (ruff `PGH` enforces this).
@@ -62,10 +62,10 @@ The whole workspace is `mypy --strict` clean — **both source roots must stay a
 
 Two directories are `git subtree`s from mc-chat. **Edits belong in mc-chat and are synced here** — editing them locally guarantees drift. The `mc-chat` remote is a local path remote already configured in this repo.
 
-| Path | Upstream prefix | Split branch |
-|---|---|---|
-| `src/mcapp/classifier/` | `meshcom_mock/classifier` | `classifier` |
-| `src/mcapp/contract/` | `contract` | `contract-subtree` |
+| Path                    | Upstream prefix           | Split branch       |
+| ----------------------- | ------------------------- | ------------------ |
+| `src/mcapp/classifier/` | `meshcom_mock/classifier` | `classifier`       |
+| `src/mcapp/contract/`   | `contract`                | `contract-subtree` |
 
 ```bash
 cd /Users/martinwerner/WebDev/mc-chat
@@ -422,7 +422,7 @@ firmware side: `MeshCom-Firmware-DEV-Main/docs/ack-wer-hat-quittiert.md`.
 - **`echo_id` identifies NOTHING on its own — the inline `:ackNNN` match needs the ack's addressing
   AND a 1-hour window.** It is the firmware's `{NNN` counter: three digits, minted per sender,
   unique only within that sender and roughly an hour. The lookup was `WHERE echo_id = ? ORDER BY
-  timestamp DESC LIMIT 1`, so any station's ack marked whichever message last used that number —
+timestamp DESC LIMIT 1`, so any station's ack marked whichever message last used that number —
   on mcapp.local an own DM to DK1TCP-77 rendered ✓✓ Delivered because an unrelated DH6MAV pair
   reused 201 forty-four minutes later (5 of 82 acked rows mis-attributed; 25 of 200 live counter
   values already shared by >1 sender). Same user-visible failure as the 2026-08-19 ctcping bug.
@@ -534,7 +534,7 @@ the PWA app-icon badge. Plan and the field evidence: `doc/2026-09-06_1200-unread
 
 - **A cursor is a timestamp, never a count.** `read_cursors(key, ts)` holds the ingest `timestamp`
   of the newest message seen; `unread = COUNT(timestamp > cursor AND base(src) != base(me)
-  AND NOT suppressed)`.
+AND NOT suppressed)`.
   The previous scheme (`read_counts`, v7: "the total was N when I looked") broke every time the
   count shrank under retention, the blocklist filter or the webapp's 2000-row cap, and was stale
   on every device except the one that did the reading. `read_counts` is still emitted and served
@@ -640,7 +640,7 @@ SSE. Design notes for the retroactive fix: `doc/2026-08-30_0930-blocklist-retroa
   already cost one debugging session.
 - **`blocklist_decision` is an INGEST gate, so blocking used to be forward-only.** It ran on ingest
   (`main.py`) and on the live broadcast (`sse_handler._broadcast_handler`) and nowhere else, which
-  left every row a station had deposited *before* it was blocked in `messages.db`, replayed to
+  left every row a station had deposited _before_ it was blocked in `messages.db`, replayed to
   every client on every reload. The sperrliste is curated centrally and lands on boxes we do not
   administer, so a per-host `DELETE` is not a fix. `MessageRouter.filter_history_row` is now applied
   on the way **out** of storage — `get_smart_initial_with_summary` and `get_messages_page` take a
@@ -651,13 +651,13 @@ SSE. Design notes for the retroactive fix: `doc/2026-08-30_0930-blocklist-retroa
   that filters to empty reads as "start of history" and the client stops paging backwards.
 - **`blocked_callsigns` must be emitted BEFORE `smart_initial` in the SSE burst.** The webapp applies
   the set at one ingest chokepoint (`messageProcessor`), so anything delivered ahead of it is
-  admitted against an *empty* blocklist and stays on screen. Emitting history first is exactly why a
+  admitted against an _empty_ blocklist and stays on screen. Emitting history first is exactly why a
   blocked station survived every reload even with a correct list on both ends. Order is load-bearing.
 - **Offline-cache hydration is the one door into the webapp's store that bypasses
   `processDataElement`.** `source === 'hydrate'` routes rows straight into `msgData`, so cached rows
   were immune to the blocklist forever. Gated now, plus `purgeBlockedCallsigns` (memory + IndexedDB
-  + positions) on every `proxy:blocked_callsigns` snapshot. All three sites share
-  `blocklistVerdict()` so they cannot drift.
+  - positions) on every `proxy:blocked_callsigns` snapshot. All three sites share
+    `blocklistVerdict()` so they cannot drift.
 - **The refresh is 15 min with a conditional GET, not 24 h.** An unchanged list costs a 304.
   `_apply_sperrliste` REPLACES the curated portion instead of unioning it, so an upstream removal
   un-blocks without a restart — but an entry an admin also kickbanned locally is protected from
@@ -671,9 +671,9 @@ SSE. Design notes for the retroactive fix: `doc/2026-08-30_0930-blocklist-retroa
 
 Web Push to browser / iOS-PWA clients, sharing one wire contract with mc-chat so both backends behave identically.
 
-- **Contract:** `src/mcapp/contract/push_contract.json` (**v7**) — defines the three `/api/push/*` endpoints, the filter `{ dm, groups[], broadcast }`, and match/eligibility/dedup/coalesce/payload semantics. `push_tests.py` runs every vector and pins the corpus sha256; mc-chat runs the same corpus. Inline `contract vN` references in the source name the version that *introduced* a clause — they are provenance, not staleness, and must not be bumped on a sync.
+- **Contract:** `src/mcapp/contract/push_contract.json` (**v7**) — defines the three `/api/push/*` endpoints, the filter `{ dm, groups[], broadcast }`, and match/eligibility/dedup/coalesce/payload semantics. `push_tests.py` runs every vector and pins the corpus sha256; mc-chat runs the same corpus. Inline `contract vN` references in the source name the version that _introduced_ a clause — they are provenance, not staleness, and must not be bumped on a sync.
 - **A subscribe POST replaces the stored filter wholesale, and that is load-bearing in both directions.** Normative since **contract v6** — read `endpoints.subscribe.semantics`, which is the authority; this bullet only summarises it. The request body is the complete new filter state, never a patch, so the backend cannot distinguish "the user cleared their groups" from "the client POSTed before its own settings finished loading" — which is exactly how the webapp silently wiped a live subscription's groups on 2026-08-17 (fixed client-side in webapp v1.6.14-dev.42, see its `docs/backlog.md` B2). v6 therefore puts the ordering obligation on the **client** ("resolve stored prefs first, POST second") and forbids the server-side workaround: **do not add a heuristic** that ignores a default-looking filter or merges it into the stored one — that would break clearing groups on purpose and diverge the two backends.
-- **The delivered payload text is stripped of the firmware ack-request suffix; the gates are not.** Normative since **contract v7** — read `payload_ack_suffix_semantics`, which is the authority. `build_push_payload` strips the $-anchored `\{[0-9]+$` (**strict: no closing brace** — there is no `{NNN}` on the wire and there never will be, so a trailing `{NNN}` is ordinary chat text) and trims, **before** the 120-char truncation, so the cap carries 120 chars of real text and a truncation can never split the suffix into a bare `{`. `handle_mesh_message` gates eligibility/blocklist/dedup on `_build_gate_view` (**unstripped**) and builds the delivered payload only after every gate passes — **do not reorder**: stripping first widens dedup's msg_id-less `(src, dst, text)` fallback key so two messages differing only in their ack counter collapse into one, and it makes clause (d) depend on ping recognition being a prefix check. Both builders share `_payload_fields` so they cannot drift. Do **not** reuse mc-chat's `strip_ack_request` / the webapp's `stripAckRequestSuffix` here — those are the looser `\{\d+\}?$` echo-matching variant and would strip `{pong}{451010884}` to `{pong}`, reopening the v5 bug. `_test_ack_suffix_stripped_after_gates` pins the ordering via dedup (verified by mutation; a link-check vector does **not** discriminate it).
+- **The delivered payload text is stripped of the firmware ack-request suffix; the gates are not.** Normative since **contract v7** — read `payload_ack_suffix_semantics`, which is the authority. `build_push_payload` strips the $-anchored `\{[0-9]+$`(**strict: no closing brace** — there is no`{NNN}`on the wire and there never will be, so a trailing`{NNN}`is ordinary chat text) and trims, **before** the 120-char truncation, so the cap carries 120 chars of real text and a truncation can never split the suffix into a bare`{`. `handle_mesh_message`gates eligibility/blocklist/dedup on`_build_gate_view`(**unstripped**) and builds the delivered payload only after every gate passes — **do not reorder**: stripping first widens dedup's msg_id-less`(src, dst, text)`fallback key so two messages differing only in their ack counter collapse into one, and it makes clause (d) depend on ping recognition being a prefix check. Both builders share`_payload_fields`so they cannot drift. Do **not** reuse mc-chat's`strip_ack_request`/ the webapp's`stripAckRequestSuffix`here — those are the looser`\{\d+\}?$`echo-matching variant and would strip`{pong}{451010884}`to`{pong}`, reopening the v5 bug. `_test_ack_suffix_stripped_after_gates` pins the ordering via dedup (verified by mutation; a link-check vector does **not** discriminate it).
 - **Routes:** `src/mcapp/sse_routes/push.py`. **Delivery:** `src/mcapp/push_delivery.py` — pure `matches()`/`is_eligible()` (resolve via-routed dst to the **last** comma-component; exclude non-chat frames and own-src), `PushCoalescer` (5 s window), `PushDedup`, and a background dispatcher calling `pywebpush` via `asyncio.to_thread` with timeouts. **The mesh-ingest path never awaits delivery** — a no-internet Pi must not stall the event loop / SSE heartbeats.
 - **Storage:** `push_subscriptions`, upsert by endpoint. Prune on pywebpush **401/403/404/410**.
 - **VAPID (two gotchas, both hit on first real delivery):** the keypair is generated once and persisted as the **raw base64url 32-byte scalar**, NOT PEM (pywebpush's `Vapid.from_string` base64-decodes it and dies on a PEM), at `/var/lib/mcapp/vapid.json` — never committed, and kept `0600` (a readable raw private scalar lets any local account forge VAPID JWTs as this node; `load_or_create_vapid` re-tightens a wider pre-existing file on load). JWT `sub` must be a valid FQDN (`mailto:admin@example.com`); Apple returns **403 `BadJwtToken`** for a no-TLD/`localhost` sub. Override via `MESHCOM_VAPID_SUB` — applied on **load**, so an existing install can fix its `sub` without regenerating a key and invalidating every subscription.
