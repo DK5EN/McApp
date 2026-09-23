@@ -51,6 +51,7 @@ from .sse_routes.weather import warm_timezone_finder
 from .suppression import get_suppression_reason, should_suppress_outbound
 from .system_converge import converge_watchdog
 from .udp_handler import UDPHandler
+from .wire_monitor import WireMonitor
 
 # Optional imports for new features
 try:
@@ -354,6 +355,9 @@ class MessageRouter:
         self._subscribers: dict[str, list[Any]] = defaultdict(list)
         # Set by build_app; times every subscriber call in publish() (stall plan §1 `handler`).
         self.stall_recorder: StallRecorder | None = None
+        # Set by build_app; the TX single point in _handle_outbound below reads
+        # it directly (RF Monitor wire contract, docs/rf-monitor-plan.md).
+        self.wire_monitor: WireMonitor | None = None
         self._protocols: dict[str, Any] = {}
         self.storage_handler: SQLiteStorage | None = message_storage_handler
         self.my_callsign: str | None = None
@@ -1992,14 +1996,19 @@ class MessageRouter:
         self,
         routed_message: dict[str, Any],
         protocol: str,
-        send: Callable[[dict[str, Any]], Awaitable[None]],
+        send: Callable[[dict[str, Any]], Awaitable[str | None]],
     ) -> None:
         """Shared outbound-message handling for UDP/BLE.
 
         Normalizes the message, checks self-suppression and self-messaging, then
         delegates the actual transport send to `send` — everything protocol-specific
         (payload shaping, the send call itself, failure handling) lives in the
-        caller's `send` callable.
+        caller's `send` callable, which returns `None` on success or a short
+        failure reason string.
+
+        This is also the ONE point that captures an outbound attempt for the
+        RF Monitor (`docs/rf-monitor-plan.md`, link "app"): exactly one
+        envelope per call, whichever of the three ways it ends.
         """
         message_data = routed_message["data"]
 
@@ -2018,6 +2027,13 @@ class MessageRouter:
             normalized_data.get("dst"),
         )
 
+        # Monitor snapshot, taken BEFORE `send` can mutate `normalized_data`
+        # in place (`_send_via_udp` strips `src_type`) — `capture()` also
+        # deep-copies, but taking the snapshot here keeps the envelope
+        # independent of what a given transport happens to pop/add.
+        monitor_frame = dict(normalized_data)
+        monitor_frame.setdefault("type", "msg")
+
         suppress_result, reason = self._should_suppress_outbound(normalized_data)
         self._logger.debug("%s_DIAG suppress=%s", protocol.upper(), suppress_result)
 
@@ -2027,6 +2043,7 @@ class MessageRouter:
             )
             synthetic_message = self._create_synthetic_message(normalized_data, protocol)
             await self._route_to_command_handler(synthetic_message)
+            await self._capture_tx(monitor_frame, "suppressed", "local_command")
             return
 
         is_self_message = await self._handle_outgoing_message(normalized_data, protocol)
@@ -2034,9 +2051,22 @@ class MessageRouter:
 
         if is_self_message:
             self._logger.debug("%s Handler: Self-message handled, not sending", protocol.upper())
+            await self._capture_tx(monitor_frame, "suppressed", "self_message")
             return
 
-        await send(normalized_data)
+        failure_reason = await send(normalized_data)
+        if failure_reason is None:
+            await self._capture_tx(monitor_frame, "sent", None)
+        else:
+            await self._capture_tx(monitor_frame, "failed", failure_reason)
+
+    async def _capture_tx(self, frame: dict[str, Any], verdict: str, reason: str | None) -> None:
+        """RF Monitor TX capture (`docs/rf-monitor-plan.md`) — see
+        `_handle_outbound`. A no-op when the monitor isn't wired (headless
+        tests, or main.py before `build_app` finishes wiring it).
+        """
+        if self.wire_monitor is not None:
+            await self.wire_monitor.capture("app", "tx", verdict, reason, frame)
 
     async def _udp_message_handler(self, routed_message: dict[str, Any]) -> None:
         """Handle UDP messages from WebSocket and route to UDP handler"""
@@ -2050,8 +2080,12 @@ class MessageRouter:
         )
         await self._handle_outbound(routed_message, "udp", self._send_via_udp)
 
-    async def _send_via_udp(self, normalized_data: dict[str, Any]) -> None:
-        """Transmit a normalized outbound message over UDP to the mesh network."""
+    async def _send_via_udp(self, normalized_data: dict[str, Any]) -> str | None:
+        """Transmit a normalized outbound message over UDP to the mesh network.
+
+        Returns `None` on success, else a short failure reason — read by the
+        RF Monitor TX capture point in `_handle_outbound`.
+        """
         self._logger.debug("UDP Handler: Sending external message to mesh network")
 
         udp_handler = self.get_protocol("udp")
@@ -2077,6 +2111,9 @@ class MessageRouter:
                     },
                 )
                 await self._publish_send_failed(normalized_data, str(e))
+                return str(e)
+            else:
+                return None
         else:
             self._logger.warning("UDP handler not available, can't send message")
             await self.publish(
@@ -2090,6 +2127,7 @@ class MessageRouter:
                 },
             )
             await self._publish_send_failed(normalized_data, "UDP handler not available")
+            return "UDP handler not available"
 
     async def _publish_send_failed(self, normalized_data: dict[str, Any], reason: str) -> None:
         """Tell the webapp a specific outbound message did not leave this box.
@@ -2121,8 +2159,12 @@ class MessageRouter:
         """Handle BLE messages from WebSocket and route to BLE client"""
         await self._handle_outbound(routed_message, "ble", self._send_via_ble)
 
-    async def _send_via_ble(self, normalized_data: dict[str, Any]) -> None:
-        """Transmit a normalized outbound message over BLE to the paired device."""
+    async def _send_via_ble(self, normalized_data: dict[str, Any]) -> str | None:
+        """Transmit a normalized outbound message over BLE to the paired device.
+
+        Returns `None` on success, else a short failure reason — read by the
+        RF Monitor TX capture point in `_handle_outbound`.
+        """
         self._logger.debug("BLE Handler: Sending external message to BLE device")
         client = self._get_ble_client()
 
@@ -2139,7 +2181,7 @@ class MessageRouter:
                 },
             )
             await self._publish_send_failed(normalized_data, "BLE client not available")
-            return
+            return "BLE client not available"
 
         try:
             sent = await client.send_message(normalized_data.get("msg"), normalized_data.get("dst"))
@@ -2156,7 +2198,7 @@ class MessageRouter:
                 },
             )
             await self._publish_send_failed(normalized_data, str(e))
-            return
+            return str(e)
 
         if not sent:
             reason = (
@@ -2174,6 +2216,9 @@ class MessageRouter:
                 },
             )
             await self._publish_send_failed(normalized_data, reason)
+            return reason
+
+        return None
 
     def _is_message_to_self(self, message_data: dict[str, Any]) -> bool:
         """Check if message is addressed to our own callsign (assumes normalized data)"""
@@ -2600,6 +2645,17 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
 
     message_router = MessageRouter(storage_handler)
     message_router.stall_recorder = stall_recorder
+    # RF Monitor (docs/rf-monitor-plan.md): one WireMonitor per process,
+    # reachable from both the router (TX capture, `_handle_outbound`) and
+    # the SSE manager (REST + live `wire:frame` broadcast, wired below once
+    # sse_manager exists). RX capture subscribes to the same topics the SSE
+    # broadcaster does, alongside `_storage_handler` above.
+    wire_monitor = WireMonitor()
+    wire_monitor.router = message_router
+    message_router.wire_monitor = wire_monitor
+    message_router.subscribe("mesh_message", wire_monitor.on_mesh_message)
+    message_router.subscribe("ble_notification", wire_monitor.on_ble_notification)
+    message_router.subscribe("ble_status", wire_monitor.on_ble_status)
     message_router.set_callsign(cfg.call_sign)
     storage_handler.set_message_router(message_router)
     # One-shot, idempotent read-cursor seed (unread-cursor plan §3): must run
@@ -2674,6 +2730,8 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
         if sse_manager:
             message_router.register_protocol("sse", sse_manager)
             sse_manager.stall_recorder = stall_recorder
+            sse_manager.wire_monitor = wire_monitor
+            wire_monitor.sse_manager = sse_manager
             stall_recorder.register_gauge("sse_clients", lambda: len(sse_manager.clients))
             if hasattr(sse_manager, "set_classifier"):
                 sse_manager.set_classifier(classifier)

@@ -1,12 +1,15 @@
 # McApp production health log — mcapp.local
 
-> **Status:** Current — newest section: §17 (2026-09-19 09:12 CEST, `v2.0.11-dev.1` deployed to
+> **Status:** Current — newest section: §18 (2026-09-23 08:10 CEST, pre-release sweep of
+> `v2.0.13-dev.2` before the v2.0.13 promotion) — all green, zero findings, new watch point
+> **W17** (`/api/read_cursor` stalls rising since v2.0.11, off-loop, not a dev.2 regression).
+> §17 (2026-09-19 09:12 CEST, `v2.0.11-dev.1` deployed to
 > mcapp.local slot-0 and verified live). **W15 resolved** — every `loop_lag` row is now legible.
 > **W13 reduced, still open** — the mheard dumps no longer block the event loop at all, but still
 > cost ~1 s of wall time, so `/api/send` `http` rows remain and are expected. Newest full sweep:
 > §15 (2026-09-19 07:50) — all green, zero findings; `handler` stalls down from ~42–54/day to
 > 1 in 7 h. Last finding was **F13** (§7), upstream and resolved 2026-09-01.
-> Open watch points: **W13** (reduced, §17), **W14** (§15), **W16** (§16), **W1** (zram swap,
+> Open watch points: **W17** (§18), **W13** (reduced, §17), **W14** (§15), **W16** (§16), **W1** (zram swap,
 > trend watch only), **W12** (§12), **W2**, **W3**, **W6**, **W7**, **W9**, **W10**.
 > **W15** (§15/§16/§17), **W4**, **W5**, **W8** and **W11** are resolved.
 >
@@ -1333,3 +1336,109 @@ it. The architectural fix — make the dump command return immediately and deliv
   blocking is gone. Expect the `http` rows; alarm only on an accompanying `loop_lag`.
 - **W14**, **W16**, **W1**, **W12**, **W2**, **W3**, **W6**, **W7**, **W9**, **W10** unchanged.
 - **W15** resolved.
+
+## 18. 2026-09-23 08:10 CEST — pre-release sweep before promoting v2.0.13-dev.2 to v2.0.13
+
+Sign-off sweep for the **v2.0.13** promotion (RF Monitor, own-message display exemption).
+Verdict: **all green, zero findings, one new watch point (W17).** The box is 27 minutes past the
+`v2.0.13-dev.2` deploy, so rates below carry that caveat and totals are context only. `dev.1`
+(own-message exemption) had run since 2026-09-21; `dev.2` adds the RF Monitor on top of it.
+
+### Anchors
+
+| Anchor              | Value                                                                     |
+| ------------------- | ------------------------------------------------------------------------- |
+| Snapshot            | 2026-09-23 08:10–08:13 CEST                                               |
+| Release             | `v2.0.13-dev.2` (`/webapp/version.html` agrees)                           |
+| App version         | `v2.0.13` (`/api/status`, dev suffix not carried there)                   |
+| Active slot         | **slot-1** (slot-2 `v2.0.13-dev.1`, slot-0 `v2.0.12`)                     |
+| Schema              | **32** = `LATEST_SCHEMA_VERSION` ✓                                        |
+| System epoch        | box **5** = `REQUIRED_SYSTEM_EPOCH` 5 ✓, no `reboot-required` marker      |
+| Service start       | mcapp 07:43:42, mcapp-ble 07:43:38 CEST; `uptime_seconds` 1607            |
+| `systemd NRestarts` | **0** (mcapp and mcapp-ble)                                               |
+| Host uptime         | 4 days 8:31, load 0.11 / 0.09 / 0.13                                      |
+| Classifier          | version **4**, **38** rules, markers `v0 v1 v3 v4`, 0 unclassified in 1 h |
+| UDP provenance      | `identified`, 1 source, 0 untrusted, 0 suppressed target changes          |
+
+Classifier version **4** supersedes the **3** in §1's structural line: v2.0.11's rule-42 change
+went through `bump_classifier_version` (commit `5b52fc6`), and its `backfill_done:v4` marker is
+present.
+
+### Rate table re-measured
+
+| Signal                     | §1 baseline | This run      | Window |
+| -------------------------- | ----------- | ------------- | ------ |
+| `messages` type `msg`      | 11 / h      | **10 / h**    | 1 h    |
+| `messages` type `pos`      | 87 / h      | **65 / h**    | 1 h    |
+| `signal_log`               | 347 / h     | **285 / h**   | 1 h    |
+| journal warnings           | 0 / 24 h    | **0** (both)  | 24 h   |
+| unclassified `msg`         | 0           | **0**         | 1 h    |
+| `{CET}` rows in `messages` | 0           | **0**         | all    |
+| last `{CET}` beacon        | —           | **492 s** ago | live   |
+| heartbeat age              | < 60 s      | **5 s**       | live   |
+
+`pos`/`signal` sit ~20 % under baseline, the same early-morning shape as §15. Inside the band.
+
+### RF Monitor on live traffic (the dev.2 change)
+
+In the first 15 minutes after the deploy, `GET /api/monitor/frames` held **131** envelopes with
+**no `seq` gap**: 90 BLE `pos`, 9+9 UDP `pos`/`tele`, 6 BLE `sys`, 6 BLE `ack`, 3+3 UDP/BLE `msg`,
+1 BLE `msg` `dropped`, one `app` `tx` `sent`, and the node's own UDP echoes as `tx` `shown`. That
+last group is `dir: tx` because `src_type == "node"`, which is what the contract specifies, not a
+misclassified RX. Every real chat message appeared on both transports and matched its stored
+`messages` row. The on-box gate (dev build) ran green, `config_migration` and `wire_monitor`
+included. No traceback in the journal since the 07:43:42 start.
+
+### Stalls since the deploy
+
+`loop_lag` 2 × critical (max 1174 ms) and 3 × stall, all in the restart minute. One `handler`
+stall (555 ms, 07:51:20). One `/api/weather` pair (550 ms server / 815 ms client) — closed as the
+upstream fetch, not re-opened. The rest is `/api/read_cursor`, which is W17.
+
+### Host and hygiene
+
+| Signal        | Value                                                                  |
+| ------------- | ---------------------------------------------------------------------- |
+| Disk          | 4.5 G of 59 G, **9 %**                                                 |
+| RAM           | MemTotal 474 MB, **MemAvailable 177 MB**                               |
+| Swap          | **31 MB out** (SwapFree 441328 of 473084 kB)                           |
+| Temp          | **42.9 °C**                                                            |
+| mcapp RSS     | **121 MB** at 27 min (W14 data point; §15 read 88 MB at start of boot) |
+| DB / WAL      | **42.0 MB** / **4.2 MB**                                               |
+| `vapid.json`  | `0600` ✓, raw base64url scalar ✓                                       |
+| `config.json` | `0640` — W2, accepted by decision                                      |
+| TLS           | Caddy internal ECC leaf, `Sep 22 23:09 → Sep 23 11:09 GMT`, mid-life   |
+
+`/api/uptime?range=24h`: `active`, **100.0 %** uptime, **100.0 %** coverage, longest outage 0,
+72 stored segments. The ~20 s deploy restart falls under the metric's one-cadence resolution.
+
+### Absent signals — the zero is the result
+
+- **0** journal warnings in 24 h for `mcapp` and `mcapp-ble`; **0** tracebacks since 07:43:42.
+- **0** `NRestarts`, **0** unclassified messages, **0** `{CET}` rows, no `reboot-required`.
+- `udp_untrusted_source_ips` **empty**, `udp_multiple_sources` **false**,
+  `udp_suppressed_target_changes` **0**.
+
+### Watch points
+
+- **W17 (new): `POST /api/read_cursor` stalls are rising, and they are older than this release.**
+  Server-side `http` stall rows on that path, per 24 h ending 08:11: 09-16 to 09-18 **0**, 09-19
+  **1**, 09-20 **3**, 09-21 **11**, 09-22 **17**, 09-23 **15** (max 1830 ms). They began with
+  v2.0.11's unread-suppression change (the narrowed summary now runs the suppression predicate
+  and the four-leg dedup subquery) and ran at the same rate under v2.0.12 and `dev.1`, so `dev.2`
+  did not introduce them. Every row is a `200`, with `loop_lag_ms` ~1 ms and an empty pool queue:
+  the cost is off-loop, and nothing else is stalled by it. The slow calls are mostly `key: "*"`,
+  at 650–1180 ms. The two `client_error` rows at 07:56:05 (`"Load failed"`, ~637 ms) came from a
+  Safari tab still running the `dev.1` bundle (`app_version v2.0.12-3-ge2b84b5`), while the
+  server answered the same calls `200` in 716 ms. They are consistent with a page reload
+  aborting in-flight fetches, and that reading is not proven. Lever if it keeps climbing: the
+  dedup subquery runs twice per summary (CLAUDE.md § Unread Cursors); materialise it once.
+  Re-read next sweep: a daily count still climbing, or any `loop_lag` alongside, is the finding.
+- **W14** — mcapp RSS 121 MB at 27 min into this boot. One more data point, no trend claim.
+- **W13**, **W16**, **W1**, **W12**, **W2**, **W3**, **W6**, **W7**, **W10** unchanged.
+- **W9** unchanged: CI is not running on these commits (the latest `development` runs are
+  Dependabot/graph jobs only), so the promotion is signed off on the local gates. Those are ruff,
+  ruff-format, mypy and all backend suites, plus the on-box gate; and vue-tsc, eslint, prettier,
+  3636 vitest cases and `build:strict`. All are green on the dependency-updated trees.
+- Soak is short: `dev.2` had run **27 minutes** at the time of this sweep; `dev.1` was published
+  2026-09-21 21:52 CEST, about 34 hours before `dev.2` replaced it.

@@ -1,5 +1,69 @@
 # Release History
 
+## v2.0.13 (2026-09-23)
+
+One new view and one reported bug. The RF Monitor shows every frame the node hears or sends,
+including the ones the normal views deliberately hide. Separately, a message the operator sent
+could vanish from their own chat when it tripped their own spam filter. Schema stays at 32 and
+`SYSTEM_EPOCH` at 5, so there is no migration, no bootstrap convergence and no contract version
+change.
+
+### Highlights
+
+- **RF Monitor: a live, interpreted view of the wire.** A new **Monitor** entry in the navigation
+  opens a terminal-style view with one line per frame. Each line shows the time, the kind
+  (MSG / POS / TEL / ACK / SYS), RX or TX, how the frame reached the backend (UDP, BLE, or sent
+  from the app), where it came from on the mesh (LoRa, node, UDP gateway), the sender, the via
+  path, the destination, the payload, RSSI/SNR and the msg_id. Frames the chat and map views
+  filter out are shown too, dimmed, with the reason (blocklist, link check, command echo, ...).
+  The same frame arriving several times (UDP and BLE copies, several relays, an app send and the
+  node's echo of it) collapses into one line with a copy count, and it expands to show each copy.
+  The monitor collects from app start, whatever view is open, and fills its scrollback from the
+  backend on load and after a reconnect. In its first 15 minutes on the production node it captured
+  131 frames with no gaps in the sequence numbers, and its message lines matched the stored
+  messages one for one.
+- **Your own messages no longer disappear behind your own filters.** Sending a message that the
+  classifier took for spam made it vanish from the conversation it was sent to, with no feedback:
+  it looked like a failed send. On 2026-09-21 an ordinary message mentioning _WebDesk_ in group 262
+  was hidden as a software advert. A message from the operator's own callsign (any SSID, so
+  DK5EN-14 counts as own traffic on a DK5EN-98 node) is now exempt from every display filter: the
+  spam classifier, the blocked-texts list and the callsign blocklist. Protocol frames stay filtered
+  for own traffic too: duplicates, `{ping}`/`{pong}`, bare acks and `:ackNNN`.
+
+### Backend (MCProxy)
+
+- New in-memory frame ring (2000 frames per process, not persisted) that records every frame
+  received over UDP or BLE and every send attempt. It is broadcast live as the SSE event
+  `wire:frame` and served with paging at `GET /api/monitor/frames`.
+- Whether a frame is shown or dropped is decided by one function, shared by the live message
+  stream and the monitor, so the monitor can never disagree with what the app actually displays.
+  The live stream's own behaviour is unchanged.
+- Dependencies refreshed. The `multidict` hold from v2.0.12 is lifted: 6.9.1 has since been
+  re-published with a source distribution and Python 3.13 wheels, and it was confirmed to install
+  on the production node's Python 3.13 (aarch64) before it was taken.
+- The standalone `ble_service` lock is regenerated. It now records the `uvicorn>=0.53.0` requirement
+  that the pyproject already carried.
+
+### Frontend (webapp)
+
+- New `/monitor` view with a status bar showing the own node's state and an expand-all / collapse-all
+  toggle. It follows the app theme.
+- The own-message exemption sits above the shared filter functions, not inside them, so the
+  cross-repo vector files that pin those functions are unchanged. Unread counting is also
+  unchanged: it has always excluded own traffic.
+- Against a backend that does not provide the monitor stream, the view falls back to tapping
+  the normal message stream, with live frames only.
+- Dependencies refreshed (MapLibre GL 6.11.0).
+
+### Upgrade notes
+
+- Nothing to do. No schema migration, no system convergence, no contract version change.
+- The monitor's backend history lives in memory only. It starts empty after every service restart
+  or update, and fills from live traffic.
+- Other stations' ordinary messages that merely mention _WebDesk_ are still classified as software
+  adverts. This release fixes only the operator's own messages; a narrower classifier rule is
+  not part of it.
+
 ## v2.0.12 (2026-09-21)
 
 One reported bug, with a root cause that reaches further than the symptom: the firmware message id
