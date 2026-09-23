@@ -191,11 +191,17 @@ DEFAULT_RULES: list[dict[str, Any]] = [
         "extra_tags": ["beacon"],
     },
     # ── SW / node adverts ───────────────────────────────────────────────
+    # WebDesk is a PRODUCT PEOPLE TALK ABOUT, so the three rules below must
+    # key on advert SHAPE (version string, decorative frame, pipe-separated
+    # field list) and never on the bare word. A `\bwebdesk\b` mention rule
+    # matched 14 of 15 real occurrences on mcapp.local -- all of them ordinary
+    # chat -- and the webapp hides sw_advert, so an operator's own message
+    # vanished from the conversation it was sent to (2026-09-21, group 262).
     {
         "priority": 30,
         "name": "MeshCom WebDesk version",
         "scope": "msg",
-        "pattern": r"(?i)MeshComWebDesk v\d",
+        "pattern": r"(?i)\bmeshcom\s*webdesk\s+v?\d+\.\d",
         "category": "sw_advert",
         "extra_tags": ["beacon"],
     },
@@ -203,7 +209,7 @@ DEFAULT_RULES: list[dict[str, Any]] = [
         "priority": 31,
         "name": "MeshCom WebDesk banner",
         "scope": "msg",
-        "pattern": r"\*\*\*MeshCom WebDesk",
+        "pattern": r"(?i)(\*{2,}|-{2,}=|={2,}|-=\()\s*meshcom\s*webdesk",
         "category": "sw_advert",
         "extra_tags": ["beacon"],
     },
@@ -211,7 +217,7 @@ DEFAULT_RULES: list[dict[str, Any]] = [
         "priority": 32,
         "name": "MeshCom/WebDesk mention",
         "scope": "msg",
-        "pattern": r"(?i)\b(meshcom\s*webdesk|webdesk)\b",
+        "pattern": r"(?i)\b(meshcom\s*webdesk|webdesk)\b[^\n]*\|[^\n]*\|",
         "category": "sw_advert",
         "extra_tags": ["beacon"],
     },
