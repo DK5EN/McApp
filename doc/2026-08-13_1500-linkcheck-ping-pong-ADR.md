@@ -443,3 +443,42 @@ Worth doing in the firmware fork, independently of McApp: add `{ping}` to the
 `{CET}`/`{MCP}`/`{SET}` no-retransmit exclusion list at `loop_functions.cpp:3468`. That cuts a
 proxy-originated ping from ~4 keyings to 1 and removes the 40 s quantisation from the measured
 time (§1.4 point 7, §1.5.4).
+
+## 8. Amendment 2026-09-24: transport-agnostic pong, node-id correlation
+
+Field report from DM3KS-12 (v2.0.13): ping `x2EFB0228` to DM3KS-13 went out, the pong
+`{pong}{788202024}` (== `0x2EFB0228`) came back 7 s later, direct, RSSI -33 — and the modal still
+timed out. The node's Extern-UDP pointed at a MeshCom WebDesk PC, not at McApp. The firmware
+sends the `"node"` echo AND the pong to the same EXT IP (`sendExtern()`), so McApp saw neither.
+
+McApp now accepts a pong from either transport and correlates without the echo:
+
+- **The ping goes out over BLE whenever a BLE client is connected**, UDP otherwise. With EXTUDP
+  off the node never reads the UDP socket (`esp32_main.cpp`: `if(bEXTUDP) getExternUDP();`), so a
+  UDP-only sender transmitted nothing while the modal still said "ping sent" (DK5EN-98 -> DK5EN-1,
+  2026-09-24, EXTUDP off). A BLE-sent ping is still echoed to Extern-UDP when the EXT IP points
+  here, and the node also hands it back over BLE (observed live: `{ping}{487`, msg_id `1AE1E1E7`,
+  `src == DK5EN-98`, no path, `src_type:"ble_remote"`), so the exact correlation survives EXTUDP
+  off. BLE frames arrive as `"ble_remote"` (restamped by `ble_client_remote`); `"ble"` is accepted
+  too.
+
+- **An RF pong is an RF pong regardless of transport.** Extern-UDP `src_type:"lora"` and a BLE
+  copy without the server flag (`msg_server`, byte-5 bit 0x80) both resolve the attempt. Extern-UDP
+  `src_type:"udp"` and a BLE copy WITH the server flag are the internet path (`internet_reply`),
+  exactly as before. Only the Extern-UDP copy has RSSI/SNR; a BLE-first resolve waits 2 s
+  (`LINKCHECK_SIGNAL_GRACE_S`) for it and re-emits `linkcheck_result` with the signal filled in.
+  BLE hop count comes from `via`, where `split_path` keeps the relay path.
+- **Node-id correlation when no echo was seen.** Every id the firmware mints is
+  `((_GW_ID & 0x3FFFFF) << 10) | counter`, and the firmware itself uses
+  `(msgId >> 10) == (gwId & 0x3FFFFF)` to recognise its own messages (`ack_attribution.h`). McApp
+  learns `_GW_ID` from the BLE `I` register (`ID`) or from any echo, and accepts a pong whose token
+  carries our node's prefix, from the station the session is pinging, for an attempt that never
+  learned its id. It proves "the target answered a ping from our node", not "this ping": a ping
+  another client sent through the same node, or a late answer to an earlier timed-out attempt,
+  matches too. A token is credited once (`_linkcheck_claimed_tokens`, 180 s).
+
+**Firmware precondition, not met today:** a `{pong}` addressed to our node is only queued for
+the display (`lora_functions.cpp`, the `{pong}` branch: `queueDisplayText()`, no
+`addBLEOutBuffer()`, §1.4 point 4). So a box whose Extern-UDP points elsewhere still gets no pong
+at all until the firmware forwards it to BLE. With EXT IP pointing at McApp, the exact echo path
+works as before.

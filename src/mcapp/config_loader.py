@@ -172,6 +172,23 @@ class LocationConfig:
 
 
 @dataclass
+class NodeConsoleConfig:
+    """Node debug console bridge (`node_console.py`) — the MeshCom firmware's
+    TCP net console (port 2323, ESP32 only). Flat top-level config.json keys,
+    same convention as StorageConfig above, not a nested sub-object like
+    `stalls` — there is no other console-shaped grouping to nest under.
+
+    `password` must never be logged or surfaced in `/api/monitor/console`
+    status (see `node_console.NodeConsoleSession.status`) — it is read here
+    only to compute the HMAC-SHA256 handshake response.
+    """
+
+    password: str = ""
+    port: int = 2323
+    max_session_s: int = 1800
+
+
+@dataclass
 class StallsConfig:
     """Thresholds and limits for stall tracking.
 
@@ -215,6 +232,9 @@ class Config:
 
     # Location configuration
     location: LocationConfig = field(default_factory=LocationConfig)
+
+    # Node debug console bridge configuration
+    node_console: NodeConsoleConfig = field(default_factory=NodeConsoleConfig)
 
     # Stall tracking configuration
     stalls: StallsConfig = field(default_factory=StallsConfig)
@@ -363,6 +383,18 @@ class Config:
         )
         location = LocationConfig(**location_kwargs)
 
+        node_console_kwargs: dict[str, Any] = {}
+        cls._pluck_present(
+            node_console_kwargs,
+            data,
+            {
+                "NODE_CONSOLE_PASSWORD": "password",
+                "NODE_CONSOLE_PORT": "port",
+                "NODE_CONSOLE_MAX_SESSION_S": "max_session_s",
+            },
+        )
+        node_console = NodeConsoleConfig(**node_console_kwargs)
+
         # Nested `stalls` sub-object (not one of the flat UPPER_CASE top-level
         # keys the rest of config.json uses) — field names double as the JSON
         # keys, so `_pluck_present`'s 1:1 mapping still fits. A non-dict or
@@ -399,6 +431,7 @@ class Config:
             ble=ble,
             storage=storage,
             location=location,
+            node_console=node_console,
             stalls=stalls,
             _raw=data,
         )

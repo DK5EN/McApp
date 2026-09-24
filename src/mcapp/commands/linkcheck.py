@@ -15,6 +15,22 @@ and `linkcheck.normalise_id()` (../linkcheck.py) already do the hex/decimal
 and sign normalisation; this module only tracks which attempt is waiting for
 which id.
 
+The Extern-UDP echo only exists when the node's EXT IP points at THIS box.
+The ping itself goes out over BLE whenever a BLE client is connected
+(`_linkcheck_send_topic`), so it is transmitted even with EXTUDP off, and the
+node then hands it back over BLE as well — `_is_own_ping_echo` takes either
+copy. Should neither echo arrive, a pong is also accepted when it answers a
+ping minted BY OUR NODE: every firmware
+msg_id carries `_GW_ID & 0x3FFFFF` in its top 22 bits, and we know our node's
+`_GW_ID` from the BLE `I` register (or from any echo). See
+`_match_linkcheck_attempt` for the exact rule and what it cannot tell apart.
+
+Which transport the pong arrived on does not matter for "did it answer over
+RF": an Extern-UDP `src_type:"lora"` copy and a BLE copy without the
+server flag are both the node hearing the target on air. Only the Extern-UDP
+copy carries RSSI/SNR (a BLE text frame has no signal footer), so a BLE-first
+resolve waits `linkcheck_signal_grace` for the UDP copy to add the signal.
+
 No round-trip time is reported here on purpose (ADR §1.5.4) — `response_ms`
 is queueing-dominated and must never be labelled RTT by a caller.
 """
@@ -65,6 +81,32 @@ LINKCHECK_COOLDOWN_S = 60.0
 # extudp_functions.cpp:266 silently drops any dst outside 1-9 characters.
 _MAX_TARGET_CALLSIGN_LEN = 9
 
+# How long an attempt resolved by a signal-less BLE pong keeps the driver
+# waiting for the Extern-UDP "lora" copy of the same pong, which carries the
+# RSSI/SNR. The two copies of one frame land ~40-170 ms apart (CLAUDE.md,
+# Unread Cursors); a BLE-only box simply ends the attempt this much later.
+LINKCHECK_SIGNAL_GRACE_S = 2.0
+
+
+class _PongPath(StrEnum):
+    """What a pong copy says about HOW the target's answer reached our node."""
+
+    RF_SIGNAL = "rf_signal"  # Extern-UDP src_type "lora": on air, with RSSI/SNR
+    RF = "rf"  # BLE, no server flag: on air, but no signal footer
+    INTERNET = "internet"  # Extern-UDP src_type "udp", or BLE with msg_server
+
+
+def _pong_path(frame: linkcheck.LinkCheckFrame) -> _PongPath | None:
+    """Classify one pong copy; `None` for a copy that says nothing (our own
+    node's `src_type:"node"` sentinel, or an unknown src_type)."""
+    if frame.src_type == "lora":
+        return _PongPath.RF_SIGNAL
+    if frame.src_type == "udp":
+        return _PongPath.INTERNET
+    if frame.src_type in linkcheck.BLE_SRC_TYPES:
+        return _PongPath.INTERNET if frame.msg_server else _PongPath.RF
+    return None
+
 
 class LinkCheckStatus(StrEnum):
     RUNNING = "running"
@@ -86,11 +128,28 @@ class LinkCheckAttempt:
     response_ms: int | None = None
     hops: int | None = None
     late: bool = False
-    # Set when a src_type:"udp" (internet-path) pong matches this attempt's
-    # id — ADR §1.5.1: real signal only on src_type:"lora". Never itself
-    # resolves the attempt; a later "lora" copy still overwrites rssi/snr/hops
-    # normally and reports this as True.
+    # Set when an internet-path pong (Extern-UDP src_type:"udp", or a BLE copy
+    # carrying the server flag) matches this attempt's id — ADR §1.5.1. Never
+    # itself resolves the attempt; a later RF copy still resolves it normally
+    # and reports this as True.
     internet_reply: bool = False
+    # "echo" when ping_id came from our node's Extern-UDP echo, "node_id" when
+    # the pong was matched through our node's identity instead (no echo).
+    correlation: str | None = None
+    # Pending "wake the driver" timer while a signal-less BLE resolve waits
+    # for the Extern-UDP copy (LINKCHECK_SIGNAL_GRACE_S).
+    grace_handle: asyncio.TimerHandle | None = None
+    # Set by the driver only while it is waiting on THIS attempt. Per attempt,
+    # never per target: a late pong (or a late signal copy) for an attempt
+    # that already ended must not wake the attempt now in flight, which would
+    # end it at once as a spurious timeout.
+    wake: asyncio.Event | None = None
+
+
+def _cancel_grace(attempt: LinkCheckAttempt) -> None:
+    if attempt.grace_handle is not None:
+        attempt.grace_handle.cancel()
+        attempt.grace_handle = None
 
 
 @dataclass
@@ -115,11 +174,16 @@ class LinkCheckMixin(CommandHandlerBase):
         # time.monotonic() end-of-cooldown per target; never wall-clock, so an
         # NTP step can't shorten or extend a cooldown.
         self._linkcheck_cooldown_until: dict[str, float] = {}
-        # One asyncio.Event per target with an in-flight attempt, so a pong
-        # (or the timeout) can wake the driver loop immediately instead of
-        # polling. Attempts within one session are strictly sequential, so at
-        # most one entry per target exists at any time.
-        self._linkcheck_wake: dict[str, asyncio.Event] = {}
+        self.linkcheck_signal_grace = LINKCHECK_SIGNAL_GRACE_S
+        # Our node's `_GW_ID & 0x3FFFFF`, i.e. the top 22 bits of every msg_id
+        # it mints. Learned from the BLE `I` register or from any echo; None
+        # until then, which disables the node-id correlation path entirely.
+        self._linkcheck_node_prefix: int | None = None
+        # Pong tokens already credited to an attempt, with their monotonic
+        # expiry. The node-id path has no ping id to compare against, so this
+        # is what stops a straggler copy of an OLD pong (a retransmitted ping
+        # answered again, same token) from resolving a later attempt.
+        self._linkcheck_claimed_tokens: dict[int, float] = {}
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -254,12 +318,20 @@ class LinkCheckMixin(CommandHandlerBase):
             if frame is None:
                 return
 
-            if frame.kind is linkcheck.LinkCheckKind.PING and frame.src_type == "node":
+            if frame.kind is linkcheck.LinkCheckKind.PING and self._is_own_ping_echo(frame):
                 self._handle_linkcheck_echo(frame)
             elif frame.kind is linkcheck.LinkCheckKind.PONG:
                 await self._handle_linkcheck_pong(frame)
         except Exception:
             logger.exception("Error handling link check frame")
+
+    def note_linkcheck_node_register(self, register: dict[str, Any]) -> None:
+        """Learn our node's msg_id prefix from its BLE `I` register (`ID` is
+        the firmware's `_GW_ID`). Sent on every BLE connect; a non-int `ID`
+        leaves what we already know untouched."""
+        prefix = linkcheck.node_prefix_of_gw_id(register.get("ID"))
+        if prefix is not None:
+            self._linkcheck_node_prefix = prefix
 
     async def stop_linkcheck(self) -> None:
         """Shutdown: cancel every in-flight session and clear all state."""
@@ -279,10 +351,25 @@ class LinkCheckMixin(CommandHandlerBase):
             await asyncio.gather(*stray, return_exceptions=True)
 
         self.link_sessions.clear()
-        self._linkcheck_wake.clear()
         self._linkcheck_cooldown_until.clear()
 
     # ── Internal: correlation ────────────────────────────────────────────
+
+    def _is_own_ping_echo(self, frame: linkcheck.LinkCheckFrame) -> bool:
+        """Our node handing our own ping back with its real msg_id.
+
+        Two shapes: the Extern-UDP `src_type:"node"` echo, and — for a ping
+        sent over BLE — the node's BLE copy of it (`src` == our callsign, no
+        path; observed live 2026-09-24 on DK5EN-98 as `{ping}{487`, msg_id
+        1AE1E1E7, `src_type:"ble_remote"`). A `{ping}` from any other station
+        over BLE is someone pinging us, never an echo.
+        """
+        if frame.src_type == "node":
+            return True
+        return (
+            frame.src_type in linkcheck.BLE_SRC_TYPES
+            and frame.origin.strip().upper() == str(self.my_callsign).strip().upper()
+        )
 
     def _handle_linkcheck_echo(self, frame: linkcheck.LinkCheckFrame) -> None:
         """A `src_type:"node"` echo of our own outgoing ping: learn its msg_id.
@@ -290,88 +377,198 @@ class LinkCheckMixin(CommandHandlerBase):
         Attempts within a session are strictly sequential (ATTEMPTS ARE
         SEQUENTIAL, not on a fixed interval — see `_run_link_check_session`),
         so the most recent attempt is always the one still missing a
-        `ping_id`; no need to scan the whole list.
+        `ping_id`; no need to scan the whole list. The echo is our own node's
+        frame, so its id also names our node (`node_prefix_of_msg_id`).
         """
+        echo_id = linkcheck.normalise_id(frame.msg_id)
+        if echo_id is not None:
+            self._linkcheck_node_prefix = linkcheck.node_prefix_of_msg_id(echo_id)
         session = self.link_sessions.get(frame.dst.strip().upper())
         if session is None or not session.attempts:
             return
         attempt = session.attempts[-1]
         if attempt.ping_id is None:
-            attempt.ping_id = linkcheck.normalise_id(frame.msg_id)
+            attempt.ping_id = echo_id
 
-    async def _handle_linkcheck_pong(self, frame: linkcheck.LinkCheckFrame) -> None:
-        """Match a pong's correlation id against every session's attempts."""
-        if frame.correlates_to is None:
-            return
+    def _match_linkcheck_attempt(
+        self, frame: linkcheck.LinkCheckFrame, token: int
+    ) -> tuple[str, LinkCheckAttempt, str] | None:
+        """Find the attempt a pong answers: `(target, attempt, correlation)`.
 
+        1. `"echo"` — an attempt whose ping id (learned from the Extern-UDP
+           echo, or pinned by an earlier node-id match) equals the token.
+           Exact, and the only path that can tell two of our pings apart.
+        2. `"node_id"` — no attempt knows the token, but it was minted by OUR
+           node (top 22 bits == our `_GW_ID`), the pong comes from the station
+           this session is pinging, and that session's current attempt never
+           learned its id. This is the no-echo case (Extern-UDP pointed
+           elsewhere). It proves "the target answered a ping from our node",
+           not "answered THIS ping": a ping another client sent through the
+           same node, or a late answer to an earlier timed-out attempt, would
+           match too. Tokens already credited are refused
+           (`_linkcheck_claimed_tokens`), so one pong never counts twice.
+        """
+        return self._match_by_ping_id(token) or self._match_by_node_id(frame, token)
+
+    def _match_by_ping_id(self, token: int) -> tuple[str, LinkCheckAttempt, str] | None:
+        late_window_ms = int(LINKCHECK_LATE_WINDOW_S * 1000)
         for target, session in self.link_sessions.items():
             for attempt in session.attempts:
-                if attempt.ping_id != frame.correlates_to:
+                if attempt.ping_id != token:
                     continue
-
-                response_ms = now_ms() - attempt.sent_ms
-                if response_ms > int(LINKCHECK_LATE_WINDOW_S * 1000):
-                    # Too old to trust as this attempt's reply; keep scanning
-                    # in case of a genuine (if unlikely) id collision.
+                # Too old to trust as this attempt's reply; keep scanning in
+                # case of a genuine (if unlikely) id collision.
+                if now_ms() - attempt.sent_ms > late_window_ms:
                     continue
+                return target, attempt, "echo"
+        return None
 
-                # Real signal only on src_type:"lora" (ADR §1.5.1); "udp"/"node"
-                # carry a 0/0 sentinel. A "udp" pong is a genuine reply, but an
-                # internet-path one, not RF — record that the target answered
-                # without resolving the attempt, so it keeps waiting for a
-                # "lora" copy until the driver timeout. "node" is our own
-                # node's echo sentinel; "ble" is the BLE-service copy whose
-                # signal provenance is ambiguous — the Extern-UDP "lora" copy
-                # of the same pong arrives within ~1 s and resolves then.
-                if frame.src_type == "udp":
-                    attempt.internet_reply = True
-                    logger.debug(
-                        "Internet-path (udp) pong for %s seq=%d, still waiting for an RF copy",
-                        target,
-                        attempt.seq,
-                    )
-                    return
-                if frame.src_type != "lora":
-                    logger.debug(
-                        "Ignoring pong with src_type=%r for %s seq=%d",
-                        frame.src_type,
-                        target,
-                        attempt.seq,
-                    )
-                    return
+    def _match_by_node_id(
+        self, frame: linkcheck.LinkCheckFrame, token: int
+    ) -> tuple[str, LinkCheckAttempt, str] | None:
+        prefix = self._linkcheck_node_prefix
+        if prefix is None or linkcheck.node_prefix_of_msg_id(token) != prefix:
+            return None
+        self._expire_linkcheck_tokens()
+        if token in self._linkcheck_claimed_tokens:
+            return None
+        # A pong answering our node's ping is addressed to our node.
+        if frame.dst.split(",")[-1].strip().upper() != str(self.my_callsign).strip().upper():
+            return None
+        target = frame.origin.strip().upper()
+        waiting = self.link_sessions.get(target)
+        if waiting is None or not waiting.attempts:
+            return None
+        current = waiting.attempts[-1]
+        if current.ping_id is not None or current.resolved:
+            return None
+        return target, current, "node_id"
 
-                if attempt.resolved:
-                    logger.debug(
-                        "Duplicate link check pong for %s seq=%d, ignoring",
-                        target,
-                        attempt.seq,
-                    )
-                    return
+    def _expire_linkcheck_tokens(self) -> None:
+        now = time.monotonic()
+        for token in [t for t, until in self._linkcheck_claimed_tokens.items() if until <= now]:
+            del self._linkcheck_claimed_tokens[token]
 
-                attempt.resolved = True
-                attempt.response_ms = response_ms
+    @staticmethod
+    def _wake_linkcheck_driver(attempt: LinkCheckAttempt, delay: float) -> None:
+        """Wake the driver if it is still waiting on `attempt`, now
+        (`delay <= 0`) or after `delay` seconds; a later call replaces a
+        pending delayed wake. A no-op once that attempt's wait has ended."""
+        _cancel_grace(attempt)
+        wake = attempt.wake
+        if wake is None:
+            return
+        if delay <= 0:
+            wake.set()
+        else:
+            attempt.grace_handle = asyncio.get_running_loop().call_later(delay, wake.set)
+
+    def _linkcheck_send_topic(self) -> str:
+        """BLE when a BLE client is connected, else Extern-UDP.
+
+        BLE works in both node configurations: `sendMessage()` still echoes
+        the ping to Extern-UDP when the node's EXT IP points here, so the
+        exact echo correlation is kept. Extern-UDP only works while the node
+        has EXTUDP enabled — with it off the node never reads the socket
+        (`esp32_main.cpp`: `if(bEXTUDP) getExternUDP();`) and the ping is
+        silently never transmitted, while the modal still says "ping sent".
+        """
+        router = self.message_router
+        get_protocol = getattr(router, "get_protocol", None)
+        client = get_protocol("ble_client") if callable(get_protocol) else None
+        if client is None:
+            return "udp_message"
+        try:
+            value = client.is_connected
+            connected = bool(value() if callable(value) else value)
+        except Exception:
+            connected = False
+        return "ble_message" if connected else "udp_message"
+
+    async def _emit_linkcheck_result(self, target: str, attempt: LinkCheckAttempt) -> None:
+        await self._emit_linkcheck_event(
+            "linkcheck_result",
+            target=target,
+            seq=attempt.seq,
+            response_ms=attempt.response_ms,
+            rssi=attempt.rssi,
+            snr=attempt.snr,
+            hops=attempt.hops,
+            late=attempt.late,
+            internet_reply=attempt.internet_reply,
+        )
+
+    async def _handle_linkcheck_pong(self, frame: linkcheck.LinkCheckFrame) -> None:
+        """Credit a pong copy to the attempt it answers, from either transport."""
+        token = frame.correlates_to
+        if token is None:
+            return
+        match = self._match_linkcheck_attempt(frame, token)
+        if match is None:
+            # No attempt anywhere answers this id: unknown/foreign pong, ignored.
+            return
+        target, attempt, correlation = match
+
+        path = _pong_path(frame)
+        if path is None:
+            logger.debug(
+                "Ignoring pong with src_type=%r for %s seq=%d",
+                frame.src_type,
+                target,
+                attempt.seq,
+            )
+            return
+        if path is _PongPath.INTERNET:
+            # The target is alive, but this copy is no evidence of an RF path
+            # (ADR §1.5.1): record it and keep waiting for an RF copy.
+            attempt.internet_reply = True
+            logger.debug(
+                "Internet-path pong for %s seq=%d, still waiting for an RF copy",
+                target,
+                attempt.seq,
+            )
+            return
+
+        if attempt.resolved:
+            # A second RF copy. The one worth having is the Extern-UDP copy
+            # adding the RSSI/SNR a BLE copy could not carry.
+            if path is _PongPath.RF_SIGNAL and attempt.rssi is None and attempt.snr is None:
                 attempt.rssi = frame.rssi
                 attempt.snr = frame.snr
                 attempt.hops = frame.hops
-                attempt.late = attempt.timed_out or response_ms > int(self.linkcheck_timeout * 1000)
-
-                wake = self._linkcheck_wake.get(target)
-                if wake is not None:
-                    wake.set()
-
-                await self._emit_linkcheck_event(
-                    "linkcheck_result",
-                    target=target,
-                    seq=attempt.seq,
-                    response_ms=attempt.response_ms,
-                    rssi=attempt.rssi,
-                    snr=attempt.snr,
-                    hops=attempt.hops,
-                    late=attempt.late,
-                    internet_reply=attempt.internet_reply,
+                await self._emit_linkcheck_result(target, attempt)
+                self._wake_linkcheck_driver(attempt, 0)
+            else:
+                logger.debug(
+                    "Duplicate link check pong for %s seq=%d, ignoring", target, attempt.seq
                 )
-                return
-        # No attempt anywhere carries this id: unknown/foreign pong, ignored.
+            return
+
+        response_ms = now_ms() - attempt.sent_ms
+        attempt.resolved = True
+        attempt.correlation = correlation
+        if attempt.ping_id is None:
+            # Pin the token: later copies of this pong now match exactly
+            # ("echo" path) and enrich or dedupe instead of re-matching.
+            attempt.ping_id = token
+        self._linkcheck_claimed_tokens[token] = time.monotonic() + LINKCHECK_LATE_WINDOW_S
+        attempt.response_ms = response_ms
+        # Real signal only on the Extern-UDP "lora" copy; a BLE text frame
+        # carries no RSSI/SNR footer at all.
+        attempt.rssi = frame.rssi if path is _PongPath.RF_SIGNAL else None
+        attempt.snr = frame.snr if path is _PongPath.RF_SIGNAL else None
+        attempt.hops = frame.hops
+        attempt.late = attempt.timed_out or response_ms > int(self.linkcheck_timeout * 1000)
+        if correlation == "node_id":
+            logger.info(
+                "Link check pong for %s seq=%d matched by node id (no Extern-UDP echo seen)",
+                target,
+                attempt.seq,
+            )
+
+        await self._emit_linkcheck_result(target, attempt)
+        grace = 0.0 if path is _PongPath.RF_SIGNAL else self.linkcheck_signal_grace
+        self._wake_linkcheck_driver(attempt, grace)
 
     # ── Internal: driver ─────────────────────────────────────────────────
 
@@ -398,7 +595,7 @@ class LinkCheckMixin(CommandHandlerBase):
                 try:
                     await self.message_router.publish(
                         "linkcheck",
-                        "udp_message",
+                        self._linkcheck_send_topic(),
                         {
                             "dst": target,
                             "msg": linkcheck.PING_PAYLOAD,
@@ -418,13 +615,14 @@ class LinkCheckMixin(CommandHandlerBase):
                 await self._emit_linkcheck_event("linkcheck_sent", target=target, seq=seq)
 
                 wake = asyncio.Event()
-                self._linkcheck_wake[target] = wake
+                attempt.wake = wake
                 try:
                     await asyncio.wait_for(wake.wait(), timeout=self.linkcheck_timeout)
                 except TimeoutError:
                     pass
                 finally:
-                    self._linkcheck_wake.pop(target, None)
+                    attempt.wake = None
+                    _cancel_grace(attempt)
 
                 if attempt.resolved:
                     received += 1
@@ -473,7 +671,6 @@ class LinkCheckMixin(CommandHandlerBase):
                 )
         finally:
             self.link_sessions.pop(target, None)
-            self._linkcheck_wake.pop(target, None)
             # A user-initiated stop allows an immediate restart; only a
             # natural end (completed/timeout/error) starts the cooldown.
             if session.status != LinkCheckStatus.STOPPED:

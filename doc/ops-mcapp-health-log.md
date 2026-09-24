@@ -1,6 +1,8 @@
 # McApp production health log — mcapp.local
 
-> **Status:** Current — newest section: §18 (2026-09-23 08:10 CEST, pre-release sweep of
+> **Status:** Current — newest section: §19 (2026-09-24 22:55 CEST, pre-release sweep of
+> `v2.0.14-dev.3` before the v2.0.14 promotion) — green, zero findings, new watch point **W18**
+> (`udp_target_kind` `config` while Extern-UDP is off on DK5EN-98). Before that: §18 (2026-09-23 08:10 CEST, pre-release sweep of
 > `v2.0.13-dev.2` before the v2.0.13 promotion) — all green, zero findings, new watch point
 > **W17** (`/api/read_cursor` stalls rising since v2.0.11, off-loop, not a dev.2 regression).
 > §17 (2026-09-19 09:12 CEST, `v2.0.11-dev.1` deployed to
@@ -9,7 +11,7 @@
 > cost ~1 s of wall time, so `/api/send` `http` rows remain and are expected. Newest full sweep:
 > §15 (2026-09-19 07:50) — all green, zero findings; `handler` stalls down from ~42–54/day to
 > 1 in 7 h. Last finding was **F13** (§7), upstream and resolved 2026-09-01.
-> Open watch points: **W17** (§18), **W13** (reduced, §17), **W14** (§15), **W16** (§16), **W1** (zram swap,
+> Open watch points: **W18** (§19), **W17** (§18), **W13** (reduced, §17), **W14** (§15), **W16** (§16), **W1** (zram swap,
 > trend watch only), **W12** (§12), **W2**, **W3**, **W6**, **W7**, **W9**, **W10**.
 > **W15** (§15/§16/§17), **W4**, **W5**, **W8** and **W11** are resolved.
 >
@@ -1442,3 +1444,116 @@ upstream fetch, not re-opened. The rest is `/api/read_cursor`, which is W17.
   3636 vitest cases and `build:strict`. All are green on the dependency-updated trees.
 - Soak is short: `dev.2` had run **27 minutes** at the time of this sweep; `dev.1` was published
   2026-09-21 21:52 CEST, about 34 hours before `dev.2` replaced it.
+
+## 19. 2026-09-24 22:55 CEST — pre-release sweep before promoting v2.0.14-dev.3 to v2.0.14
+
+Sign-off sweep for the **v2.0.14** promotion (RF Monitor DBG console, monitor highlighting and
+BITV contrast, link check without Extern-UDP). Verdict: **green, zero findings, one new watch
+point (W18).** The box is 19 minutes past the `v2.0.14-dev.3` deploy, so rates carry that caveat.
+The operator switched **Extern-UDP off on DK5EN-98** this evening, so every frame now arrives
+over BLE only. Several readings below differ from §18 for that reason, not because of a fault.
+
+### Anchors
+
+| Anchor              | Value                                                                       |
+| ------------------- | --------------------------------------------------------------------------- |
+| Snapshot            | 2026-09-24 22:55–23:05 CEST                                                 |
+| Release             | `v2.0.14-dev.3` (`/webapp/version.html` agrees)                             |
+| Active slot         | **slot-0** (slot-1 `v2.0.14-dev.2`, slot-2 `v2.0.14-dev.1`)                 |
+| Schema              | **32** = `LATEST_SCHEMA_VERSION` ✓                                          |
+| System epoch        | box **5** = `REQUIRED_SYSTEM_EPOCH` 5 ✓                                     |
+| Service start       | mcapp 22:36:52 CEST; `uptime_seconds` 1131                                  |
+| `systemd NRestarts` | **0** (mcapp and mcapp-ble)                                                 |
+| Host uptime         | 12:22 (booted 10:33), load 0.04 / 0.05 / 0.16                               |
+| Classifier          | version **5**, **38** rules, markers `v0 v1 v3 v4 v5`, 0 unclassified (1 h) |
+| UDP provenance      | **`config`**, 0 untrusted, not multiple, 0 suppressed changes — see W18     |
+
+Classifier **5** is the mc-chat pull "a WebDesk mention is chat, not an advert" (`cec999b`); its
+`backfill_done:v5` marker is present.
+
+### Rate table re-measured
+
+| Signal                     | §1 baseline | This run      | Window |
+| -------------------------- | ----------- | ------------- | ------ |
+| `messages` type `msg`      | 11 / h      | **16 / h**    | 1 h    |
+| `messages` type `pos`      | 87 / h      | **83 / h**    | 1 h    |
+| `signal_log`               | 347 / h     | **309 / h**   | 1 h    |
+| journal warnings           | 0 / 24 h    | **0**         | 24 h   |
+| unclassified `msg`         | 0           | **0**         | 1 h    |
+| `{CET}` rows in `messages` | 0           | **0**         | all    |
+| last `{CET}` beacon        | —           | **148 s** ago | live   |
+| heartbeat age              | < 60 s      | **10 s**      | live   |
+
+Since 21:00 the `msg` rows arrive as `ble_remote` (11 in 21 h, 11 in 22 h) instead of the earlier
+`lora`/`udp` mix. That matches Extern-UDP being off. The `{CET}` beacon keeps arriving (148 s ago)
+over BLE, so the gateway-uptime ledger works on a BLE-only box, as its hop-0 gate was designed to.
+
+### Changes under test
+
+- **DBG console (dev.1):** a session on DK5EN-98 read `LORADEBUG off / TXCAPTURE off`, set both,
+  streamed `[MC-DBG]`/`[LOG]` lines, and restored both to `off`, confirmed by a second `--info`.
+  A later attempt got `ECONNREFUSED` on 2323 while the net console was off, and the session went
+  to `error`. That is the designed behaviour.
+- **Link check without Extern-UDP (dev.2/dev.3):** DK5EN-98 → DK5EN-1 at 22:42. McApp sent the
+  ping over BLE, learned `ping_id 1AE1E1EA` from the node's BLE echo 2 s later, and the node's
+  console showed `{pong}{451011050}` (== `0x1AE1E1EA`, −71 dBm / 6 dB) at 22:42:46. The pong went
+  only to the display and to the server uplink, not to BLE, so the attempt timed out. That is a
+  firmware gap, not ours. The same log shows the answered ping retransmitted twice (22:43:24,
+  22:44:04).
+
+### Uptime
+
+`/api/uptime?range=24h`: `active`, **97.19 %** uptime, **100.0 %** coverage, longest outage
+**20.2 min**. Two contiguous `gap` rows, 10:04:25–10:24:38 and 10:24:40–10:44:51. They coincide
+with the morning's maintenance: the host rebooted at 10:32:56, and the node's `--info` reports
+`UPDATE: 2026-09-24 10:34:45` (firmware update). Operator activity, not a McApp or link fault.
+
+### Stalls since the deploy (22:36:52)
+
+`loop_lag` 2 × critical (max 1207 ms) and 3 × stall (max 219 ms), in the restart window as in
+§18. One `http` stall (740 ms), three `client_http` stalls (max 888 ms). W17 `read_cursor` rows
+per day: 09-19 **4**, 09-20 **11**, 09-21 **17**, 09-22 **11**, 09-23 **19**, 09-24 **13**. The
+count is flat, not climbing, so W17 stays a watch point.
+
+### Host and hygiene
+
+| Signal       | Value                                                                |
+| ------------ | -------------------------------------------------------------------- |
+| Disk         | 4.5 G of 59 G, **9 %**                                               |
+| RAM          | MemTotal 462 MB, **MemAvailable 169 MB**                             |
+| Swap         | **22 MB out** (SwapFree 450796 of 473084 kB)                         |
+| Temp         | **41.9 °C**                                                          |
+| mcapp RSS    | **119 MB** at 19 min (W14 data point)                                |
+| DB / WAL     | **42.6 MB** / **4.1 MB**                                             |
+| `vapid.json` | `0600` ✓, raw base64url scalar ✓                                     |
+| TLS          | Caddy internal ECC leaf, `Sep 24 15:43 → Sep 25 03:43 GMT`, mid-life |
+
+### Absent signals — the zero is the result
+
+- **0** journal warnings in 24 h (`-- No entries --`); **0** `NRestarts`; **0** unclassified;
+  **0** `{CET}` rows.
+- `udp_untrusted_source_ips` **empty**, `udp_multiple_sources` **false**,
+  `udp_suppressed_target_changes` **0**.
+
+### Watch points
+
+- **W18 (new): `udp_target_kind` reads `config`, not `identified`.** The node sends no UDP frames
+  with Extern-UDP off, so McApp never sees one and cannot identify the target. Expected while the
+  operator keeps it off. If Extern-UDP is switched back on and this stays `config`, that is the
+  finding.
+- **W17** flat (numbers above). **W14** 119 MB at 19 min, in line with §18's 121 MB at 27 min.
+- **W13**, **W16**, **W1**, **W12**, **W2**, **W3**, **W6**, **W7**, **W10** unchanged.
+- **W9** unchanged: CI runs only the dependency-graph jobs on `development`. The promotion is
+  signed off on the local gates: ruff, ruff-format, mypy, all backend suites; vue-tsc, eslint,
+  prettier, 3843 vitest cases, `build:strict`. All green on the dependency-updated trees (ruff
+  0.16.9 taken for this release).
+- Soak is short: `dev.3` had run **19 minutes**, `dev.1` (DBG console, monitor colours) about
+  **1 h 15 min**.
+- **Advisor review of the link-check change (before promotion): rework, done.** It found that
+  the driver's wake event was keyed by target. As a result, a late pong or late signal copy for
+  an earlier attempt ended the attempt then in flight as an immediate timeout. The late-pong case
+  dates back to v2.0.13; the late-signal case is new in the BLE path. Also hardened: the node id
+  is only taken from the BLE `I` register (a :1799 datagram of that shape used to reach it), and
+  the node-id fallback now requires the pong to be addressed to us. Fixed in `c451ec2`, with four
+  regression tests that fail on `dev.3`. The fix ships as `v2.0.14-dev.4`, and that dev tag is
+  what gets promoted.

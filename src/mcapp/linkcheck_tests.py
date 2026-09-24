@@ -27,6 +27,8 @@ from .linkcheck import (
     PING_PAYLOAD,
     LinkCheckKind,
     is_link_check_payload,
+    node_prefix_of_gw_id,
+    node_prefix_of_msg_id,
     normalise_id,
     parse,
 )
@@ -379,6 +381,97 @@ def _test_is_link_check_payload_never_raises() -> _RecordFn_Results:
     return results
 
 
+def _test_ble_pong_path_and_server_flag() -> _RecordFn_Results:
+    """A BLE pong's relay path lives in `via` (`src` is only the originator),
+    and its `msg_server` flag is carried through. Shapes are what
+    `ble_protocol.transform_msg` emits: `via` is the path with our own
+    callsign stripped, so a direct frame has `via == src`."""
+    results: _RecordFn_Results = []
+    direct = parse(
+        {
+            "src": "DM3KS-13",
+            "via": "DM3KS-13",
+            "dst": "DM3KS-12",
+            "msg": "{pong}{788202024}",
+            "msg_id": "0D1F90CC",
+            "src_type": "ble",
+            "msg_server": False,
+        }
+    )
+    results.append(("ble direct pong: parses", direct is not None))
+    if direct is not None:
+        results.append(("ble direct pong: hops == 0", direct.hops == 0))
+        results.append(("ble direct pong: origin", direct.origin == "DM3KS-13"))
+        results.append(("ble direct pong: msg_server False", direct.msg_server is False))
+        results.append(("ble direct pong: no rssi", direct.rssi is None and direct.snr is None))
+    relayed = parse(
+        {
+            "src": "DB0HOB-12",
+            "via": "DB0HOB-12,DB0ED-99",
+            "dst": "DK5EN-98",
+            "msg": "{pong}{-427408969}",
+            "src_type": "ble",
+            "msg_server": True,
+        }
+    )
+    results.append(("ble relayed pong: parses", relayed is not None))
+    if relayed is not None:
+        results.append(("ble relayed pong: hops == 1 (from via)", relayed.hops == 1))
+        results.append(
+            ("ble relayed pong: heard_from is the relay", relayed.heard_from == "DB0ED-99")
+        )
+        results.append(("ble relayed pong: msg_server True", relayed.msg_server is True))
+    live = parse(
+        {
+            "src": "DK5EN-1",
+            "via": "DK5EN-1,DK5EN-2",
+            "dst": "DK5EN-98",
+            "msg": "{pong}{1}",
+            "src_type": "ble_remote",
+        }
+    )
+    results.append(("ble_remote pong: path from via", live is not None and live.hops == 1))
+    # A UDP frame's `via`, if one ever carried such a key, must not replace `src`.
+    udp = parse(
+        {"src": "A-1,B-2", "via": "X-9", "dst": "C-3", "msg": "{pong}{1}", "src_type": "lora"}
+    )
+    results.append(("udp pong: path still from src", udp is not None and udp.hops == 1))
+    # msg_server must be a real True — a truthy string off the wire is not the flag.
+    odd = parse(
+        {"src": "A-1", "dst": "B-2", "msg": "{pong}{1}", "src_type": "ble", "msg_server": "yes"}
+    )
+    results.append(("msg_server non-bool reads False", odd is not None and odd.msg_server is False))
+    return results
+
+
+def _test_node_prefix() -> _RecordFn_Results:
+    """The firmware mints msg_id = ((_GW_ID & 0x3FFFFF) << 10) | counter."""
+    results: _RecordFn_Results = []
+    # DK5EN-98: --info reports "...ID 0406B878"; its echo ids are 1AE1E0xx.
+    results.append(
+        (
+            "node prefix: DK5EN-98 _GW_ID matches its own echo id",
+            node_prefix_of_gw_id(0x0406B878) == node_prefix_of_msg_id(0x1AE1E057),
+        )
+    )
+    # DM3KS-12 field capture 2026-09-24: ping x2EFB0228, pong {788202024}.
+    results.append(
+        (
+            "node prefix: DM3KS-12 pong token names the pinging node",
+            node_prefix_of_msg_id(788202024) == node_prefix_of_msg_id(0x2EFB0228) == 0x0BBEC0,
+        )
+    )
+    results.append(
+        (
+            "node prefix: counter bits ignored",
+            node_prefix_of_msg_id(0x1AE1E000) == node_prefix_of_msg_id(0x1AE1E3FF),
+        )
+    )
+    for bad in (None, True, "0406B878", 1.5, [1]):
+        results.append((f"node prefix: gw id {bad!r} -> None", node_prefix_of_gw_id(bad) is None))
+    return results
+
+
 def run_linkcheck_tests() -> bool:
     """Run the linkcheck parser suite; return True iff all cases passed."""
     results: _RecordFn_Results = []
@@ -390,6 +483,8 @@ def run_linkcheck_tests() -> bool:
     results.extend(_test_non_link_check_messages_return_none())
     results.extend(_test_hostile_inputs_never_raise())
     results.extend(_test_msg_id_preserved_raw_not_validated())
+    results.extend(_test_ble_pong_path_and_server_flag())
+    results.extend(_test_node_prefix())
 
     for label, passed in results:
         print(f"    {'✅ PASS' if passed else '❌ FAIL'} | {label}")

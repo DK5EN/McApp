@@ -17,6 +17,15 @@ class RoutingMixin(CommandHandlerBase):
         """Handle incoming messages: dispatch echoes/ACKs, then parse and execute commands."""
         message_data = routed_message["data"]
 
+        # Our own node's BLE "I" register names its _GW_ID, which the link
+        # check needs to recognise a pong answering a ping from this node when
+        # no Extern-UDP echo reaches us (commands/linkcheck.py). BLE only:
+        # :1799 is unauthenticated, and a datagram shaped like the register
+        # must not re-teach the node's identity.
+        if message_data.get("TYP") == "I" and routed_message.get("source") == "ble":
+            self.note_linkcheck_node_register(message_data)
+            return
+
         # Blocked callsigns never trigger command processing (echoes, ACKs or
         # ! commands) — same shared decision that gates the storage/broadcast
         # paths, so a blocked station can't drive the bot even though its group

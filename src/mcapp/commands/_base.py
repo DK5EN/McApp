@@ -134,3 +134,6 @@ class CommandHandlerBase(Protocol):
     # LinkCheckMixin → called by RoutingMixin
     async def handle_link_check_frame(self, message_data: dict[str, Any]) -> None:
         raise NotImplementedError
+
+    def note_linkcheck_node_register(self, register: dict[str, Any]) -> None:
+        raise NotImplementedError
