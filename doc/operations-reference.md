@@ -35,6 +35,13 @@ Configuration lives in `/etc/mcapp/config.json`:
 - `PRUNE_HOURS_POS`: Position data retention (default 192h = 8 days)
 - `PRUNE_HOURS_ACK`: ACK retention (default 192h = 8 days)
 - `MAX_STORAGE_SIZE_MB`: In-memory store limit
+- `NODE_CONSOLE_PASSWORD`: Password for the node's TCP debug console (port
+  2323, ESP32 only) — empty (default) means the node has no console password
+  set. Never logged, never surfaced in `/api/monitor/console` status.
+- `NODE_CONSOLE_PORT`: Debug console TCP port (default `2323`, matches the
+  firmware's `net_console.cpp`)
+- `NODE_CONSOLE_MAX_SESSION_S`: Auto-stop (with flag restore) after this many
+  seconds of a `/monitor` DBG session (default `1800` = 30 min)
 
 Dev config: `/etc/mcapp/config.dev.json` (auto-selected when `MCAPP_ENV=dev`)
 

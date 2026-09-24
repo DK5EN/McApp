@@ -53,6 +53,7 @@ from mcapp.linkcheck_sse_tests import run_linkcheck_sse_tests
 from mcapp.linkcheck_tests import run_linkcheck_tests
 from mcapp.main import MessageRouter
 from mcapp.meteo_tests import run_meteo_tests
+from mcapp.node_console_tests import run_node_console_tests
 from mcapp.push_tests import run_push_tests
 from mcapp.send_path_tests import run_send_path_tests
 from mcapp.sqlite_storage import run_startup_tests as run_storage_tests
@@ -174,6 +175,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     wire_monitor_ok = await run_wire_monitor_tests()
     print(f"wire_monitor: {'PASS' if wire_monitor_ok else 'FAIL'}")
 
+    node_console_ok = await run_node_console_tests()
+    print(f"node_console: {'PASS' if node_console_ok else 'FAIL'}")
+
     signal_via_ok = await run_signal_via_tests()
     print(f"signal_via: {'PASS' if signal_via_ok else 'FAIL'}")
 
@@ -276,6 +280,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and ack_status_ok
         and linkcheck_sse_ok
         and wire_monitor_ok
+        and node_console_ok
         and aprs_symbol_ok
         and identity_ok
         and ble_service_ok

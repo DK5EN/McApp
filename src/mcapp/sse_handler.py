@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     # RF Monitor wire contract (docs/rf-monitor-plan.md); import deferred to
     # TYPE_CHECKING only — wire_monitor.py imports broadcast_verdict from
     # THIS module at runtime, so a real top-level import here would cycle.
+    from .node_console import NodeConsoleSession
     from .wire_monitor import WireMonitor
 
 SSE_CLIENT_QUEUE_SIZE = 256
@@ -279,6 +280,10 @@ class SSEManager:
         # runtime import cycle — wire_monitor.py imports broadcast_verdict
         # from this module).
         self.wire_monitor: WireMonitor | None = None
+        # Set by build_app (main.py); None keeps /api/monitor/console* at a
+        # 503 (startup tests build a manager without one), same convention
+        # as wire_monitor above.
+        self.node_console: NodeConsoleSession | None = None
 
         # Subscribe to messages from the router
         if message_router:

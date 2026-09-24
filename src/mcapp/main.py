@@ -39,6 +39,7 @@ from .config_loader import (
 from .logging_setup import get_logger, setup_logging
 from .logging_setup import has_console as check_console
 from .meteo import is_valid_position
+from .node_console import NodeConsoleSession
 
 # Re-exported (import-as-itself) so identity_tests.py can monkeypatch
 # main.save_runtime_state as a module attribute under mypy --strict's
@@ -2342,6 +2343,7 @@ class AppContext:
     ble_client: Any
     ble_mode: BLEMode
     stall_recorder: StallRecorder
+    node_console: NodeConsoleSession
 
 
 class _ClassifierBus:
@@ -2656,6 +2658,18 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
     message_router.subscribe("mesh_message", wire_monitor.on_mesh_message)
     message_router.subscribe("ble_notification", wire_monitor.on_ble_notification)
     message_router.subscribe("ble_status", wire_monitor.on_ble_status)
+    # Node debug console bridge (node_console.py): one session per process,
+    # reachable from the REST layer via `sse_manager.node_console` (wired
+    # below once sse_manager exists). Host is the node's UDP target — the
+    # same node this proxy already talks to — never a separately-configured
+    # address.
+    node_console = NodeConsoleSession(
+        wire_monitor,
+        host=cfg.udp.target,
+        port=cfg.node_console.port,
+        password=cfg.node_console.password,
+        max_session_s=cfg.node_console.max_session_s,
+    )
     message_router.set_callsign(cfg.call_sign)
     storage_handler.set_message_router(message_router)
     # One-shot, idempotent read-cursor seed (unread-cursor plan §3): must run
@@ -2732,6 +2746,7 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
             sse_manager.stall_recorder = stall_recorder
             sse_manager.wire_monitor = wire_monitor
             wire_monitor.sse_manager = sse_manager
+            sse_manager.node_console = node_console
             stall_recorder.register_gauge("sse_clients", lambda: len(sse_manager.clients))
             if hasattr(sse_manager, "set_classifier"):
                 sse_manager.set_classifier(classifier)
@@ -2812,6 +2827,7 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
         ble_client=ble_client,
         ble_mode=ble_mode,
         stall_recorder=stall_recorder,
+        node_console=node_console,
     )
 
 
@@ -3157,6 +3173,12 @@ async def _cancel_background_tasks(tasks: _BackgroundTasks) -> None:
 async def _shutdown_services(ctx: AppContext) -> None:
     """4-step shutdown ladder: beacons → BLE → UDP → SSE, each with a timeout."""
     logger.info("Stopping proxy server, saving to disc ..")
+
+    # Node debug console bridge (node_console.py): stop first, restoring any
+    # flags the operator's DBG session changed on the node — independent of
+    # UDP/BLE/SSE (its own TCP connection to the node's console), and
+    # `shutdown()` is already a bounded, non-raising best-effort call.
+    await ctx.node_console.shutdown()
 
     try:
         # Step 1: Clean up beacons

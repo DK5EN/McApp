@@ -33,7 +33,7 @@ from __future__ import annotations
 import copy
 import secrets
 from collections import deque
-from typing import Any
+from typing import Any, cast
 
 from .logging_setup import get_logger
 from .sse_handler import broadcast_verdict
@@ -68,6 +68,14 @@ class WireMonitor:
 
     def __init__(self) -> None:
         self._ring: deque[dict[str, Any]] = deque(maxlen=RING_MAXLEN)
+        # Node debug console lines (link == "console") live in their OWN ring,
+        # so a console session's ~200 B/s of output (node debug console
+        # bridge, `node_console.py`) can never evict RF frames from `_ring`
+        # — the two are independent capacities, not a shared budget. `seq`
+        # is still ONE shared counter across both rings (assigned in
+        # `capture()` before either ring is chosen), so `page()` can merge
+        # them back into one ordered stream.
+        self._console_ring: deque[dict[str, Any]] = deque(maxlen=RING_MAXLEN)
         # Random per-process token (contract: "a change means seq
         # restarted") — lets a reconnecting client detect a backend restart
         # instead of misreading a reset seq counter as a gap.
@@ -111,7 +119,8 @@ class WireMonitor:
                 "reason": reason,
                 "frame": copy.deepcopy(frame),
             }
-            self._ring.append(envelope)
+            ring = self._console_ring if link == "console" else self._ring
+            ring.append(envelope)
         except Exception:
             logger.exception(
                 "WireMonitor.capture failed to build/store envelope (link=%s dir=%s verdict=%s)",
@@ -139,8 +148,17 @@ class WireMonitor:
         than) and `after` (newer than) are mutually exclusive — the REST
         layer (`sse_routes/monitor.py`) rejects both given before this is
         ever called. Neither given returns the newest `limit` frames.
+
+        Merges the RF ring and the console ring (node debug console bridge,
+        `node_console.py`) back into ONE stream ordered by the shared `seq`
+        counter — the two rings exist only so console volume cannot evict RF
+        frames (see `__init__`), never as a visible split to callers of
+        `page()`.
         """
-        frames = list(self._ring)  # deque append order is oldest -> newest
+        # Both deques append in oldest -> newest order; merge on `seq` since
+        # each ring evicts independently, so neither is a suffix of the
+        # other's timeline.
+        frames = sorted((*self._ring, *self._console_ring), key=lambda f: cast("int", f["seq"]))
         if before is not None:
             older = [f for f in frames if f["seq"] < before]
             page_frames = older[-limit:] if limit > 0 else []
