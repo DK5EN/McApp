@@ -1,5 +1,78 @@
 # Release History
 
+## v2.0.14 (2026-09-24)
+
+The RF Monitor learns to read the node's own debug console, gets colour and icons, and passes
+the BITV contrast check in both themes. The link check no longer depends on the node's Extern-UDP
+being pointed at McApp. Schema stays at 32 and `SYSTEM_EPOCH` at 5, so there is no migration, no
+bootstrap convergence and no contract version change.
+
+### Highlights
+
+- **DBG button: the node's debug console inside the RF Monitor.** A new **DBG** toggle, left of
+  the MSG filter, connects McApp to the node's net console (TCP 2323). It switches on
+  `--loradebug` and `--txcapture` and streams every console line into the monitor as its own
+  highlighted row type. On stop, after 30 minutes, or when the service shuts down, the two
+  switches go back to exactly the state they were in. Only a switch this session turned on is
+  switched off, and the restore is only reported once the node's own `--info` confirms it. Tested
+  on DK5EN-98: both switches went off → on → off, confirmed by the node, and the console showed a
+  complete ping/pong exchange line by line. The console accepts one client at a time. While
+  another client holds it (a meshlogger run, for example), DBG reports "console busy" instead of
+  fighting for it.
+- **Colour and icons in the monitor.** Each frame type (MSG / POS / TEL / ACK / SYS / DBG) and
+  each path (UDP, BLE, LoRa, node, server) has its own colour. Every RSSI/SNR value gets Wi-Fi
+  bars from the SNR (above −4 dB three bars, above −8 two, above −12 one, otherwise none), and
+  every battery value gets a battery icon that turns amber at 33 % and red at 10 %.
+- **Link check without Extern-UDP.** The ping now goes out over BLE whenever BLE is connected. A
+  node with Extern-UDP switched off never reads the UDP socket, so the ping used to be silently
+  dropped while the dialog still showed "ping sent". The node's BLE copy of the ping supplies
+  its msg_id, and a pong counts whichever transport it arrives on. When no copy of the ping comes
+  back, a pong is still matched through the node's own ID, which is built into every msg_id the
+  node assigns. The firmware keeps the last step to itself for now. It shows a pong only on its
+  own display and does not pass it on over BLE, so a node without Extern-UDP still times out
+  until that firmware change lands. Measured 2026-09-24 on DK5EN-98 → DK5EN-1: McApp had the
+  ping's id 2 s after sending, the pong reached the node 6 s after transmission (−71 dBm / 6 dB),
+  and it went no further than the node's display.
+
+### Backend (MCProxy)
+
+- Node console bridge: `GET /api/monitor/console`, `POST /api/monitor/console/start` and
+  `POST /api/monitor/console/stop` (`stop` returns immediately). Status changes go out as the SSE
+  event `monitor:console`. Console lines are kept in their own ring buffer, so a busy console
+  can never push radio frames out of the monitor's history. Flags whose restore could not be
+  confirmed are listed in `pending_restore` and retried after 5, 30 and 60 seconds, and at the
+  next session.
+- Link check: the node's `I` register now supplies the node's ID. BLE frames are recognised under
+  both of their transport labels (`ble` and `ble_remote`). A pong carrying the server flag still
+  counts as reached over the internet, not over the air. A pong that arrives over BLE first is
+  reported at once, and its signal values are filled in if the UDP copy follows within 2 s.
+- Link check: a late answer to an earlier attempt, or a late signal copy for it, no longer ends
+  the attempt currently in flight as a timeout. The late-answer case has been present since
+  v2.0.13; the review before this release found it.
+- Classifier v5 (pulled from mc-chat): a message that merely mentions _WebDesk_ is chat, not a
+  software advert. The one-time reclassification runs at startup.
+- Dependencies refreshed (starlette 1.7.0, ruff 0.16.9), including the standalone `ble_service`
+  lock.
+
+### Frontend (webapp)
+
+- RF Monitor: coloured labels, battery and signal icons in rows, copies and the status bar, the
+  DBG toggle, and DBG rows with syntax highlighting. Console text is always rendered as plain
+  text, never as HTML.
+- Accessibility (BITV / WCAG AA). The active filter chips measured 4.43:1 in light mode and
+  now reach 6.02:1. Filtered rows used to be dimmed down to 2.15:1 (light) and 2.37:1 (dark).
+  They now keep full contrast and are marked with a warning-coloured stripe. A new test checks
+  every monitor colour pair in all three theme blocks: at least 4.5:1 for text, 3:1 for icons.
+- Dependencies refreshed (Vite 8.3.1, MapLibre GL 6.11.2, Lucide 1.48.0). TypeScript stays on 6.
+
+### Upgrade notes
+
+- If the node's console is password-protected, set `NODE_CONSOLE_PASSWORD` in
+  `/etc/mcapp/config.json`. The console host is the existing `MESHCOM_IOT_TARGET`. Without a
+  password nothing needs to be configured.
+- The link check needs one of two things to show a pong: Extern-UDP pointed at McApp (works as
+  before), or a firmware that forwards a pong addressed to the node over BLE (not released yet).
+
 ## v2.0.13 (2026-09-23)
 
 One new view and one reported bug. The RF Monitor shows every frame the node hears or sends,
