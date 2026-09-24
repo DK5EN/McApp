@@ -57,6 +57,9 @@ _MAX_HEX_ID_LEN = 16
 # unsigned 32-bit space both sides of the correlation compare live in.
 _MASK_32BIT = 0xFFFFFFFF
 
+# The 22 node-identity bits of a firmware msg_id — see node_prefix_of_msg_id.
+_NODE_PREFIX_MASK = 0x3FFFFF
+
 
 class LinkCheckKind(StrEnum):
     PING = "ping"
@@ -73,9 +76,10 @@ class LinkCheckFrame:
     origin: str
     """First comma-component of `src` — who originated the frame."""
     heard_from: str
-    """Last comma-component of `src` — who we actually heard on RF."""
+    """Last comma-component of the path — who we actually heard on RF."""
     hops: int
-    """`src.count(",")` — 0 means we heard the origin directly."""
+    """Relay count of the path (`src` on Extern-UDP, `via` on BLE) — 0
+    means we heard the origin directly."""
     msg_id: str | None
     """This frame's own id, 8-hex-digit STRING as received (not parsed)."""
     correlates_to: int | None
@@ -83,6 +87,9 @@ class LinkCheckFrame:
     rssi: int | None
     snr: float | None
     src_type: str
+    msg_server: bool = False
+    """BLE only: the firmware's "came via a gateway/server" flag (byte-5 bit
+    0x80) — the BLE equivalent of an Extern-UDP `src_type:"udp"` frame."""
 
 
 def is_link_check_payload(msg: object) -> bool:
@@ -187,10 +194,21 @@ def parse(message: dict[str, Any]) -> LinkCheckFrame | None:
 
     src = _as_str(message.get("src"))
     dst = _as_str(message.get("dst"))
-    parts = src.split(",")
+    src_type = _as_str(message.get("src_type"))
+    # A BLE frame's `src` is only the originator (`ble_protocol.split_path`);
+    # its relay path lives in `via`, which is that same path with our own
+    # callsign stripped — "ORIG" for a direct frame, "ORIG,R1" for one relay.
+    # That is exactly the shape an Extern-UDP `src` has, so the hop rules
+    # below apply unchanged.
+    path = src
+    if src_type == "ble":
+        via = _as_str(message.get("via"))
+        if via:
+            path = via
+    parts = path.split(",")
     origin = parts[0]
     heard_from = parts[-1]
-    hops = src.count(",")
+    hops = path.count(",")
 
     return LinkCheckFrame(
         kind=kind,
@@ -203,5 +221,27 @@ def parse(message: dict[str, Any]) -> LinkCheckFrame | None:
         correlates_to=correlates_to,
         rssi=_as_int(message.get("rssi")),
         snr=_as_float(message.get("snr")),
-        src_type=_as_str(message.get("src_type")),
+        src_type=src_type,
+        msg_server=message.get("msg_server") is True,
     )
+
+
+def node_prefix_of_msg_id(msg_id: int) -> int:
+    """The originating node's identity inside a firmware `msg_id`.
+
+    The firmware mints every id it originates as
+    `((_GW_ID & 0x3FFFFF) << 10) | counter` (loop_functions.cpp, the
+    `aprsmsg.msg_id` assignment), so the top 22 bits name the node and only
+    the low 10 bits are the 0-999 counter. The firmware itself compares the
+    two halves this way to decide whether an ACK is for one of its own
+    messages (`ack_attribution.h`, `(msgId >> 10) == (gwId & 0x3FFFFF)`).
+    """
+    return (msg_id >> 10) & _NODE_PREFIX_MASK
+
+
+def node_prefix_of_gw_id(gw_id: object) -> int | None:
+    """`_GW_ID` (the BLE `I` register's `ID`) reduced to the 22 bits a
+    `msg_id` carries; `None` for anything that is not a plain int."""
+    if isinstance(gw_id, bool) or not isinstance(gw_id, int):
+        return None
+    return gw_id & _NODE_PREFIX_MASK

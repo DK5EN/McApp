@@ -43,14 +43,21 @@ class _FakeRouter:
 
     def __init__(self) -> None:
         self.udp_sent: list[dict[str, Any]] = []
+        self.ble_sent: list[dict[str, Any]] = []
         self.events: list[dict[str, Any]] = []
         self.fail_targets: set[str] = set()
+        self.ble_client: Any = None
+
+    def get_protocol(self, name: str) -> Any:
+        return self.ble_client if name == "ble_client" else None
 
     async def publish(self, _source: str, topic: str, data: dict[str, Any]) -> None:
         if topic == "udp_message":
             if data.get("dst") in self.fail_targets:
                 raise OSError("simulated send failure")
             self.udp_sent.append(data)
+        elif topic == "ble_message":
+            self.ble_sent.append(data)
         elif topic == "linkcheck_event":
             self.events.append(data)
 
@@ -509,35 +516,290 @@ async def _test_udp_pong_then_lora_pong_resolves_with_rf_signal() -> list[tuple[
     return out
 
 
-async def _test_ble_pong_ignored() -> list[tuple[str, bool]]:
-    """A `src_type:"ble"` pong causes no state change: the "lora" copy resolves it later."""
+# DM3KS-12 field capture, 2026-09-24: its Extern-UDP pointed at a WebDesk PC,
+# so McApp never saw the "node" echo of ping x2EFB0228 and got the answer
+# `DM3KS-13>DM3KS-12:{pong}{788202024}` over BLE only. 788202024 == 0x2EFB0228.
+# The I-register ID is any value whose low 22 bits name that node (0x0BBEC0).
+_DM3KS_GW_ID = 0xF6CBBEC0
+_DM3KS_PONG_TOKEN = 788202024
+_DK5EN_GW_ID = 0x0406B878  # --info "...ID 0406B878"; echo ids 1AE1E0xx
+
+
+def _ble_pong(  # noqa: PLR0913 - test fixture builder, all but src/token are kw-only
+    src: str,
+    token: int,
+    *,
+    dst: str = "DK5EN-98",
+    via: str | None = None,
+    msg_server: bool = False,
+    msg_id: str = "0D1F90CC",
+) -> dict[str, Any]:
+    """What `ble_protocol.transform_msg` emits: no rssi/snr, path in `via`."""
+    return {
+        "type": "msg",
+        "src": src,
+        "dst": dst,
+        "msg": f"{{pong}}{{{token}}}",
+        "msg_id": msg_id,
+        "src_type": "ble",
+        "via": via if via is not None else src,
+        "msg_server": msg_server,
+    }
+
+
+def _i_register(gw_id: int, call: str = "DK5EN-98") -> dict[str, Any]:
+    return {"TYP": "I", "ID": gw_id, "CALL": call, "src_type": "BLE"}
+
+
+async def _start(h: _Harness, target: str, count: int = 1) -> bool:
+    ok, _msg = await h.start_link_check(target, count, h.my_callsign)
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    return ok
+
+
+async def _test_ble_only_pong_resolves_via_node_id() -> list[tuple[str, bool]]:
+    """The DM3KS-12 regression: no echo, pong over BLE only -> completed."""
+    out: list[tuple[str, bool]] = []
+    h = _make_harness("DM3KS-12")
+    h.linkcheck_timeout = 2.0
+    h.linkcheck_signal_grace = 0.01
+    h.note_linkcheck_node_register(_i_register(_DM3KS_GW_ID, "DM3KS-12"))
+
+    out.append(("ble-only: start accepted", await _start(h, "DM3KS-13")))
+    await h.handle_link_check_frame(_ble_pong("DM3KS-13", _DM3KS_PONG_TOKEN, dst="DM3KS-12"))
+    await _await_driver(h, "DM3KS-13")
+
+    results = h.message_router.results_for("DM3KS-13")
+    out.append(("ble-only: exactly one result event", len(results) == 1))
+    if results:
+        r = results[0]
+        out.append(("ble-only: hops == 0", r["hops"] == 0))
+        out.append(("ble-only: no rssi/snr (BLE has none)", r["rssi"] is None and r["snr"] is None))
+        out.append(("ble-only: not an internet reply", r["internet_reply"] is False))
+    done = h.message_router.done_for("DM3KS-13")
+    out.append(("ble-only: completed", done is not None and done["status"] == "completed"))
+    return out
+
+
+async def _test_ble_pong_with_echo_resolves() -> list[tuple[str, bool]]:
+    """With the echo known, a BLE copy resolves by exact id like a lora one."""
+    out: list[tuple[str, bool]] = []
+    h = _make_harness()
+    h.linkcheck_timeout = 2.0
+    h.linkcheck_signal_grace = 0.01
+
+    out.append(("ble+echo: start accepted", await _start(h, "DL2JA-2")))
+    await h.handle_link_check_frame(_echo("DL2JA-2", _REAL_ECHO_MSG_ID))
+    await h.handle_link_check_frame(_ble_pong("DL2JA-2", _REAL_PONG_TOKEN))
+    session = h.link_sessions.get("DL2JA-2")
+    attempt = session.attempts[-1] if session and session.attempts else None
+    out.append(("ble+echo: resolved", attempt is not None and attempt.resolved))
+    out.append(
+        ("ble+echo: correlation echo", attempt is not None and attempt.correlation == "echo")
+    )
+    await _await_driver(h, "DL2JA-2")
+    done = h.message_router.done_for("DL2JA-2")
+    out.append(("ble+echo: completed", done is not None and done["status"] == "completed"))
+    return out
+
+
+async def _test_ble_then_lora_adds_signal() -> list[tuple[str, bool]]:
+    """BLE first (no signal), the Extern-UDP lora copy inside the grace window
+    adds RSSI/SNR and ends the wait at once."""
+    out: list[tuple[str, bool]] = []
+    h = _make_harness()
+    h.linkcheck_timeout = 5.0
+    h.linkcheck_signal_grace = 3.0
+
+    out.append(("ble then lora: start accepted", await _start(h, "DL2JA-2")))
+    await h.handle_link_check_frame(_echo("DL2JA-2", _REAL_ECHO_MSG_ID))
+    await h.handle_link_check_frame(_ble_pong("DL2JA-2", _REAL_PONG_TOKEN))
+    first = list(h.message_router.results_for("DL2JA-2"))
+    out.append(("ble then lora: BLE copy reported at once", len(first) == 1))
+    out.append(("ble then lora: still waiting inside grace", "DL2JA-2" in h.link_sessions))
+
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    await h.handle_link_check_frame(
+        _pong("DL2JA-2", _REAL_PONG_TOKEN, rssi=_REAL_RSSI, snr=_REAL_SNR)
+    )
+    await _await_driver(h, "DL2JA-2", max_wait=2.0)
+    out.append(("ble then lora: lora copy ends the grace early", loop.time() - t0 < 1.0))
+
+    results = h.message_router.results_for("DL2JA-2")
+    out.append(("ble then lora: second result event", len(results) == 2))
+    if len(results) == 2:
+        out.append(("ble then lora: same seq", results[0]["seq"] == results[1]["seq"]))
+        out.append(("ble then lora: rssi filled in", results[1]["rssi"] == _REAL_RSSI))
+        out.append(("ble then lora: snr filled in", results[1]["snr"] == _REAL_SNR))
+    done = h.message_router.done_for("DL2JA-2")
+    out.append(("ble then lora: received counted once", done is not None and done["received"] == 1))
+    return out
+
+
+async def _test_lora_then_ble_is_duplicate() -> list[tuple[str, bool]]:
+    out: list[tuple[str, bool]] = []
+    h = _make_harness()
+    h.linkcheck_timeout = 2.0
+
+    out.append(("lora then ble: start accepted", await _start(h, "DL2JA-2")))
+    await h.handle_link_check_frame(_echo("DL2JA-2", _REAL_ECHO_MSG_ID))
+    await h.handle_link_check_frame(
+        _pong("DL2JA-2", _REAL_PONG_TOKEN, rssi=_REAL_RSSI, snr=_REAL_SNR)
+    )
+    await h.handle_link_check_frame(_ble_pong("DL2JA-2", _REAL_PONG_TOKEN))
+    await _await_driver(h, "DL2JA-2")
+    results = h.message_router.results_for("DL2JA-2")
+    out.append(("lora then ble: one result only", len(results) == 1))
+    out.append(("lora then ble: signal kept", bool(results) and results[0]["rssi"] == _REAL_RSSI))
+    return out
+
+
+async def _test_ble_server_pong_is_internet_reply() -> list[tuple[str, bool]]:
+    """A BLE copy carrying the server flag is the internet path, not RF."""
     out: list[tuple[str, bool]] = []
     h = _make_harness()
     h.linkcheck_timeout = 0.05
+    h.note_linkcheck_node_register(_i_register(_DK5EN_GW_ID))
 
-    ok, _msg = await h.start_link_check("DL2JA-2", 1, "DK5EN-98")
-    out.append(("ble pong: start accepted", ok))
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
-
-    await h.handle_link_check_frame(_echo("DL2JA-2", _REAL_ECHO_MSG_ID))
-    await h.handle_link_check_frame(
-        _pong("DL2JA-2", _REAL_PONG_TOKEN, src_type="ble", rssi=_REAL_RSSI, snr=_REAL_SNR)
-    )
-
+    out.append(("ble server: start accepted", await _start(h, "DL2JA-2")))
+    await h.handle_link_check_frame(_ble_pong("DL2JA-2", _REAL_PONG_TOKEN, msg_server=True))
     session = h.link_sessions.get("DL2JA-2")
     attempt = session.attempts[-1] if session and session.attempts else None
-    out.append(("ble pong: attempt not resolved", attempt is not None and not attempt.resolved))
-    out.append(
-        ("ble pong: internet_reply stays False", attempt is not None and not attempt.internet_reply)
-    )
-    out.append(("ble pong: no result event", len(h.message_router.results_for("DL2JA-2")) == 0))
-
-    await _await_driver(h, "DL2JA-2", max_wait=2.0)
+    out.append(("ble server: not resolved", attempt is not None and not attempt.resolved))
+    out.append(("ble server: internet_reply", attempt is not None and attempt.internet_reply))
+    await _await_driver(h, "DL2JA-2")
     done = h.message_router.done_for("DL2JA-2")
+    out.append(("ble server: timeout", done is not None and done["status"] == "timeout"))
+    return out
+
+
+async def _test_node_id_needs_our_prefix_and_target() -> list[tuple[str, bool]]:
+    """No echo: a pong minted by ANOTHER node, one from a station we are not
+    pinging, and any pong before the I register is known are all ignored."""
+    out: list[tuple[str, bool]] = []
+    h = _make_harness("DM3KS-12")
+    h.linkcheck_timeout = 0.1
+
+    out.append(("node id guards: start accepted", await _start(h, "DM3KS-13")))
+    # Prefix still unknown: even the right pong cannot be attributed.
+    await h.handle_link_check_frame(_ble_pong("DM3KS-13", _DM3KS_PONG_TOKEN, dst="DM3KS-12"))
+    out.append(("node id guards: unknown prefix -> no result", not h.message_router.results_for()))
+
+    h.note_linkcheck_node_register(_i_register(_DK5EN_GW_ID, "DM3KS-12"))  # wrong node
+    await h.handle_link_check_frame(_ble_pong("DM3KS-13", _DM3KS_PONG_TOKEN, dst="DM3KS-12"))
+    out.append(("node id guards: foreign prefix -> no result", not h.message_router.results_for()))
+
+    h.note_linkcheck_node_register(_i_register(_DM3KS_GW_ID, "DM3KS-12"))
+    await h.handle_link_check_frame(_ble_pong("DL9XX-1", _DM3KS_PONG_TOKEN, dst="DM3KS-12"))
+    out.append(("node id guards: other origin -> no result", not h.message_router.results_for()))
+
+    await _await_driver(h, "DM3KS-13")
+    done = h.message_router.done_for("DM3KS-13")
+    out.append(("node id guards: timeout", done is not None and done["status"] == "timeout"))
+    return out
+
+
+async def _test_node_id_token_never_counts_twice() -> list[tuple[str, bool]]:
+    """No echo, two attempts: the same pong token arriving again (a copy, or
+    an answer to the firmware's retransmission of ping 1) must not resolve
+    attempt 2, nor a later session."""
+    out: list[tuple[str, bool]] = []
+    h = _make_harness("DM3KS-12")
+    h.linkcheck_timeout = 0.3
+    h.linkcheck_signal_grace = 0.01
+    h.note_linkcheck_node_register(_i_register(_DM3KS_GW_ID, "DM3KS-12"))
+
+    out.append(("token reuse: start accepted", await _start(h, "DM3KS-13", count=2)))
+    pong = _ble_pong("DM3KS-13", _DM3KS_PONG_TOKEN, dst="DM3KS-12")
+    await h.handle_link_check_frame(pong)
+
+    for _ in range(100):  # wait for attempt 2 to be sent
+        session = h.link_sessions.get("DM3KS-13")
+        if session is not None and len(session.attempts) == 2:
+            break
+        await asyncio.sleep(0.01)
+    await h.handle_link_check_frame(pong)
+    await _await_driver(h, "DM3KS-13")
+    done = h.message_router.done_for("DM3KS-13")
+    out.append(("token reuse: only attempt 1 counted", done is not None and done["received"] == 1))
+
+    h._linkcheck_cooldown_until.clear()
+    out.append(("token reuse: second session accepted", await _start(h, "DM3KS-13")))
+    await h.handle_link_check_frame(pong)
+    session = h.link_sessions.get("DM3KS-13")
+    attempt = session.attempts[-1] if session and session.attempts else None
     out.append(
-        ("ble pong: done status == timeout", done is not None and done["status"] == "timeout")
+        (
+            "token reuse: old token ignored by next session",
+            attempt is not None and not attempt.resolved,
+        )
     )
+    await _await_driver(h, "DM3KS-13")
+    return out
+
+
+async def _test_echo_teaches_node_prefix() -> list[tuple[str, bool]]:
+    h = _make_harness()
+    await h.handle_link_check_frame(_echo("DL2JA-2", _REAL_ECHO_MSG_ID))
+    return [
+        (
+            "echo teaches node prefix",
+            h._linkcheck_node_prefix == (_DK5EN_GW_ID & 0x3FFFFF),
+        )
+    ]
+
+
+async def _test_routing_feeds_i_register() -> list[tuple[str, bool]]:
+    """The real `_message_handler` hands our node's BLE `I` register to the
+    link check — without that hook the node-id path never has a prefix."""
+    from .handler import CommandHandler
+
+    h = CommandHandler(message_router=None, storage_handler=None, my_callsign="DM3KS-12")
+    await h._message_handler(
+        {"source": "ble", "type": "ble_notification", "data": _i_register(_DM3KS_GW_ID, "DM3KS-12")}
+    )
+    return [("routing: I register teaches node prefix", h._linkcheck_node_prefix == 0x0BBEC0)]
+
+
+class _BleClientProperty:
+    def __init__(self, connected: bool) -> None:
+        self.is_connected = connected
+
+
+class _BleClientMethod:
+    def __init__(self, connected: bool) -> None:
+        self._connected = connected
+
+    def is_connected(self) -> bool:
+        return self._connected
+
+
+async def _test_ping_goes_over_ble_when_connected() -> list[tuple[str, bool]]:
+    """With EXTUDP off the node never reads UDP, so a connected BLE client
+    must carry the ping; without one it stays on UDP."""
+    out: list[tuple[str, bool]] = []
+    cases: tuple[tuple[str, Any, str], ...] = (
+        ("no ble client", None, "udp"),
+        ("ble disconnected", _BleClientProperty(False), "udp"),
+        ("ble connected (property)", _BleClientProperty(True), "ble"),
+        ("ble connected (method)", _BleClientMethod(True), "ble"),
+    )
+    for label, client, expected in cases:
+        h = _make_harness()
+        h.linkcheck_timeout = 0.02
+        h.message_router.ble_client = client
+        await _start(h, "DL2JA-2")
+        await _await_driver(h, "DL2JA-2")
+        sent_ble = [m for m in h.message_router.ble_sent if m.get("dst") == "DL2JA-2"]
+        sent_udp = [m for m in h.message_router.udp_sent if m.get("dst") == "DL2JA-2"]
+        got = "ble" if sent_ble and not sent_udp else "udp" if sent_udp and not sent_ble else "?"
+        out.append((f"send transport: {label} -> {expected}", got == expected))
+        if sent_ble:
+            out.append(
+                (f"send transport: {label} payload is the ping", sent_ble[0]["msg"] == "{ping}")
+            )
     return out
 
 
@@ -559,7 +821,16 @@ async def _collect_all() -> list[tuple[str, bool]]:
         _test_relayed_pong_reports_hops,
         _test_udp_pong_does_not_resolve,
         _test_udp_pong_then_lora_pong_resolves_with_rf_signal,
-        _test_ble_pong_ignored,
+        _test_ble_only_pong_resolves_via_node_id,
+        _test_ble_pong_with_echo_resolves,
+        _test_ble_then_lora_adds_signal,
+        _test_lora_then_ble_is_duplicate,
+        _test_ble_server_pong_is_internet_reply,
+        _test_node_id_needs_our_prefix_and_target,
+        _test_node_id_token_never_counts_twice,
+        _test_echo_teaches_node_prefix,
+        _test_routing_feeds_i_register,
+        _test_ping_goes_over_ble_when_connected,
     ):
         try:
             results.extend(await test_fn())
