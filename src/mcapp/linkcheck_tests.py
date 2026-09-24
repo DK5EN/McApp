@@ -421,6 +421,16 @@ def _test_ble_pong_path_and_server_flag() -> _RecordFn_Results:
             ("ble relayed pong: heard_from is the relay", relayed.heard_from == "DB0ED-99")
         )
         results.append(("ble relayed pong: msg_server True", relayed.msg_server is True))
+    live = parse(
+        {
+            "src": "DK5EN-1",
+            "via": "DK5EN-1,DK5EN-2",
+            "dst": "DK5EN-98",
+            "msg": "{pong}{1}",
+            "src_type": "ble_remote",
+        }
+    )
+    results.append(("ble_remote pong: path from via", live is not None and live.hops == 1))
     # A UDP frame's `via`, if one ever carried such a key, must not replace `src`.
     udp = parse(
         {"src": "A-1,B-2", "via": "X-9", "dst": "C-3", "msg": "{pong}{1}", "src_type": "lora"}

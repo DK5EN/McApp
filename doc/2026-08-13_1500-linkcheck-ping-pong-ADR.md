@@ -457,7 +457,10 @@ McApp now accepts a pong from either transport and correlates without the echo:
   off the node never reads the UDP socket (`esp32_main.cpp`: `if(bEXTUDP) getExternUDP();`), so a
   UDP-only sender transmitted nothing while the modal still said "ping sent" (DK5EN-98 -> DK5EN-1,
   2026-09-24, EXTUDP off). A BLE-sent ping is still echoed to Extern-UDP when the EXT IP points
-  here, so the exact correlation is kept wherever it was available.
+  here, and the node also hands it back over BLE (observed live: `{ping}{487`, msg_id `1AE1E1E7`,
+  `src == DK5EN-98`, no path, `src_type:"ble_remote"`), so the exact correlation survives EXTUDP
+  off. BLE frames arrive as `"ble_remote"` (restamped by `ble_client_remote`); `"ble"` is accepted
+  too.
 
 - **An RF pong is an RF pong regardless of transport.** Extern-UDP `src_type:"lora"` and a BLE
   copy without the server flag (`msg_server`, byte-5 bit 0x80) both resolve the attempt. Extern-UDP

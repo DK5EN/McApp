@@ -60,6 +60,11 @@ _MASK_32BIT = 0xFFFFFFFF
 # The 22 node-identity bits of a firmware msg_id — see node_prefix_of_msg_id.
 _NODE_PREFIX_MASK = 0x3FFFFF
 
+# Every `src_type` a BLE-delivered frame can carry: `ble_protocol` stamps
+# "ble", and `ble_client_remote._finalize_transformed_output` restamps every
+# data frame "ble_remote" — the value live traffic actually has.
+BLE_SRC_TYPES = frozenset({"ble", "ble_remote"})
+
 
 class LinkCheckKind(StrEnum):
     PING = "ping"
@@ -201,7 +206,7 @@ def parse(message: dict[str, Any]) -> LinkCheckFrame | None:
     # That is exactly the shape an Extern-UDP `src` has, so the hop rules
     # below apply unchanged.
     path = src
-    if src_type == "ble":
+    if src_type in BLE_SRC_TYPES:
         via = _as_str(message.get("via"))
         if via:
             path = via

@@ -533,15 +533,17 @@ def _ble_pong(  # noqa: PLR0913 - test fixture builder, all but src/token are kw
     via: str | None = None,
     msg_server: bool = False,
     msg_id: str = "0D1F90CC",
+    src_type: str = "ble_remote",
 ) -> dict[str, Any]:
-    """What `ble_protocol.transform_msg` emits: no rssi/snr, path in `via`."""
+    """What reaches the handler over BLE: no rssi/snr, path in `via`, and
+    `src_type` restamped "ble_remote" by `ble_client_remote` (live value)."""
     return {
         "type": "msg",
         "src": src,
         "dst": dst,
         "msg": f"{{pong}}{{{token}}}",
         "msg_id": msg_id,
-        "src_type": "ble",
+        "src_type": src_type,
         "via": via if via is not None else src,
         "msg_server": msg_server,
     }
@@ -803,6 +805,83 @@ async def _test_ping_goes_over_ble_when_connected() -> list[tuple[str, bool]]:
     return out
 
 
+# DK5EN-98 live capture 2026-09-24 (v2.0.14-dev.2, EXTUDP off): the node's BLE
+# copy of our own BLE-sent ping, verbatim from /api/monitor/frames.
+_BLE_ECHO_FRAME: dict[str, Any] = {
+    "app_offline": False,
+    "dest": "DK5EN-1",
+    "dst": "DK5EN-1",
+    "fcs_ok": True,
+    "hw_id": 43,
+    "message": ":{ping}{487",
+    "msg": "{ping}{487",
+    "msg_id": "1AE1E1E7",
+    "msg_server": False,
+    "path": "DK5EN-98>",
+    "src": "DK5EN-98",
+    "src_type": "ble_remote",
+    "transformer": "msg",
+    "type": "msg",
+    "via": "",
+}
+
+
+async def _test_ble_echo_teaches_ping_id() -> list[tuple[str, bool]]:
+    """With EXTUDP off the only echo is the node's BLE copy of our ping."""
+    out: list[tuple[str, bool]] = []
+    h = _make_harness()
+    h.linkcheck_timeout = 2.0
+    h.linkcheck_signal_grace = 0.01
+
+    out.append(("ble echo: start accepted", await _start(h, "DK5EN-1")))
+    await h.handle_link_check_frame(dict(_BLE_ECHO_FRAME))
+    session = h.link_sessions.get("DK5EN-1")
+    attempt = session.attempts[-1] if session and session.attempts else None
+    out.append(
+        ("ble echo: ping id learned exactly", attempt is not None and attempt.ping_id == 0x1AE1E1E7)
+    )
+    out.append(
+        ("ble echo: node prefix learned", h._linkcheck_node_prefix == (_DK5EN_GW_ID & 0x3FFFFF))
+    )
+    await h.handle_link_check_frame(_ble_pong("DK5EN-1", 0x1AE1E1E7))
+    await _await_driver(h, "DK5EN-1")
+    out.append(
+        ("ble echo: correlated by echo", attempt is not None and attempt.correlation == "echo")
+    )
+    done = h.message_router.done_for("DK5EN-1")
+    out.append(("ble echo: completed", done is not None and done["status"] == "completed"))
+    return out
+
+
+async def _test_foreign_ble_ping_is_not_an_echo() -> list[tuple[str, bool]]:
+    """Someone else pinging over BLE must not set our attempt's id."""
+    h = _make_harness()
+    h.linkcheck_timeout = 0.05
+    await _start(h, "DK5EN-1")
+    foreign = dict(_BLE_ECHO_FRAME, src="DL9XX-1", path="DL9XX-1,DK5EN-98>", via="DL9XX-1")
+    await h.handle_link_check_frame(foreign)
+    session = h.link_sessions.get("DK5EN-1")
+    attempt = session.attempts[-1] if session and session.attempts else None
+    ok = attempt is not None and attempt.ping_id is None
+    await _await_driver(h, "DK5EN-1")
+    return [("foreign ble ping: not taken as our echo", ok)]
+
+
+async def _test_plain_ble_src_type_also_counts() -> list[tuple[str, bool]]:
+    """`ble_protocol`'s own stamp ("ble") is accepted like "ble_remote"."""
+    h = _make_harness("DM3KS-12")
+    h.linkcheck_timeout = 2.0
+    h.linkcheck_signal_grace = 0.01
+    h.note_linkcheck_node_register(_i_register(_DM3KS_GW_ID, "DM3KS-12"))
+    await _start(h, "DM3KS-13")
+    await h.handle_link_check_frame(
+        _ble_pong("DM3KS-13", _DM3KS_PONG_TOKEN, dst="DM3KS-12", src_type="ble")
+    )
+    await _await_driver(h, "DM3KS-13")
+    done = h.message_router.done_for("DM3KS-13")
+    return [("src_type ble: completed", done is not None and done["status"] == "completed")]
+
+
 async def _collect_all() -> list[tuple[str, bool]]:
     results: list[tuple[str, bool]] = []
     for test_fn in (
@@ -831,6 +910,9 @@ async def _collect_all() -> list[tuple[str, bool]]:
         _test_echo_teaches_node_prefix,
         _test_routing_feeds_i_register,
         _test_ping_goes_over_ble_when_connected,
+        _test_ble_echo_teaches_ping_id,
+        _test_foreign_ble_ping_is_not_an_echo,
+        _test_plain_ble_src_type_also_counts,
     ):
         try:
             results.extend(await test_fn())

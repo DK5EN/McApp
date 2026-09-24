@@ -298,7 +298,9 @@ feature. Design and the on-air measurements: `doc/2026-08-13_1500-linkcheck-ping
   starting `{CET}`/`{MCP}`/`{SET}`). Caps are enforced server-side; the endpoint has no auth.
 - **We cannot ping ourselves** — the firmware refuses a DM to its own callsign.
 - **The ping goes over BLE when BLE is connected, else UDP** (ADR §8). With EXTUDP off the node
-  never reads UDP, so a UDP-sent ping is silently never transmitted.
+  never reads UDP, so a UDP-sent ping is silently never transmitted. The node echoes a BLE-sent
+  ping back over BLE (`src` == our callsign) with its real msg_id. Live BLE frames carry
+  `src_type:"ble_remote"`, not `"ble"` — test fixtures must use it.
 - **A pong counts from either transport; the echo is optional** (ADR §8, 2026-09-24). BLE copy
   without `msg_server` = RF, with it = internet path. Without the Extern-UDP echo the pong is
   matched through our node's id — the top 22 bits of every firmware msg_id, learned from the BLE

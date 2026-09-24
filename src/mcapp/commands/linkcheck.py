@@ -15,11 +15,12 @@ and `linkcheck.normalise_id()` (../linkcheck.py) already do the hex/decimal
 and sign normalisation; this module only tracks which attempt is waiting for
 which id.
 
-That echo only exists on Extern-UDP, and only when the node's EXT IP points
-at THIS box. The ping itself goes out over BLE whenever a BLE client is
-connected (`_linkcheck_send_topic`), so it is transmitted even with EXTUDP
-off; the pong can then only reach us over BLE, and there is no echo. For that
-case a pong is also accepted when it answers a ping minted BY OUR NODE: every firmware
+The Extern-UDP echo only exists when the node's EXT IP points at THIS box.
+The ping itself goes out over BLE whenever a BLE client is connected
+(`_linkcheck_send_topic`), so it is transmitted even with EXTUDP off, and the
+node then hands it back over BLE as well — `_is_own_ping_echo` takes either
+copy. Should neither echo arrive, a pong is also accepted when it answers a
+ping minted BY OUR NODE: every firmware
 msg_id carries `_GW_ID & 0x3FFFFF` in its top 22 bits, and we know our node's
 `_GW_ID` from the BLE `I` register (or from any echo). See
 `_match_linkcheck_attempt` for the exact rule and what it cannot tell apart.
@@ -102,7 +103,7 @@ def _pong_path(frame: linkcheck.LinkCheckFrame) -> _PongPath | None:
         return _PongPath.RF_SIGNAL
     if frame.src_type == "udp":
         return _PongPath.INTERNET
-    if frame.src_type == "ble":
+    if frame.src_type in linkcheck.BLE_SRC_TYPES:
         return _PongPath.INTERNET if frame.msg_server else _PongPath.RF
     return None
 
@@ -317,7 +318,7 @@ class LinkCheckMixin(CommandHandlerBase):
             if frame is None:
                 return
 
-            if frame.kind is linkcheck.LinkCheckKind.PING and frame.src_type == "node":
+            if frame.kind is linkcheck.LinkCheckKind.PING and self._is_own_ping_echo(frame):
                 self._handle_linkcheck_echo(frame)
             elif frame.kind is linkcheck.LinkCheckKind.PONG:
                 await self._handle_linkcheck_pong(frame)
@@ -354,6 +355,22 @@ class LinkCheckMixin(CommandHandlerBase):
         self._linkcheck_cooldown_until.clear()
 
     # ── Internal: correlation ────────────────────────────────────────────
+
+    def _is_own_ping_echo(self, frame: linkcheck.LinkCheckFrame) -> bool:
+        """Our node handing our own ping back with its real msg_id.
+
+        Two shapes: the Extern-UDP `src_type:"node"` echo, and — for a ping
+        sent over BLE — the node's BLE copy of it (`src` == our callsign, no
+        path; observed live 2026-09-24 on DK5EN-98 as `{ping}{487`, msg_id
+        1AE1E1E7, `src_type:"ble_remote"`). A `{ping}` from any other station
+        over BLE is someone pinging us, never an echo.
+        """
+        if frame.src_type == "node":
+            return True
+        return (
+            frame.src_type in linkcheck.BLE_SRC_TYPES
+            and frame.origin.strip().upper() == str(self.my_callsign).strip().upper()
+        )
 
     def _handle_linkcheck_echo(self, frame: linkcheck.LinkCheckFrame) -> None:
         """A `src_type:"node"` echo of our own outgoing ping: learn its msg_id.
