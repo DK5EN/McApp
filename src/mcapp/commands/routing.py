@@ -19,8 +19,10 @@ class RoutingMixin(CommandHandlerBase):
 
         # Our own node's BLE "I" register names its _GW_ID, which the link
         # check needs to recognise a pong answering a ping from this node when
-        # no Extern-UDP echo reaches us (commands/linkcheck.py).
-        if message_data.get("TYP") == "I":
+        # no Extern-UDP echo reaches us (commands/linkcheck.py). BLE only:
+        # :1799 is unauthenticated, and a datagram shaped like the register
+        # must not re-teach the node's identity.
+        if message_data.get("TYP") == "I" and routed_message.get("source") == "ble":
             self.note_linkcheck_node_register(message_data)
             return
 

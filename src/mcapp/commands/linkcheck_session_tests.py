@@ -882,6 +882,97 @@ async def _test_plain_ble_src_type_also_counts() -> list[tuple[str, bool]]:
     return [("src_type ble: completed", done is not None and done["status"] == "completed")]
 
 
+async def _wait_for_attempt(h: _Harness, target: str, n: int) -> bool:
+    for _ in range(200):
+        session = h.link_sessions.get(target)
+        if session is not None and len(session.attempts) >= n:
+            return True
+        await asyncio.sleep(0.005)
+    return False
+
+
+async def _test_late_signal_copy_does_not_end_next_attempt() -> list[tuple[str, bool]]:
+    """Advisor finding 1: the Extern-UDP copy of attempt 1's pong, arriving
+    after attempt 2 was sent, adds its signal to attempt 1 and must NOT wake
+    attempt 2 — that used to end attempt 2 at once as a timeout."""
+    out: list[tuple[str, bool]] = []
+    h = _make_harness()
+    h.linkcheck_timeout = 0.4
+    h.linkcheck_signal_grace = 0.02
+    await _start(h, "DL2JA-2", count=2)
+    await h.handle_link_check_frame(_echo("DL2JA-2", _REAL_ECHO_MSG_ID))
+    await h.handle_link_check_frame(_ble_pong("DL2JA-2", _REAL_PONG_TOKEN))
+    out.append(("late signal: attempt 2 sent", await _wait_for_attempt(h, "DL2JA-2", 2)))
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    await h.handle_link_check_frame(
+        _pong("DL2JA-2", _REAL_PONG_TOKEN, rssi=_REAL_RSSI, snr=_REAL_SNR)
+    )
+    await _await_driver(h, "DL2JA-2")
+    out.append(("late signal: attempt 2 ran its full timeout", loop.time() - t0 >= 0.3))
+    results = h.message_router.results_for("DL2JA-2")
+    out.append(
+        (
+            "late signal: attempt 1 got its signal",
+            bool(results) and results[-1]["rssi"] == _REAL_RSSI,
+        )
+    )
+    done = h.message_router.done_for("DL2JA-2")
+    out.append(
+        (
+            "late signal: sent 2, received 1",
+            done is not None and (done["sent"], done["received"]) == (2, 1),
+        )
+    )
+    return out
+
+
+async def _test_late_pong_does_not_end_next_attempt() -> list[tuple[str, bool]]:
+    """Advisor finding 2 (pre-existing since v2.0.13): a late pong for timed-out
+    attempt 1 is reported `late`, and must not end attempt 2 early."""
+    out: list[tuple[str, bool]] = []
+    h = _make_harness()
+    h.linkcheck_timeout = 0.3
+    await _start(h, "DL2JA-2", count=2)
+    await h.handle_link_check_frame(_echo("DL2JA-2", _REAL_ECHO_MSG_ID))
+    out.append(("late pong: attempt 2 sent", await _wait_for_attempt(h, "DL2JA-2", 2)))
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    await h.handle_link_check_frame(
+        _pong("DL2JA-2", _REAL_PONG_TOKEN, rssi=_REAL_RSSI, snr=_REAL_SNR)
+    )
+    results = h.message_router.results_for("DL2JA-2")
+    out.append(("late pong: reported late", bool(results) and results[-1]["late"] is True))
+    await _await_driver(h, "DL2JA-2")
+    out.append(("late pong: attempt 2 ran its full timeout", loop.time() - t0 >= 0.2))
+    return out
+
+
+async def _test_forged_udp_register_is_ignored() -> list[tuple[str, bool]]:
+    """Advisor finding 3: only the BLE `I` register may teach the node id —
+    a :1799 datagram of the same shape must not."""
+    from .handler import CommandHandler
+
+    h = CommandHandler(message_router=None, storage_handler=None, my_callsign="DM3KS-12")
+    await h._message_handler(
+        {"source": "udp", "type": "mesh_message", "data": _i_register(_DM3KS_GW_ID, "DM3KS-12")}
+    )
+    return [("routing: UDP-sourced I register ignored", h._linkcheck_node_prefix is None)]
+
+
+async def _test_node_id_pong_must_be_addressed_to_us() -> list[tuple[str, bool]]:
+    h = _make_harness("DM3KS-12")
+    h.linkcheck_timeout = 0.05
+    h.note_linkcheck_node_register(_i_register(_DM3KS_GW_ID, "DM3KS-12"))
+    await _start(h, "DM3KS-13")
+    await h.handle_link_check_frame(_ble_pong("DM3KS-13", _DM3KS_PONG_TOKEN, dst="OE9XYZ-1"))
+    session = h.link_sessions.get("DM3KS-13")
+    attempt = session.attempts[-1] if session and session.attempts else None
+    ok = attempt is not None and not attempt.resolved
+    await _await_driver(h, "DM3KS-13")
+    return [("node id: pong to another station ignored", ok)]
+
+
 async def _collect_all() -> list[tuple[str, bool]]:
     results: list[tuple[str, bool]] = []
     for test_fn in (
@@ -913,6 +1004,10 @@ async def _collect_all() -> list[tuple[str, bool]]:
         _test_ble_echo_teaches_ping_id,
         _test_foreign_ble_ping_is_not_an_echo,
         _test_plain_ble_src_type_also_counts,
+        _test_late_signal_copy_does_not_end_next_attempt,
+        _test_late_pong_does_not_end_next_attempt,
+        _test_forged_udp_register_is_ignored,
+        _test_node_id_pong_must_be_addressed_to_us,
     ):
         try:
             results.extend(await test_fn())

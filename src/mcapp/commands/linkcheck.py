@@ -139,6 +139,11 @@ class LinkCheckAttempt:
     # Pending "wake the driver" timer while a signal-less BLE resolve waits
     # for the Extern-UDP copy (LINKCHECK_SIGNAL_GRACE_S).
     grace_handle: asyncio.TimerHandle | None = None
+    # Set by the driver only while it is waiting on THIS attempt. Per attempt,
+    # never per target: a late pong (or a late signal copy) for an attempt
+    # that already ended must not wake the attempt now in flight, which would
+    # end it at once as a spurious timeout.
+    wake: asyncio.Event | None = None
 
 
 def _cancel_grace(attempt: LinkCheckAttempt) -> None:
@@ -169,11 +174,6 @@ class LinkCheckMixin(CommandHandlerBase):
         # time.monotonic() end-of-cooldown per target; never wall-clock, so an
         # NTP step can't shorten or extend a cooldown.
         self._linkcheck_cooldown_until: dict[str, float] = {}
-        # One asyncio.Event per target with an in-flight attempt, so a pong
-        # (or the timeout) can wake the driver loop immediately instead of
-        # polling. Attempts within one session are strictly sequential, so at
-        # most one entry per target exists at any time.
-        self._linkcheck_wake: dict[str, asyncio.Event] = {}
         self.linkcheck_signal_grace = LINKCHECK_SIGNAL_GRACE_S
         # Our node's `_GW_ID & 0x3FFFFF`, i.e. the top 22 bits of every msg_id
         # it mints. Learned from the BLE `I` register or from any echo; None
@@ -351,7 +351,6 @@ class LinkCheckMixin(CommandHandlerBase):
             await asyncio.gather(*stray, return_exceptions=True)
 
         self.link_sessions.clear()
-        self._linkcheck_wake.clear()
         self._linkcheck_cooldown_until.clear()
 
     # ── Internal: correlation ────────────────────────────────────────────
@@ -409,6 +408,9 @@ class LinkCheckMixin(CommandHandlerBase):
            match too. Tokens already credited are refused
            (`_linkcheck_claimed_tokens`), so one pong never counts twice.
         """
+        return self._match_by_ping_id(token) or self._match_by_node_id(frame, token)
+
+    def _match_by_ping_id(self, token: int) -> tuple[str, LinkCheckAttempt, str] | None:
         late_window_ms = int(LINKCHECK_LATE_WINDOW_S * 1000)
         for target, session in self.link_sessions.items():
             for attempt in session.attempts:
@@ -419,12 +421,19 @@ class LinkCheckMixin(CommandHandlerBase):
                 if now_ms() - attempt.sent_ms > late_window_ms:
                     continue
                 return target, attempt, "echo"
+        return None
 
+    def _match_by_node_id(
+        self, frame: linkcheck.LinkCheckFrame, token: int
+    ) -> tuple[str, LinkCheckAttempt, str] | None:
         prefix = self._linkcheck_node_prefix
         if prefix is None or linkcheck.node_prefix_of_msg_id(token) != prefix:
             return None
         self._expire_linkcheck_tokens()
         if token in self._linkcheck_claimed_tokens:
+            return None
+        # A pong answering our node's ping is addressed to our node.
+        if frame.dst.split(",")[-1].strip().upper() != str(self.my_callsign).strip().upper():
             return None
         target = frame.origin.strip().upper()
         waiting = self.link_sessions.get(target)
@@ -440,11 +449,13 @@ class LinkCheckMixin(CommandHandlerBase):
         for token in [t for t, until in self._linkcheck_claimed_tokens.items() if until <= now]:
             del self._linkcheck_claimed_tokens[token]
 
-    def _wake_linkcheck_driver(self, target: str, attempt: LinkCheckAttempt, delay: float) -> None:
-        """Wake the driver waiting on `attempt` now (`delay <= 0`) or after
-        `delay` seconds; a later call replaces a pending delayed wake."""
+    @staticmethod
+    def _wake_linkcheck_driver(attempt: LinkCheckAttempt, delay: float) -> None:
+        """Wake the driver if it is still waiting on `attempt`, now
+        (`delay <= 0`) or after `delay` seconds; a later call replaces a
+        pending delayed wake. A no-op once that attempt's wait has ended."""
         _cancel_grace(attempt)
-        wake = self._linkcheck_wake.get(target)
+        wake = attempt.wake
         if wake is None:
             return
         if delay <= 0:
@@ -526,7 +537,7 @@ class LinkCheckMixin(CommandHandlerBase):
                 attempt.snr = frame.snr
                 attempt.hops = frame.hops
                 await self._emit_linkcheck_result(target, attempt)
-                self._wake_linkcheck_driver(target, attempt, 0)
+                self._wake_linkcheck_driver(attempt, 0)
             else:
                 logger.debug(
                     "Duplicate link check pong for %s seq=%d, ignoring", target, attempt.seq
@@ -557,7 +568,7 @@ class LinkCheckMixin(CommandHandlerBase):
 
         await self._emit_linkcheck_result(target, attempt)
         grace = 0.0 if path is _PongPath.RF_SIGNAL else self.linkcheck_signal_grace
-        self._wake_linkcheck_driver(target, attempt, grace)
+        self._wake_linkcheck_driver(attempt, grace)
 
     # ── Internal: driver ─────────────────────────────────────────────────
 
@@ -604,13 +615,13 @@ class LinkCheckMixin(CommandHandlerBase):
                 await self._emit_linkcheck_event("linkcheck_sent", target=target, seq=seq)
 
                 wake = asyncio.Event()
-                self._linkcheck_wake[target] = wake
+                attempt.wake = wake
                 try:
                     await asyncio.wait_for(wake.wait(), timeout=self.linkcheck_timeout)
                 except TimeoutError:
                     pass
                 finally:
-                    self._linkcheck_wake.pop(target, None)
+                    attempt.wake = None
                     _cancel_grace(attempt)
 
                 if attempt.resolved:
@@ -660,7 +671,6 @@ class LinkCheckMixin(CommandHandlerBase):
                 )
         finally:
             self.link_sessions.pop(target, None)
-            self._linkcheck_wake.pop(target, None)
             # A user-initiated stop allows an immediate restart; only a
             # natural end (completed/timeout/error) starts the cooldown.
             if session.status != LinkCheckStatus.STOPPED:
