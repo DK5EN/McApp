@@ -1392,6 +1392,76 @@ async def _test_status_endpoint_reports_live_callsign(
     )
 
 
+async def _test_status_endpoint_reports_node_firmware_identity(
+    record: Callable[[str, bool], None],
+) -> None:
+    """`GET /api/status` gained `node_fwver` (I["FWVER"]) and `node_build`
+    (IS1["BDATE"]) -- read live off `cached_ble_registers`, degrading to None
+    when the register (or field) is absent, which covers both "never
+    connected yet" and "connected to firmware old enough to lack IS1"
+    (see doc/2026-09-25_2041-is1-sn1-registers-plan.md)."""
+
+    class _StubSSEManager:
+        """Only what build_stream_router's /api/status handler touches."""
+
+        def __init__(self, message_router: MessageRouter) -> None:
+            self.clients_lock = asyncio.Lock()
+            self.clients: dict[str, Any] = {}
+            self.message_router = message_router
+
+    router = MessageRouter(None)
+    router.set_callsign("DK5EN-14")
+    manager: Any = _StubSSEManager(router)
+
+    routes: list[Any] = list(build_stream_router(manager, "vTest").routes)
+    status_route = next(route for route in routes if route.path == "/api/status")
+
+    absent: dict[str, Any] = await status_route.endpoint()
+    record(
+        "/api/status: node_fwver/node_build are both None before any BLE register has "
+        "ever been cached",
+        absent.get("node_fwver") is None and absent.get("node_build") is None,
+    )
+
+    router.cached_ble_registers["I"] = {"TYP": "I", "FWVER": "4.35 t", "CALL": "DK5EN-14"}
+    router.cached_ble_registers["IS1"] = {"TYP": "IS1", "BDATE": "20260925-193817"}
+    present: dict[str, Any] = await status_route.endpoint()
+    record(
+        "/api/status: exposes node_fwver from the cached I register and node_build from "
+        "the cached IS1 register",
+        present.get("node_fwver") == "4.35 t" and present.get("node_build") == "20260925-193817",
+    )
+
+    # A node still running pre-IS1 firmware caches I but never IS1.
+    old_firmware_router = MessageRouter(None)
+    old_firmware_router.set_callsign("DK5EN-14")
+    old_firmware_router.cached_ble_registers["I"] = {"TYP": "I", "FWVER": "4.34"}
+    old_firmware_manager: Any = _StubSSEManager(old_firmware_router)
+    old_firmware_routes: list[Any] = list(build_stream_router(old_firmware_manager, "vTest").routes)
+    old_firmware_status_route = next(
+        route for route in old_firmware_routes if route.path == "/api/status"
+    )
+    old_firmware_result: dict[str, Any] = await old_firmware_status_route.endpoint()
+    record(
+        "/api/status: node_fwver still resolves without IS1 (older firmware never sends "
+        "it); node_build degrades to None instead of crashing",
+        old_firmware_result.get("node_fwver") == "4.34"
+        and old_firmware_result.get("node_build") is None,
+    )
+
+    # No message_router at all must degrade gracefully too (mirrors the
+    # existing bare-UDP-protocol case above).
+    bare_manager: Any = _StubSSEManager(router)
+    bare_manager.message_router = None
+    bare_routes: list[Any] = list(build_stream_router(bare_manager, "vTest").routes)
+    bare_status_route = next(route for route in bare_routes if route.path == "/api/status")
+    bare_result: dict[str, Any] = await bare_status_route.endpoint()
+    record(
+        "/api/status: no message_router at all degrades node_fwver/node_build to None, not a crash",
+        bare_result.get("node_fwver") is None and bare_result.get("node_build") is None,
+    )
+
+
 async def _test_status_endpoint_reports_udp_source_state(
     record: Callable[[str, bool], None],
 ) -> None:
@@ -1686,6 +1756,7 @@ async def run_identity_tests() -> bool:
     await _test_ble_scan_reports_real_paired_state(_record)
     await _test_identity_persist_is_serialised_and_off_thread(_record)
     await _test_status_endpoint_reports_live_callsign(_record)
+    await _test_status_endpoint_reports_node_firmware_identity(_record)
     await _test_status_endpoint_reports_udp_source_state(_record)
     _test_runtime_path_env_override(_record)
     _test_build_app_opts_into_runtime_persistence(_record)

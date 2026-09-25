@@ -1006,6 +1006,44 @@ async def _test_register_cache_excludes_conffin_and_mh(record: Any) -> None:
         restore_side_effects()
 
 
+async def _test_register_cache_caches_is1_and_sn1(record: Any) -> None:
+    """IS1 (build date, follows I) and SN1 (via state, follows SN) are the
+    newest two BLE JSON registers (2026-09-25 firmware, see
+    doc/2026-09-25_2041-is1-sn1-registers-plan.md in the mcapp repo). Before
+    this fix `_CACHEABLE_REGISTER_TYPS` did not list either, so
+    `_cache_register_if_applicable` silently ignored both and `GET
+    /api/ble/registers` never carried them -- exactly the CONFFIN/MH
+    exclusion path this suite already pins in
+    `_test_register_cache_excludes_conffin_and_mh`, but on the WRONG side of
+    it: IS1/SN1 are real, stable register config and must be cached like
+    every other TYP."""
+    restore_side_effects = _snapshot_side_effects()
+    original_cache = dict(ble_main.state.register_cache)
+    try:
+        ble_main.state.register_cache.clear()
+
+        ble_main.notification_callback(b'D{"TYP":"IS1","BDATE":"20260925-193817"}\x00\x00')
+        record(
+            "register cache: a parsed IS1-register frame lands in the cache",
+            ble_main.state.register_cache.get("IS1") == {"TYP": "IS1", "BDATE": "20260925-193817"},
+        )
+
+        ble_main.notification_callback(
+            b'D{"TYP":"SN1","VIA":true,"VIACALL":"OE1KBC-24,OE1KFR-12"}\x00\x00'
+        )
+        record(
+            "register cache: a parsed SN1-register frame lands in the cache alongside IS1, "
+            "not instead of it",
+            ble_main.state.register_cache.get("IS1") == {"TYP": "IS1", "BDATE": "20260925-193817"}
+            and ble_main.state.register_cache.get("SN1")
+            == {"TYP": "SN1", "VIA": True, "VIACALL": "OE1KBC-24,OE1KFR-12"},
+        )
+    finally:
+        ble_main.state.register_cache.clear()
+        ble_main.state.register_cache.update(original_cache)
+        restore_side_effects()
+
+
 async def _test_register_cache_unaffected_by_truncated_or_malformed_frames(record: Any) -> None:
     """An UNSALVAGEABLE truncated frame (cut inside its very first member,
     so `_repair_truncated_json_object` recovers nothing -- the firmware's
@@ -5910,6 +5948,7 @@ async def run_ble_service_tests() -> bool:
         _test_register_cache_write_and_overwrite,
         _test_registers_endpoint_contract_shape,
         _test_register_cache_excludes_conffin_and_mh,
+        _test_register_cache_caches_is1_and_sn1,
         _test_register_cache_unaffected_by_truncated_or_malformed_frames,
         _test_register_cache_receives_salvaged_partial_frame,
         _test_register_cache_cleared_on_target_change,

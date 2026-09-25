@@ -75,21 +75,21 @@ stateDiagram-v2
 
 ### State Descriptions
 
-| State | Description | Timeout | Implementation |
-|-------|-------------|---------|----------------|
-| **Disconnected** | No active connection | - | Initial state |
-| **Scanning** | Discovering nearby BLE devices | User-defined | BlueZ adapter scan |
-| **DeviceFound** | Device discovered, awaiting user action | - | Device MAC known |
-| **Pairing** | Bluetooth pairing in progress | User-defined | BlueZ pairing agent |
-| **Connecting** | Establishing BLE connection | 10.0s | `BLEClient.connect()` |
-| **Connected** | Physical connection established | - | `Device1.Connected = true` |
-| **ServicesResolving** | GATT service discovery | 10.0s | Polling `ServicesResolved` every 0.5s |
-| **CharacteristicsFound** | Read/write UUIDs found | - | GATT characteristics cached |
-| **NotifyStarted** | Notifications enabled | - | `GattCharacteristic1.StartNotify()` |
-| **HelloSent** | 0x10 hello message sent | - | 4-byte handshake: `\x04\x10\x20\x30` |
-| **WaitingHello** | Delay for firmware processing | 1.0s | `BLE_HELLO_WAIT` constant |
-| **QueryingRegisters** | Fetching device config | ~7.2s | 8 register queries with delays |
-| **Ready** | Fully operational | - | Can send/receive all message types |
+| State                    | Description                             | Timeout      | Implementation                                                                                                               |
+| ------------------------ | --------------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| **Disconnected**         | No active connection                    | -            | Initial state                                                                                                                |
+| **Scanning**             | Discovering nearby BLE devices          | User-defined | BlueZ adapter scan                                                                                                           |
+| **DeviceFound**          | Device discovered, awaiting user action | -            | Device MAC known                                                                                                             |
+| **Pairing**              | Bluetooth pairing in progress           | User-defined | BlueZ pairing agent                                                                                                          |
+| **Connecting**           | Establishing BLE connection             | 10.0s        | `BLEClient.connect()`                                                                                                        |
+| **Connected**            | Physical connection established         | -            | `Device1.Connected = true`                                                                                                   |
+| **ServicesResolving**    | GATT service discovery                  | 10.0s        | Polling `ServicesResolved` every 0.5s                                                                                        |
+| **CharacteristicsFound** | Read/write UUIDs found                  | -            | GATT characteristics cached                                                                                                  |
+| **NotifyStarted**        | Notifications enabled                   | -            | `GattCharacteristic1.StartNotify()`                                                                                          |
+| **HelloSent**            | 0x10 hello message sent                 | -            | 4-byte handshake: `\x04\x10\x20\x30`                                                                                         |
+| **WaitingHello**         | Delay for firmware processing           | 1.0s         | `BLE_HELLO_WAIT` constant                                                                                                    |
+| **QueryingRegisters**    | Fetching device config                  | ~8s+         | register queries with delays (this doc's diagrams cover 8 of production's 10 commands — see the Register Query Flow section) |
+| **Ready**                | Fully operational                       | -            | Can send/receive all message types                                                                                           |
 
 ---
 
@@ -138,15 +138,19 @@ sequenceDiagram
 
     BLEClient->>BLEClient: Delay 1.0s (BLE_HELLO_WAIT)
 
-    Note over BLEClient,Device: Register Query Phase (7.2s)
+    Note over BLEClient,Device: Register Query Phase (~8.0s; --io/--tel omitted from this diagram)
 
-    BLEClient->>Device: --info (TYP: I)
-    Device-->>BLEClient: Device info JSON
-    BLEClient->>BLEClient: Delay 0.8s
+    BLEClient->>Device: --info (TYP: I + IS1)
+    Device-->>BLEClient: Device info (I)
+    Note over Device: 2nd frame (I at length limit)
+    Device-->>BLEClient: Build date (IS1)
+    BLEClient->>BLEClient: Delay 1.2s
 
-    BLEClient->>Device: --nodeset (TYP: SN)
-    Device-->>BLEClient: Node settings JSON
-    BLEClient->>BLEClient: Delay 0.8s
+    BLEClient->>Device: --nodeset (TYP: SN + SN1)
+    Device-->>BLEClient: Node settings (SN)
+    Note over Device: 2nd frame
+    Device-->>BLEClient: Via state (SN1)
+    BLEClient->>BLEClient: Delay 1.2s
 
     BLEClient->>Device: --pos (TYP: G)
     Device-->>BLEClient: GPS position JSON
@@ -189,13 +193,13 @@ sequenceDiagram
 
 ### Timing Summary
 
-| Phase | Duration | Details |
-|-------|----------|---------|
-| Connection | ~2-5s | BLE connection + service discovery |
-| Hello Handshake | 1.0s | Mandatory delay before queries |
-| Critical Queries | 3.2s | 4 queries × 0.8s each |
-| Extended Queries | 4.0s | 2 multi-part (1.2s) + 2 standard (0.8s) |
-| **Total** | **~7-11s** | From "Connect" click to ready |
+| Phase            | Duration   | Details                                                                                           |
+| ---------------- | ---------- | ------------------------------------------------------------------------------------------------- |
+| Connection       | ~2-5s      | BLE connection + service discovery                                                                |
+| Hello Handshake  | 1.0s       | Mandatory delay before queries                                                                    |
+| Critical Queries | 4.0s       | 2 multi-part (1.2s: I+IS1, SN+SN1) + 2 standard (0.8s: G, SA)                                     |
+| Extended Queries | 4.0s       | 2 multi-part (1.2s) + 2 standard (0.8s)                                                           |
+| **Total**        | **~8-12s** | From "Connect" click to ready (diagram omits `--io`/`--tel`; production sends 10 commands, not 8) |
 
 ---
 
@@ -217,9 +221,9 @@ flowchart TD
 
     CriticalStart[Start Critical Queries] --> Q1
 
-    Q1[--info<br/>TYP: I] --> D1[Delay 0.8s]
-    D1 --> Q2[--nodeset<br/>TYP: SN]
-    Q2 --> D2[Delay 0.8s]
+    Q1[--info<br/>TYP: I + IS1<br/>Multi-part] --> D1[Delay 1.2s<br/>BLE_QUERY_DELAY_MULTIPART]
+    D1 --> Q2[--nodeset<br/>TYP: SN + SN1<br/>Multi-part]
+    Q2 --> D2[Delay 1.2s]
     D2 --> Q3[--pos<br/>TYP: G]
     Q3 --> D3[Delay 0.8s]
     D3 --> Q4[--aprsset<br/>TYP: SA]
@@ -251,7 +255,9 @@ flowchart TD
 ```
 
 **Legend:**
-- 🟢 Green: Critical queries (always run)
+
+- 🟢 Green: Critical queries (always run) — Q1/Q2 (`--info`, `--nodeset`) are ALSO multi-part
+  now (I+IS1, SN+SN1) but stay green: criticality and multi-part-ness are independent axes
 - 🟡 Gold: Multi-part queries (SE+S1, SW+S2)
 - 🔵 Blue: Extended queries (optional, can fail)
 
@@ -294,12 +300,15 @@ sequenceDiagram
 
 ### Multi-Part Pairs
 
-| Command | Part 1 | Part 2 | Delay | Description |
-|---------|--------|--------|-------|-------------|
-| `--seset` | SE | S1 | 1.2s | Sensor settings + extended sensor data |
-| `--wifiset` | SW | S2 | 1.2s | WiFi settings + extended WiFi data |
+| Command     | Part 1 | Part 2 | Delay | Description                            |
+| ----------- | ------ | ------ | ----- | -------------------------------------- |
+| `--info`    | I      | IS1    | 1.2s  | Device info + build date               |
+| `--nodeset` | SN     | SN1    | 1.2s  | Node settings + via-routing state      |
+| `--seset`   | SE     | S1     | 1.2s  | Sensor settings + extended sensor data |
+| `--wifiset` | SW     | S2     | 1.2s  | WiFi settings + extended WiFi data     |
 
 **Key Points:**
+
 1. Device sends TWO separate BLE notifications
 2. ~200ms internal delay between parts
 3. Backend processes each independently
@@ -365,17 +374,17 @@ flowchart TD
 
 ### Message Format Reference
 
-| Type | Msg ID | Format | Example |
-|------|--------|--------|---------|
-| Text Message | 0xA0 | `[LEN][0xA0][{GRP}MSG]` | Group chat |
-| Set Time | 0x20 | `[LEN][0x20][TIMESTAMP]` | UNIX timestamp (4B LE) |
-| Set Callsign | 0x50 | `[LEN][0x50][LEN][CALL]` | Length-prefixed string |
-| WiFi Config | 0x55 | `[LEN][0x55][SSID_LEN][SSID][PWD_LEN][PWD]` | Two length-prefixed strings |
-| Set Latitude | 0x70 | `[LEN][0x70][FLOAT][FLAG]` | 4B float (LE) + save flag |
-| Set Longitude | 0x80 | `[LEN][0x80][FLOAT][FLAG]` | 4B float (LE) + save flag |
-| Set Altitude | 0x90 | `[LEN][0x90][INT][FLAG]` | 4B signed int (LE) + flag |
-| APRS Symbols | 0x95 | `[LEN][0x95][PRI][SEC]` | 2 bytes (table + symbol) |
-| Save & Reboot | 0xF0 | `[LEN][0xF0]` | No payload |
+| Type          | Msg ID | Format                                      | Example                     |
+| ------------- | ------ | ------------------------------------------- | --------------------------- |
+| Text Message  | 0xA0   | `[LEN][0xA0][{GRP}MSG]`                     | Group chat                  |
+| Set Time      | 0x20   | `[LEN][0x20][TIMESTAMP]`                    | UNIX timestamp (4B LE)      |
+| Set Callsign  | 0x50   | `[LEN][0x50][LEN][CALL]`                    | Length-prefixed string      |
+| WiFi Config   | 0x55   | `[LEN][0x55][SSID_LEN][SSID][PWD_LEN][PWD]` | Two length-prefixed strings |
+| Set Latitude  | 0x70   | `[LEN][0x70][FLOAT][FLAG]`                  | 4B float (LE) + save flag   |
+| Set Longitude | 0x80   | `[LEN][0x80][FLOAT][FLAG]`                  | 4B float (LE) + save flag   |
+| Set Altitude  | 0x90   | `[LEN][0x90][INT][FLAG]`                    | 4B signed int (LE) + flag   |
+| APRS Symbols  | 0x95   | `[LEN][0x95][PRI][SEC]`                     | 2 bytes (table + symbol)    |
+| Save & Reboot | 0xF0   | `[LEN][0xF0]`                               | No payload                  |
 
 ---
 
@@ -436,12 +445,12 @@ except Exception as e:
 
 All errors are published to the frontend via SSE:
 
-| Operation | Status Types | Messages |
-|-----------|--------------|----------|
-| Connect | `info`, `error` | Connection progress, failures |
-| Send Hello | `info`, `error` | Handshake status |
-| Send Message | `ok`, `error` | Message sent or failed |
-| Send Command | `ok`, `error` | Command execution status |
+| Operation    | Status Types    | Messages                      |
+| ------------ | --------------- | ----------------------------- |
+| Connect      | `info`, `error` | Connection progress, failures |
+| Send Hello   | `info`, `error` | Handshake status              |
+| Send Message | `ok`, `error`   | Message sent or failed        |
+| Send Command | `ok`, `error`   | Command execution status      |
 
 ---
 
@@ -505,19 +514,20 @@ sequenceDiagram
 
 ### Key Files
 
-| File | Purpose | Key Functions |
-|------|---------|---------------|
-| `ble_handler.py` | BLE connection management | `connect()`, `send_hello()`, `send_message()` |
-| `main.py` | Register query orchestration | `_query_ble_registers()`, `_send_ble_command_with_retry()` |
-| `ble_client.py` | Abstraction interface | `create_ble_client()` factory |
-| `ble_client_local.py` | Local D-Bus implementation | Wrapper around `ble_handler.py` |
-| `ble_client_remote.py` | Remote HTTP/SSE client | For distributed deployments |
+| File                   | Purpose                      | Key Functions                                              |
+| ---------------------- | ---------------------------- | ---------------------------------------------------------- |
+| `ble_handler.py`       | BLE connection management    | `connect()`, `send_hello()`, `send_message()`              |
+| `main.py`              | Register query orchestration | `_query_ble_registers()`, `_send_ble_command_with_retry()` |
+| `ble_client.py`        | Abstraction interface        | `create_ble_client()` factory                              |
+| `ble_client_local.py`  | Local D-Bus implementation   | Wrapper around `ble_handler.py`                            |
+| `ble_client_remote.py` | Remote HTTP/SSE client       | For distributed deployments                                |
 
 ### Timing Constants
 
 All timing constants are centralized:
 
 **`ble_handler.py`:**
+
 ```python
 BLE_CONNECT_TIMEOUT = 10.0  # Connection timeout
 BLE_SERVICES_CHECK_INTERVAL = 0.5  # Service polling interval
@@ -527,6 +537,7 @@ BLE_DISCONNECT_DELAY = 2.0  # Pre-disconnect delay
 ```
 
 **`main.py`:**
+
 ```python
 BLE_HELLO_WAIT = 1.0  # Wait after hello
 BLE_QUERY_DELAY_STANDARD = 0.8  # Standard query delay
@@ -540,14 +551,14 @@ BLE_RETRY_BASE_DELAY = 0.5  # Retry backoff base
 
 ### Common Issues
 
-| Issue | State | Cause | Solution |
-|-------|-------|-------|----------|
-| Connection timeout | Connecting | Device too far, interference | Retry, move closer |
+| Issue                 | State             | Cause                        | Solution                        |
+| --------------------- | ----------------- | ---------------------------- | ------------------------------- |
+| Connection timeout    | Connecting        | Device too far, interference | Retry, move closer              |
 | Services not resolved | ServicesResolving | Slow device, BLE stack issue | Increase timeout, restart BlueZ |
-| Hello timeout | WaitingHello | Device not ready | Increase `BLE_HELLO_WAIT` |
-| Query failures | QueryingRegisters | Command not supported | Check firmware version |
-| MTU exceeded | Ready | Message too long | Split message or shorten |
-| Connection drops | Ready | Signal weak, device reboot | Auto-reconnect on next send |
+| Hello timeout         | WaitingHello      | Device not ready             | Increase `BLE_HELLO_WAIT`       |
+| Query failures        | QueryingRegisters | Command not supported        | Check firmware version          |
+| MTU exceeded          | Ready             | Message too long             | Split message or shorten        |
+| Connection drops      | Ready             | Signal weak, device reboot   | Auto-reconnect on next send     |
 
 ### Debug Tips
 
@@ -573,12 +584,14 @@ Potential improvements to the state machine:
 ---
 
 **Document Maintenance:**
+
 - Update diagrams when adding new states or transitions
 - Keep timing constants synchronized with code
 - Document any protocol changes from firmware updates
 - Add new message types as implemented
 
 **Related Documents:**
+
 - `doc/ble-challenges.md` - Gap analysis and implementation status
 - `doc/a0-commands.md` - Firmware protocol specification
 - `doc/phase3-summary.md` - Phase 3 implementation details

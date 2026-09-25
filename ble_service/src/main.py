@@ -135,14 +135,16 @@ _ERROR_CODE_BUSY = "busy"  # == REASON_BUSY; kept as its own name for the error_
 # on explicit query (see the module's "Extended Register Queries" docstring
 # section: I, SN, G, SA, SE+S1, SW+S2, W, AN are auto-sent; IO and TM are
 # query-only) -- i.e. every TYP that represents a real, cacheable slice of
-# device config. Deliberately excludes two TYPs that DO appear in `D{...}`
-# frames but are not "a register":
+# device config. IS1 (build date, follows I) and SN1 (via state, follows SN)
+# are the newest two, both auto-sent right alongside their parent -- see
+# doc/2026-09-25_2041-is1-sn1-registers-plan.md in the mcapp repo. Deliberately
+# excludes two TYPs that DO appear in `D{...}` frames but are not "a register":
 #   - CONFFIN: a burst-terminator marker, not a config value in itself.
 #   - MH: a rolling mheard list, not a stable register -- caching only the
 #     last-seen MH frame would misrepresent it as "the" mheard state when it
 #     is really just whichever station was heard most recently.
 _CACHEABLE_REGISTER_TYPS = frozenset(
-    {"I", "SN", "G", "SA", "SE", "S1", "SW", "S2", "W", "IO", "TM", "AN"}
+    {"I", "SN", "G", "SA", "SE", "S1", "SW", "S2", "W", "IO", "TM", "AN", "IS1", "SN1"}
 )
 
 

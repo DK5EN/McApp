@@ -199,6 +199,25 @@ def build_stream_router(manager: SSEManager, version: str) -> APIRouter:  # noqa
             }
         )
 
+        # Node firmware identity (IS1-adoption wave, 2026-09-25): read live off
+        # the BLE register cache, never a boot-time value -- a runtime BLE
+        # (re)connect or register re-query is what actually populates these.
+        # None when the register (or field) is absent -- older firmware never
+        # sends IS1 at all, and every field of a cached register dict is
+        # read via .get() elsewhere too. See
+        # doc/2026-09-25_2041-is1-sn1-registers-plan.md.
+        cached_registers: dict[str, Any] = (
+            message_router.cached_ble_registers if message_router is not None else {}
+        )
+        i_register = cached_registers.get("I")
+        node_fwver = i_register.get("FWVER") if isinstance(i_register, dict) else None
+        if not isinstance(node_fwver, str):
+            node_fwver = None
+        is1_register = cached_registers.get("IS1")
+        node_build = is1_register.get("BDATE") if isinstance(is1_register, dict) else None
+        if not isinstance(node_build, str):
+            node_build = None
+
         return {
             "status": "ok",
             "version": version,
@@ -216,6 +235,8 @@ def build_stream_router(manager: SSEManager, version: str) -> APIRouter:  # noqa
             # _note_untrusted_source.
             "udp_suppressed_target_changes": udp_status["suppressed_target_changes"],
             "udp_untrusted_source_ips": udp_status["untrusted_source_ips"],
+            "node_fwver": node_fwver,
+            "node_build": node_build,
         }
 
     # Health check endpoint

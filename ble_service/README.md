@@ -132,7 +132,7 @@ On successful connect, the service automatically: starts notifications, waits ~0
 
 - Always `200`. `registers: {}` / `count: 0` when nothing has been cached yet.
 - Keyed by `TYP`; each value is the exact parsed JSON object last received for that `TYP` (the `TYP` field itself included), last-write-wins.
-- Only registers the device actually sends a config value for are cached: `I`, `SN`, `G`, `SA`, `SE`, `S1`, `SW`, `S2`, `W`, `IO`, `TM`, `AN` (see "Extended Register Queries" below for which are auto-sent vs. query-only). `CONFFIN` (a burst-terminator marker, not a value) and `MH` (a rolling mheard list, not a stable register) are never cached.
+- Only registers the device actually sends a config value for are cached: `I`, `IS1`, `SN`, `SN1`, `G`, `SA`, `SE`, `S1`, `SW`, `S2`, `W`, `IO`, `TM`, `AN` (see "Extended Register Queries" below for which are auto-sent vs. query-only). `CONFFIN` (a burst-terminator marker, not a value) and `MH` (a rolling mheard list, not a stable register) are never cached.
 - **Staleness is deliberate.** The cache is _not_ cleared on a plain disconnect — a value from before a dropped link is more useful than nothing, especially since this cache exists precisely to soften the case where the device's automatic post-hello register burst does not arrive at all (see `HELLO_SETTLE_DELAY_S` above). A value here can therefore be from any point since the last connect to this device, not necessarily the current connection.
 - **The cache IS cleared the moment the connect target changes to a different MAC** (before the new connect attempt even starts) — a cached value from one node must never be attributed to another. Reconnecting to the _same_ device (auto-reconnect, or re-tapping the node you were already on) keeps the cache.
 - Exists because the notification SSE stream (`/api/ble/notifications`) alone is not durable memory: its queue is bounded (`NOTIFICATION_QUEUE_SIZE`) and is lost across an mcapp restart, so a register that only arrives once per connect could be gone before anything ever reads it.
@@ -205,7 +205,7 @@ While connected, the service sends a `--pos` command every 5 minutes to prevent 
 
 ### Extended Register Queries
 
-After connecting, the service automatically queries `--io` (GPIO status) and `--tel` (telemetry config). The device auto-sends all other registers on BLE connect: I, SN, G, SA, SE+S1, SW+S2, W, AN.
+After connecting, the service automatically queries `--io` (GPIO status) and `--tel` (telemetry config). The device auto-sends all other registers on BLE connect: I+IS1, SN+SN1, G, SA, SE+S1, SW+S2, W, AN (IS1/SN1 only on firmware from 2026-09-25).
 
 ### Connection States
 
