@@ -55,4 +55,5 @@ mc-chat: no BLE register surface, no change. No contract/corpus affected.
 - Advisor pass APPROVED. Accepted trade-off: an empty SN1 reset does not clear the Via card's
   refs, so switching (without leaving the page) to a different node on pre-SN1 firmware keeps the
   previous node's via values on screen. Fix if it bites: reset the refs on the BLE disconnect path.
-- `doc/ble-state-machine.md` diagrams model 8 of the 10 sweep commands (pre-existing; annotated).
+- `doc/ble-state-machine.md` rewritten 2026-09-25 against the current two-process architecture
+  (all 10 sweep commands, IS1/SN1); closed.
