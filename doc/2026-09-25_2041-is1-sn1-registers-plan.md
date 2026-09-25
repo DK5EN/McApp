@@ -1,6 +1,7 @@
 # BLE registers IS1 and SN1 — adoption plan
 
-Status: Wave 1 done and committed (2026-09-25); Wave 2 (dev release + live check) open.
+Status: shipped in v2.0.15-dev.1, deployed to mcapp.local 2026-09-25 22:07. Live IS1/SN1 check
+pending a node reflash (see Wave 2).
 
 ## Firmware facts
 
@@ -43,12 +44,12 @@ mc-chat: no BLE register surface, no change. No contract/corpus affected.
 
 ## Waves
 
-| Wave | Owner        | Scope                                                                                | Status |
-| ---- | ------------ | ------------------------------------------------------------------------------------ | ------ |
-| 1A   | implementer  | MCProxy: allowlists, sweep delays, `/api/status` fields, via-change log, tests, docs | done   |
-| 1B   | implementer  | webapp: bleStore IS1/SN1, register status rows, BDATE formatter, Build row, Via card | done   |
-| gate | orchestrator | both repos full gate, advisor pass, commit per repo                                  | done   |
-| 2    | orchestrator | dev release + mcapp.local live check (SN1 now; IS1 once the node has #1156)          | open   |
+| Wave | Owner        | Scope                                                                                | Status  |
+| ---- | ------------ | ------------------------------------------------------------------------------------ | ------- |
+| 1A   | implementer  | MCProxy: allowlists, sweep delays, `/api/status` fields, via-change log, tests, docs | done    |
+| 1B   | implementer  | webapp: bleStore IS1/SN1, register status rows, BDATE formatter, Build row, Via card | done    |
+| gate | orchestrator | both repos full gate, advisor pass, commit per repo                                  | done    |
+| 2    | orchestrator | dev release + mcapp.local live check (SN1 now; IS1 once the node has #1156)          | partial |
 
 ## Follow-ups
 
@@ -57,3 +58,14 @@ mc-chat: no BLE register surface, no change. No contract/corpus affected.
   previous node's via values on screen. Fix if it bites: reset the refs on the BLE disconnect path.
 - `doc/ble-state-machine.md` rewritten 2026-09-25 against the current two-process architecture
   (all 10 sweep commands, IS1/SN1); closed.
+
+## Wave 2 result (2026-09-25)
+
+- v2.0.15-dev.1 deployed to mcapp.local slot-0: health checks all OK, new symbols in the active slot,
+  `/api/status` reports `node_fwver: "4.35 t"`, `node_build: null`.
+- DK5EN-98's firmware predates #1155/#1156: ble_service's register cache holds the 12 old TYPs and
+  no `IS1`/`SN1`. Degradation verified: required set complete, no `Type not found`, no reconciler
+  warning. `I.FWDATE` is also absent, so the webapp Build row shows its placeholder.
+- Open: flash DK5EN-98 with a fork-main build at or after `1b829721` (both registers), then check
+  `node_build`, the "BLE via state: initial" journal line, the Via card, and a `--via on/off` round
+  trip.
