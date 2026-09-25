@@ -2810,7 +2810,7 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
     # ensuring the health check finds port 1799 listening promptly.
     await udp_handler.start_listening()
 
-    # BLE Client (supports local, remote, disabled modes)
+    # BLE Client (remote or disabled mode)
     ble_client = None
     try:
         ble_mode = BLEMode(cfg.ble.mode)
