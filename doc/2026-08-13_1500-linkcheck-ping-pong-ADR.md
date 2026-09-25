@@ -1,7 +1,7 @@
 # ADR: Link Check (firmware `{ping}` / `{pong}`) in McApp
 
 **Date:** 2026-08-13
-**Status:** **Implemented and deployed** 2026-08-14 in `v1.6.14-dev.35` (`mcapp.local`). Protocol validated on air (§1.5); the deployed stack re-verified end to end after release (§6).
+**Status:** **Implemented and deployed** 2026-08-14 in `v1.6.14-dev.35` (`mcapp.local`). Protocol validated on air (§1.5); the deployed stack re-verified end to end after release (§6). **Amended 2026-09-25** (§9): two firmware limitations this ADR treated as permanent — no BLE pong (§1.4 point 4) and unbounded ping retransmission (§1.4 point 7) — are now fixed in the DK5EN fork; official firmware and upstream are unchanged.
 **Affects:** `storage/ingest.py`, `commands/linkcheck.py` (new), `sse_routes/linkcheck.py` (new), `main.py`, frontend `webapp`
 **Implementation plan:** `doc/archive/2026-08-13_1500-linkcheck-implementation-plan.md`
 **Review:** `doc/archive/2026-08-13_1500-linkcheck-verdict.md` — this ADR's first draft contained two
@@ -113,6 +113,16 @@ Python's `&` on a negative int yields the two's-complement value, so this is exa
    station. Signal may only be attributed to the target when the pong arrives with an empty path.
    A pong with a via-path proves reachability but says nothing about the target's signal.
 
+   **Corrected 2026-09-25:** "Nothing reaches the MeshCom server" is wrong. A gateway uploads
+   every received text frame that lacks the server flag, including a ping or pong addressed to
+   itself — `if(bGATEWAY && (!aprsmsg.msg_server || ...)) addNodeData(...)` in `OnRxDone()`
+   (`lora_functions.cpp`), before the relay decision this point describes. Confirmed on air:
+   DK5EN-98's console logged `TX-UDP` for an incoming pong (2026-09-24 22:42:46), and DK5EN-1
+   (gateway) logged `GWU x1AE1E22C` for an incoming ping (2026-09-25 07:56:48). What the original
+   claim gets right is narrower: a foreign ping/pong is not relayed on RF
+   (`bMeshDestination = false`) and gets no gateway ACK (`bSendAckGateway = false`). Neither flag
+   gates the server upload, which is the frame's ordinary gateway path and fires regardless.
+
 3. **`queueExtern()` runs before any ping/pong filtering.** `lora_functions.cpp:701` queues
    received frames to Extern-UDP, behind three gates: `bEXTUDP`, `is_new_packet()`, and a
    TEXT/POS/HEY type check. Ping and pong therefore arrive at McApp as ordinary `type:"msg"`
@@ -120,6 +130,14 @@ Python's `&` on a negative int yields the two's-complement value, so this is exa
 4. **The phone never sees a pong.** The `{pong}` branch at `lora_functions.cpp:773` calls
    `queueDisplayText()` and clears `bPingSend`, but never `addBLEOutBuffer()`. On BLE the exchange
    is invisible; it exists only on the OLED.
+
+   **Fixed in the fork firmware (2026-09-24):** the `{pong}` branch of the DM-to-self handler in
+   `OnRxDone()` (`src/lora_functions.cpp`) now calls `addBLEOutBuffer(RcvBuffer, size)` like every
+   other DM to the node; the raw frame reaches BLE as `{pong}{<id>}` with the server flag intact.
+   Commits: `feature-neighbour-matrix` `14a669cf`, `fork-neo-test` `3b018f03`, `fork-main`
+   `0e271c17`. Live on DK5EN-98 and DK5EN-1 since 2026-09-24 ~23:26 (OTA to build
+   `Sep 24 2026 / 23:15:22`). Official firmware and upstream `dev` are unchanged — see §9.
+
 5. **A ping we originate is echoed back to us with its `msg_id`.** The Extern-UDP inbound handler
    (`extudp_functions.cpp:282`) wraps the payload as `:{dst}payload` and calls `sendMessage()`,
    which echoes to Extern-UDP as `src_type:"node"` (`loop_functions.cpp:3502`). The echo is a
@@ -147,6 +165,16 @@ Python's `&` on a negative int yields the two's-complement value, so this is exa
    `{CET}`/`{MCP}`/`{SET}` exclusion list at `loop_functions.cpp:3468` would make a proxy-originated
    ping behave like the node's own — one keying instead of four, and no 40 s quantisation in the
    measured time.
+
+   **Fixed in the fork firmware (feature-neighbour-matrix, fork-neo-test; fork-main in progress):**
+   a ping sent through `sendMessage()` (BLE, Extern-UDP, web) is now keyed once. The fix keeps the
+   ping at personal-DM priority — the TX ring decides priority from the status byte at enqueue, so
+   marking it "no retry" up front would have mis-ranked it as a relay. Commits:
+   `feature-neighbour-matrix` `df0ea8c1`, `fork-neo-test` `1a14bef5`; `fork-main` has this in
+   progress together with the Stage-0 interaction in §9. This measurement's own MAX_RETRANSMIT
+   reading holds up under closer count: on 2026-09-24, before the fix, DK5EN-1 received ping
+   `x1AE1E1EA` four times (22:42:41, 22:43:26, 22:44:06, 22:44:49 — original + 3 retries); the
+   McApp DBG console at the time had only caught two of the three retries.
 
 8. **We cannot ping ourselves.** `sendMessage()` hard-refuses a DM to our own callsign
    (`loop_functions.cpp:3366-3372`, `[ERROR]...DM to own-all not allowed`). A self-test produces no
@@ -335,6 +363,11 @@ delivers strictly more for less.
   Do not display a number labelled RTT.
 - **Four keyings per attempt, not one** (§1.4 point 7). Airtime caps must be set against the real
   multiplier. A one-line firmware change in our fork would remove this.
+
+  **Corrected 2026-09-25:** fixed in two of the three fork branches (§1.4 point 7); `fork-main` in
+  progress. Official firmware and the rest of the fleet still retransmit, so McApp's airtime caps
+  must stay set against the four-keying case until this reaches every node we talk to — see §9.
+
 - **Reply signal is only attributable when the pong has no via-path** (§1.4 point 2) — and in
   today's fleet, relayed pongs are the observed norm.
 - **UDP mode only.** BLE clients cannot see pongs (§1.4 point 4). Note that UDP is always on and
@@ -368,6 +401,12 @@ update: re-verify against the firmware actually running on the target node that 
 `extudp_functions.cpp:365` are unchanged — the correlation scheme and the airtime estimate depend
 on all of them, and §1.4 point 7 in particular is local-fork code. New upstream tags at time of
 writing: `v4.35p.08.03`, `v4.35p.08.06`, `v4.35p.08.10.2`.
+
+**Corrected 2026-09-25:** the line numbers above are from 2026-08 and have drifted (the fork has
+moved through several campaigns since). Re-verify by function name instead of line, and do not
+attempt to renumber this section: the `OnRxDone()` `{pong}` branch (§1.4 point 4), the
+retransmission-status handling in `sendMessage()` (§1.4 point 7), and `SendPong()` / `sendPing()`
+(§1.3b, §9) are the three places this ADR's claims depend on.
 
 ---
 
@@ -444,6 +483,9 @@ Worth doing in the firmware fork, independently of McApp: add `{ping}` to the
 proxy-originated ping from ~4 keyings to 1 and removes the 40 s quantisation from the measured
 time (§1.4 point 7, §1.5.4).
 
+**Fixed in the fork firmware (2026-09-25):** done on `feature-neighbour-matrix` and
+`fork-neo-test`; `fork-main` in progress. See §1.4 point 7 and §9.
+
 ## 8. Amendment 2026-09-24: transport-agnostic pong, node-id correlation
 
 Field report from DM3KS-12 (v2.0.13): ping `x2EFB0228` to DM3KS-13 went out, the pong
@@ -482,3 +524,73 @@ the display (`lora_functions.cpp`, the `{pong}` branch: `queueDisplayText()`, no
 `addBLEOutBuffer()`, §1.4 point 4). So a box whose Extern-UDP points elsewhere still gets no pong
 at all until the firmware forwards it to BLE. With EXT IP pointing at McApp, the exact echo path
 works as before.
+
+**Corrected 2026-09-25:** this precondition is now met — see §1.4 point 4 and §9. Nodes on the
+DK5EN fork build from 2026-09-24 onward forward `{pong}` to BLE, so a box whose Extern-UDP points
+elsewhere (e.g. a MeshCom WebDesk PC, the DM3KS-12 case this section opened with) is no longer
+blind on BLE, provided the node itself runs the fixed firmware. Official firmware and upstream are
+unchanged, so this remains McApp's problem for any node not on the fork — the transport-agnostic
+design this section describes still carries that case.
+
+## 9. Amendment 2026-09-25: firmware fixed in the DK5EN fork
+
+Both firmware limitations §8 documented as structural — no BLE pong, unbounded ping
+retransmission — are now fixes in the DK5EN fork, not permanent constraints. This section records
+what changed, what is still in progress, a new fork-only regression this campaign found, and a
+fresh live verification of the fixed stack end to end.
+
+### 9.1 P13 — pong now reaches BLE
+
+Covered inline at §1.4 point 4 and §8. Summary: `OnRxDone()`'s `{pong}` branch
+(`src/lora_functions.cpp`) now calls `addBLEOutBuffer()` like every other DM to the node.
+Commits: `feature-neighbour-matrix` `14a669cf`, `fork-neo-test` `3b018f03`, `fork-main`
+`0e271c17`. Live on DK5EN-98 and DK5EN-1 since 2026-09-24 ~23:26.
+
+### 9.2 P14 — a ping sent through `sendMessage()` is keyed once
+
+Covered inline at §1.4 point 7, §4.2 and §7. Summary: the retransmission arm that used to fire for
+any DM not starting `{CET}`/`{MCP}`/`{SET}` no longer fires for `{ping}`; the ping keeps
+personal-DM priority at enqueue, which is why the fix is not simply "mark it no-retry" — that would
+have re-ranked it as a relay in the TX ring. Commits: `feature-neighbour-matrix` `df0ea8c1`,
+`fork-neo-test` `1a14bef5`. `fork-main`: in progress, entangled with §9.3 below.
+
+### 9.3 fork-main only, in progress: DM Stage 0 breaks `{ping}` in transit
+
+`fork-main`'s DM Stage 0 (commit `7aeb2ac5`) rewrites every `{` in DM text to `(` at the sender, so
+a McApp ping routed through a `fork-main` node left that node as `(ping}{NNN` — no longer a
+recognisable ping. The target ACKs it as an ordinary DM and never pongs; the link check times out
+with no error anywhere. Being fixed by exempting a leading `{ping}` and `{SET}` from that rewrite.
+**No released build contains `7aeb2ac5`** — this affects only an unreleased `fork-main` build from
+after 2026-09-13, not anything currently deployed. McApp link checks routed through such a build
+time out; this is why P14's `fork-main` port (§9.2) is bundled with this fix rather than shipped
+alone.
+
+### 9.4 In progress on all three branches: pong priority
+
+`sendPing()` and `SendPong()` currently enqueue at relay priority (NORMAL) on every firmware,
+including the fork. On a busy target the pong queues behind ACKs, DMs and group traffic — part of
+why the response times in §1.5.4 run as long as they do. Being fixed in the fork on
+`feature-neighbour-matrix`, `fork-neo-test` and `fork-main`; not yet landed anywhere as of this
+amendment.
+
+### 9.5 Live verification, 2026-09-25 07:56:47
+
+McApp v2.0.14, `mcapp.local`, DK5EN-98 via BLE, Extern-UDP off. Link check DK5EN-98 → DK5EN-1:
+`{ping}{556` (msg_id `1AE1E22C`), pong `{pong}{451011116}` (== `0x1AE1E22C`) received over BLE
+after 12 s, direct (no via). UI: "Direct RF path confirmed — answered in 12 s",
+"completed — 1 sent, 1 received". DK5EN-1's USB capture shows the ping received **exactly once**
+(capture ran live through 07:59:41, past the retry window) — P14 confirmed on the receiving end,
+not just the sender's echo. McApp's monitor shows the pong itself as `dropped · linkcheck` (the
+Stage 0 ingest filter at §3.1, working as designed) and the ping row's "x2" is McApp's own send
+plus the node's BLE echo, not a retransmission. This is also the frame pair §1.4 point 2's
+gateway-upload correction cites: DK5EN-1 logged `GWU x1AE1E22C` for this same ping.
+
+### 9.6 What is still unchanged
+
+Official MeshCom firmware and upstream `dev` have neither fix; there is no upstream PR yet for
+either — the stock phone app would render a `{pong}{id}` as an ordinary chat bubble
+(`Meshcom-MobileApp/src/hooks/MessageHandler.ts` discards only `{CET}`, nothing ping/pong-shaped).
+McApp must keep working correctly against nodes without these fixes — no BLE pong, retransmitted
+pings — and the §8 transport-agnostic design already does; nothing in this amendment changes that
+requirement, it only removes the failure mode for the subset of the fleet that is on the DK5EN
+fork post-2026-09-24.
