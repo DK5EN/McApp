@@ -166,12 +166,12 @@ Python's `&` on a negative int yields the two's-complement value, so this is exa
    ping behave like the node's own — one keying instead of four, and no 40 s quantisation in the
    measured time.
 
-   **Fixed in the fork firmware (feature-neighbour-matrix, fork-neo-test; fork-main in progress):**
+   **Fixed in the fork firmware (all three branches):**
    a ping sent through `sendMessage()` (BLE, Extern-UDP, web) is now keyed once. The fix keeps the
    ping at personal-DM priority — the TX ring decides priority from the status byte at enqueue, so
    marking it "no retry" up front would have mis-ranked it as a relay. Commits:
-   `feature-neighbour-matrix` `df0ea8c1`, `fork-neo-test` `1a14bef5`; `fork-main` has this in
-   progress together with the Stage-0 interaction in §9. This measurement's own MAX_RETRANSMIT
+   `feature-neighbour-matrix` `df0ea8c1`, `fork-neo-test` `1a14bef5`, `fork-main` `313a52ed`
+   (together with the Stage-0 fix in §9.3). This measurement's own MAX_RETRANSMIT
    reading holds up under closer count: on 2026-09-24, before the fix, DK5EN-1 received ping
    `x1AE1E1EA` four times (22:42:41, 22:43:26, 22:44:06, 22:44:49 — original + 3 retries); the
    McApp DBG console at the time had only caught two of the three retries.
@@ -364,7 +364,7 @@ delivers strictly more for less.
 - **Four keyings per attempt, not one** (§1.4 point 7). Airtime caps must be set against the real
   multiplier. A one-line firmware change in our fork would remove this.
 
-  **Corrected 2026-09-25:** fixed in two of the three fork branches (§1.4 point 7); `fork-main` in
+  **Corrected 2026-09-25:** fixed in all three fork branches (§1.4 point 7); `fork-main` since `313a52ed`, in
   progress. Official firmware and the rest of the fleet still retransmit, so McApp's airtime caps
   must stay set against the four-keying case until this reaches every node we talk to — see §9.
 
@@ -483,8 +483,8 @@ Worth doing in the firmware fork, independently of McApp: add `{ping}` to the
 proxy-originated ping from ~4 keyings to 1 and removes the 40 s quantisation from the measured
 time (§1.4 point 7, §1.5.4).
 
-**Fixed in the fork firmware (2026-09-25):** done on `feature-neighbour-matrix` and
-`fork-neo-test`; `fork-main` in progress. See §1.4 point 7 and §9.
+**Fixed in the fork firmware (2026-09-25):** done on `feature-neighbour-matrix`,
+`fork-neo-test` and `fork-main`. See §1.4 point 7 and §9.
 
 ## 8. Amendment 2026-09-24: transport-agnostic pong, node-id correlation
 
@@ -536,7 +536,7 @@ design this section describes still carries that case.
 
 Both firmware limitations §8 documented as structural — no BLE pong, unbounded ping
 retransmission — are now fixes in the DK5EN fork, not permanent constraints. This section records
-what changed, what is still in progress, a new fork-only regression this campaign found, and a
+what changed, a fork-only regression this campaign found and fixed, a related priority fix, and a
 fresh live verification of the fixed stack end to end.
 
 ### 9.1 P13 — pong now reaches BLE
@@ -552,26 +552,34 @@ Covered inline at §1.4 point 7, §4.2 and §7. Summary: the retransmission arm 
 any DM not starting `{CET}`/`{MCP}`/`{SET}` no longer fires for `{ping}`; the ping keeps
 personal-DM priority at enqueue, which is why the fix is not simply "mark it no-retry" — that would
 have re-ranked it as a relay in the TX ring. Commits: `feature-neighbour-matrix` `df0ea8c1`,
-`fork-neo-test` `1a14bef5`. `fork-main`: in progress, entangled with §9.3 below.
+`fork-neo-test` `1a14bef5`, `fork-main` `313a52ed` (bundled with §9.3 below).
 
-### 9.3 fork-main only, in progress: DM Stage 0 breaks `{ping}` in transit
+### 9.3 fork-main only, fixed: DM Stage 0 broke `{ping}` in transit
 
 `fork-main`'s DM Stage 0 (commit `7aeb2ac5`) rewrites every `{` in DM text to `(` at the sender, so
 a McApp ping routed through a `fork-main` node left that node as `(ping}{NNN` — no longer a
 recognisable ping. The target ACKs it as an ordinary DM and never pongs; the link check times out
-with no error anywhere. Being fixed by exempting a leading `{ping}` and `{SET}` from that rewrite.
+with no error anywhere. Fixed in `313a52ed` (2026-09-25) by exempting a leading `{ping}` and
+`{SET}` from that rewrite; every later `{` is still rewritten, which is all the receiver's ACK-tag
+parse needs.
 **No released build contains `7aeb2ac5`** — this affects only an unreleased `fork-main` build from
 after 2026-09-13, not anything currently deployed. McApp link checks routed through such a build
-time out; this is why P14's `fork-main` port (§9.2) is bundled with this fix rather than shipped
-alone.
+time out; builds from `313a52ed` on do not. P14's `fork-main` port (§9.2) is bundled with this
+fix: on its own it would only have stripped the retries from what was, on that branch, an ordinary
+DM.
 
-### 9.4 In progress on all three branches: pong priority
+### 9.4 Pong and ping priority (P15), fixed on all three branches
 
-`sendPing()` and `SendPong()` currently enqueue at relay priority (NORMAL) on every firmware,
-including the fork. On a busy target the pong queues behind ACKs, DMs and group traffic — part of
-why the response times in §1.5.4 run as long as they do. Being fixed in the fork on
-`feature-neighbour-matrix`, `fork-neo-test` and `fork-main`; not yet landed anywhere as of this
-amendment.
+`sendPing()` and `SendPong()` enqueued at relay priority (NORMAL) on every firmware, including the
+fork: the TX ring ranks a text frame already marked "no retransmission" as a relay. On a busy
+target the pong queued behind ACKs, DMs and group traffic — part of why the response times in
+§1.5.4 run as long as they do. Fixed in the fork (P15) with one shared enqueue helper that
+classifies the frame as a fresh own message (DM CRITICAL, group/`*` HIGH) and stores it as "no
+retransmission" inside the ring's critical section: `fork-main` `313a52ed` (also the `--dmretry`
+DMs and their retries, and the store node's mailbox), `feature-neighbour-matrix` `eb120ec0`,
+`fork-neo-test` `b55fe5d7`. Proven by host tests only; **not yet on air** — DK5EN-98 and DK5EN-1
+still run the 2026-09-24 build (P13 + P14, without P15). Official firmware and upstream are
+unchanged.
 
 ### 9.5 Live verification, 2026-09-25 07:56:47
 

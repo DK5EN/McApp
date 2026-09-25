@@ -312,10 +312,10 @@ feature. Design and the on-air measurements: `doc/2026-08-13_1500-linkcheck-ping
   on an official-firmware node a box whose EXT IP points elsewhere (MeshCom WebDesk) sees no pong.
   Symptom: link check always times out while the node's console shows `[PONG]` → check the node's
   firmware, then EXT IP.
-- **An unreleased `fork-main` build from after 2026-09-13 cannot ping at all** (ADR §9.3): its DM
+- **An unreleased `fork-main` build between 2026-09-13 and 2026-09-25 cannot ping at all** (ADR §9.3): its DM
   stage 0 rewrites `{` to `(`, so the ping leaves as `(ping}{NNN`, the target ACKs it as a plain DM
-  and never pongs. Symptom: timeout, no `[PONG]` anywhere, an ACK in the monitor instead. A fix is in
-  progress; no released build is affected.
+  and never pongs. Symptom: timeout, no `[PONG]` anywhere, an ACK in the monitor instead. Fixed in
+  `fork-main` `313a52ed` (2026-09-25); no released build was ever affected.
 
 ## Gateway Uptime (`{CET}` link)
 
