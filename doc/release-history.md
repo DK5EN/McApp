@@ -1,5 +1,55 @@
 # Release History
 
+## v2.0.15 (2026-09-26)
+
+A small release: McApp understands two new node registers, and the map no longer shows a
+signal reading on the operator's own station. Schema stays at 32 and `SYSTEM_EPOCH` at 5, so
+there is no migration, no bootstrap convergence and no contract version change.
+
+### Highlights
+
+- **Own station no longer shows a relay's signal.** When a relay repeats one of our own frames,
+  the node hears it again over the air. McApp stored that reading on our own station, so the map
+  popup for DK5EN-98 read "DL2JA-2: −118 dBm / −8 dB", a measurement of the relay shown as if it
+  described us. Such a reading is now kept off our own station in the backend and the webapp. It
+  still counts towards the signal chart of the relay link, because that link was really measured.
+  The match is on the exact callsign, so other nodes of the same operator (DK5EN-1, DK5EN-90, …)
+  keep their readings. A reading already stored is cleared once at startup; on mcapp.local that
+  was the one row for DK5EN-98.
+- **New node registers IS1 and SN1.** Newer firmware sends two extra registers: `IS1` after `I`
+  (the firmware build date) and `SN1` after `SN` (the via setting). McApp used to drop both with a
+  "Type not found!" warning. They are now passed to the webapp and cached. The node settings show
+  the build date in the Identity card, and the Via card shows the node's real via setting instead
+  of the last value typed in. Older firmware never sends them, and nothing waits for them.
+
+### Backend (MCProxy)
+
+- Own-echo gate in signal ingest: a frame originated by our own callsign writes neither
+  `signal_log` nor the signal columns of our own `station_positions` row. The relay link's
+  `signal_buckets` still accumulate. The own callsign reaches storage through the same path as
+  every callsign change, including a live change after a node swap.
+- `IS1` and `SN1` are dispatched, cached in both mcapp and `ble_service`, and replayed to new SSE
+  clients. `--info` and `--nodeset` now answer with two frames and use the multi-part query
+  delay. `/api/status` reports `node_fwver` and `node_build`, and a change of the node's via
+  setting logs one INFO line.
+- `doc/ble-state-machine.md` rewritten for the current two-process BLE architecture.
+- Dependencies refreshed (uvicorn 0.54.0), including the standalone `ble_service` lock.
+
+### Frontend (webapp)
+
+- The own station's position row never carries RSSI/SNR or a signal hop, for live frames, backend
+  snapshots and the offline cache alike. A reading cached in the browser is cleared on the next
+  load.
+- Node settings: Identity "Build" row from `IS1` (`YYYY-MM-DD HH:MM:SS`, falling back to the old
+  `FWDATE`); the Via card is driven by `SN1`, with the previous optimistic behaviour as fallback.
+- Dependencies refreshed (vitest 5.0.2).
+
+### Upgrade notes
+
+- Nothing to configure. The build date and via state appear only once the node runs firmware that
+  sends `IS1`/`SN1` (upstream `dev`, DK5EN fork builds from 2026-09-25). This has not yet been
+  checked against a live node.
+
 ## v2.0.14 (2026-09-24)
 
 The RF Monitor learns to read the node's own debug console, gets colour and icons, and passes
