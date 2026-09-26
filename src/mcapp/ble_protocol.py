@@ -1145,7 +1145,22 @@ def transform_ble(input_dict: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-ROUTINE_JSON_TYPS = ("I", "SN", "G", "SA", "W", "IO", "TM", "AN", "SE", "SW", "S1", "S2")
+ROUTINE_JSON_TYPS = (
+    "I",
+    "SN",
+    "G",
+    "SA",
+    "W",
+    "IO",
+    "TM",
+    "AN",
+    "SE",
+    "SW",
+    "S1",
+    "S2",
+    "IS1",
+    "SN1",
+)
 
 # RX-02: telemetry beacons ride a `:` text frame (PAYLOAD_TYPE_MSG) addressed
 # to the reserved destination "100001" (`loop_functions.cpp:5083-5084`), body
@@ -1162,6 +1177,8 @@ def dispatcher(input_dict: dict[str, Any], own_callsign: str = "") -> dict[str, 
     Route BLE messages to appropriate transformer based on type.
 
     Multi-Part Configuration Responses:
+    - I + IS1: Device info (sent back to back by the same --info call)
+    - SN + SN1: Node settings (sent back to back by sendNodeSetting())
     - SE + S1: Sensor settings (arrive ~200ms apart)
     - SW + S2: WiFi settings (arrive ~200ms apart)
 

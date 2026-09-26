@@ -1698,7 +1698,7 @@ class BLEAdapter:
         """
         Query device registers NOT auto-sent on connection.
 
-        The device auto-sends: I, SN, G, SA, SE+S1, SW+S2, W, AN
+        The device auto-sends: I+IS1, SN+SN1, G, SA, SE+S1, SW+S2, W, AN
         This only queries: IO (GPIO status) and TM (telemetry config).
 
         The same burst carries the one per-session setting McApp needs on

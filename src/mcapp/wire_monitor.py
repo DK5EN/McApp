@@ -52,7 +52,7 @@ MAX_PAGE_LIMIT = 2000
 # transform_msg/transform_pos/transform_tele/transform_ack, plus transform_mh
 # — an MHeard beacon transformed into a synthetic "pos" frame). Every BLE
 # register/config notification (`ble_protocol.transform_ble`, TYP in
-# ROUTINE_JSON_TYPS: I/G/SN/SA/W/IO/TM/AN/SE/SW/S1/S2) carries no `type` key
+# ROUTINE_JSON_TYPS: I/G/SN/SA/W/IO/TM/AN/SE/SW/S1/S2/IS1/SN1) carries no `type` key
 # at all — it spreads the firmware's own `TYP` field instead and stamps
 # `src_type: "BLE"` (upper-case) — so gating on `type` membership already
 # excludes every register/config notification without re-deriving the TYP

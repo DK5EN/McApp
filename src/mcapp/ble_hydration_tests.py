@@ -1,7 +1,7 @@
 """Regression suite for the BLE config-register hydration sweep.
 
-WHAT BROKE. A MeshCom node emits its twelve config registers
-(I SN G SA SE S1 SW S2 W AN IO TM) only as its own post-hello burst, exactly
+WHAT BROKE. A MeshCom node emits its config registers
+(I IS1 SN SN1 G SA SE S1 SW S2 W AN IO TM) only as its own post-hello burst, exactly
 once per genuine hello handshake; mcapp merely cached whatever of that burst
 flew past. When the webapp moved its connect flow to
 `POST /api/ble/ensure_connected`, that route queried nothing at all, so every
@@ -11,7 +11,7 @@ explicitly, via text commands, on a scheduled background sweep.
 
 WHAT THIS SUITE PINS DOWN. The ten-command sequence and its exact order (the
 assertion that fails against the old three-command `--pos/--io/--tel` sweep),
-the mapping from those ten commands onto all twelve registers, the load-bearing
+the mapping from those ten commands onto all fourteen registers, the load-bearing
 inter-command spacing, the route's success-body gating, the single-flight
 SKIP semantics, the `after_hello`/`replay_grace` delay choice, the never-raises
 contract of a detached task, the pre-sweep link re-check, cancellation, the
@@ -96,9 +96,9 @@ EXPECTED_REGISTER_COMMANDS: tuple[str, ...] = (
 # Duplicated here on purpose: if someone drops a command from production, the
 # union below stops covering BLE_REGISTER_TYPES and this suite fails.
 COMMAND_REGISTER_MAP: dict[str, tuple[str, ...]] = {
-    "--info": ("I",),
+    "--info": ("I", "IS1"),  # two frames
     "--pos": ("G",),
-    "--nodeset": ("SN",),
+    "--nodeset": ("SN", "SN1"),  # two frames
     "--aprsset": ("SA",),
     "--seset": ("SE", "S1"),  # two frames
     "--wifiset": ("SW", "S2"),  # two frames
@@ -108,9 +108,9 @@ COMMAND_REGISTER_MAP: dict[str, tuple[str, ...]] = {
     "--tel": ("TM",),
 }
 
-# The two commands that answer with TWO frames and therefore get the longer
+# The four commands that answer with TWO frames and therefore get the longer
 # inter-command gap.
-MULTIPART_COMMANDS = frozenset({"--seset", "--wifiset"})
+MULTIPART_COMMANDS = frozenset({"--info", "--nodeset", "--seset", "--wifiset"})
 
 _DEVICE_MAC = "AA:BB:CC:DD:EE:FF"
 _DEVICE_NAME = "MeshCom-TEST"
@@ -426,7 +426,7 @@ def _ensure_connected_endpoint(manager: _StubManager) -> Callable[..., Any]:
 
 async def _test_register_sweep_order(record: _RecordFn, sleeps: list[float]) -> None:
     """THE core regression: all ten commands, in the documented order, covering
-    all twelve registers — and spaced so no two land in one firmware tick."""
+    all fourteen registers — and spaced so no two land in one firmware tick."""
     client = _RecordingBLEClient()
     router = _make_router(client)
 
@@ -442,10 +442,10 @@ async def _test_register_sweep_order(record: _RecordFn, sleeps: list[float]) -> 
     for cmd in client.commands:
         covered.update(COMMAND_REGISTER_MAP.get(cmd, ()))
     record(
-        "core regression: the issued commands cover all twelve BLE_REGISTER_TYPES "
-        "(--seset -> SE+S1, --wifiset -> SW+S2)",
+        "core regression: the issued commands cover all fourteen BLE_REGISTER_TYPES "
+        "(--info -> I+IS1, --nodeset -> SN+SN1, --seset -> SE+S1, --wifiset -> SW+S2)",
         covered == set(main_module.BLE_REGISTER_TYPES)
-        and len(main_module.BLE_REGISTER_TYPES) == 12,
+        and len(main_module.BLE_REGISTER_TYPES) == 14,
     )
     record(
         "no time sync and no hello wait when wait_for_hello=False",
@@ -463,8 +463,8 @@ async def _test_register_sweep_order(record: _RecordFn, sleeps: list[float]) -> 
             )
             spacing_ok = spacing_ok and delay == expected
     record(
-        "multipart spacing: --seset/--wifiset are followed by BLE_QUERY_DELAY_MULTIPART, "
-        "every other command by BLE_QUERY_DELAY_STANDARD",
+        "multipart spacing: --info/--nodeset/--seset/--wifiset are followed by "
+        "BLE_QUERY_DELAY_MULTIPART, every other command by BLE_QUERY_DELAY_STANDARD",
         spacing_ok,
     )
     record(
@@ -1651,6 +1651,139 @@ async def _test_sse_register_replay(record: _RecordFn) -> None:
     )
 
 
+async def _test_is1_sn1_dispatch_and_cache(record: _RecordFn) -> None:
+    """IS1 (build date, follows I) and SN1 (via state, follows SN) are the
+    newest two BLE JSON registers (2026-09-25 firmware, see
+    doc/2026-09-25_2041-is1-sn1-registers-plan.md). Before this fix the
+    dispatcher's allowlist did not include either TYP, so every IS1/SN1 frame
+    was dropped with a WARNING ("Type not found!") and never published --
+    which also meant it could never reach the register cache. Pins both
+    halves: dispatch (via `BLEClientRemote._handle_notification`, the same
+    path a live frame takes) and caching (via `_wire_ble_caches`, the real
+    `MessageRouter` subscriber that serves `/api/status` and SSE reconnect).
+    """
+    stub_router = _RecordingRouter()
+    client = BLEClientRemote("http://127.0.0.1:9", message_router=stub_router)
+
+    before = _undecodable_count()
+    await client._handle_notification(
+        json.dumps(
+            {
+                "format": "json",
+                "parsed": {"TYP": "IS1", "BDATE": "20260925-193817"},
+                "timestamp": 1,
+            }
+        )
+    )
+    await client._handle_notification(
+        json.dumps(
+            {
+                "format": "json",
+                "parsed": {"TYP": "SN1", "VIA": True, "VIACALL": "OE1KBC-24,OE1KFR-12"},
+                "timestamp": 1,
+            }
+        )
+    )
+    published = _ble_notification_publishes(stub_router)
+    record(
+        "IS1 and SN1: the dispatcher recognizes both TYPs and publishes a transformed dict "
+        "for each (not dropped as an unrecognized TYP)",
+        len(published) == 2
+        and published[0].get("TYP") == "IS1"
+        and published[0].get("BDATE") == "20260925-193817"
+        and published[1].get("TYP") == "SN1"
+        and published[1].get("VIACALL") == "OE1KBC-24,OE1KFR-12"
+        and _undecodable_count() == before,
+    )
+
+    router = MessageRouter(None)
+    main_module._wire_ble_caches(router)
+    await router.publish(
+        "ble_client", "ble_notification", {"TYP": "IS1", "BDATE": "20260925-193817"}
+    )
+    await router.publish(
+        "ble_client",
+        "ble_notification",
+        {"TYP": "SN1", "VIA": True, "VIACALL": "OE1KBC-24,OE1KFR-12"},
+    )
+    record(
+        "IS1 and SN1: both land in cached_ble_registers, exactly like every other "
+        "BLE_REGISTER_TYPES member",
+        router.cached_ble_registers.get("IS1", {}).get("BDATE") == "20260925-193817"
+        and router.cached_ble_registers.get("SN1", {}).get("VIACALL") == "OE1KBC-24,OE1KFR-12",
+    )
+
+
+def _test_is1_sn1_not_required(record: _RecordFn) -> None:
+    """IS1/SN1 must never join REQUIRED_BLE_REGISTER_TYPES: they are brand new
+    (2026-09-25) firmware registers, so a node on any older firmware never
+    sends either one -- requiring one would mean the completeness reconciler
+    (`MessageRouter.arm_ble_register_reconciler`) never reaches completeness
+    on that firmware and warns forever, the same trap "AN" is already
+    documented to avoid on nRF52 hardware."""
+    record(
+        "REQUIRED_BLE_REGISTER_TYPES excludes IS1 and SN1 (old firmware never sends them)",
+        "IS1" not in main_module.REQUIRED_BLE_REGISTER_TYPES
+        and "SN1" not in main_module.REQUIRED_BLE_REGISTER_TYPES,
+    )
+
+
+def _test_info_and_nodeset_use_multipart_delay(record: _RecordFn) -> None:
+    """`--info` and `--nodeset` now answer with TWO frames each (I+IS1,
+    SN+SN1) and must use the longer BLE_QUERY_DELAY_MULTIPART, exactly like
+    `--seset`/`--wifiset` already did -- otherwise the second frame can land
+    in the same firmware main-loop tick as the next command and get dropped.
+    `_test_register_sweep_order` proves the ACTUAL delay production passes for
+    every command via this same `MULTIPART_COMMANDS` fixture; this test pins
+    the fixture itself, which is what makes that proof meaningful.
+    """
+    record(
+        "--info and --nodeset are both in MULTIPART_COMMANDS (the fixture "
+        "_test_register_sweep_order's spacing assertion keys off of)",
+        {"--info", "--nodeset"} <= MULTIPART_COMMANDS,
+    )
+
+
+async def _test_sn1_via_change_logged(record: _RecordFn) -> None:
+    """A changed SN1 `(VIA, VIACALL)` pair logs one INFO line naming old and
+    new; an identical repeat logs nothing further. The very first SN1 a
+    process ever sees also logs (an "initial" line), since a fresh cache has
+    no prior value to diff against."""
+    router = MessageRouter(None)
+    main_module._wire_ble_caches(router)
+
+    with _capture_logs(_MAIN_LOGGER) as first_logs:
+        await router.publish(
+            "ble_client", "ble_notification", {"TYP": "SN1", "VIA": False, "VIACALL": ""}
+        )
+    record(
+        "SN1 via state: the first-ever SN1 this process sees logs an 'initial' INFO line",
+        any("initial" in msg and "VIA=False" in msg for msg in first_logs),
+    )
+
+    with _capture_logs(_MAIN_LOGGER) as changed_logs:
+        await router.publish(
+            "ble_client",
+            "ble_notification",
+            {"TYP": "SN1", "VIA": True, "VIACALL": "OE1KBC-24"},
+        )
+    record(
+        "SN1 via state: a changed (VIA, VIACALL) pair logs exactly one INFO line naming old -> new",
+        len(changed_logs) == 1 and "OE1KBC-24" in changed_logs[0] and "changed" in changed_logs[0],
+    )
+
+    with _capture_logs(_MAIN_LOGGER) as repeat_logs:
+        await router.publish(
+            "ble_client",
+            "ble_notification",
+            {"TYP": "SN1", "VIA": True, "VIACALL": "OE1KBC-24"},
+        )
+    record(
+        "SN1 via state: an identical repeat of the same (VIA, VIACALL) logs nothing",
+        repeat_logs == [],
+    )
+
+
 async def _test_schedule_without_event_loop(record: _RecordFn) -> None:
     """Scheduling from a thread with no running loop reports False instead of
     raising — callers must never break because scheduling was impossible.
@@ -1924,6 +2057,10 @@ async def run_ble_hydration_tests() -> bool:  # noqa: PLR0915 - sequential test-
         await _test_reconciler_finally_guard_survives_interleaved_arm(_record)
         await _test_hydration_skip_does_not_disarm_recovery(_record)
         await _test_sse_register_replay(_record)
+        await _test_is1_sn1_dispatch_and_cache(_record)
+        _test_is1_sn1_not_required(_record)
+        _test_info_and_nodeset_use_multipart_delay(_record)
+        await _test_sn1_via_change_logged(_record)
         await _test_schedule_without_event_loop(_record)
         await _test_undecodable_binary_dropped(_record)
         await _test_raw_format_fragment_dropped(_record)

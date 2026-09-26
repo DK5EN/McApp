@@ -94,9 +94,26 @@ SHUTDOWN_TIMEOUT_UDP_S = 3.0
 SHUTDOWN_TIMEOUT_SSE_S = 3.0
 # Config registers the device emits: once per genuine hello handshake as its own
 # post-hello burst, and otherwise only when explicitly asked (see
-# MessageRouter._query_ble_registers, which asks for all twelve). Cached here so
-# an SSE reconnect is served instantly instead of re-querying the radio.
-BLE_REGISTER_TYPES = ("I", "SN", "G", "SA", "SE", "S1", "SW", "S2", "W", "AN", "IO", "TM")
+# MessageRouter._query_ble_registers, which asks for all fourteen). Cached here
+# so an SSE reconnect is served instantly instead of re-querying the radio.
+# IS1 (build date, follows I) and SN1 (via state, follows SN) are the newest
+# two -- see doc/2026-09-25_2041-is1-sn1-registers-plan.md.
+BLE_REGISTER_TYPES = (
+    "I",
+    "SN",
+    "G",
+    "SA",
+    "SE",
+    "S1",
+    "SW",
+    "S2",
+    "W",
+    "AN",
+    "IO",
+    "TM",
+    "IS1",
+    "SN1",
+)
 
 # The subset of BLE_REGISTER_TYPES the webapp's frontend actually depends on
 # (its own REQUIRED row) -- everything else the sweep fetches anyway, but must
@@ -104,6 +121,10 @@ BLE_REGISTER_TYPES = ("I", "SN", "G", "SA", "SE", "S1", "SW", "S2", "W", "AN", "
 # at all, so requiring it would mean the reconciler below (see
 # MessageRouter.arm_ble_register_reconciler) never reaches completeness on
 # that hardware and warns forever for a register that will never arrive.
+# IS1/SN1 are excluded for the same reason from the other direction: they are
+# brand new firmware registers (2026-09-25), so a node running any older
+# firmware never sends them at all -- requiring either would mean the
+# reconciler never reaches completeness on that firmware and warns forever.
 REQUIRED_BLE_REGISTER_TYPES = frozenset({"I", "SN", "G", "SA"})
 
 # Re-exported from util so `main.PLACEHOLDER_CALLSIGN_BASES` keeps resolving for
@@ -121,7 +142,7 @@ is_dev: bool = False
 # BLE Register Query Timing Constants (seconds)
 BLE_HELLO_WAIT = 1.0  # Wait after hello handshake before queries
 BLE_QUERY_DELAY_STANDARD = 0.8  # Delay between standard register queries
-BLE_QUERY_DELAY_MULTIPART = 1.2  # Delay for multi-part responses (SE+S1, SW+S2)
+BLE_QUERY_DELAY_MULTIPART = 1.2  # Multi-part responses (I+IS1, SN+SN1, SE+S1, SW+S2)
 BLE_RETRY_BASE_DELAY = 0.5  # Base delay for exponential backoff retries
 # Head start handed to the node's OWN post-hello config burst before a
 # scheduled hydration sweep starts pushing register commands of its own.
@@ -156,7 +177,7 @@ BLE_HYDRATE_QUIET_DELAY_S = 1.0
 # cache it holds is already warm) then ran a wasted ~9s, 10-command RF sweep
 # a fraction of a second after the replay had already populated the cache for
 # free from ble_service's own `GET /api/ble/registers`. 3.0s gives that local,
-# no-RF replay (one loopback GET plus up to twelve in-process notification
+# no-RF replay (one loopback GET plus up to fourteen in-process notification
 # handoffs) comfortable headroom to land before `skip_if_complete` gets to
 # evaluate `_missing_required_ble_registers()`. Strictly between the quiet
 # delay and the burst-clearing one: unlike the quiet delay it must reliably
@@ -415,6 +436,9 @@ class MessageRouter:
         self.my_callsign = new_callsign
         self.validator = MessageValidator(self.my_callsign)
         self._logger.info("Callsign set to '%s', validator initialized", self.my_callsign)
+
+        if self.storage_handler is not None:
+            self.storage_handler.set_own_callsign(new_callsign)
 
         cmd_handler = self.get_protocol("commands")
         if cmd_handler is not None:
@@ -1085,13 +1109,14 @@ class MessageRouter:
 
         The mental model this method used to be written around was wrong, and
         the `XX0XXX` / `0.0.0` / `00:00:00:00` placeholders the frontend showed
-        forever are what it cost. The node does auto-send its twelve registers
-        (I, SN, G, SA, SE+S1, SW+S2, W, AN, IO, TM) — but ONLY as its own
-        post-hello config burst, exactly once per genuine hello handshake
-        (firmware: esp32_main.cpp/nrf52_main.cpp's `config_cmds`). mcapp
-        merely caches whatever of that burst happens to fly past
-        (`_wire_ble_caches`). Every path that does not produce a fresh hello
-        therefore leaves the cache empty or stale, and there are several:
+        forever are what it cost. The node does auto-send its fourteen
+        registers (I+IS1, SN+SN1, G, SA, SE+S1, SW+S2, W, AN, IO, TM) — but
+        ONLY as its own post-hello config burst, exactly once per genuine
+        hello handshake (firmware: esp32_main.cpp/nrf52_main.cpp's
+        `config_cmds`). mcapp merely caches whatever of that burst happens to
+        fly past (`_wire_ble_caches`). Every path that does not produce a
+        fresh hello therefore leaves the cache empty or stale, and there are
+        several:
 
         * an mcapp restart while `ble_service` keeps the BLE session alive —
           `BLEClientRemote.start()` sees `connected` and never redoes
@@ -1113,9 +1138,9 @@ class MessageRouter:
 
         Spacing is load-bearing, not politeness. Two text commands landing in
         one firmware main-loop tick means only the last one executes, so every
-        command is followed by a sleep. `--seset` and `--wifiset` each answer
-        with TWO frames (SE+S1, SW+S2) and get the longer
-        BLE_QUERY_DELAY_MULTIPART.
+        command is followed by a sleep. `--info`, `--nodeset`, `--seset` and
+        `--wifiset` each answer with TWO frames (I+IS1, SN+SN1, SE+S1, SW+S2)
+        and get the longer BLE_QUERY_DELAY_MULTIPART.
 
         Callers are responsible for not starting a sweep inside the node's own
         post-hello burst window — see BLE_HYDRATE_BURST_CLEAR_DELAY_S and
@@ -1140,9 +1165,9 @@ class MessageRouter:
         # A sweep cut short by BLE_REQUERY_TIMEOUT_S then still delivered the
         # load-bearing part.
         register_queries = [
-            ("--info", BLE_QUERY_DELAY_STANDARD),  # TYP: I  — FWVER/CALL/ID/HWID
+            ("--info", BLE_QUERY_DELAY_MULTIPART),  # TYP: I + IS1 — FWVER/.../BDATE, two frames
             ("--pos", BLE_QUERY_DELAY_STANDARD),  # TYP: G  — GPS fix
-            ("--nodeset", BLE_QUERY_DELAY_STANDARD),  # TYP: SN — node settings
+            ("--nodeset", BLE_QUERY_DELAY_MULTIPART),  # TYP: SN + SN1 — node + via, two frames
             ("--aprsset", BLE_QUERY_DELAY_STANDARD),  # TYP: SA — APRS settings
             ("--seset", BLE_QUERY_DELAY_MULTIPART),  # TYP: SE + S1 — two frames
             ("--wifiset", BLE_QUERY_DELAY_MULTIPART),  # TYP: SW + S2 — two frames
@@ -1854,7 +1879,7 @@ class MessageRouter:
 
         What did change is the optional register re-query: it is SCHEDULED now
         rather than awaited, so asking for BLE info no longer blocks the
-        command handler for the ~9 s a full twelve-register sweep costs.
+        command handler for the ~9 s a full fourteen-register sweep costs.
 
         Args:
             websocket: WebSocket to send response to (None = broadcast via SSE)
@@ -2377,6 +2402,34 @@ def _coordinate(value: Any, limit: float) -> float | None:
     return coordinate
 
 
+def _log_sn1_via_change(previous: Any, current: dict[str, Any]) -> None:
+    """Log one INFO line when SN1's (VIA, VIACALL) differs from what was
+    previously cached -- including the very first SN1 this process ever
+    sees, which has no `previous` to compare against. Must never raise: it
+    runs from inside the `ble_notification` subscriber, on the hot ingest
+    path, for every SN1 frame (connect burst, `--nodeset`, and every
+    `--via` change on the node).
+    """
+    try:
+        new_via = current.get("VIA")
+        new_viacall = current.get("VIACALL")
+        if not isinstance(previous, dict):
+            logger.info("BLE via state: initial VIA=%r VIACALL=%r", new_via, new_viacall)
+            return
+        old_via = previous.get("VIA")
+        old_viacall = previous.get("VIACALL")
+        if (old_via, old_viacall) != (new_via, new_viacall):
+            logger.info(
+                "BLE via state changed: VIA=%r VIACALL=%r -> VIA=%r VIACALL=%r",
+                old_via,
+                old_viacall,
+                new_via,
+                new_viacall,
+            )
+    except Exception:
+        logger.debug("BLE via-change logging failed", exc_info=True)
+
+
 def _wire_ble_caches(message_router: MessageRouter) -> None:
     """Subscribe the BLE-register/GPS caching handlers used to serve SSE
     reconnects instantly instead of re-querying the device."""
@@ -2386,6 +2439,8 @@ def _wire_ble_caches(message_router: MessageRouter) -> None:
         data = routed_message["data"]
         typ = data.get("TYP")
         if typ in BLE_REGISTER_TYPES:
+            if typ == "SN1":
+                _log_sn1_via_change(message_router.cached_ble_registers.get("SN1"), data)
             message_router.cached_ble_registers[typ] = data
 
     message_router.subscribe("ble_notification", _cache_ble_register)
@@ -2697,6 +2752,17 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
             logger.info("Repaired %d read cursor(s) with a stale DM key", repaired)
     except Exception:
         logger.warning("repair_read_cursor_dm_keys failed", exc_info=True)
+    # One-shot, idempotent cleanup of a station_positions signal reading
+    # poisoned by our own frame echoing back over RF before the ingest gate
+    # in storage/ingest.py's `_ingest_signal` existed (see that method and
+    # `clear_own_signal`'s docstring). No marker needed: a correct row is
+    # never touched, so this is a no-op after the first successful run.
+    try:
+        cleared = await storage_handler.clear_own_signal(message_router.my_callsign or "")
+        if cleared > 0:
+            logger.info("Cleared %d poisoned own-station signal reading(s)", cleared)
+    except Exception:
+        logger.warning("clear_own_signal failed", exc_info=True)
     message_router.cached_gps = None  # {lat, lon} — set when BLE device sends TYP="G"
     message_router.cached_ble_registers = {}  # {TYP: dict} — cached on ble_notification
     _wire_ble_caches(message_router)
@@ -2758,7 +2824,7 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
     # ensuring the health check finds port 1799 listening promptly.
     await udp_handler.start_listening()
 
-    # BLE Client (supports local, remote, disabled modes)
+    # BLE Client (remote or disabled mode)
     ble_client = None
     try:
         ble_mode = BLEMode(cfg.ble.mode)

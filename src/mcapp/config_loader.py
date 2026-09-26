@@ -131,7 +131,7 @@ class UDPConfig:
 class BLEConfig:
     """Bluetooth Low Energy configuration."""
 
-    mode: str = "remote"  # "local" | "remote" | "disabled"
+    mode: str = "remote"  # "remote" | "disabled"
     api_key: str = ""  # per-deployment auth key
 
 

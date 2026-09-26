@@ -31,6 +31,7 @@ class StorageBase(Protocol):
     _recent_ingest: dict[tuple[str, str], int]
     _message_router: Any
     _classifier: Any
+    _own_callsign: str
     MAX_DB_SIZE_MB: int
 
     # ── Cross-mixin method stubs (CMD-09: raise, don't silently return None —
@@ -84,6 +85,9 @@ class StorageBase(Protocol):
         raise NotImplementedError
 
     async def store_message(self, message: dict[str, Any], raw: str) -> None:
+        raise NotImplementedError
+
+    async def clear_own_signal(self, callsign: str) -> int:
         raise NotImplementedError
 
     def _should_filter_message(self, message: dict[str, Any]) -> bool:

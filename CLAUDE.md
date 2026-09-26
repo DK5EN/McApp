@@ -287,15 +287,18 @@ feature. Design and the on-air measurements: `doc/2026-08-13_1500-linkcheck-ping
 - **The ingest guard sits before `_insert_message_row`, NOT in `_should_filter_message`.** The
   latter returns before `_ingest_signal`, so a guard there deletes the pong's signal ingestion,
   which already works. `linkcheck_ingest_tests.py` case 1 pins exactly that pair.
-- **It does not measure a round-trip time.** Measured 21-43 s on air, dominated by the node's TX
-  queue and the firmware's 40 s retransmit steps. Report reachability + reply RSSI/SNR; never label
-  a number RTT. Attempt timeout is 90 s for that reason, and attempts are sequential.
+- **It does not measure a round-trip time.** Measured 21-43 s on air with official firmware,
+  dominated by the node's TX queue and the firmware's 40 s retransmit steps (12 s on the fixed fork
+  firmware, ADR §9.5). Report reachability + reply RSSI/SNR; never label a number RTT. Attempt
+  timeout is 90 s for that reason, and attempts are sequential.
 - **RSSI/SNR belongs to the target only when the pong arrives with no via-path** (`hops == 0`);
   relayed pongs are the observed norm and carry the last hop's signal.
 - **Nothing we send survives the round trip** — `getExtern()` reads only `dst` and `msg`, so our
   own echo cannot be tagged and the echo-claim can only be narrowed, never closed.
-- A proxy-originated ping is **~4 keyings over 2 minutes** (retransmission is armed for any DM not
-  starting `{CET}`/`{MCP}`/`{SET}`). Caps are enforced server-side; the endpoint has no auth.
+- A proxy-originated ping is **~4 keyings over 2 minutes on official firmware** (retransmission is
+  armed for any DM not starting `{CET}`/`{MCP}`/`{SET}`); DK5EN fork builds from 2026-09-24 key it
+  once (ADR §9.2). Set caps for the four-keying case — the fleet is mixed. Caps are enforced
+  server-side; the endpoint has no auth.
 - **We cannot ping ourselves** — the firmware refuses a DM to its own callsign.
 - **The ping goes over BLE when BLE is connected, else UDP** (ADR §8). With EXTUDP off the node
   never reads UDP, so a UDP-sent ping is silently never transmitted. The node echoes a BLE-sent
@@ -304,9 +307,15 @@ feature. Design and the on-air measurements: `doc/2026-08-13_1500-linkcheck-ping
 - **A pong counts from either transport; the echo is optional** (ADR §8, 2026-09-24). BLE copy
   without `msg_server` = RF, with it = internet path. Without the Extern-UDP echo the pong is
   matched through our node's id — the top 22 bits of every firmware msg_id, learned from the BLE
-  `I` register's `ID`. **The firmware does not forward a `{pong}` for us to BLE** (display only),
-  so a box whose EXT IP points elsewhere (MeshCom WebDesk) still sees no pong until it does.
-  Symptom: link check always times out while the node's console shows `[PONG]` → check EXT IP.
+  `I` register's `ID`. **Official firmware does not forward a `{pong}` for us to BLE** (display
+  only); DK5EN fork builds from 2026-09-24 do (ADR §9.1, verified live 2026-09-25 on DK5EN-98). So
+  on an official-firmware node a box whose EXT IP points elsewhere (MeshCom WebDesk) sees no pong.
+  Symptom: link check always times out while the node's console shows `[PONG]` → check the node's
+  firmware, then EXT IP.
+- **An unreleased `fork-main` build between 2026-09-13 and 2026-09-25 cannot ping at all** (ADR §9.3): its DM
+  stage 0 rewrites `{` to `(`, so the ping leaves as `(ping}{NNN`, the target ACKs it as a plain DM
+  and never pongs. Symptom: timeout, no `[PONG]` anywhere, an ACK in the monitor instead. Fixed in
+  `fork-main` `313a52ed` (2026-09-25); no released build was ever affected.
 
 ## Gateway Uptime (`{CET}` link)
 

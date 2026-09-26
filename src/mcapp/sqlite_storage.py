@@ -85,6 +85,13 @@ class SQLiteStorage(
         # Reference to classifier (set via set_classifier after construction)
         self._classifier = None
 
+        # This node's own callsign (set via set_own_callsign after construction,
+        # wired from MessageRouter.apply_callsign). Empty until then. Lets
+        # IngestMixin._ingest_signal recognise a frame that is OUR OWN traffic
+        # relayed back to us over RF, whose rssi/snr describe the relay's link,
+        # not our own station — see that method for the gating.
+        self._own_callsign: str = ""
+
         # Parsed push_subscriptions cache; None = cold. Read on EVERY inbound mesh
         # message by PushDispatcher.handle_mesh_message, mutated only by
         # subscribe/unsubscribe/prune — see list_push_subscriptions.
@@ -109,6 +116,17 @@ class SQLiteStorage(
     def set_message_router(self, router: Any) -> None:
         """Allow storage to publish events (e.g. ACK status updates)."""
         self._message_router = router
+
+    def set_own_callsign(self, callsign: str) -> None:
+        """Record this node's own callsign for own-echo signal gating.
+
+        Wired from `MessageRouter.apply_callsign`, so both boot (`set_callsign`)
+        and a live callsign swap keep this in sync. Stripped and upper-cased
+        so `IngestMixin._ingest_signal`'s comparison against the ingested
+        `callsign` (itself upper-cased at the comparison site — the frame's
+        `src` is not normalised on the way in) is a plain exact match.
+        """
+        self._own_callsign = callsign.strip().upper()
 
     def set_classifier(self, classifier: Any) -> None:
         """Wire the classifier so store_message() annotates new rows inline."""

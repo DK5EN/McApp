@@ -28,6 +28,16 @@ Coverage:
     though signal_buckets keys differently — the two tables serve different
     purposes (see ingest.py's `_ingest_signal` docstring) and only the bucket
     key changes.
+  * Own-echo gating: our own frame relayed back to us over RF (`callsign` ==
+    the configured own callsign) writes NO signal_log row and NO
+    station_positions signal upsert onto our own row, but the relay's link
+    (`signal_via`) still accumulates into signal_buckets — it is a genuine
+    measurement of that link. A different SSID of the same base operator
+    callsign (e.g. DK5EN-1 vs the configured DK5EN-98) is NOT gated: exact
+    match only, never base-callsign.
+  * `clear_own_signal` nulls a pre-poisoned own station_positions row exactly
+    once (idempotent: a second call against the same row is a no-op), and
+    never touches any other row.
 
 All timestamps are milliseconds (project-wide DB convention).
 """
@@ -208,9 +218,200 @@ async def run_signal_via_tests() -> bool:
         finally:
             await storage.close()
 
+    await _test_own_echo_and_clear_own_signal(results)
+
     for label, ok in results:
         print(f"    {'✅ PASS' if ok else '❌ FAIL'} | {label}")
 
     all_ok = all(ok for _, ok in results)
     print(f"    signal_via: {'PASS' if all_ok else 'FAIL'}")
     return all_ok
+
+
+async def _test_own_echo_and_clear_own_signal(results: list[tuple[str, bool]]) -> None:
+    """Own-echo gating in `_ingest_signal` + `clear_own_signal` cleanup.
+
+    Our own frame, relayed back to us over RF, arrives as an ordinary lora
+    reception with `callsign` == our own configured callsign — see the
+    docstrings on `IngestMixin._ingest_signal` and `clear_own_signal` for the
+    live-evidence bug this pins.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = Path(tmp_dir) / "signal_via_own_echo_test.db"
+        storage = await create_sqlite_storage(db_path)
+        try:
+
+            async def _station_row(callsign: str) -> dict[str, Any] | None:
+                rows = await storage._query(
+                    "SELECT * FROM station_positions WHERE callsign = ?", (callsign,)
+                )
+                return rows[0] if rows else None
+
+            async def _signal_log_sources(callsign: str) -> list[str]:
+                rows = await storage._query(
+                    "SELECT source FROM signal_log WHERE callsign = ? ORDER BY timestamp",
+                    (callsign,),
+                )
+                return [row["source"] for row in rows]
+
+            # 1. Own-echo gating: our own frame, relayed back to us over RF, must not
+            # poison our own station_positions row or write a signal_log row for us,
+            # but the relay's link (last hop) is still a genuine measurement and must
+            # still accumulate.
+            own_callsign = "DK5EN-98"
+            own_last_hop = "DL2JA-2"
+            storage.set_own_callsign(own_callsign)
+
+            # Seed a station_positions row for our own callsign the way a real own
+            # position beacon would (direct, no relay path, no rssi/snr) — mirrors
+            # production, where the node already has a row before a relay ever
+            # echoes it back.
+            own_seed_msg = {
+                "msg_id": "SIGVIA005",
+                "src": own_callsign,
+                "dst": "*",
+                "msg": "",
+                "type": "pos",
+                "src_type": "lora",
+                "timestamp": _BASE_TS + 5,
+                "lat": 48.2,
+                "lon": 16.3,
+            }
+            await storage.store_message(own_seed_msg, json.dumps(own_seed_msg))
+
+            own_echo_msg = {
+                "msg_id": "SIGVIA006",
+                "src": f"{own_callsign},DL2UD-1,{own_last_hop}",
+                "dst": "*",
+                "msg": "",
+                "type": "msg",
+                "src_type": "lora",
+                "timestamp": _BASE_TS + 6,
+                "rssi": -118,
+                "snr": -8.0,
+            }
+            own_bucket_start = (own_echo_msg["timestamp"] // _BUCKET_MS) * _BUCKET_MS  # type: ignore[operator]
+            await storage.store_message(own_echo_msg, json.dumps(own_echo_msg))
+
+            own_row = await _station_row(own_callsign)
+            results.append(
+                (
+                    (
+                        "own echo: station_positions for our own callsign keeps NULL rssi/snr"
+                        " and no signal_via (the relay's rssi/snr is not ours)"
+                    ),
+                    own_row is not None
+                    and own_row.get("rssi") is None
+                    and own_row.get("snr") is None
+                    and (own_row.get("signal_via") or "") == "",
+                )
+            )
+            results.append(
+                (
+                    "own echo: no signal_log row is written for our own callsign",
+                    await _signal_log_sources(own_callsign) == [],
+                )
+            )
+            own_bucket_key = (own_last_hop, own_bucket_start)
+            own_bucket_accumulated = (
+                own_bucket_key in storage._bucket_accumulators
+                and len(storage._bucket_accumulators[own_bucket_key]["rssi"]) >= 1
+            )
+            results.append(
+                (
+                    (
+                        "own echo: signal_buckets accumulation for the relay"
+                        f" ({own_last_hop!r}) still happens — it is a real measurement"
+                        " of that link"
+                    ),
+                    own_bucket_accumulated,
+                )
+            )
+
+            # 2. A different SSID of the SAME base operator callsign is a distinct,
+            # real station and must NOT be gated (exact match only, never base).
+            same_base_cs = "DK5EN-1"
+            same_base_last_hop = "DL2JA-2"
+            same_base_msg = {
+                "msg_id": "SIGVIA007",
+                "src": f"{same_base_cs},{same_base_last_hop}",
+                "dst": "*",
+                "msg": "",
+                "type": "msg",
+                "src_type": "lora",
+                "timestamp": _BASE_TS + 7,
+                "rssi": -95,
+                "snr": 2.0,
+            }
+            await storage.store_message(same_base_msg, json.dumps(same_base_msg))
+            same_base_row = await _station_row(same_base_cs)
+            results.append(
+                (
+                    (
+                        "same-base, different SSID (DK5EN-1 vs own DK5EN-98): signal IS"
+                        " written — exact match only, never base-callsign"
+                    ),
+                    same_base_row is not None
+                    and same_base_row.get("signal_via") == same_base_last_hop,
+                )
+            )
+            results.append(
+                (
+                    "same-base, different SSID: signal_log row IS written",
+                    await _signal_log_sources(same_base_cs) == ["lora"],
+                )
+            )
+
+            # 3. clear_own_signal: idempotent cleanup of a pre-poisoned own row,
+            # never touching any other station's row.
+            await storage._mutate(
+                "UPDATE station_positions SET rssi = ?, snr = ?, signal_via = ? WHERE callsign = ?",
+                (-118, -8.0, own_last_hop, own_callsign),
+            )
+            poisoned_row = await _station_row(own_callsign)
+            results.append(
+                (
+                    "clear_own_signal setup: own row is poisoned before the cleanup call",
+                    poisoned_row is not None and poisoned_row.get("rssi") == -118,
+                )
+            )
+
+            cleared_first = await storage.clear_own_signal(own_callsign)
+            cleaned_row = await _station_row(own_callsign)
+            results.append(
+                (
+                    "clear_own_signal: first call nulls the poisoned row and returns 1",
+                    cleared_first == 1
+                    and cleaned_row is not None
+                    and cleaned_row.get("rssi") is None
+                    and cleaned_row.get("snr") is None
+                    and (cleaned_row.get("signal_via") or "") == "",
+                )
+            )
+
+            cleared_second = await storage.clear_own_signal(own_callsign)
+            results.append(
+                (
+                    "clear_own_signal: second call against the same (now clean) row is a no-op",
+                    cleared_second == 0,
+                )
+            )
+
+            other_row_after_clear = await _station_row(same_base_cs)
+            results.append(
+                (
+                    "clear_own_signal: an unrelated station's row is left untouched",
+                    other_row_after_clear is not None
+                    and other_row_after_clear.get("signal_via") == same_base_last_hop,
+                )
+            )
+
+            cleared_empty = await storage.clear_own_signal("")
+            results.append(
+                (
+                    "clear_own_signal: an empty callsign is a no-op and returns 0",
+                    cleared_empty == 0,
+                )
+            )
+        finally:
+            await storage.close()

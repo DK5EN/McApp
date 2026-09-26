@@ -67,10 +67,11 @@ Response:
 
 ### Status & Discovery
 
-| Method | Endpoint           | Description                                          |
-| ------ | ------------------ | ---------------------------------------------------- |
-| GET    | `/api/ble/status`  | Connection status, state, device info, last activity |
-| GET    | `/api/ble/devices` | Scan for BLE devices                                 |
+| Method | Endpoint            | Description                                           |
+| ------ | ------------------- | ----------------------------------------------------- |
+| GET    | `/api/ble/status`   | Connection status, state, device info, last activity  |
+| GET    | `/api/ble/devices`  | Scan for BLE devices                                  |
+| GET    | `/api/ble/activity` | Recent connection events (last 50), `{events, count}` |
 
 **`GET /api/ble/devices`** query parameters:
 
@@ -83,18 +84,40 @@ Cannot scan while connected (returns 409).
 
 ### Connection Management
 
-| Method | Endpoint              | Description                             |
-| ------ | --------------------- | --------------------------------------- |
-| POST   | `/api/ble/connect`    | Connect to device                       |
-| POST   | `/api/ble/disconnect` | Disconnect (also resets ERROR state)    |
-| POST   | `/api/ble/pair`       | Pair with device (must be disconnected) |
-| POST   | `/api/ble/unpair`     | Remove pairing                          |
+| Method | Endpoint                    | Description                                                         |
+| ------ | --------------------------- | ------------------------------------------------------------------- |
+| POST   | `/api/ble/ensure_connected` | User-initiated connect with PIN, pairing on demand and `error_code` |
+| POST   | `/api/ble/connect`          | Connect to device (legacy path, auto-reconnect)                     |
+| POST   | `/api/ble/disconnect`       | Disconnect (also resets ERROR state)                                |
+| POST   | `/api/ble/cancel_reconnect` | Stop a running reconnect ladder without touching the link           |
+| PATCH  | `/api/ble/pin`              | Set the app-layer BLE PIN used for the hello                        |
+| POST   | `/api/ble/pair`             | Pair with device (must be disconnected)                             |
+| POST   | `/api/ble/unpair`           | Remove pairing                                                      |
 
 **`POST /api/ble/connect`** accepts JSON body with either `device_address` (MAC) or `device_name`. If only `device_name` is given, the service scans for 5 seconds to resolve the MAC address (returns 404 if not found).
 
-On successful connect, the service automatically: starts notifications, waits ~0.7s (`HELLO_SETTLE_DELAY_S` — mirrors how long a phone app waits between subscribing to notifications and sending hello; sending hello immediately was suspected of racing the firmware's connect-callback setup and suppressing its post-hello register burst), sends hello, waits 1s, then queries extended registers (`--io`, `--tel`).
+On successful connect, the service automatically: starts notifications, waits ~0.7s (`HELLO_SETTLE_DELAY_S` — mirrors how long a phone app waits between subscribing to notifications and sending hello; sending hello immediately was suspected of racing the firmware's connect-callback setup and suppressing its post-hello register burst), sends hello, waits 1s, then sends `--ackinfo on` and queries the extended registers `--io` and `--tel` (0.8s apart).
+
+**`POST /api/ble/ensure_connected`** is the connect path the webapp uses (via mcapp). JSON body:
+`device_address` (required) and optional `pin` (0 or 100000-999999). It cancels any background
+reconnect first, answers 409 with `error_code: "busy"` while another operation holds the lock, then
+makes a single connect attempt (plus one scan and retry if BlueZ does not know the device, and one
+bond reset and retry on `AuthenticationFailed` for a stale bond), marks the device trusted, and pairs
+on demand if `StartNotify` fails with a GATT security error. The connect is bounded by
+`ENSURE_CONNECTED_DEADLINE_S` (28 s); the following hello and `--ackinfo on`/`--io`/`--tel` init by
+`POST_CONNECT_INIT_DEADLINE_S` (8 s). Response: `{success, message, error_code}`, where
+`error_code` is one of `device_not_found`, `connect_failed`, `pair_failed`, `gatt_failed`,
+`pin_required`, `timeout`, `busy` (None on success). `pin_required` means the node dropped the link
+within `PIN_REQUIRED_WINDOW_S` (5 s) of the hello, which is how a wrong PIN shows; no reconnect is
+scheduled after it. A PIN that worked is persisted.
+
+`POST /api/ble/connect` has no busy guard: a call while another operation runs waits on the lock.
 
 **`POST /api/ble/disconnect`** cancels any pending auto-reconnect attempt.
+
+**`PATCH /api/ble/pin`** body `{"pin": int}` (0 = open hello, 100000-999999 = SHA-256 keyed hello).
+It only changes what the service sends; the node's own PIN is set with `--btcode`. Returns
+`{"ok": true}`.
 
 **`POST /api/ble/pair`** and **`POST /api/ble/unpair`** require `device_address` in the JSON body.
 
@@ -132,7 +155,7 @@ On successful connect, the service automatically: starts notifications, waits ~0
 
 - Always `200`. `registers: {}` / `count: 0` when nothing has been cached yet.
 - Keyed by `TYP`; each value is the exact parsed JSON object last received for that `TYP` (the `TYP` field itself included), last-write-wins.
-- Only registers the device actually sends a config value for are cached: `I`, `SN`, `G`, `SA`, `SE`, `S1`, `SW`, `S2`, `W`, `IO`, `TM`, `AN` (see "Extended Register Queries" below for which are auto-sent vs. query-only). `CONFFIN` (a burst-terminator marker, not a value) and `MH` (a rolling mheard list, not a stable register) are never cached.
+- Only registers the device actually sends a config value for are cached: `I`, `IS1`, `SN`, `SN1`, `G`, `SA`, `SE`, `S1`, `SW`, `S2`, `W`, `IO`, `TM`, `AN` (see "Extended Register Queries" below for which are auto-sent vs. query-only). `CONFFIN` (a burst-terminator marker, not a value) and `MH` (a rolling mheard list, not a stable register) are never cached.
 - **Staleness is deliberate.** The cache is _not_ cleared on a plain disconnect — a value from before a dropped link is more useful than nothing, especially since this cache exists precisely to soften the case where the device's automatic post-hello register burst does not arrive at all (see `HELLO_SETTLE_DELAY_S` above). A value here can therefore be from any point since the last connect to this device, not necessarily the current connection.
 - **The cache IS cleared the moment the connect target changes to a different MAC** (before the new connect attempt even starts) — a cached value from one node must never be attributed to another. Reconnecting to the _same_ device (auto-reconnect, or re-tapping the node you were already on) keeps the cache.
 - Exists because the notification SSE stream (`/api/ble/notifications`) alone is not durable memory: its queue is bounded (`NOTIFICATION_QUEUE_SIZE`) and is lost across an mcapp restart, so a register that only arrives once per connect could be gone before anything ever reads it.
@@ -197,7 +220,22 @@ curl -N -H "X-API-Key: secret" \
 
 ### Auto-Reconnect
 
-On unexpected disconnect (detected during a failed write), the service automatically attempts to reconnect with exponential backoff: 5s, 10s, 20s, 60s (4 attempts). Auto-reconnect is cancelled if the user explicitly calls `/api/ble/disconnect`.
+An unexpected disconnect is detected from BlueZ's `Device1.Connected` property turning false, or
+from a write failing with "Not connected". The service then retries with the ladder
+`RECONNECT_DELAYS_S` = 5 s, 10 s, 20 s, 60 s (4 attempts), pushing a `reconnecting` status per
+attempt and `reconnect_exhausted` after the last one; there is no further retry. No reconnect runs
+after `/api/ble/disconnect` or `/api/ble/cancel_reconnect`, nor after a drop inside the PIN probe
+window of `/api/ble/ensure_connected`.
+
+On service startup, the last device is auto-connected after `BLE_AUTO_CONNECT_DELAY` (default 8 s)
+with the same ladder, except that the first attempt is immediate and each attempt is bounded at 30 s.
+
+### Writes
+
+All writes are serialized. Consecutive `0xA0` text/command frames are kept at least `A0_MIN_GAP_S`
+(0.3 s) apart, because the firmware keeps only the last text frame per main-loop pass; binary config
+frames are not delayed. There is no chunking: a frame over 255 bytes (the length prefix) is rejected
+before any write, and callsign/WiFi frames are also capped at 247 bytes.
 
 ### Keepalive
 
@@ -205,7 +243,7 @@ While connected, the service sends a `--pos` command every 5 minutes to prevent 
 
 ### Extended Register Queries
 
-After connecting, the service automatically queries `--io` (GPIO status) and `--tel` (telemetry config). The device auto-sends all other registers on BLE connect: I, SN, G, SA, SE+S1, SW+S2, W, AN.
+After connecting, the service automatically queries `--io` (GPIO status) and `--tel` (telemetry config). The device auto-sends all other registers on BLE connect: I+IS1, SN+SN1, G, SA, SE+S1, SW+S2, W, AN (IS1/SN1 only on firmware from 2026-09-25).
 
 ### Connection States
 
@@ -218,6 +256,9 @@ The `state` field in status responses reflects the current connection lifecycle:
 | `connected`     | Active connection to device                       |
 | `disconnecting` | Disconnect in progress                            |
 | `error`         | Connection failed (cleared by calling disconnect) |
+
+While a reconnect ladder runs, `GET /api/ble/status` reports `state: "reconnecting"` (with
+`reconnect_attempt` / `reconnect_max_attempts`) instead of the underlying connection state.
 
 ### Status/reason wire vocabulary (BLE-10)
 

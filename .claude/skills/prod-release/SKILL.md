@@ -352,9 +352,19 @@ The deploy takes several minutes on a Pi Zero 2W. **Do not poll it turn by turn.
 background wait with a terminal condition and do something else until it fires:
 
 ```bash
-until [ "$(curl -sk --max-time 5 https://mcapp.local/webapp/version.html | tr -d '[:space:]')" \
-  = "vX.Y.Z" ]; do sleep 15; done; echo DONE
+ssh mcapp.local 'for i in $(seq 1 80); do
+  [ "$(curl -s --max-time 10 http://127.0.0.1/webapp/version.html | tr -d "[:space:]")" = "vX.Y.Z" ] \
+    && { echo DONE; exit 0; }
+  sleep 15
+done; echo "TIMEOUT: still not vX.Y.Z after 20 min"; exit 1'
 ```
+
+**Poll from the Pi, not from the Mac, and give the loop an end.** From the Mac every request to
+`mcapp.local` first spends ~5 s on the mDNS lookup. The earlier version of this loop ran there with
+`--max-time 5`, so every attempt was cut off before an answer arrived. It never matched and polled
+silently forever: during the v2.0.14 promotion it was still running long after the box was on
+`v2.0.14`. On the Pi, `127.0.0.1` needs no name lookup at all. The 80 × 15 s bound turns a
+deploy that never lands into a `TIMEOUT` line and exit code 1, instead of a wait that never ends.
 
 **Key that loop on `version.html`, never on `/api/status`.** `/api/status`'s `version` field is
 the **pyproject version**, not the deployed tag — and a dev pre-release is built from the same
