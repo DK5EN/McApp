@@ -1,6 +1,8 @@
 # McApp production health log — mcapp.local
 
-> **Status:** Current — newest section: §19 (2026-09-24 22:55 CEST, pre-release sweep of
+> **Status:** Current — newest section: §20 (2026-09-26 08:50 CEST, pre-release sweep of
+> `v2.0.15-dev.2` before the v2.0.15 promotion) — green, zero findings, no new watch point.
+> Before that: §19 (2026-09-24 22:55 CEST, pre-release sweep of
 > `v2.0.14-dev.3` before the v2.0.14 promotion) — green, zero findings, new watch point **W18**
 > (`udp_target_kind` `config` while Extern-UDP is off on DK5EN-98). Before that: §18 (2026-09-23 08:10 CEST, pre-release sweep of
 > `v2.0.13-dev.2` before the v2.0.13 promotion) — all green, zero findings, new watch point
@@ -1557,3 +1559,90 @@ count is flat, not climbing, so W17 stays a watch point.
   the node-id fallback now requires the pong to be addressed to us. Fixed in `c451ec2`, with four
   regression tests that fail on `dev.3`. The fix ships as `v2.0.14-dev.4`, and that dev tag is
   what gets promoted.
+
+## 20. 2026-09-26 08:50 CEST — pre-release sweep before promoting v2.0.15-dev.2 to v2.0.15
+
+Sign-off sweep for the **v2.0.15** promotion (BLE registers IS1/SN1; own frames relayed back over
+RF no longer set our own station's signal). Verdict: **green, zero findings, no new watch point.**
+The box is 20 minutes past the `v2.0.15-dev.2` deploy, so rates carry that caveat.
+
+### Anchors
+
+| Anchor              | Value                                                                       |
+| ------------------- | --------------------------------------------------------------------------- |
+| Snapshot            | 2026-09-26 08:49–08:55 CEST                                                 |
+| Release             | `v2.0.15-dev.2` (`/webapp/version.html` agrees)                             |
+| Active slot         | **slot-2** (slot-0 `v2.0.15-dev.1`, slot-1 `v2.0.14`)                       |
+| Schema              | **32** = `LATEST_SCHEMA_VERSION` ✓                                          |
+| System epoch        | box **5** = `REQUIRED_SYSTEM_EPOCH` 5 ✓                                     |
+| Service start       | mcapp 08:29:54 CEST                                                         |
+| `systemd NRestarts` | **0** (mcapp and mcapp-ble)                                                 |
+| Host uptime         | 1 day 22:17, load 0.05 / 0.05 / 0.09                                        |
+| Classifier          | version **5**, **38** rules, markers `v0 v1 v3 v4 v5`, 0 unclassified (1 h) |
+| UDP provenance      | **`config`**, 0 untrusted, not multiple, 0 suppressed changes — W18         |
+
+### Rate table re-measured
+
+| Signal                     | §1 baseline | This run      | Window |
+| -------------------------- | ----------- | ------------- | ------ |
+| `messages` type `msg`      | 11 / h      | **17 / h**    | 1 h    |
+| `messages` type `pos`      | 87 / h      | **84 / h**    | 1 h    |
+| `signal_log`               | 347 / h     | **255 / h**   | 1 h    |
+| journal warnings           | 0 / 24 h    | **0**         | 24 h   |
+| unclassified `msg`         | 0           | **0**         | 1 h    |
+| `{CET}` rows in `messages` | 0           | **0**         | all    |
+| last `{CET}` beacon        | —           | **197 s** ago | live   |
+| heartbeat age              | < 60 s      | **15 s**      | live   |
+
+### Change under test
+
+- **Own-echo signal (dev.2):** at startup the service logged `Cleared 1 poisoned own-station
+signal reading(s)`. `station_positions['DK5EN-98']` now reads rssi/snr `NULL`, `signal_via`
+  `''` (before: −118 / −8 via `DL2JA-2`, from 2026-09-22 23:14). `DK5EN-1` (−71 / 6) and
+  `DL2JA-2` (−120 / −8) keep their readings, so the exact-callsign gate does not catch sibling
+  SSIDs. Own echoes are rare on air (so far only during the 2026-09-19 store-and-forward tests),
+  so the live ingest gate has not been exercised by a new frame yet.
+- **IS1/SN1 (dev.1):** the live check still waits for a node reflash (see
+  `doc/2026-09-25_2041-is1-sn1-registers-plan.md`). The parsers are inert against current
+  firmware.
+
+### Uptime
+
+`/api/uptime?range=24h`: `active`, **100.0 %** uptime, **100.0 %** coverage, longest outage **0**.
+
+### Stalls since the deploy (08:29:54)
+
+`loop_lag` 2 × critical (max 1156 ms) and 4 × stall in 08:29–08:30, the restart window as in
+§18/§19, plus one 140 ms `loop_lag` at 08:45 beside a `/api/weather` stall (upstream fetch,
+closed as a non-issue 2026-09-18). Two `handler` stalls (995 ms at 08:28:31 during shutdown, 528
+ms at 08:35). Two `/api/read_cursor` `http` stalls (559 / 814 ms) with no `loop_lag` alongside —
+W17, unchanged.
+
+### Host and hygiene
+
+| Signal       | Value                                                            |
+| ------------ | ---------------------------------------------------------------- |
+| Disk         | 52 G free, **9 %**                                               |
+| RAM          | **MemAvailable 170 MB**                                          |
+| Swap         | **24 MB out** (SwapFree 448636 of 473084 kB)                     |
+| Temp         | **44.5 °C**                                                      |
+| mcapp RSS    | **119 MB** at 20 min (W14 data point)                            |
+| DB / WAL     | **44.4 MB** / **4.1 MB**                                         |
+| `vapid.json` | `0600` ✓                                                         |
+| TLS          | Caddy internal leaf, `Sep 25 23:43 → Sep 26 11:43 GMT`, mid-life |
+
+### Absent signals — the zero is the result
+
+- **0** journal warnings in 24 h; **0** `NRestarts`; **0** unclassified; **0** `{CET}` rows.
+- `udp_untrusted_source_ips` **empty**, `udp_multiple_sources` **false**,
+  `udp_suppressed_target_changes` **0**.
+
+### Watch points
+
+- **W18** unchanged: Extern-UDP still off on DK5EN-98, `udp_target_kind` `config`.
+- **W17** unchanged (two rows today, no `loop_lag` beside them). **W14** 119 MB at 20 min, in line
+  with §19.
+- **W9** unchanged: CI runs only the dependency-graph jobs on `development`; the promotion is
+  signed off on the local gates.
+- Soak is short: `dev.2` had run **20 minutes**, `dev.1` (IS1/SN1) about **10 h 20 min**.
+- **W13**, **W16**, **W1**, **W12**, **W2**, **W3**, **W6**, **W7**, **W10** unchanged.
