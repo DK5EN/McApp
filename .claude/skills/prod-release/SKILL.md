@@ -349,15 +349,40 @@ one for a production tag.
 5. the modal streams `PREPARE → DEPLOY → ACTIVATE → HEALTH → DONE` over SSE
 
 The deploy takes several minutes on a Pi Zero 2W. **Do not poll it turn by turn.** Arm one
-background wait with a terminal condition and do something else until it fires:
+background wait with a terminal condition and do something else until it fires.
+
+**Record the old state BEFORE you click Start Update**, because the terminal condition is "the
+service moved off it":
 
 ```bash
-ssh mcapp.local 'for i in $(seq 1 80); do
-  [ "$(curl -s --max-time 10 http://127.0.0.1/webapp/version.html | tr -d "[:space:]")" = "vX.Y.Z" ] \
-    && { echo DONE; exit 0; }
-  sleep 15
-done; echo "TIMEOUT: still not vX.Y.Z after 20 min"; exit 1'
+ssh mcapp.local 'readlink -f ~/mcapp-slots/current; systemctl show mcapp -p ActiveEnterTimestampMonotonic --value'
+# e.g. /home/martin/mcapp-slots/slot-2  and  168412345678  -> OLD_SLOT / OLD_START below
 ```
+
+Then, after Start Update:
+
+```bash
+ssh mcapp.local 'OLD_SLOT=/home/martin/mcapp-slots/slot-N OLD_START=<monotonic>
+for i in $(seq 1 80); do
+  tag=$(curl -s --max-time 10 http://127.0.0.1/webapp/version.html | tr -d "[:space:]")
+  cur=$(readlink -f ~/mcapp-slots/current)
+  start=$(systemctl show mcapp -p ActiveEnterTimestampMonotonic --value)
+  if [ "$tag" = "vX.Y.Z" ] && [ "$cur" != "$OLD_SLOT" ] && [ "$start" != "$OLD_START" ] \
+     && systemctl is-active --quiet mcapp; then
+    echo "DONE $cur"; exit 0
+  fi
+  sleep 15
+done; echo "TIMEOUT: not on vX.Y.Z in a new slot after 20 min"; exit 1'
+```
+
+**`version.html` alone fires too early.** The runner copies the webapp bundle to
+`/var/www/html/webapp` during DEPLOY, before ACTIVATE switches `current` and restarts the
+services. During the v2.0.15 promotion a loop keyed only on `version.html` printed DONE while the
+modal was still at ACTIVATE and `mcapp` was running the old slot from the previous deploy — the
+service restarted about two minutes later. All three conditions are needed: the tag (new bundle),
+a different `current` (the switch happened) and a changed `ActiveEnterTimestampMonotonic` (the
+service actually restarted onto it). On an in-place re-deploy of the same version `current` does
+not move — then drop the slot condition and rely on the restart.
 
 **Poll from the Pi, not from the Mac, and give the loop an end.** From the Mac every request to
 `mcapp.local` first spends ~5 s on the mDNS lookup. The earlier version of this loop ran there with
@@ -366,12 +391,12 @@ silently forever: during the v2.0.14 promotion it was still running long after t
 `v2.0.14`. On the Pi, `127.0.0.1` needs no name lookup at all. The 80 × 15 s bound turns a
 deploy that never lands into a `TIMEOUT` line and exit code 1, instead of a wait that never ends.
 
-**Key that loop on `version.html`, never on `/api/status`.** `/api/status`'s `version` field is
-the **pyproject version**, not the deployed tag — and a dev pre-release is built from the same
-`pyproject` version as the production release it becomes. Promoting `v2.0.11-dev.4` to `v2.0.11`,
-the box reported `version: v2.0.11` **before the deploy had started**, so a loop keyed on that
-field fires instantly and reports success against the old code. `version.html` carries the actual
-tag and is the only field that tells a dev tag from its release.
+**Never key it on `/api/status`.** `/api/status`'s `version` field is the **pyproject version**,
+not the deployed tag — and a dev pre-release is built from the same `pyproject` version as the
+production release it becomes. Promoting `v2.0.11-dev.4` to `v2.0.11`, the box reported
+`version: v2.0.11` **before the deploy had started**, so a loop keyed on that field fires
+instantly and reports success against the old code. `version.html` is the only field that tells a
+dev tag from its release — which is why it stays in the condition, just not alone.
 
 Auto-rollback is armed: if the health checks fail the previous slot stays active and the service
 keeps running the old code.
