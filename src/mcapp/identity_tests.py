@@ -63,6 +63,7 @@ from .runtime_state import (
     resolve_runtime_path,
     save_runtime_state,
 )
+from .sqlite_storage import SQLiteStorage
 from .sse_routes.stream import build_stream_router
 from .udp_handler import UDPHandler
 
@@ -539,6 +540,26 @@ def _test_apply_callsign_fans_out(record: Callable[[str, bool], None]) -> None:
         "apply_callsign: command handler admin_callsign_base re-derived",
         handler.admin_callsign_base == "DK5EN",
     )
+
+
+def _test_apply_callsign_reaches_storage(record: Callable[[str, bool], None]) -> None:
+    # The own-echo signal gate in storage/ingest.py `_ingest_signal` keys on
+    # storage._own_callsign, which only apply_callsign sets. Every other test
+    # here builds MessageRouter(None), so without this case deleting the
+    # wiring would leave the whole suite green. The constructor touches no DB.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        storage = SQLiteStorage(Path(tmp_dir) / "messages.db")
+        router = MessageRouter(storage)
+        router.set_callsign("dk5en-98")
+        record(
+            "apply_callsign: boot set_callsign reaches storage's own-echo gate, upper-cased",
+            storage._own_callsign == "DK5EN-98",
+        )
+        router.apply_callsign("DK5EN-14")
+        record(
+            "apply_callsign: a live callsign swap updates storage's own-echo gate",
+            storage._own_callsign == "DK5EN-14",
+        )
 
 
 def _test_user_info_text_preserved_vs_regenerated(record: Callable[[str, bool], None]) -> None:
@@ -1747,6 +1768,7 @@ async def run_identity_tests() -> bool:
     _test_boot_order_reaches_both_holders(_record)
     _test_overlay_precedence_and_noop_in_config_load(_record)
     _test_apply_callsign_fans_out(_record)
+    _test_apply_callsign_reaches_storage(_record)
     _test_user_info_text_preserved_vs_regenerated(_record)
     _test_user_info_text_regenerates_for_lowercase_config_callsign(_record)
     _test_same_callsign_is_noop(_record)

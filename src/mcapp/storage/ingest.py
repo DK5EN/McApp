@@ -809,19 +809,74 @@ class IngestMixin(StorageBase):
                     signal_via,
                 )
                 return is_mheard
-            await self._mutate(
-                "INSERT INTO signal_log (callsign, timestamp, rssi, snr, source)"
-                " VALUES (?, ?, ?, ?, ?)",
-                (callsign, timestamp, rssi, snr, source),
+
+            # Own echo: a relay repeated OUR OWN frame back to us over RF, so
+            # Extern-UDP delivers it as an ordinary lora reception with
+            # `callsign` == our own station. The rssi/snr on it describe the
+            # relay's transmission (signal_via), never anything about our own
+            # station — there is no "reading" of ourselves to record. Writing
+            # it to signal_log or upserting it onto our own station_positions
+            # row would show a measurement of the relay's link as if it were
+            # our own reception quality (live evidence: station_positions for
+            # DK5EN-98 carried rssi=-118/snr=-8/signal_via='DL2JA-2', a
+            # measurement of DL2JA-2 displayed on our own station). Exact
+            # match only, case-insensitive — NOT base-callsign: DK5EN-1/-2/-90
+            # are separate real nodes of the same operator and their signal is
+            # genuinely measured. An empty `_own_callsign` (not yet wired, or
+            # this storage instance predates the callsign being known) gates
+            # nothing. The signal_buckets accumulation below still runs
+            # either way — it is a genuine measurement of signal_via's link,
+            # independent of who originated the frame.
+            is_own_echo = (
+                bool(self._own_callsign) and callsign.strip().upper() == self._own_callsign
             )
+            if not is_own_echo:
+                await self._mutate(
+                    "INSERT INTO signal_log (callsign, timestamp, rssi, snr, source)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (callsign, timestamp, rssi, snr, source),
+                )
             # Accumulate into bucket and flush completed ones. Keyed by signal_via
             # (the last hop that actually delivered this reading), not the packet's
             # originator `callsign` — see this method's docstring.
             completed = self._accumulate_signal(signal_via, timestamp, rssi, snr)
             await self._flush_completed_buckets(completed)
-            await self._upsert_station_position(callsign, message, "signal", signal_via=signal_via)
+            if not is_own_echo:
+                await self._upsert_station_position(
+                    callsign, message, "signal", signal_via=signal_via
+                )
 
         return is_mheard
+
+    async def clear_own_signal(self, callsign: str) -> int:
+        """One-shot, idempotent cleanup of a poisoned own-station signal reading.
+
+        Before the own-echo gate in `_ingest_signal` above existed, a relay
+        repeating our own frame back to us over RF wrote the relay's rssi/snr
+        onto OUR OWN `station_positions` row — live evidence: DK5EN-98 carried
+        rssi=-118/snr=-8/signal_via='DL2JA-2', a measurement of DL2JA-2 shown
+        on our own station. This nulls exactly that: the signal columns on the
+        row for `callsign`, and only when one of them is actually set, so a
+        correct row (which the fixed ingest gate never poisons again) is a
+        no-op. Called once at startup, unconditionally — never gated by a
+        `classifier_meta` marker, unlike `repair_read_cursor_dm_keys` — because
+        the predicate ("does this row hold a signal reading at all") is
+        naturally idempotent: nothing to clear reads as 0 rows affected, every
+        time.
+
+        Empty `callsign` is a no-op (own callsign not yet known) and returns 0
+        without querying. Returns the number of rows updated (0 on every
+        repeat call against an already-clean row).
+        """
+        own = callsign.strip().upper()
+        if not own:
+            return 0
+        return await self._mutate(
+            "UPDATE station_positions"
+            "   SET rssi = NULL, snr = NULL, signal_via = '', signal_ts = NULL"
+            " WHERE callsign = ? AND (rssi IS NOT NULL OR snr IS NOT NULL)",
+            (own,),
+        )
 
     async def backfill_signal_log(self) -> dict[str, Any]:
         """One-time backfill: populate signal_log from historical UDP-lora `messages`.

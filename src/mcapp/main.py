@@ -437,6 +437,9 @@ class MessageRouter:
         self.validator = MessageValidator(self.my_callsign)
         self._logger.info("Callsign set to '%s', validator initialized", self.my_callsign)
 
+        if self.storage_handler is not None:
+            self.storage_handler.set_own_callsign(new_callsign)
+
         cmd_handler = self.get_protocol("commands")
         if cmd_handler is not None:
             if old_callsign is not None:
@@ -2749,6 +2752,17 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
             logger.info("Repaired %d read cursor(s) with a stale DM key", repaired)
     except Exception:
         logger.warning("repair_read_cursor_dm_keys failed", exc_info=True)
+    # One-shot, idempotent cleanup of a station_positions signal reading
+    # poisoned by our own frame echoing back over RF before the ingest gate
+    # in storage/ingest.py's `_ingest_signal` existed (see that method and
+    # `clear_own_signal`'s docstring). No marker needed: a correct row is
+    # never touched, so this is a no-op after the first successful run.
+    try:
+        cleared = await storage_handler.clear_own_signal(message_router.my_callsign or "")
+        if cleared > 0:
+            logger.info("Cleared %d poisoned own-station signal reading(s)", cleared)
+    except Exception:
+        logger.warning("clear_own_signal failed", exc_info=True)
     message_router.cached_gps = None  # {lat, lon} — set when BLE device sends TYP="G"
     message_router.cached_ble_registers = {}  # {TYP: dict} — cached on ble_notification
     _wire_ble_caches(message_router)
