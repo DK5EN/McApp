@@ -50,7 +50,7 @@ _CONTRACT_PATH = pathlib.Path(__file__).parent / "contract" / "dedup_contract.js
 # Captured once per contract version (v2). mc-chat is UPSTREAM of this file (see the
 # module docstring): a mismatch means either this copy was edited in place — which a
 # subtree pull will overwrite — or the pull has not been run yet.
-_EXPECTED_SHA256 = "5f4221b7ceda8d4bc24c4076c85fea98c57214645094c7ef35c5ecc20d74da87"
+_EXPECTED_SHA256 = "26ab6ff3b3955ed1c0d890dd95b57c819d59bd5f0ddcae5e247c0dc6f9fde85c"
 
 
 def _load_contract() -> tuple[dict[str, Any], bool]:
