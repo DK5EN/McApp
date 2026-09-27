@@ -53,6 +53,7 @@ from mcapp.linkcheck_sse_tests import run_linkcheck_sse_tests
 from mcapp.linkcheck_tests import run_linkcheck_tests
 from mcapp.main import MessageRouter
 from mcapp.meteo_tests import run_meteo_tests
+from mcapp.msg_core_tests import run_msg_core_tests
 from mcapp.node_console_tests import run_node_console_tests
 from mcapp.push_tests import run_push_tests
 from mcapp.send_path_tests import run_send_path_tests
@@ -105,6 +106,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     dedup_contract_ok = run_dedup_contract_tests()
     print(f"dedup_contract: {'PASS' if dedup_contract_ok else 'FAIL'}")
+
+    msg_core_ok = run_msg_core_tests()
+    print(f"msg_core: {'PASS' if msg_core_ok else 'FAIL'}")
 
     linkcheck_ok = run_linkcheck_tests()
     print(f"linkcheck: {'PASS' if linkcheck_ok else 'FAIL'}")
@@ -310,6 +314,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and live_classification_ok
         and ingest_dedup_ok
         and meteo_ok
+        and msg_core_ok
         and push_ok
         and blocklist_history_ok
         and ble_protocol_ok

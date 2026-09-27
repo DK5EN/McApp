@@ -4,8 +4,15 @@ from typing import Any
 
 from .. import linkcheck
 from ..logging_setup import get_logger
+from ..util import msg_core
 from ._base import CommandHandlerBase
-from .parsing import extract_target_callsign, is_group, normalize_unified, parse_command
+from .parsing import (
+    extract_target_callsign,
+    is_group,
+    normalize_unified,
+    parse_command,
+    strip_relay_path,
+)
 
 logger = get_logger(__name__)
 
@@ -84,12 +91,28 @@ class RoutingMixin(CommandHandlerBase):
         # Guarded on a truthy msg_id: an unguarded mark would insert a falsy
         # id (None/"") into processed_msg_ids and then block every later
         # command that also lacks a msg_id for MSG_ID_TIMEOUT_SECONDS.
+        #
+        # Keyed on sender + retry-invariant core (util.msg_core), not the raw
+        # msg_id: since firmware fork-neo-test, every direct message retries
+        # up to 3x 40s apart with bits 10-11 of msg_id XORed per retry, text
+        # (including the `{NNN` suffix) identical. An old-firmware relay
+        # forwards each copy under its own msg_id, so a raw-id dedup lets a
+        # resent `!command` through — where it used to hit the content
+        # throttle below and get an extra "Command throttled" RF reply.
+        # Sender is REQUIRED in the key: bits 10-11 are the low bits of the
+        # sending station's own node id, so the core alone collides across
+        # stations (doc/2026-09-27_2200-pn-retry-xor-plan.md §3).
         msg_id = message_data.get("msg_id")
-        if msg_id and self._is_duplicate_msg_id(msg_id):
-            logger.debug("Duplicate msg_id %s, ignoring", msg_id)
+        dedup_key = (
+            f"{strip_relay_path(message_data.get('src', 'UNKNOWN'))}|{msg_core(msg_id)}"
+            if msg_id
+            else None
+        )
+        if dedup_key and self._is_duplicate_msg_id(dedup_key):
+            logger.debug("Duplicate msg_id %s (dedup_key=%s), ignoring", msg_id, dedup_key)
             return
-        if msg_id:
-            self._mark_msg_id_processed(msg_id)
+        if dedup_key:
+            self._mark_msg_id_processed(dedup_key)
 
         normalized = self.normalize_command_data(message_data)
         src = normalized["src"]

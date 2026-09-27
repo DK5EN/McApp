@@ -38,6 +38,21 @@ of just returning.
       `_ingest_signal`, exactly once — guarded against double-counting by
       only firing when the enrichment actually filled rssi/snr from NULL.
 
+PN retry XOR (doc/2026-09-27_2200-pn-retry-xor-plan.md): the firmware retries
+a personal DM up to 3x, XORing msg_id bits 10-11 with the retry index.
+
+  12. Two XOR-related msg_ids for a personal dst, from the same sender -> one
+      row (the retry-invariant core matches).
+  13. The same pair addressed to a GROUP -> two rows (never XOR-retried;
+      exact matching kept).
+  14. The same pair from two DIFFERENT senders -> two rows (the core is not
+      unique across stations; sender scoping stays load-bearing).
+  15. Restart backstop (mirrors case 5/10): the retry copy lands on a FRESH
+      storage instance (empty in-memory claim) -> the DB-lookup IN(variants)
+      branch alone still dedups it, AND enriches the row.
+  16. The same restart shape with a GROUP dst -> two rows (never merged via
+      the core, even when the in-memory claim cannot be the discriminator).
+
 Ephemeral tempfile SQLite DB per case; drives the REAL `store_message`.
 All timestamps are milliseconds (project-wide DB convention).
 """
@@ -496,6 +511,216 @@ async def _test_text_frame_hardware_fields(results: list[tuple[str, bool]]) -> N
         tmp.cleanup()
 
 
+async def _test_pn_retry_xor_dedup(results: list[tuple[str, bool]]) -> None:
+    """PN retry XOR (doc/2026-09-27_2200-pn-retry-xor-plan.md): the firmware
+    retries a DM up to 3x, XORing msg_id bits 10-11 with the retry index. An
+    old-firmware relay forwards each copy with its own msg_id, so a personal
+    DM's two retry copies must dedup to ONE row even though their msg_ids
+    differ (E1E05457 vs E1E05057 -- bit 10 flipped, i.e. retry k=1).
+    """
+    storage, tmp = await _with_storage("dedup_pn_retry")
+    try:
+        first = _chat("DK1TCP-77", "E1E05457", _T0, "udp")
+        first["dst"] = "OE1XYZ-1"
+        first["msg"] = "hello there{042"
+        retry = _chat("DK1TCP-77", "E1E05057", _T0 + 40_000, "udp")
+        retry["dst"] = "OE1XYZ-1"
+        retry["msg"] = "hello there{042"
+        await storage.store_message(first, "")
+        await storage.store_message(retry, "")
+        rows = await storage._query(
+            "SELECT msg_id FROM messages WHERE src = 'DK1TCP-77' AND dst = 'OE1XYZ-1'"
+        )
+        results.append(
+            (
+                "PN retry XOR copy of a personal DM dedups to one row",
+                len(rows) == 1 and rows[0]["msg_id"] == "E1E05457",
+            )
+        )
+    finally:
+        await storage.close()
+        tmp.cleanup()
+
+
+async def _test_pn_retry_xor_group_not_deduped(results: list[tuple[str, bool]]) -> None:
+    """Negative case: the SAME pair of msg_ids addressed to a GROUP must NOT
+    dedup — groups are never XOR-retried by the firmware (plan §3) and the
+    core is not unique across stations, so widening the match there would
+    collide unrelated frames."""
+    storage, tmp = await _with_storage("dedup_pn_retry_group")
+    try:
+        first = _chat("DK1TCP-77", "E1E05458", _T0, "udp")
+        first["dst"] = "20"
+        second = _chat("DK1TCP-77", "E1E05058", _T0 + 40_000, "udp")
+        second["dst"] = "20"
+        await storage.store_message(first, "")
+        await storage.store_message(second, "")
+        rows = await storage._query(
+            "SELECT msg_id FROM messages WHERE src = 'DK1TCP-77' AND dst = '20'"
+        )
+        results.append(
+            (
+                "the same XOR-related pair addressed to a group is NOT deduped",
+                len(rows) == 2,
+            )
+        )
+    finally:
+        await storage.close()
+        tmp.cleanup()
+
+
+async def _test_pn_retry_xor_different_senders(results: list[tuple[str, bool]]) -> None:
+    """Negative case: the same XOR-related msg_id pair from DIFFERENT senders
+    to a personal dst must NOT dedup — the core is not unique across
+    stations, and sender scoping is load-bearing exactly like the plain
+    msg_id dedup gate."""
+    storage, tmp = await _with_storage("dedup_pn_retry_senders")
+    try:
+        first = _chat("DK1TCP-77", "E1E05459", _T0, "udp")
+        first["dst"] = "OE1XYZ-1"
+        second = _chat("OE5HWN-12", "E1E05059", _T0 + 5, "udp")
+        second["dst"] = "OE1XYZ-1"
+        await storage.store_message(first, "")
+        await storage.store_message(second, "")
+        rows = await storage._query("SELECT msg_id, src FROM messages WHERE dst = 'OE1XYZ-1'")
+        results.append(
+            (
+                "the same XOR-related pair from different senders is NOT deduped",
+                len(rows) == 2,
+            )
+        )
+    finally:
+        await storage.close()
+        tmp.cleanup()
+
+
+async def _test_pn_retry_xor_restart_backstop_enrichment(
+    results: list[tuple[str, bool]],
+) -> None:
+    """Restart backstop for the PN retry XOR core match (mirrors
+    `_test_restart_backstop_enrichment` above): the in-memory claim is empty
+    after a restart, so the DB-lookup half of the gate alone
+    (`_find_duplicate_row_id`'s `msg_id IN (<variants>)` branch) must catch a
+    personal DM's XOR retry copy landing on a FRESH storage instance -- and
+    still enrich the row, not just dedup it. Without this case the IN(...)
+    branch is only ever reached via the in-memory claim (`_claim_recent_
+    ingest`), so a mutant collapsing it back to exact-only still passes every
+    other case in this file.
+    """
+    tmp = tempfile.TemporaryDirectory()
+    db_path = Path(tmp.name) / "dedup_pn_retry_restart.db"
+    try:
+        first = await create_sqlite_storage(db_path)
+        outbound = _chat("DK1TCP-77", "E1E05457", _T0, "udp")
+        outbound["dst"] = "OE1XYZ-1"
+        await first.store_message(outbound, "")
+        await first.close()
+        second = await create_sqlite_storage(db_path)  # empty in-memory set
+        try:
+            retry = _chat("DK1TCP-77", "E1E05057", _T0 + 40_000, "udp", mesh_info="restart")
+            retry["dst"] = "OE1XYZ-1"
+            await second.store_message(retry, "")
+            rows = await second._query(
+                "SELECT msg_id, mesh_info FROM messages"
+                " WHERE src = 'DK1TCP-77' AND dst = 'OE1XYZ-1'"
+            )
+            results.append(
+                (
+                    "PN retry XOR restart backstop: one row after a restart",
+                    len(rows) == 1 and rows[0]["msg_id"] == "E1E05457",
+                )
+            )
+            results.append(
+                (
+                    "PN retry XOR restart backstop: the retry copy's enrichment landed",
+                    len(rows) == 1 and rows[0]["mesh_info"] == "restart",
+                )
+            )
+        finally:
+            await second.close()
+    finally:
+        tmp.cleanup()
+
+
+async def _test_pn_retry_xor_restart_backstop_group_not_deduped(
+    results: list[tuple[str, bool]],
+) -> None:
+    """Negative half of the same restart shape: a GROUP dst must NOT merge
+    via the core even when only the DB-lookup backstop (no in-memory claim)
+    is in play."""
+    tmp = tempfile.TemporaryDirectory()
+    db_path = Path(tmp.name) / "dedup_pn_retry_restart_group.db"
+    try:
+        first = await create_sqlite_storage(db_path)
+        outbound = _chat("DK1TCP-77", "E1E05460", _T0, "udp")
+        outbound["dst"] = "20"
+        await first.store_message(outbound, "")
+        await first.close()
+        second = await create_sqlite_storage(db_path)  # empty in-memory set
+        try:
+            retry = _chat("DK1TCP-77", "E1E05060", _T0 + 40_000, "udp")
+            retry["dst"] = "20"
+            await second.store_message(retry, "")
+            rows = await second._query(
+                "SELECT msg_id FROM messages WHERE src = 'DK1TCP-77' AND dst = '20'"
+            )
+            results.append(
+                (
+                    "PN retry XOR restart backstop: a group dst is NOT deduped across a restart",
+                    len(rows) == 2,
+                )
+            )
+        finally:
+            await second.close()
+    finally:
+        tmp.cleanup()
+
+
+async def _test_non_str_dst_does_not_raise(results: list[tuple[str, bool]]) -> None:
+    """R4 regression (advisor rework, 2026-09-27): the PN retry XOR dedup gate
+    added `dst_kind(dst)` calls in `_claim_recent_ingest`/`_find_duplicate_
+    row_id`, which run for EVERY msg_id-bearing frame -- a `pos`/`tele` one
+    included, not just `msg_type == 'msg'` (the only branch
+    `compute_conversation_key` already guarded against a non-str `dst`).
+    Port 1799 is unauthenticated, so a crafted non-str `dst` (`resolve_dst_
+    target` calls `.rsplit()`/`.strip()` on it via `dst_kind`) must not raise
+    AttributeError and lose the whole frame's signal/position data.
+    """
+    storage, tmp = await _with_storage("dedup_non_str_dst")
+    try:
+        beacon = {
+            "src": "DB0ED-99",
+            "dst": 123,  # crafted: not a str
+            "msg": "",
+            "type": "pos",
+            "msg_id": "00004444",
+            "timestamp": _T0,
+            "src_type": "udp",
+            "lat": 48.28,
+            "lon": 12.03,
+        }
+        raised = False
+        try:
+            await storage.store_message(beacon, "")
+        except Exception:
+            raised = True
+        rows = await storage._query(
+            "SELECT lat, lon FROM station_positions WHERE callsign = ?", ("DB0ED-99",)
+        )
+        results.append(
+            (
+                (
+                    "a non-str dst on a msg_id-bearing pos frame does not raise,"
+                    " and the position still ingests"
+                ),
+                not raised and len(rows) == 1 and rows[0]["lat"] == 48.28,
+            )
+        )
+    finally:
+        await storage.close()
+        tmp.cleanup()
+
+
 async def run_ingest_dedup_tests() -> bool:
     """Run the ingest dedup regression suite. Returns True iff every case passes."""
     results: list[tuple[str, bool]] = []
@@ -513,6 +738,12 @@ async def run_ingest_dedup_tests() -> bool:
     await _test_duplicate_signal_ingested(results)
     await _test_signal_sentinel_not_stored(results)
     await _test_text_frame_hardware_fields(results)
+    await _test_pn_retry_xor_dedup(results)
+    await _test_pn_retry_xor_group_not_deduped(results)
+    await _test_pn_retry_xor_different_senders(results)
+    await _test_pn_retry_xor_restart_backstop_enrichment(results)
+    await _test_pn_retry_xor_restart_backstop_group_not_deduped(results)
+    await _test_non_str_dst_does_not_raise(results)
 
     for label, ok in results:
         logger.info("    %s | %s", "✅ PASS" if ok else "❌ FAIL", label)

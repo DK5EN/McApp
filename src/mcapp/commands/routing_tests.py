@@ -281,6 +281,28 @@ class _OwnCommandHarness(RoutingMixin, DedupMixin, ResponseMixin, SimpleCommands
         return None
 
 
+def _incoming_command_routed_message(
+    *, my_callsign: str, src: str, msg: str, msg_id: str
+) -> dict[str, Any]:
+    """Build the routed_message shape for an INCOMING direct '!command' DM
+    from another station (as opposed to ``_own_command_routed_message``'s
+    locally-typed own command): ``source: "udp"``, matching a real Extern-UDP
+    inbound frame addressed to us.
+    """
+    return {
+        "source": "udp",
+        "type": "mesh_message",
+        "data": {
+            "src": src,
+            "dst": my_callsign,
+            "msg": msg,
+            "msg_id": msg_id,
+            "type": "msg",
+            "src_type": "udp",
+        },
+    }
+
+
 def _own_command_routed_message(
     *, my_callsign: str, dst: str, msg: str, msg_id: str
 ) -> dict[str, Any]:
@@ -397,6 +419,160 @@ def _test_own_command_routing() -> bool:
     return passed == total
 
 
+def _sent_replies(router: _RecordingRouter) -> list[tuple[str, str]]:
+    """(dst, msg) pairs for every reply the harness actually transmitted."""
+    return [
+        (data.get("dst", ""), data.get("msg", ""))
+        for _s, topic, data in router.published
+        if topic in ("udp_message", "ble_message", "websocket_message")
+    ]
+
+
+async def _check_pn_retry_same_sender_dedup() -> list[tuple[str, bool]]:
+    """PN retry XOR (plan §3): a resent '!command' DM — same sender, identical
+    text, msg_id bits 10-11 XORed by the firmware's retry (E1E05457 -> retry
+    k=2 -> E1E05057, same core) — must be deduped on (sender, core). It must
+    never reach the content throttle and produce a second "Command throttled"
+    reply. Real firmware spacing is 40 s apart; the dedup key change is
+    time-independent, so the test drives both copies back to back.
+    """
+    out: list[tuple[str, bool]] = []
+    my_call = "DK5EN"
+    sender = "OE5HWN-12"
+    harness = _OwnCommandHarness(my_call)  # type: ignore[abstract]  # partial test double for CommandHandler mixins
+    router: _RecordingRouter = harness.message_router
+
+    for msg_id in ("E1E05457", "E1E05057"):
+        await harness._message_handler(
+            _incoming_command_routed_message(
+                my_callsign=my_call, src=sender, msg="!TIME", msg_id=msg_id
+            )
+        )
+    if harness._response_bg_tasks:
+        await asyncio.gather(*harness._response_bg_tasks)
+
+    replies = _sent_replies(router)
+    out.append(("PN retry copy: exactly one reply sent, not two", len(replies) == 1))
+    out.append(
+        (
+            "PN retry copy: no 'Command throttled' reply",
+            all("Command throttled" not in msg for _dst, msg in replies),
+        )
+    )
+    return out
+
+
+async def _check_pn_retry_different_senders_not_collapsed() -> list[tuple[str, bool]]:
+    """Sender scoping (plan §3): msg_id bits 10-11 are the low bits of the
+    SENDING station's own node id, so a core (or even a raw id) collision
+    across two DIFFERENT stations must not dedup one against the other —
+    both commands are processed and both get a reply.
+    """
+    out: list[tuple[str, bool]] = []
+    my_call = "DK5EN"
+    harness = _OwnCommandHarness(my_call)  # type: ignore[abstract]  # partial test double for CommandHandler mixins
+    router: _RecordingRouter = harness.message_router
+
+    shared_msg_id = "E1E05457"
+    for sender in ("OE5HWN-12", "OE1ABC-5"):
+        await harness._message_handler(
+            _incoming_command_routed_message(
+                my_callsign=my_call, src=sender, msg="!TIME", msg_id=shared_msg_id
+            )
+        )
+    if harness._response_bg_tasks:
+        await asyncio.gather(*harness._response_bg_tasks)
+
+    replies = _sent_replies(router)
+    out.append(
+        (
+            "different senders, same msg_id: both stations get a reply",
+            {dst for dst, _msg in replies} == {"OE5HWN-12", "OE1ABC-5"},
+        )
+    )
+    out.append(
+        (
+            "different senders, same msg_id: neither reply is 'Command throttled'",
+            all("Command throttled" not in msg for _dst, msg in replies),
+        )
+    )
+    return out
+
+
+async def _check_exact_duplicate_msg_id_still_dropped() -> list[tuple[str, bool]]:
+    """Existing behaviour preserved: a literal duplicate msg_id from the same
+    sender (not a retry-XOR variant, just the same frame arriving twice) is
+    still deduped to a single reply.
+    """
+    out: list[tuple[str, bool]] = []
+    my_call = "DK5EN"
+    sender = "OE5HWN-12"
+    harness = _OwnCommandHarness(my_call)  # type: ignore[abstract]  # partial test double for CommandHandler mixins
+    router: _RecordingRouter = harness.message_router
+
+    for _ in range(2):
+        await harness._message_handler(
+            _incoming_command_routed_message(
+                my_callsign=my_call, src=sender, msg="!TIME", msg_id="E1E05457"
+            )
+        )
+    if harness._response_bg_tasks:
+        await asyncio.gather(*harness._response_bg_tasks)
+
+    replies = _sent_replies(router)
+    out.append(
+        ("exact duplicate msg_id, same sender: still deduped to one reply", len(replies) == 1)
+    )
+    return out
+
+
+async def _check_non_str_msg_id_still_processed() -> list[tuple[str, bool]]:
+    """Extern-UDP admits any JSON scalar as msg_id (`udp_handler._JSON_SCALAR_TYPES`).
+    An int msg_id must not raise inside the dedup-key build: before msg_core()
+    accepted non-str input, `{"msg_id": 12345}` crashed `_message_handler` and
+    the command got no reply.
+    """
+    out: list[tuple[str, bool]] = []
+    my_call = "DK5EN"
+    harness = _OwnCommandHarness(my_call)  # type: ignore[abstract]  # partial test double for CommandHandler mixins
+    router: _RecordingRouter = harness.message_router
+
+    message = _incoming_command_routed_message(
+        my_callsign=my_call, src="OE5HWN-12", msg="!TIME", msg_id="placeholder"
+    )
+    message["data"]["msg_id"] = 12345
+    try:
+        await harness._message_handler(message)
+        raised = False
+    except AttributeError:
+        raised = True
+    if harness._response_bg_tasks:
+        await asyncio.gather(*harness._response_bg_tasks)
+
+    out.append(("int msg_id: no exception in dedup-key build", not raised))
+    out.append(("int msg_id: command still gets its reply", len(_sent_replies(router)) == 1))
+    return out
+
+
+def _test_pn_retry_msg_id_dedup() -> bool:
+    """PN retry XOR dedup key: (sender, core) — plan doc §3, Wave 1b."""
+    logger.info("Testing PN retry XOR msg_id dedup (sender + core):")
+    logger.info("=" * 50)
+
+    results = _run_coro(_check_pn_retry_same_sender_dedup())
+    results += _run_coro(_check_pn_retry_different_senders_not_collapsed())
+    results += _run_coro(_check_exact_duplicate_msg_id_still_dropped())
+    results += _run_coro(_check_non_str_msg_id_still_processed())
+
+    for label, ok in results:
+        logger.info("%s | %s", "✅ PASS" if ok else "❌ FAIL", label)
+
+    passed = sum(1 for _, ok in results if ok)
+    total = len(results)
+    logger.info("PN retry XOR msg_id dedup Summary: %d/%d passed", passed, total)
+    return passed == total
+
+
 class _HelpHarness(SimpleCommandsMixin, ResponseMixin):
     """Minimal concrete handler for handle_help (Bug C): real _is_admin logic
     plus real _chunk_response (ResponseMixin's chunking needs no other state).
@@ -483,9 +659,14 @@ def run_routing_tests() -> bool:
     error_passed = _test_error_response_text()
     own_command_routing_passed = _test_own_command_routing()
     help_command_passed = _test_help_command()
+    pn_retry_dedup_passed = _test_pn_retry_msg_id_dedup()
 
     all_passed = (
-        target_passed and error_passed and own_command_routing_passed and help_command_passed
+        target_passed
+        and error_passed
+        and own_command_routing_passed
+        and help_command_passed
+        and pn_retry_dedup_passed
     )
 
     logger.info("=" * 60)
@@ -498,5 +679,6 @@ def run_routing_tests() -> bool:
             error_passed,
             own_command_routing_passed,
             help_command_passed,
+            pn_retry_dedup_passed,
         ]
     )
