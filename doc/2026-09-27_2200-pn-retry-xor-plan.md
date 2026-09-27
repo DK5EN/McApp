@@ -40,14 +40,16 @@ and later), `docs/pn-retry-mcapp.md` (firmware-authored impact note, German),
 
 ## 4. Waves
 
-| Wave | Scope                                                                                                                                                                                  | Owner            | Status             |
-| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- | ------------------ |
-| 0    | DB check on mcapp.local                                                                                                                                                                | orchestrator     | done, 0 pairs      |
-| 0    | `util.msg_core`/`msg_id_retry_variants` + `msg_core_tests.py`, registered in `run_startup_tests.py`                                                                                    | orchestrator     | done               |
-| 1a   | `storage/ingest.py`: ingest dedup on core (personal dst only), `_resolve_ack_target` variant fallback (own sent rows), ack ledger key; tests in ingest_dedup / ack_status / conv_dedup | implementer      | done               |
-| 1b   | `commands/routing.py`: command dedup key `(sender, core)`; test in routing_tests                                                                                                       | implementer      | done               |
-| 2    | `dedup_contract.json` id normalization + sender scoping in mc-chat (canonical), subtree pull + sha pin here, `PushDedup`, webapp `getDedupKey` + contract copy                         | tbd after Wave 1 | open               |
-| -    | Firmware: `handleACK()` does not fold a retry msg_id before `checkOwnTx()` (`lora_functions.cpp:410-505`) -> node/gateway heard-ack for a retry copy is dropped                        | firmware side    | reported, not ours |
+| Wave | Scope                                                                                                                                                                                  | Owner         | Status                              |
+| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ----------------------------------- |
+| 0    | DB check on mcapp.local                                                                                                                                                                | orchestrator  | done, 0 pairs                       |
+| 0    | `util.msg_core`/`msg_id_retry_variants` + `msg_core_tests.py`, registered in `run_startup_tests.py`                                                                                    | orchestrator  | done                                |
+| 1a   | `storage/ingest.py`: ingest dedup on core (personal dst only), `_resolve_ack_target` variant fallback (own sent rows), ack ledger key; tests in ingest_dedup / ack_status / conv_dedup | implementer   | done                                |
+| 1b   | `commands/routing.py`: command dedup key `(sender, core)`; test in routing_tests                                                                                                       | implementer   | done                                |
+| 2a   | mc-chat: `dedup_contract.json` v2 (`(resolved-src, core)` key, `id_normalization`, via-path + retry vectors, window vector with `msg_id_b`), `push._dedup_key`                         | implementer   | done, mc-chat `cd10a43` + `2270951` |
+| 2b   | MCProxy: subtree pulls, sha pin `26ab6ff3`, `PushDedup` v2 key, harness honours `msg_id_b`                                                                                             | implementer   | done                                |
+| 2c   | webapp: vendored contract + sha, `getDedupKey` v2 + `msgCore`, foreground push sound key                                                                                               | implementer   | done, webapp `ea8e5bb`              |
+| -    | Firmware: `handleACK()` does not fold a retry msg_id before `checkOwnTx()` (`lora_functions.cpp:410-505`) -> node/gateway heard-ack for a retry copy is dropped                        | firmware side | reported, not ours                  |
 
 ## 5. Wave 1 advisor round (2026-09-27)
 
@@ -67,3 +69,20 @@ Declined: running ANALYZE so the `_resolve_ack_target` variant query uses the ms
 (3.5 ms/call at 20k rows unanalysed). The query only runs when the exact id has no match, for an
 8-hex id, with our own callsign known — rare by construction, and the planner switches to the
 index after the first prune's ANALYZE. Revisit if `handler` stall rows ever name `_handle_ack`.
+
+## 6. Wave 2 advisor round (2026-09-27)
+
+All items verified in code, all applied in the same wave:
+
+- webapp `msgCore` threw on a non-string msg_id; one bad frame aborted the whole `mesh:batch`.
+- webapp `useForegroundPushSound.dedupKeyFor` still used the v1 key, so every retry copy beeped.
+- MCProxy `dedup_contract_tests.py` docstrings still described v1.
+- Python `_parse_msg_id` accepted a sign, `0x`, `_` and non-ASCII digits; now strict 8 ASCII hex
+  in MCProxy and mc-chat.
+- Contract: via-path key vector added (the BLE/UDP pair shape), and the false claim that every
+  content key already resolves src removed.
+- Orchestrator catch before the advisor: the webapp id key used the raw `src` with its relay path,
+  which would have split transport pairs v1 merged. It now takes the first comma component.
+
+Open, not in scope: the webapp content-fallback key still uses the raw `src` (pre-existing,
+unchanged by v2); aligning it needs its own contract vector.
