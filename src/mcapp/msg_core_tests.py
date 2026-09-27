@@ -58,6 +58,9 @@ def _test_core_edge_inputs() -> _Results:
         ("wrong length returned unchanged", msg_core("1234") == "1234"),
         # Extern-UDP admits any JSON scalar as msg_id; must not raise.
         ("int input stringified, no raise", msg_core(12345) == "12345"),
+        # Exactly 8 ASCII hex digits: int(s, 16) alone would accept these.
+        ("signed id returned verbatim", msg_core("-1A2B3C4") == "-1A2B3C4"),
+        ("underscored id returned verbatim", msg_core("1A2B_3C4") == "1A2B_3C4"),
     ]
 
 

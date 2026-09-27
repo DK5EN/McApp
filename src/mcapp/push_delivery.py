@@ -46,7 +46,7 @@ from pywebpush import webpush as _real_webpush
 from .linkcheck import is_link_check_payload
 from .logging_setup import get_logger
 from .storage.constants import DEDUP_WINDOW_MS
-from .util import strip_ack_suffix
+from .util import msg_core, strip_ack_suffix
 
 logger = get_logger(__name__)
 
@@ -496,9 +496,19 @@ class PushDedup:
     count for ANY subscription, so this guard is global (per-dispatcher), not
     per-subscription like `PushCoalescer`.
 
-    Dedup key: `msg_id` within the window when truthy, else the tuple
-    (resolved-src, resolved-dst, text). Driven by the same injectable `now()`
-    clock as the coalescer — never real wall-clock in tests.
+    Dedup key: `dedup_contract.json` v2 `key_semantics` — a truthy `msg_id`
+    keys as `(resolved-src, core(msg_id))`, via `util.msg_core` and the SAME
+    `_resolve_source` resolution the fallback triple key below applies to its
+    own `src` field; never the raw `msg_id` alone and never `core(msg_id)`
+    alone. Reason: the firmware's PN-retry feature resends a direct message
+    up to 3 times, 40s apart, XORing msg_id bits 10-11 with the retry index —
+    raw-msg_id-alone keying treats each retry as a distinct message and never
+    dedups them, while those same two bits are also the two low bits of the
+    sender's 22-bit node id, so core-alone keying is not unique across
+    stations (two different senders' messages can share a core and collide).
+    Falls back to the tuple (resolved-src, resolved-dst, text) when `msg_id`
+    is falsy. Driven by the same injectable `now()` clock as the coalescer —
+    never real wall-clock in tests.
     """
 
     def __init__(self, window_seconds: float, now: Callable[[], float]) -> None:
@@ -522,14 +532,22 @@ class PushDedup:
     def is_duplicate(self, payload: dict[str, Any]) -> bool:
         """Return True if this message's dedup key was already seen within
         the window (and do NOT re-record it); otherwise record it as newly
-        seen and return False."""
+        seen and return False.
+
+        Sender-scoped id key (dedup_contract.json v2): a truthy `msg_id` is
+        reduced to its retry-invariant `core` (bits 10-11 masked off, since
+        the firmware's PN-retry resends XOR those bits with the retry index)
+        and paired with the message's resolved source — core alone would
+        collide two different senders' messages, since the same two bits are
+        also the low bits of the sender's node id.
+        """
         self._prune()
-        msg_id = payload.get("msg_id")
+        resolved_src = _resolve_source(str(payload.get("src") or ""))
+        core = msg_core(payload.get("msg_id"))
         key: Any
-        if msg_id:
-            key = ("id", msg_id)
+        if core is not None:
+            key = ("id", resolved_src, core)
         else:
-            resolved_src = _resolve_source(str(payload.get("src") or ""))
             resolved_dst = _resolve_target(str(payload.get("dst") or ""))
             key = ("triple", resolved_src, resolved_dst, payload.get("text"))
         if key in self._seen:

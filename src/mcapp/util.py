@@ -100,16 +100,15 @@ def strip_ack_suffix(text: str) -> str:
 # built from it must therefore carry the sender as well.
 MSG_ID_CORE_MASK = 0xFFFFF3FF
 _MSG_ID_RETRY_SHIFT = 10
-_MSG_ID_HEX_LEN = 8
+_MSG_ID_HEX_RE = re.compile(r"[0-9A-Fa-f]{8}")
 
 
 def _parse_msg_id(msg_id: str) -> int | None:
-    if len(msg_id) != _MSG_ID_HEX_LEN:
+    # fullmatch, not bare int(s, 16): that also accepts `0X`, a sign,
+    # underscores and non-ASCII digits, none of which are a firmware id.
+    if not _MSG_ID_HEX_RE.fullmatch(msg_id):
         return None
-    try:
-        return int(msg_id, 16)
-    except ValueError:
-        return None
+    return int(msg_id, 16)
 
 
 def msg_core(msg_id: object) -> str | None:

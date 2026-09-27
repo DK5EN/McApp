@@ -1,4 +1,4 @@
-"""Startup regression suite for the shared message-dedup contract (v1).
+"""Startup regression suite for the shared message-dedup contract (v2).
 
 Implements every vector in `contract/dedup_contract.json` (a byte-verbatim
 copy of the shared contract; the mc-chat sibling implements the SAME vectors
@@ -24,6 +24,15 @@ repeat hit), not a message-timestamp-keyed one like the webapp's, so every
 direction, and this divergence never matters here. It also does NOT pin the
 storage layer's separate `msg_id`+`src` SQL dedup (`sqlite_storage.py`) —
 this suite exercises only `PushDedup`, the push-delivery layer's guard.
+
+v2 (2026-09-27, firmware PN-retry XOR): a truthy msg_id now keys as
+(resolved-src, core(msg_id)) rather than the raw msg_id — see the contract's
+`key_semantics`. Some `window_vectors` entries carry an optional `msg_id_b`:
+the id the SECOND call in that vector uses instead of replaying the first
+message's own `msg_id` (the firmware retry itself changes the id, so a
+harness that always replays the first msg_id would never actually exercise a
+retry pair, and every such vector would pass vacuously regardless of whether
+`PushDedup` masks bits 10-11 at all).
 """
 
 from __future__ import annotations
@@ -38,10 +47,10 @@ from .push_delivery import DEDUP_WINDOW_SECONDS, PushDedup
 from .storage.constants import DEDUP_WINDOW_MS
 
 _CONTRACT_PATH = pathlib.Path(__file__).parent / "contract" / "dedup_contract.json"
-# Captured once per contract version (v1). mc-chat is UPSTREAM of this file (see the
+# Captured once per contract version (v2). mc-chat is UPSTREAM of this file (see the
 # module docstring): a mismatch means either this copy was edited in place — which a
 # subtree pull will overwrite — or the pull has not been run yet.
-_EXPECTED_SHA256 = "d37ffa41433426e11172caa8050650477cfd75c4d5f2c6ecba64e9317697eff8"
+_EXPECTED_SHA256 = "5f4221b7ceda8d4bc24c4076c85fea98c57214645094c7ef35c5ecc20d74da87"
 
 
 def _load_contract() -> tuple[dict[str, Any], bool]:
@@ -59,16 +68,13 @@ def _key_vector_message(msg: dict[str, Any]) -> dict[str, Any]:
 
     No field renaming is needed: `PushDedup` reads `payload["msg_id"]`,
     `["src"]`, `["dst"]`, `["text"]` directly — the same names the contract
-    uses — and every key_vectors callsign is a plain callsign with no via-path
-    comma segments, so `_resolve_source`/`_resolve_target` (first-/last-comma-
-    component extraction) are no-ops on them. That's deliberate: this suite
-    exercises key PRECEDENCE (id vs. content), not resolver behaviour, so
-    identity vectors are the right fixture — see `_test_dedup_fallback_and_pruning`
-    in `push_tests.py` for a resolver-focused via-path regression. An absent
-    `msg_id` (some vectors omit the key entirely; contract: "absent and falsy
-    msg_id are equivalent") comes through as `dict.get` returning `None`,
-    which `PushDedup`'s `if msg_id:` already treats as falsy — no extra
-    handling required here either.
+    uses. One v2 key vector carries a via-routed src (`OE1ABC-1,DB0XYZ-10`,
+    the BLE/UDP transport-pair shape); `_resolve_source` reduces it to the
+    first component, so it is passed through verbatim like every other src.
+    An absent `msg_id` (some vectors omit the key entirely; contract: "absent
+    and falsy msg_id are equivalent") comes through as `dict.get` returning
+    `None`, which `msg_core` maps to None and `PushDedup` then routes to the
+    content fallback (`core is not None` is the id-branch test).
     """
     return dict(msg)
 
@@ -77,7 +83,7 @@ def run_dedup_contract_tests() -> bool:
     """Return True iff every message-dedup contract vector, plus the pinned
     window constants, pass."""
     if has_console:
-        print("\n🧪 Testing message-dedup contract (v1):")
+        print("\n🧪 Testing message-dedup contract (v2):")
         print("=" * 55)
 
     results: list[tuple[str, bool]] = []
@@ -89,7 +95,7 @@ def run_dedup_contract_tests() -> bool:
 
     contract, sha_ok = _load_contract()
     _record("dedup_contract.json sha256 matches captured hash (drift tripwire)", sha_ok)
-    _record("contract version == 1", contract.get("version") == 1)
+    _record("contract version == 2", contract.get("version") == 2)
     _record("key_vectors is non-empty", len(contract.get("key_vectors", [])) > 0)
     _record("window_vectors is non-empty", len(contract.get("window_vectors", [])) > 0)
 
@@ -118,19 +124,25 @@ def run_dedup_contract_tests() -> bool:
     # window_vectors: replay through the REAL duplicate check with an
     # injected clock (PushDedup's own testability seam — its `now` is never
     # real wall-clock here, matching push_tests.py's coalesce/dedup fixtures)
-    # — first sighting at t=0, second at t=delta_ms/1000.
+    # — first sighting at t=0, second at t=delta_ms/1000. A vector's optional
+    # `msg_id_b` (v2) is the id the SECOND call uses — the firmware's own
+    # retry pair carries two DIFFERENT raw msg_ids sharing one core, so
+    # replaying the first message's msg_id unconditionally would never
+    # exercise that pair and the retry vector would pass whether or not
+    # `PushDedup` masks bits 10-11 at all.
     for vector in contract["window_vectors"]:
         clock = {"t": 0.0}
         dedup = PushDedup(window_ms / 1000, now=lambda: clock["t"])  # noqa: B023 - called within the same iteration
-        msg = {
+        msg_a = {
             "msg_id": vector.get("msg_id"),
             "src": vector["src"],
             "dst": vector["dst"],
             "text": vector["text"],
         }
-        first = dedup.is_duplicate(dict(msg))
+        msg_b = {**msg_a, "msg_id": vector["msg_id_b"]} if "msg_id_b" in vector else dict(msg_a)
+        first = dedup.is_duplicate(dict(msg_a))
         clock["t"] = vector["delta_ms"] / 1000
-        second = dedup.is_duplicate(dict(msg))
+        second = dedup.is_duplicate(msg_b)
         ok = first is False and second == vector["duplicate"]
         _record(f"window: {vector['name']}", ok)
 
