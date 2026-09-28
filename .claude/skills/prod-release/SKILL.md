@@ -196,6 +196,12 @@ section. So:
 - the file has to read well from the top down, because that is the GitHub release body
 - follow the existing shape: `## vX.Y.Z (YYYY-MM-DD)`, a lead paragraph, `### Highlights`,
   `### Backend (MCProxy)`, `### Frontend (webapp)`, `### Upgrade notes`
+- **only the newest release keeps its full notes.** The whole file is also what the webapp's Update
+  page renders. When you add the new section, append the previous full section verbatim to
+  `doc/archive/release-history-full.md` (at the top, under its intro — newest first), and
+  replace it in `release-history.md` with a 1-3 bullet `### vX.Y.Z (date)` entry at the top of
+  `## Earlier releases, in brief`. Keep schema, `SYSTEM_EPOCH` and contract changes and any
+  one-off operator action (a reboot, a firmware minimum) in the brief entry; drop the rest.
 
 Get the material from the commit range in both repos:
 
