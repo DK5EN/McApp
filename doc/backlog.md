@@ -67,3 +67,16 @@ explicit go-ahead. Declined → close B5b with the reason. Recommended client is
 **Do not** re-open the security posture question casually: APRSLink's challenge/response discloses
 three password characters by position, in clear, across the mesh and APRS-IS on every login. The
 decision taken is to use a password that protects nothing else.
+
+## B6 — keep an older message's ACK records when its msg_id is reused
+
+Left open on 2026-09-28 by choice: only the read side was fixed then (`?since=` on
+`GET /api/messages/{msg_id}/acks`, commits 856348b / webapp 4362bbb).
+
+When a msg_id is reused, the older message's own ACK records are still deleted when the newer
+message's first ACK arrives (`_prune_stale_message_acks`, `storage/ingest.py`, called from
+`_handle_ack`). The older message's popover therefore shows nothing instead of its real ACKs. The
+prune exists because the `message_acks` key `(msg_id, kind, from_call)` carries no message
+identity, so without it `INSERT OR IGNORE` swallows the newer message's ACKs (CLAUDE.md, ACK
+Attribution). Keeping both needs a schema migration that adds message identity to the key (for
+example the bound message row id), and the `?since=` read path then filtering on it.
