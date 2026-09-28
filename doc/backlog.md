@@ -21,7 +21,7 @@ mcapp is ~16 MB lighter at equal uptime, matching the import-cost estimate (13.4
 shows no measurable change; the extras drop saved nothing visible there. The old build was flat
 between 46 min and 3 h, which already argues against a leak.
 
-**Open question — does mcapp grow? (plan wave W6; 47 min read done, 24 h and 72 h reads due 2026-09-29 11:30 and 2026-10-01 11:30).** The 2026-09-15
+**Open question — does mcapp grow? (plan wave W6; 47 min read done, 24 h and 72 h reads due 2026-09-29 12:35 and 2026-10-01 12:35, anchored on the v2.0.17 restart at 12:33:37).** The 2026-09-15
 note measured 67 MB at import and 85-95 MB live with 40 MB swapped; the 2026-09-28 figure is
 113 MB Pss with nothing swapped, so the two are not comparable. Read Pss at ~1 h, ~24 h and
 ~72 h uptime: growth under ~5 MB/day that flattens closes this as baseline (page cache +
