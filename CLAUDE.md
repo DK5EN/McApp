@@ -477,6 +477,16 @@ timestamp DESC LIMIT 1`, so any station's ack marked whichever message last used
   INSIDE the window (a held-carve-out match's older rows are that message's own). `get_message_acks`
   applies the same clamp on READ, anchored on the newest ack for the id, which is what makes rows
   written before the prune existed read correctly without a migration or backfill.
+- **The newest-ack anchor is wrong for the OLDER message, so the popover sends `?since=`.**
+  Anchored on the newest ack, an older message's popover listed the acks of the newer message that
+  reused its msg_id. The webapp passes the bubble's own `timestamp` as `since`, and
+  `get_message_acks` then returns `[since - ACK_SINCE_SLACK_MS, since + 4 h)`, or 168 h when a
+  `held` row lies inside the NARROW window, and ignores the newest ack. The held probe must stay
+  narrow: probed over 168 h it finds a NEWER reuser's `held` row and widens the older message
+  back over that message's acks (pinned by `ack_status_tests` case 20c2). A message's own first
+  `held` always binds within 4 h, so nothing real is lost. Without `since` it behaves exactly as
+  before, which is what older webapps get. The older message's own rows are already gone (pruned
+  at write), so it shows nothing rather than the wrong station.
 - **Never key the inline match on the ack payload's padded callsign.** `%-9.9s:ack%03i` TRUNCATES
   at 9 chars (`OE1ABCD-12` arrives as `OE1ABCD-1`) and real traffic shows the no-separator case
   (`DK1TCP-77:ack622`). The frame's `src`/`dst` carry the same identities untruncated. The padded

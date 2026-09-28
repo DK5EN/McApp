@@ -84,6 +84,16 @@ HELD_ACK_WINDOW_MS = 168 * 3600 * 1000  # 168 h = the firmware's --storetime max
 # legitimately acked days later, and clamping it to 4 h would strand it at
 # `held` forever.
 ACK_MSG_ID_WINDOW_MS = 4 * 3600 * 1000  # 4 h
+
+# Slack applied below an explicit `since` anchor in `get_message_acks` (the
+# `?since=` query param, `GET /api/messages/{msg_id}/acks`). `since` is the
+# anchor message row's own timestamp. A BLE row carries the NODE's clock
+# (the RX timestamp trailer, accepted up to 60 s of skew in ble_protocol.py)
+# while acks are stamped on Pi arrival, so the row can lead its first node ack
+# by up to that skew; a bare `timestamp >= since` would drop that ack. 60 s
+# matches the skew allowance and stays far below DEDUP_WINDOW_MS, so a msg_id
+# cannot recur inside it and the slack cannot pull in another message's acks.
+ACK_SINCE_SLACK_MS = 60_000
 TELEMETRY_DEDUP_WINDOW_MS = 60_000
 
 # Gateway-uptime ledger (schema v25) — see
