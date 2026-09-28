@@ -84,6 +84,74 @@ def strip_ack_suffix(text: str) -> str:
     return ACK_SUFFIX_RE.sub("", text).strip()
 
 
+# --- PN retry msg_id core (firmware XOR retry) ------------------------------
+# Since firmware fork-neo-test (v4.35t.09.28-neo) EVERY direct message retries
+# up to three times, 40 s apart, and retry k XORs bits 10-11 of the msg_id with
+# k (`src/pn_retry.h`, `PN_RETRY_CORE_MASK`). The first send is byte-identical
+# to old firmware, and the `{NNN` suffix -- the low 10 counter bits -- never
+# changes. A node on that firmware filters the copies before BLE/Extern-UDP; a
+# node on OLDER firmware forwards every copy with its own msg_id, and each one
+# looks like a new message here. Design: firmware `docs/pn-retry-mcapp.md`,
+# campaign state: `doc/2026-09-27_2200-pn-retry-xor-plan.md`.
+#
+# Bits 10-11 are the two LOW bits of the 22-bit node id
+# (`((_GW_ID & 0x3FFFFF) << 10) | counter`), so the core is NOT unique across
+# stations: two nodes whose ids differ only there collide on it. Every key
+# built from it must therefore carry the sender as well.
+MSG_ID_CORE_MASK = 0xFFFFF3FF
+_MSG_ID_RETRY_SHIFT = 10
+_MSG_ID_HEX_RE = re.compile(r"[0-9A-Fa-f]{8}")
+
+
+def _parse_msg_id(msg_id: str) -> int | None:
+    # fullmatch, not bare int(s, 16): that also accepts `0X`, a sign,
+    # underscores and non-ASCII digits, none of which are a firmware id.
+    if not _MSG_ID_HEX_RE.fullmatch(msg_id):
+        return None
+    return int(msg_id, 16)
+
+
+def msg_core(msg_id: object) -> str | None:
+    """Retry-invariant core of a firmware msg_id: bits 10-11 cleared.
+
+    Falsy input -> None. Anything that is not an 8-digit hex id is returned
+    as its upper-cased string, so a caller can always key on the result without
+    a second branch. Output is upper-case hex, matching `hex_msg_id()` and
+    `normalize_extudp_ack`, which is how every stored msg_id is spelled.
+
+    Takes `object`, not `str`: the Extern-UDP ingress admits any JSON scalar
+    for `msg_id` (`udp_handler._JSON_SCALAR_TYPES`), and an int there must
+    not raise inside command routing.
+    """
+    if not msg_id:
+        return None
+    normalised = str(msg_id).strip().upper()
+    value = _parse_msg_id(normalised)
+    if value is None:
+        return normalised
+    return f"{value & MSG_ID_CORE_MASK:08X}"
+
+
+def msg_id_retry_variants(msg_id: str) -> tuple[str, ...]:
+    """All four msg_ids sharing `msg_id`'s core, `msg_id` itself first.
+
+    For an SQL `msg_id IN (...)` match: keeps the existing msg_id index usable,
+    which a per-row function call in the WHERE clause would not. A value that
+    is not an 8-digit hex id yields just itself.
+    """
+    normalised = msg_id.strip().upper()
+    value = _parse_msg_id(normalised)
+    if value is None:
+        return (normalised,)
+    core = value & MSG_ID_CORE_MASK
+    others = (
+        f"{core | (bits << _MSG_ID_RETRY_SHIFT):08X}"
+        for bits in range(4)
+        if core | (bits << _MSG_ID_RETRY_SHIFT) != value
+    )
+    return (normalised, *others)
+
+
 def match_ack_suffix(text: str) -> re.Match[str] | None:
     """Match a trailing FIXED-WIDTH `{NNN` suffix (the firmware's `%03i`).
 

@@ -1,7 +1,11 @@
 # BLE registers IS1 and SN1 — adoption plan
 
-Status: shipped in v2.0.15-dev.1, deployed to mcapp.local 2026-09-25 22:07. Live IS1/SN1 check
-pending a node reflash (see Wave 2).
+Status: done. Shipped in v2.0.15-dev.1, released in production v2.0.15 (2026-09-26). Live check on
+mcapp.local 2026-09-26 09:11 against DK5EN-98 (firmware `4.35 t`, build `20260926-034041`): IS1
+and SN1 both arrive, no `Type not found!` warning since the dev.1 deploy, `/api/status` reports
+`node_fwver` / `node_build`, the `BLE via state: initial VIA=False VIACALL=''` INFO line is logged
+on every start, and the webapp shows IS1/SN1 as present, the Identity "Build" row as
+`2026-09-26 03:40:41` and the Via card as Off with an empty path.
 
 ## Firmware facts
 
@@ -44,12 +48,12 @@ mc-chat: no BLE register surface, no change. No contract/corpus affected.
 
 ## Waves
 
-| Wave | Owner        | Scope                                                                                | Status  |
-| ---- | ------------ | ------------------------------------------------------------------------------------ | ------- |
-| 1A   | implementer  | MCProxy: allowlists, sweep delays, `/api/status` fields, via-change log, tests, docs | done    |
-| 1B   | implementer  | webapp: bleStore IS1/SN1, register status rows, BDATE formatter, Build row, Via card | done    |
-| gate | orchestrator | both repos full gate, advisor pass, commit per repo                                  | done    |
-| 2    | orchestrator | dev release + mcapp.local live check (SN1 now; IS1 once the node has #1156)          | partial |
+| Wave | Owner        | Scope                                                                                | Status |
+| ---- | ------------ | ------------------------------------------------------------------------------------ | ------ |
+| 1A   | implementer  | MCProxy: allowlists, sweep delays, `/api/status` fields, via-change log, tests, docs | done   |
+| 1B   | implementer  | webapp: bleStore IS1/SN1, register status rows, BDATE formatter, Build row, Via card | done   |
+| gate | orchestrator | both repos full gate, advisor pass, commit per repo                                  | done   |
+| 2    | orchestrator | dev release + mcapp.local live check (SN1 now; IS1 once the node has #1156)          | done   |
 
 ## Follow-ups
 

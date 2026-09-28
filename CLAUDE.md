@@ -761,6 +761,25 @@ One policy, one module, both ingest routes. Firmware background: CHR-03
 - mc-chat carries the same `decode_text` semantics in `meshcom_mock/decoder.py`. Ported, never
   imported — separate repos.
 
+## PN Retry XOR (`msg_core`)
+
+Firmware `fork-neo-test` (v4.35t.09.28-neo) resends every direct message up to 3x, 40 s apart;
+retry k XORs msg_id bits 10-11 with k, text and `{NNN` unchanged. Plan and campaign state:
+`doc/2026-09-27_2200-pn-retry-xor-plan.md`; firmware side `docs/pn-retry-mcapp.md` there.
+
+- **A node on that firmware filters the copies; an old-firmware node forwards each one with its own
+  msg_id.** Every dedup that keys on msg_id therefore goes through `util.msg_core()` (mask
+  `0xFFFFF3FF`) or, in SQL, `msg_id IN (msg_id_retry_variants(...))` so the index stays usable.
+- **Never key on the core alone.** Bits 10-11 are the low bits of the sender's 22-bit node id, so
+  the core collides across stations. Every core-based key carries the sender: ingest
+  (`(sender, core)`, personal dst only), command dedup (`sender|core`), `PushDedup` and the webapp
+  (`dedup_contract.json` v2, `(resolved-src, core)`).
+- **Stored `messages.msg_id` stays the raw received value.** Ack ledger rows and the published
+  `msg_status` use the resolved row's msg_id, never the ack frame's.
+- **Every 0x41 ack/status frame for our own DM carries the ORIGINAL msg_id** (the firmware folds it
+  back). `_resolve_ack_target`'s variant fallback is defensive and limited to rows we sent.
+- `linkcheck.py` is untouched on purpose: ping/pong are never retried.
+
 ## Key Gotchas
 
 - **A `#TAG` destination is a hashtag channel, not a callsign — and `is_group()` stays numeric.** The MeshCom FW 4.36 RfC puts a `#OE-SOTA` token in the destination field. All three repos independently misclassified it as a personal DM, which sent it into `compute_conversation_key`'s DM branch where it was **split on its first hyphen** (`"#OE-SOTA"` → key `"#OE<>DK5EN"`), collapsing distinct tags and fragmenting one tag per sender. Fixed in `ea15511` by adding **sibling** predicates `is_hashtag()` / `dst_kind()` / `resolve_dst_target()` beside `is_group()` in `commands/parsing.py` — `is_group` was deliberately NOT widened, because it is pinned by a corpus mirrored in mc-chat and the webapp. Two invariants look like oversights and are load-bearing: classification is **case-insensitive** and **NOT length-bounded** — a tag failing either would fall straight back into the DM branch, which is the defect. The RfC's 9-char cap is send-side grammar, enforced at the API boundary, never in classification. `dst_kind` returns `"unknown"` (never `"direct"`) for a `#`-prefixed value that fails the tag charset: it addresses nobody, and is the shape most likely to arrive from a buggy or hostile sender. Contract: `commands/hashtag_dst_vectors.json` (32 vectors, sha256-pinned by `commands/hashtag_dst_tests.py`). **No prefix/subscription matching exists** (RfC US-3) — its stated rule contradicts its own worked examples, so implementing it would encode a guess. Background: `MeshCom-Hashtag-prep.md`.

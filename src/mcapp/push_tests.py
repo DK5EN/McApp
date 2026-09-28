@@ -249,6 +249,13 @@ async def run_push_tests() -> bool:
     #     contract's msg_id-keyed dedup scenario above, so covered directly.
     _test_dedup_fallback_and_pruning(_record)
 
+    # 2c. PushDedup: the truthy-msg_id key is sender-scoped and core-masked
+    #     (dedup_contract.json v2) — a same-src retry pair collapses to one
+    #     key, a same-msg_id different-src pair does not. Covered by
+    #     dedup_contract_tests.py's contract vectors too; this direct case
+    #     pins it against this suite's own PushDedup import.
+    _test_dedup_id_key_sender_scoped_core(_record)
+
     # 3. subscribe/unsubscribe/upsert (real ephemeral storage + real router).
     await _test_subscribe_unsubscribe_upsert(_record)
     _test_filter_groups_null_coercion(_record)
@@ -386,6 +393,42 @@ def _test_dedup_fallback_and_pruning(record: _RecordFn) -> None:
     record(
         "dedup fallback: same key re-seen after the window has elapsed is NOT a duplicate (pruned)",
         dedup.is_duplicate(msg_a) is False,
+    )
+
+
+def _test_dedup_id_key_sender_scoped_core(record: _RecordFn) -> None:
+    """`PushDedup`'s truthy-`msg_id` key is sender-scoped and core-masked
+    (dedup_contract.json v2 `key_semantics`): the firmware's PN-retry feature
+    XORs msg_id bits 10-11 with the retry index, so a same-src retry pair
+    must collapse to one dedup key even though the raw msg_ids differ — and
+    those same two bits are also the low bits of the sender's node id, so an
+    identical raw msg_id from a DIFFERENT src must NOT collapse to one key.
+    """
+    clock = {"t": 0.0}
+    window = 3600.0
+
+    dedup = PushDedup(window, now=lambda: clock["t"])
+    first = {"src": "OE1ABC-1", "dst": "232", "text": "hello", "msg_id": "E1E05457"}
+    retry = {"src": "OE1ABC-1", "dst": "232", "text": "hello", "msg_id": "E1E05057"}
+    record(
+        "dedup id key: same src, retry-XOR msg_id — first sighting is not a duplicate",
+        dedup.is_duplicate(dict(first)) is False,
+    )
+    record(
+        "dedup id key: same src, retry-XOR msg_id (bits 10-11 differ) IS a duplicate",
+        dedup.is_duplicate(dict(retry)) is True,
+    )
+
+    dedup2 = PushDedup(window, now=lambda: clock["t"])
+    same_id_a = {"src": "OE1ABC-1", "dst": "232", "text": "hello", "msg_id": "E1E05457"}
+    same_id_b = {"src": "OE1XYZ-2", "dst": "232", "text": "hello", "msg_id": "E1E05457"}
+    record(
+        "dedup id key: different src, identical raw msg_id — first sighting is not a duplicate",
+        dedup2.is_duplicate(dict(same_id_a)) is False,
+    )
+    record(
+        "dedup id key: different src, identical raw msg_id is NOT a duplicate (sender-scoped)",
+        dedup2.is_duplicate(dict(same_id_b)) is False,
     )
 
 

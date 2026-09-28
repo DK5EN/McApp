@@ -1584,6 +1584,109 @@ async def run_ack_status_tests() -> bool:  # noqa: PLR0915 - seven independent A
                 )
             )
 
+            # 19. PN retry XOR (doc/2026-09-27_2200-pn-retry-xor-plan.md): an
+            #     old-firmware relay forwards each of the firmware's retries of
+            #     OUR OWN outbound DM under its own XORed msg_id (bits 10-11),
+            #     but the ack for it always carries the ORIGINAL msg_id (plan
+            #     §1) — so this direction is the mirror image of the ingest
+            #     dedup gate: here it is the STORED row's id, not the ack's,
+            #     that is the variant. (a) An ack for a variant of a row WE
+            #     sent resolves to that row, and the ledger is keyed under the
+            #     row's OWN msg_id, matching the inline `:ackNNN` path.
+            router.published.clear()
+            storage.set_own_callsign("DK5EN-98")
+            outbound_pn = {
+                "msg_id": "E1E05457",
+                "src": "DK5EN-98",
+                "dst": "OE1RTY-1",
+                "msg": "hello{456",
+                "type": "msg",
+                "src_type": "ble",
+                "timestamp": _BASE_TS + 500,
+            }
+            await storage.store_message(outbound_pn, "{}")
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "E1E05057",  # retry k=1 variant of E1E05457
+                    "ack_type": 0x01,
+                    "ack_type_text": "Gateway ACK",
+                    "ack_from": "OE1GW-1",
+                    "ack_via": "lora",
+                    "timestamp": _BASE_TS + 501,
+                },
+                "{}",
+            )
+            pn_row = await _row("E1E05457")
+            pn_ledger = await storage.get_message_acks("E1E05457")
+            results.append(
+                (
+                    "PN retry XOR: an ack for a variant msg_id resolves to our own sent row",
+                    pn_row is not None and pn_row.get("send_success") == 1,
+                )
+            )
+            results.append(
+                (
+                    (
+                        "PN retry XOR: the ledger is keyed under the row's OWN"
+                        " msg_id, not the ack frame's"
+                    ),
+                    [(a["kind"], a["from"]) for a in pn_ledger] == [("gateway", "OE1GW-1")]
+                    and await storage.get_message_acks("E1E05057") == [],
+                )
+            )
+            pn_events = _msg_status_events()
+            results.append(
+                (
+                    (
+                        "PN retry XOR: the published msg_status event carries the"
+                        " row's OWN msg_id (E1E05457), not the ack frame's"
+                        " (E1E05057) -- the webapp keys msg:status by msg_id, and"
+                        " no bubble holds the ack frame's id"
+                    ),
+                    len(pn_events) == 1 and pn_events[0].get("msg_id") == "E1E05457",
+                )
+            )
+
+            # (b) The same variant match must NOT bind to a row sent by
+            #     ANOTHER station — the core is not unique across stations
+            #     (plan §3), and an ack can only ever answer OUR OWN outbound
+            #     frame.
+            router.published.clear()
+            foreign_pn = {
+                "msg_id": "E1E05458",
+                "src": "OE5HWN-12",
+                "dst": "OE1RTY-1",
+                "msg": "hello from someone else{457",
+                "type": "msg",
+                "src_type": "lora",
+                "timestamp": _BASE_TS + 502,
+            }
+            await storage.store_message(foreign_pn, "{}")
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "E1E05058",  # variant of E1E05458, but not our row
+                    "ack_type": 0x01,
+                    "ack_type_text": "Gateway ACK",
+                    "ack_from": "OE1GW-1",
+                    "timestamp": _BASE_TS + 503,
+                },
+                "{}",
+            )
+            foreign_row = await _row("E1E05458")
+            results.append(
+                (
+                    (
+                        "PN retry XOR: a variant match is refused when the row"
+                        " was sent by another station"
+                    ),
+                    foreign_row is not None
+                    and foreign_row.get("send_success") != 1
+                    and await storage.get_message_acks("E1E05458") == [],
+                )
+            )
+
         finally:
             await storage.close()
 

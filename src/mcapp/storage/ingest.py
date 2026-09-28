@@ -19,7 +19,7 @@ from typing import Any
 
 from .. import linkcheck
 from ..ble_protocol import normalise_ack_callsign
-from ..commands.parsing import resolve_dst_target
+from ..commands.parsing import dst_kind, resolve_dst_target
 from ..logging_setup import get_logger
 from ..util import (
     ACK_SUFFIX_RE,
@@ -27,6 +27,8 @@ from ..util import (
     FEET_TO_METERS,
     FIRMWARE_DOUBLED_BACKSLASH,
     is_placeholder_callsign,
+    msg_core,
+    msg_id_retry_variants,
     now_ms,
     undouble_aprs_symbol_escapes,
 )
@@ -285,7 +287,7 @@ def _classifier_fields(
 
 
 class IngestMixin(StorageBase):
-    def _claim_recent_ingest(self, callsign: str, msg_id: str, timestamp: int) -> bool:
+    def _claim_recent_ingest(self, callsign: str, msg_id: str, timestamp: int, *, dst: str) -> bool:
         """Race-free half of the message dedup gate. Returns True when this
         (sender, msg_id) is new within DEDUP_WINDOW_MS and records it; False when
         a copy was already claimed. Deliberately synchronous — no await between
@@ -295,8 +297,20 @@ class IngestMixin(StorageBase):
         sender exactly like that lookup: msg_id is a node-local 32-bit counter,
         so two stations collide regularly inside one window and must never
         suppress each other.
+
+        PN retry XOR (doc/2026-09-27_2200-pn-retry-xor-plan.md): for a personal
+        `dst`, the firmware's up-to-3 retries of one DM XOR msg_id bits 10-11, so
+        the in-memory key is the retry-invariant `msg_core()` instead of the raw
+        id — an old-firmware relay forwards each retry copy as its own frame and
+        every one must claim the SAME key. Groups/broadcast/hashtag keep the raw
+        msg_id: they are never XOR-retried (plan §3) and a shared core would
+        collide unrelated frames.
         """
-        key = (callsign.strip().upper(), msg_id)
+        # `or msg_id`: msg_core() only returns None on falsy input, which a
+        # real msg_id never is here — the fallback just keeps this str, not
+        # str | None, for mypy.
+        dedup_id = (msg_core(msg_id) or msg_id) if dst_kind(dst) == "direct" else msg_id
+        key = (callsign.strip().upper(), dedup_id)
         seen = self._recent_ingest.get(key)
         if seen is not None and timestamp - seen <= DEDUP_WINDOW_MS:
             return False
@@ -308,7 +322,7 @@ class IngestMixin(StorageBase):
         return True
 
     async def _find_duplicate_row_id(
-        self, msg_id: Any, callsign: str, timestamp: int
+        self, msg_id: Any, callsign: str, timestamp: int, *, dst: str
     ) -> int | None:
         """Locate the row a duplicate frame belongs to, with EXACTLY the same
         predicate the dedup backstop SELECT uses (msg_id + window + resolved
@@ -316,13 +330,32 @@ class IngestMixin(StorageBase):
         by that backstop check and by the enrichment path below so the two
         can never drift apart; drifting would let a relay copy an hour later
         touch the wrong message.
+
+        PN retry XOR (doc/2026-09-27_2200-pn-retry-xor-plan.md): for a personal
+        `dst` the match widens to every msg_id sharing this one's retry-invariant
+        core (`msg_id_retry_variants`), matching `_claim_recent_ingest`'s in-memory
+        key — otherwise an old-firmware relay's forwarded retry copies land as
+        separate rows. `msg_id IN (...)` keeps the msg_id index usable; a
+        per-row function call in WHERE would not. Groups/broadcast/hashtag stay
+        on the exact id, never XOR-retried by the firmware (plan §3).
         """
-        rows = await self._query(
-            "SELECT id FROM messages WHERE msg_id = ? AND timestamp > ?"  # noqa: S608 - sender_base_sql returns a fixed literal; every value is parameterized
-            f" AND {sender_base_sql('src')} = ?"
-            " ORDER BY timestamp ASC, id ASC LIMIT 1",
-            (msg_id, timestamp - DEDUP_WINDOW_MS, callsign.upper()),
-        )
+        if dst_kind(dst) == "direct":
+            variants = msg_id_retry_variants(str(msg_id))
+            placeholders = ",".join("?" for _ in variants)
+            query = (
+                f"SELECT id FROM messages WHERE msg_id IN ({placeholders}) AND timestamp > ?"  # noqa: S608 - placeholders are '?' only, sender_base_sql returns a fixed literal; every value is parameterized
+                f" AND {sender_base_sql('src')} = ?"
+                " ORDER BY timestamp ASC, id ASC LIMIT 1"
+            )
+            params: tuple[Any, ...] = (*variants, timestamp - DEDUP_WINDOW_MS, callsign.upper())
+        else:
+            query = (
+                "SELECT id FROM messages WHERE msg_id = ? AND timestamp > ?"  # noqa: S608 - sender_base_sql returns a fixed literal; every value is parameterized
+                f" AND {sender_base_sql('src')} = ?"
+                " ORDER BY timestamp ASC, id ASC LIMIT 1"
+            )
+            params = (msg_id, timestamp - DEDUP_WINDOW_MS, callsign.upper())
+        rows = await self._query(query, params)
         return int(rows[0]["id"]) if rows else None
 
     async def _enrich_duplicate_row(  # noqa: PLR0913 - one arg per enrichable column, mirrors store_message's own locals
@@ -1177,7 +1210,12 @@ class IngestMixin(StorageBase):
         # outside the window by definition and is skipped — there the older rows
         # ARE this message's own, the `held` record this late ack completes.
         if target is not None and target["timestamp"] > timestamp - ACK_MSG_ID_WINDOW_MS:
-            await self._prune_stale_message_acks(ack_for_msg_id, timestamp - ACK_MSG_ID_WINDOW_MS)
+            # Keyed on the TARGET row's own stored msg_id, not the ack frame's
+            # (PN retry XOR, doc/2026-09-27_2200-pn-retry-xor-plan.md §3) —
+            # matching the inline `:ackNNN` path below and `_record_message_ack`'s
+            # ledger writes at every call site in this method, so a resolved
+            # retry-variant match prunes and records under the same key.
+            await self._prune_stale_message_acks(target["msg_id"], timestamp - ACK_MSG_ID_WINDOW_MS)
         if ack_type == 0x03:  # noqa: PLR2004 - firmware wire constant (failed), named in ble_protocol.py
             rows = 1 if target is not None else 0
         elif target is None:
@@ -1221,7 +1259,14 @@ class IngestMixin(StorageBase):
             # ack for a msg_id we never sent must never claim a delivery. Never let
             # a publish failure break ingestion (hot path).
             if acked_rows and target is not None:
-                await self._record_message_ack(ack_for_msg_id, "peer", ack_from, ack_via, timestamp)
+                # Ledger key is the TARGET row's own stored msg_id, matching the
+                # inline `:ackNNN` path — see the prune call's comment above and
+                # doc/2026-09-27_2200-pn-retry-xor-plan.md §3. The published
+                # `msg_status` event below still names `ack_for_msg_id` (the
+                # frame's own field), unchanged.
+                await self._record_message_ack(
+                    target["msg_id"], "peer", ack_from, ack_via, timestamp
+                )
                 # `acked` is rank 4, the top of the store-forward precedence
                 # scale (plan §4) — always wins over a stored `held`/`failed`,
                 # and is itself final (nothing outranks it). `ack_from` is the
@@ -1237,7 +1282,15 @@ class IngestMixin(StorageBase):
                         "storage",
                         "msg_status",
                         {
-                            "msg_id": ack_for_msg_id,
+                            # PN retry XOR (plan §3): after a variant-fallback
+                            # bind, `target["msg_id"]` is the row's own id,
+                            # which may differ from the ack frame's own
+                            # `ack_for_msg_id` — the webapp keys msg:status by
+                            # msg_id, so the event must name the id an actual
+                            # bubble holds. `target` is guaranteed non-None
+                            # here (acked_rows is 0 otherwise); the fallback
+                            # only mirrors the other three sites' shape.
+                            "msg_id": target["msg_id"] if target is not None else ack_for_msg_id,
                             "acked": True,
                             "ack_kind": "peer",
                             **_ack_attribution_fields(ack_from, ack_via),
@@ -1262,8 +1315,10 @@ class IngestMixin(StorageBase):
                 await self._write_delivery_status(
                     ack_for_msg_id, "failed", ack_from, row_id=target["id"]
                 )
+                # Ledger key is the TARGET row's own stored msg_id (PN retry
+                # XOR, plan §3) — see the peer branch's identical comment above.
                 await self._record_message_ack(
-                    ack_for_msg_id, "failed", ack_from, ack_via, timestamp
+                    target["msg_id"], "failed", ack_from, ack_via, timestamp
                 )
             if rows and self._message_router:
                 try:
@@ -1271,7 +1326,9 @@ class IngestMixin(StorageBase):
                         "storage",
                         "msg_status",
                         {
-                            "msg_id": ack_for_msg_id,
+                            # PN retry XOR (plan §3) — see the peer branch's
+                            # identical comment above.
+                            "msg_id": target["msg_id"] if target is not None else ack_for_msg_id,
                             # `acked: False` is a COMPATIBILITY REQUIREMENT, not
                             # decoration (plan §5). The webapp's msg:status
                             # handler treats ANY event with no `sent` key and
@@ -1306,11 +1363,17 @@ class IngestMixin(StorageBase):
                 await self._write_delivery_status(
                     ack_for_msg_id, "held", ack_from, row_id=target["id"]
                 )
-                await self._record_message_ack(ack_for_msg_id, "held", ack_from, ack_via, timestamp)
+                # Ledger key is the TARGET row's own stored msg_id (PN retry
+                # XOR, plan §3) — see the peer branch's identical comment above.
+                await self._record_message_ack(
+                    target["msg_id"], "held", ack_from, ack_via, timestamp
+                )
             if rows and self._message_router:
                 try:
                     payload: dict[str, Any] = {
-                        "msg_id": ack_for_msg_id,
+                        # PN retry XOR (plan §3) — see the peer branch's
+                        # identical comment above.
+                        "msg_id": target["msg_id"] if target is not None else ack_for_msg_id,
                         "sent": True,
                         "ack_kind": "held",
                         **_ack_attribution_fields(ack_from, ack_via),
@@ -1344,14 +1407,22 @@ class IngestMixin(StorageBase):
             ack_kind = "gateway"
         else:
             ack_kind = f"unknown({ack_type!r})"
-        if rows and ack_kind in ("node", "gateway"):
-            await self._record_message_ack(ack_for_msg_id, ack_kind, ack_from, ack_via, timestamp)
+        # `rows` truthy implies `target is not None` (the UPDATE above ran off
+        # `target["id"]`); the explicit check is only to satisfy mypy's narrowing.
+        # Ledger key is the TARGET row's own stored msg_id (PN retry XOR, plan §3).
+        if rows and target is not None and ack_kind in ("node", "gateway"):
+            await self._record_message_ack(target["msg_id"], ack_kind, ack_from, ack_via, timestamp)
         if self._message_router:
             await self._message_router.publish(
                 "storage",
                 "msg_status",
                 {
-                    "msg_id": ack_for_msg_id,
+                    # PN retry XOR (plan §3) — see the peer branch's identical
+                    # comment above. Unlike the other three branches this one
+                    # publishes even when `target` is None (an unmatched ack
+                    # is still reported for diagnosis), so the fallback here
+                    # is live, not just defensive.
+                    "msg_id": target["msg_id"] if target is not None else ack_for_msg_id,
                     "sent": True,
                     "ack_kind": ack_kind,
                     **_ack_attribution_fields(ack_from, ack_via),
@@ -1382,6 +1453,19 @@ class IngestMixin(StorageBase):
         Returns the newest match — `id`, `msg_id`, `timestamp` and
         `delivery_status` — which is also what the caller needs to tell a
         normal match from one made only by the held carve-out.
+
+        PN retry XOR (doc/2026-09-27_2200-pn-retry-xor-plan.md): when the exact
+        id has no match, retry against every id sharing its retry-invariant core
+        (`msg_id_retry_variants`). Defensive: current firmware folds every
+        0x41 frame for our own DM back to the ORIGINAL msg_id (plan §1), but a
+        heard-ack for one of its XORed retry copies carries that copy's id,
+        and the node's `handleACK()` does not fold it today (firmware finding,
+        plan §4). If that is ever forwarded, it must still land on the row
+        stored under the original. Restricted to rows WE sent
+        (`_own_callsign`, same exact-match style `_ingest_signal`'s own-echo
+        gate uses): an ack can only ever answer our own outbound frame, and the
+        core is not unique across stations (plan §3), so an unscoped retry could
+        bind to a stranger's unrelated DM that happens to share the low bits.
         """
         rows = await self._query(
             "SELECT id, msg_id, timestamp, delivery_status FROM messages"
@@ -1390,6 +1474,29 @@ class IngestMixin(StorageBase):
             "        OR (delivery_status = 'held' AND timestamp > ?))"
             " ORDER BY timestamp DESC LIMIT 1",
             (msg_id, ack_ts - ACK_MSG_ID_WINDOW_MS, ack_ts - HELD_ACK_WINDOW_MS),
+        )
+        if rows:
+            return dict(rows[0])
+
+        if not self._own_callsign:
+            return None
+        variants = msg_id_retry_variants(msg_id)
+        if len(variants) <= 1:
+            return None
+        placeholders = ",".join("?" for _ in variants)
+        rows = await self._query(
+            "SELECT id, msg_id, timestamp, delivery_status FROM messages"  # noqa: S608 - placeholders are '?' only, sender_base_sql returns a fixed literal; every value is parameterized
+            f" WHERE msg_id IN ({placeholders}) AND type = 'msg'"
+            f"   AND {sender_base_sql('src')} = ?"
+            "   AND (timestamp > ?"
+            "        OR (delivery_status = 'held' AND timestamp > ?))"
+            " ORDER BY timestamp DESC LIMIT 1",
+            (
+                *variants,
+                self._own_callsign,
+                ack_ts - ACK_MSG_ID_WINDOW_MS,
+                ack_ts - HELD_ACK_WINDOW_MS,
+            ),
         )
         return dict(rows[0]) if rows else None
 
@@ -1637,7 +1744,18 @@ class IngestMixin(StorageBase):
 
         msg_id = message.get("msg_id")
         src = message.get("src", "")
-        dst = message.get("dst", "")
+        # Coerce once, here: PN retry XOR (doc/2026-09-27_2200-pn-retry-xor-
+        # plan.md) added `dst_kind(dst)` calls in the dedup gate below, which
+        # run for EVERY msg_id-bearing frame regardless of `msg_type` (a
+        # `pos`/`tele` frame included, not just msg_type == "msg" as
+        # `compute_conversation_key(callsign, dst)` further down is gated).
+        # `dst_kind` -> `resolve_dst_target` calls `.rsplit()`/`.strip()` on
+        # it, so a crafted non-str `dst` (port 1799 is unauthenticated) raised
+        # AttributeError and lost the whole frame's signal/position data, not
+        # just the dedup decision — the same failure mode `msg`'s coercion
+        # below already guards against.
+        raw_dst = message.get("dst", "")
+        dst = raw_dst if isinstance(raw_dst, str) else ""
         # Coerce once, here: `msg` is used downstream by the echo_id regex
         # (`re.search(..., msg)`), the `":ack" in msg` prefilter, the classifier
         # and the link-check guard, every one of which assumes `str`. Port 1799 is
@@ -1916,26 +2034,32 @@ class IngestMixin(StorageBase):
         # duplicate (a LoRa relay copy seconds later) was caught by the SELECT.
         # storage/ingest_dedup_tests.py replays both shapes.
         if msg_id is not None:
-            claimed = self._claim_recent_ingest(callsign, str(msg_id), timestamp)
+            claimed = self._claim_recent_ingest(callsign, str(msg_id), timestamp, dst=dst)
             duplicate = not claimed
             existing_row_id: int | None = None
             if claimed:
                 # Backstop across a restart (empty in-memory set): even a
                 # freshly claimed key may already be on disk from a previous
                 # process.
-                existing_row_id = await self._find_duplicate_row_id(msg_id, callsign, timestamp)
+                existing_row_id = await self._find_duplicate_row_id(
+                    msg_id, callsign, timestamp, dst=dst
+                )
                 duplicate = existing_row_id is not None
             else:
                 # Concurrent race: our claim lost to a copy being processed by
                 # a SEPARATE, still-suspended asyncio task — it may not have
                 # committed its INSERT yet. Bounded poll rather than an
                 # unbounded wait; see _ENRICH_RACE_POLL_ATTEMPTS.
-                existing_row_id = await self._find_duplicate_row_id(msg_id, callsign, timestamp)
+                existing_row_id = await self._find_duplicate_row_id(
+                    msg_id, callsign, timestamp, dst=dst
+                )
                 for _ in range(_ENRICH_RACE_POLL_ATTEMPTS):
                     if existing_row_id is not None:
                         break
                     await asyncio.sleep(_ENRICH_RACE_POLL_INTERVAL_S)
-                    existing_row_id = await self._find_duplicate_row_id(msg_id, callsign, timestamp)
+                    existing_row_id = await self._find_duplicate_row_id(
+                        msg_id, callsign, timestamp, dst=dst
+                    )
 
             if duplicate:
                 # Presence, not truthiness — see the identical note in

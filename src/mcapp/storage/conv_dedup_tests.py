@@ -115,7 +115,13 @@ from ..commands.parsing import SPAM_GROUP
 from ..logging_setup import get_logger
 from ..sqlite_storage import create_sqlite_storage
 from ..util import now_ms
-from .constants import DEDUP_WINDOW_MS, LONG_RETENTION_DAYS, SECONDS_PER_DAY, db_read
+from .constants import (
+    DEDUP_WINDOW_MS,
+    LONG_RETENTION_DAYS,
+    SECONDS_PER_DAY,
+    compute_conversation_key,
+    db_read,
+)
 from .query import (
     _CONV_CURSOR_JOINS,
     _CONV_NEWER_EXPR,
@@ -882,6 +888,66 @@ async def _test_group_by_identity_legs_pin(results: list[tuple[str, bool]]) -> N
             await storage.close()
 
 
+async def _test_pn_retry_xor_ingest_dedup(results: list[tuple[str, bool]]) -> None:
+    """PN retry XOR (doc/2026-09-27_2200-pn-retry-xor-plan.md): the firmware
+    retries a personal DM up to 3x, XORing msg_id bits 10-11 with the retry
+    index; an old-firmware relay forwards each copy under its own msg_id.
+    Unlike cases 1/2/7 above (one msg_id, two physical rows engineered by
+    `_duplicate_row`), the ingest-side fix (storage/ingest.py) collapses the
+    two XOR-variant msg_ids into a SINGLE physical row at ingest time, so
+    this needs no query-side change: driving `store_message` twice with the
+    real variant ids leaves only one row, and `get_conversation_summary`
+    counting that row correctly is a direct consequence.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = Path(tmp_dir) / "pn_retry.db"
+        storage = await create_sqlite_storage(db_path)
+        try:
+            dm_dst = "OE1RTY-1"
+            t0 = now_ms() - 1_000_000
+            await _store_msg(
+                storage,
+                dm_dst,
+                MY_CALLSIGN,
+                "hello there{042",
+                t0,
+                msg_id="E1E05457",
+                src_type="udp",
+            )
+            # retry k=1 variant (bit 10 flipped), forwarded by an old-firmware
+            # relay under its own msg_id, 40 s later (the firmware's retry
+            # cadence) -- see doc/2026-09-27_2200-pn-retry-xor-plan.md §1.
+            await _store_msg(
+                storage,
+                dm_dst,
+                MY_CALLSIGN,
+                "hello there{042",
+                t0 + 40_000,
+                msg_id="E1E05057",
+                src_type="udp",
+            )
+            rows = await storage._query(
+                "SELECT COUNT(*) AS n FROM messages WHERE src = ?", (dm_dst,)
+            )
+            summary = await storage.get_conversation_summary(MY_CALLSIGN)
+            key = compute_conversation_key(MY_CALLSIGN, dm_dst) or ""
+            entry = summary.get(key, {})
+            results.append(
+                (
+                    "PN retry XOR: two variant msg_ids of one personal DM ingest as ONE row",
+                    rows[0]["n"] == 1,
+                )
+            )
+            results.append(
+                (
+                    "PN retry XOR: get_conversation_summary counts 1 message / unread 1",
+                    entry.get("count") == 1 and entry.get("unread") == 1,
+                )
+            )
+        finally:
+            await storage.close()
+
+
 async def run_conv_dedup_tests() -> bool:
     """Run the conversation-dedup regression suite. Returns True iff every
     case passes."""
@@ -900,6 +966,7 @@ async def run_conv_dedup_tests() -> bool:
     await _test_anchor_width_pin(results)
     await _test_anchor_strict_boundary_pin(results)
     await _test_group_by_identity_legs_pin(results)
+    await _test_pn_retry_xor_ingest_dedup(results)
 
     for label, ok in results:
         print(f"    {'✅ PASS' if ok else '❌ FAIL'} | {label}")
