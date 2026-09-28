@@ -28,6 +28,7 @@ from bootstrap_network_safety_tests import run_bootstrap_network_safety_tests
 from bootstrap_pinning_tests import run_bootstrap_pinning_tests
 from caddy_config_tests import run_caddy_config_tests
 from config_migration_tests import run_config_migration_tests
+from health_probe_tests import run_health_probe_tests
 from release_prep_tests import run_release_prep_tests
 from system_converge_tests import run_system_converge_tests
 from update_runner_tests import run_update_runner_tests
@@ -57,6 +58,7 @@ from mcapp.msg_core_tests import run_msg_core_tests
 from mcapp.node_console_tests import run_node_console_tests
 from mcapp.push_tests import run_push_tests
 from mcapp.send_path_tests import run_send_path_tests
+from mcapp.server_imports_tests import run_server_imports_tests
 from mcapp.sqlite_storage import run_startup_tests as run_storage_tests
 from mcapp.sse_format_tests import run_sse_format_tests
 from mcapp.sse_handler import run_startup_tests as run_sse_tests
@@ -221,6 +223,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     push_ok = await run_push_tests()
     print(f"push: {'PASS' if push_ok else 'FAIL'}")
 
+    server_imports_ok = await run_server_imports_tests()
+    print(f"server_imports: {'PASS' if server_imports_ok else 'FAIL'}")
+
     blocklist_history_ok = await run_blocklist_history_tests()
     print(f"blocklist_history: {'PASS' if blocklist_history_ok else 'FAIL'}")
 
@@ -241,6 +246,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     bootstrap_pinning_ok = run_bootstrap_pinning_tests()
     print(f"bootstrap_pinning: {'PASS' if bootstrap_pinning_ok else 'FAIL'}")
+
+    health_probe_ok = run_health_probe_tests()
+    print(f"health_probe: {'PASS' if health_probe_ok else 'FAIL'}")
 
     bootstrap_network_safety_ok = run_bootstrap_network_safety_tests()
     print(f"bootstrap_network_safety: {'PASS' if bootstrap_network_safety_ok else 'FAIL'}")
@@ -316,6 +324,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and meteo_ok
         and msg_core_ok
         and push_ok
+        and server_imports_ok
         and blocklist_history_ok
         and ble_protocol_ok
         and ble_hydration_ok
@@ -323,6 +332,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and system_converge_ok
         and caddy_config_ok
         and bootstrap_pinning_ok
+        and health_probe_ok
         and bootstrap_network_safety_ok
         and release_prep_ok
         and webapp_deploy_ok

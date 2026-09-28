@@ -2160,4 +2160,5 @@ if __name__ == "__main__":
         host="0.0.0.0",  # noqa: S104 - LAN service binds all interfaces by design
         port=int(os.getenv("BLE_SERVICE_PORT", "8081")),
         reload=False,
+        ws="none",  # no WebSocket route exists; avoids importing `websockets` (B4.2a)
     )

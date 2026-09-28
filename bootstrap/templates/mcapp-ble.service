@@ -18,7 +18,7 @@ ExecStartPre=+/usr/bin/bluetoothctl power on
 # ~10 MB virtual per service and a resolver step per restart. WorkingDirectory
 # above is what makes `ble_service.src.main:app` resolve -- uvicorn's CLI
 # inserts cwd into sys.path via its --app-dir default of "" (uvicorn/main.py).
-ExecStart={{HOME}}/mcapp-slots/current/.venv/bin/uvicorn ble_service.src.main:app --host 127.0.0.1 --port 8081
+ExecStart={{HOME}}/mcapp-slots/current/.venv/bin/uvicorn ble_service.src.main:app --host 127.0.0.1 --port 8081 --ws none
 Restart=on-failure
 RestartSec=5
 
