@@ -48,8 +48,8 @@ one wins; `memory.current` reads real values).
   both envs. `health.sh`'s venv probe had to follow. Pinned by `server_imports` and `health_probe`.
 - **3. pywebpush** — replaced in `3d960d9` (2026-09-28) by `push_send.py`: `http_ece` +
   `py_vapid` unchanged, POST via httpx; `aiohttp`, `requests` and their deps left the env
-  (+13.4 MB import RSS on the dev Mac). Live push delivery to iOS and Chrome is checked on the
-  next deploy.
+  (+13.4 MB import RSS on the dev Mac; -16 MB Pss measured on mcapp.local at equal uptime). Live
+  push verified 2026-09-28 on v2.0.17-dev.1: 201 from Apple, notification arrived on the iPhone.
 - **4. `MALLOC_ARENA_MAX=2`** — shipped 2026-09-15 in both unit templates;
   `MALLOC_TRIM_THRESHOLD_` deliberately not added.
 - **5. Logs in RAM** — journald `RuntimeMaxUse=8M` shipped 2026-09-15. The `/run/journalxship`

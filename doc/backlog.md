@@ -7,13 +7,21 @@ closing plan: `doc/2026-09-28_1035-backlog-review-verdict-and-plan.md`.
 
 ## B4 — memory footprint on mcapp.local (one open question)
 
-Baseline, mcapp.local 2026-09-28 with mcapp up 46 min, BEFORE W2/W3, from
-`/proc/<pid>/smaps_rollup`: mcapp Pss 113 MB, swap 0; mcapp-ble 43 MB; caddy 28 MB; `free`
-168 MB available; mcapp cgroup `memory.peak` 159 MB. W2 (-~3 MB per service) and W3 (-~13 MB in
-mcapp, measured as import RSS on the dev Mac) are committed on `development`, not yet deployed —
-the first post-deploy read also measures what they actually saved on the Pi.
+Measured on mcapp.local 2026-09-28 from `/proc/<pid>/smaps_rollup`, before and after v2.0.17-dev.1
+(W2 + W3), at matched uptime:
 
-**Open question — does mcapp grow? (plan wave W6, after v2.0.17 with W2/W3 is deployed).** The 2026-09-15
+| Build                   | Uptime | mcapp Pss | mcapp cgroup peak | mcapp-ble Pss |
+| ----------------------- | ------ | --------- | ----------------- | ------------- |
+| v2.0.16 (old)           | 46 min | 113.4 MB  | 158.7 MB          | 43.2 MB       |
+| v2.0.16 (old)           | ~3 h   | 113.4 MB  | —                 | 42.6 MB       |
+| v2.0.17-dev.1 (W2 + W3) | 3 min  | 85.9 MB   | —                 | 43.4 MB       |
+| v2.0.17-dev.1 (W2 + W3) | 47 min | 97.3 MB   | 132.0 MB          | 43.5 MB       |
+
+mcapp is ~16 MB lighter at equal uptime, matching the import-cost estimate (13.4 + ~3). mcapp-ble
+shows no measurable change; the extras drop saved nothing visible there. The old build was flat
+between 46 min and 3 h, which already argues against a leak.
+
+**Open question — does mcapp grow? (plan wave W6; 47 min read done, 24 h and 72 h reads due 2026-09-29 11:30 and 2026-10-01 11:30).** The 2026-09-15
 note measured 67 MB at import and 85-95 MB live with 40 MB swapped; the 2026-09-28 figure is
 113 MB Pss with nothing swapped, so the two are not comparable. Read Pss at ~1 h, ~24 h and
 ~72 h uptime: growth under ~5 MB/day that flattens closes this as baseline (page cache +
