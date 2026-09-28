@@ -1,5 +1,56 @@
 # Release History
 
+## v2.0.16 (2026-09-28)
+
+McApp copes with the new MeshCom firmware that resends every direct message on its own, and the
+ACK details stop listing the same station twice. Schema stays at 32 and `SYSTEM_EPOCH` at 5, so
+there is no migration and no bootstrap convergence. The shared dedup contract moves to v2.
+
+### Highlights
+
+- **Resent direct messages count once.** Firmware from 2026-09-28 (`v4.35t.09.28-neo`, DK5EN fork)
+  resends every direct message up to three times, 40 s apart, until the addressee answers. Each
+  resend changes two bits of the message ID. A node on this firmware filters the copies itself, but
+  a node on older firmware (most of the fleet) passes each one on as a new message. McApp now
+  recognises such a copy by the unchanged part of the ID plus the sender, so it stores one message,
+  sends one push, shows one bubble, plays one sound and counts one unread. A resent `!command` no
+  longer draws a second "Command throttled" reply over the air.
+- **One line per station in the ACK details.** When the addressee confirmed a DM with a text ACK,
+  the details listed "Acknowledged by DK5EN-1 via lora" and "Acknowledged by unknown station" for
+  the same answer. The second line is gone.
+
+Checked live on mcapp.local: a DM to an unreachable station went out as `1AE1E330`, was resent as
+`1AE1E730`, `1AE1EB30` and `1AE1EF30`, and gave up after four minutes. McApp holds one message,
+marked "not delivered", with every "heard by" entry on the original ID.
+
+### Backend (MCProxy)
+
+- `util.msg_core()` (mask `0xFFFFF3FF`, exactly 8 hex digits) and `msg_id_retry_variants()`. The
+  core is never used without the sender, because the two masked bits are also part of the sender's
+  node ID and would otherwise let two stations collide.
+- Ingest dedup (in-memory claim and restart backstop) matches resent copies of a DM from the same
+  sender. Groups, broadcasts and hashtags keep matching on the exact ID. The stored `msg_id` stays
+  the value received.
+- Command dedup keys on sender plus core; push dedup keys on resolved sender plus core
+  (`dedup_contract.json` v2, synced from mc-chat).
+- The "who acknowledged" list and the live `msg_status` event use the matched message's own ID. An
+  ACK whose ID matches only a resent copy is looked up for our own sent messages only.
+- A numeric `msg_id` or `dst` from Extern-UDP no longer aborts ingest or command routing.
+
+### Frontend (webapp)
+
+- Message dedup, the foreground notification sound and the contract tests use the v2 key; a
+  relay path in the sender field no longer splits the BLE and UDP copy of one message.
+- The ACK details merge an unattributed peer ACK into the named one. Gateway and node ACKs are
+  unchanged, because an unattributed one there is usually a different station.
+- Dependencies refreshed (transitive only, `ws` 8.22.0).
+
+### Upgrade notes
+
+- Nothing to configure. The change only shows behind a node on older firmware that relays
+  another station's resent DMs; behind a node on the new firmware McApp never sees the copies.
+- The IS1/SN1 registers from v2.0.15 have since been checked against a live node (DK5EN-98).
+
 ## v2.0.15 (2026-09-26)
 
 A small release: McApp understands two new node registers, and the map no longer shows a
