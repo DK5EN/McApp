@@ -1,7 +1,9 @@
 """Web Push delivery internals (Wave 5, PWA campaign): the pure matcher and
 payload builder, the per-subscription coalescing state machine, VAPID
 keypair persistence, and the background dispatcher that performs the actual
-pywebpush delivery in isolation from the mesh-message ingest path.
+push delivery (via `push_send.webpush`, contract-equivalent to `pywebpush`
+but without its `aiohttp`/`requests` import cost — see `push_send.py`'s
+module docstring, B4.3) in isolation from the mesh-message ingest path.
 
 See `src/mcapp/contract/push_contract.json` (byte-verbatim copy of the wire
 contract also implemented by the mc-chat sibling) for match/coalesce/prune
@@ -18,8 +20,8 @@ Zero 2W cannot stall the event loop or SSE heartbeats on an unreachable push
 service.
 
 Testability seams (contract): `now()` is an injectable clock (never real
-wall-clock in tests) and `webpush_fn` is an injectable callable (never real
-pywebpush in tests). `generate_vapid_keypair` is the only function that
+wall-clock in tests) and `webpush_fn` is an injectable callable (never a real
+delivery attempt in tests). `generate_vapid_keypair` is the only function that
 performs real EC keygen; tests inject a fake generator into
 `load_or_create_vapid` instead of calling it.
 """
@@ -39,12 +41,14 @@ from collections import OrderedDict
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlparse
 
-from pywebpush import WebPushException
-from pywebpush import webpush as _real_webpush
+import httpx
 
 from .linkcheck import is_link_check_payload
 from .logging_setup import get_logger
+from .push_send import WebPushError
+from .push_send import webpush as _real_webpush
 from .storage.constants import DEDUP_WINDOW_MS
 from .util import msg_core, strip_ack_suffix
 
@@ -571,7 +575,7 @@ def generate_vapid_keypair(subject: str = DEFAULT_VAPID_SUBJECT) -> dict[str, st
     is never exercised in the suite.
 
     Persists the private key as the raw base64url-encoded 32-byte scalar (not
-    PEM) — this is exactly the string form `pywebpush.webpush`'s own
+    PEM) — this is exactly the string form `push_send.webpush`'s
     `Vapid.from_string` round-trips via `Vapid.from_raw`, so delivery can pass
     it straight through without any extra reconstruction step.
     """
@@ -875,6 +879,15 @@ class PushDispatcher:
         `webpush_fn` — via `asyncio.to_thread` with explicit connect/read
         timeouts, so the event loop is never stalled by a slow/unreachable
         push service (contract `execution_isolation`).
+
+        Two distinct failure shapes, both non-fatal and never pruned except
+        as noted: `WebPushError` carries a real response (a rejected status
+        code — pruned only for `PRUNE_STATUS_CODES`); a bare `httpx.HTTPError`
+        (timeout, connection refused/reset — no response at all) is logged as
+        ONE warning line, no traceback. `logger.exception` would write a full
+        stack per attempt, and an offline Pi hits this on every mesh message
+        with a push subscriber — exactly the condition B4.3 already expects
+        push delivery to degrade silently under, not flood the log over.
         """
         claims = {"sub": self._vapid.get("subject", DEFAULT_VAPID_SUBJECT)}
         try:
@@ -886,7 +899,7 @@ class PushDispatcher:
                 vapid_claims=claims,
                 timeout=(self._connect_timeout, self._read_timeout),
             )
-        except WebPushException as exc:
+        except WebPushError as exc:
             status = _status_code(exc)
             if status in PRUNE_STATUS_CODES:
                 logger.info(
@@ -897,12 +910,17 @@ class PushDispatcher:
                 await self._storage.delete_push_subscription(sub["endpoint"])
             else:
                 logger.warning("push delivery error (status=%s): %s", status, exc)
+        except httpx.HTTPError as exc:
+            host = urlparse(sub.get("endpoint", "")).netloc or sub.get("endpoint")
+            logger.warning(
+                "push delivery network error host=%s (%s): %s", host, type(exc).__name__, exc
+            )
 
 
-def _status_code(exc: WebPushException) -> int | None:
-    """Extract the HTTP status code from a WebPushException's response,
-    whichever way pywebpush (a real `requests.Response`) or a test double
-    (any object exposing `.status_code`) attached it."""
+def _status_code(exc: WebPushError) -> int | None:
+    """Extract the HTTP status code from a WebPushError's response, whichever
+    way `push_send.webpush` (a real `httpx.Response`) or a test double (any
+    object exposing `.status_code`) attached it."""
     response = getattr(exc, "response", None)
     status = getattr(response, "status_code", None)
     return status if isinstance(status, int) else None

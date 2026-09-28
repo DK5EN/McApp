@@ -1456,12 +1456,12 @@ class IngestMixin(StorageBase):
 
         PN retry XOR (doc/2026-09-27_2200-pn-retry-xor-plan.md): when the exact
         id has no match, retry against every id sharing its retry-invariant core
-        (`msg_id_retry_variants`). Defensive: current firmware folds every
-        0x41 frame for our own DM back to the ORIGINAL msg_id (plan §1), but a
-        heard-ack for one of its XORed retry copies carries that copy's id,
-        and the node's `handleACK()` does not fold it today (firmware finding,
-        plan §4). If that is ever forwarded, it must still land on the row
-        stored under the original. Restricted to rows WE sent
+        (`msg_id_retry_variants`). Defensive: firmware folds every 0x41 frame
+        for our own DM back to the ORIGINAL msg_id (plan §1), including a
+        relay's ack for one of the XORed retry copies since `v4.35u.09.28-neo`
+        (`handleACK()` fix `8b3d70ba`, plan §4). A node still on the earlier
+        `4.35t` neo build does not fold that ack; if one forwards it, it must
+        still land on the row stored under the original. Restricted to rows WE sent
         (`_own_callsign`, same exact-match style `_ingest_signal`'s own-echo
         gate uses): an ack can only ever answer our own outbound frame, and the
         core is not unique across stations (plan §3), so an unscoped retry could

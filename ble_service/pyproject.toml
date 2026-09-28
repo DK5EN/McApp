@@ -1,6 +1,6 @@
 [project]
 name = "mcapp-ble-service"
-version = "2.0.16"
+version = "2.0.17"
 description = "Remote BLE service for McApp MeshCom gateway"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -10,7 +10,13 @@ authors = [
 ]
 dependencies = [
     "fastapi>=0.109.0",
-    "uvicorn[standard]>=0.53.0",
+    "uvicorn>=0.53.0",
+    # uvloop + httptools are what uvicorn's loop/http="auto" picks; listed
+    # explicitly instead of the [standard] extra, which also pulls
+    # watchfiles (imported by `import uvicorn`, reload-only) and websockets
+    # (no WebSocket route exists) — ~3 MB RSS per process for nothing.
+    "uvloop>=0.21.0; sys_platform != 'win32' and platform_python_implementation == 'CPython'",
+    "httptools>=0.6.3",
     "sse-starlette>=3.4.4",
     "dbus-next>=0.2.3",
     "pydantic>=2.0.0",

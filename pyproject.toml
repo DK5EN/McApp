@@ -1,15 +1,26 @@
 [project]
 name = "mcapp"
-version = "2.0.16"
+version = "2.0.17"
 requires-python = ">=3.11"
 dependencies = [
     "timezonefinder>=6.5.0",
     "httpx>=0.27",
     "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.53.0",
+    "uvicorn>=0.53.0",
+    # uvloop + httptools are what uvicorn's loop/http="auto" picks; listed
+    # explicitly instead of the [standard] extra, which also pulls
+    # watchfiles (imported by `import uvicorn`, reload-only) and websockets
+    # (no WebSocket route exists) — ~3 MB RSS per process for nothing.
+    "uvloop>=0.21.0; sys_platform != 'win32' and platform_python_implementation == 'CPython'",
+    "httptools>=0.6.3",
     "pydantic>=2.0",
     "sse-starlette>=3.4.4",
-    "pywebpush>=2.3.0",
+    # Web Push: http-ece (RFC 8291 aes128gcm) and py-vapid (RFC 8292 JWT) do the
+    # crypto, httpx does the POST (push_send.py). pywebpush itself is not used:
+    # its module top imports aiohttp and requests, +13.4 MB RSS (B4.3).
+    "http-ece>=1.2.1",
+    "py-vapid>=1.9.4",
+    "cryptography>=43.0",
 ]
 
 [project.scripts]
@@ -108,7 +119,7 @@ strict = true
 # Silence import errors only — we type our own code, not theirs.
 [[tool.mypy.overrides]]
 module = [
-    "pywebpush.*",
+    "http_ece.*",
     "py_vapid.*",
     "timezonefinder.*",
 ]

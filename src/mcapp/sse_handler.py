@@ -959,6 +959,7 @@ class SSEManager:
             port=self.port,
             log_level="warning",  # Reduce uvicorn logging noise
             access_log=False,
+            ws="none",  # no WebSocket route exists; avoids importing `websockets` (B4.2a)
         )
         self.server = uvicorn.Server(config)
 

@@ -1,6 +1,9 @@
 # McApp production health log — mcapp.local
 
-> **Status:** Current — newest section: §21 (2026-09-28 09:10 CEST, pre-release sweep of
+> **Status:** Current — newest section: §22 (2026-09-28 12:25 CEST, pre-release sweep of
+> `v2.0.17-dev.1` before the v2.0.17 promotion) — green, zero findings, short 53 min soak, new
+> watch point **W21** (`sse_answer` on the first send), W20 recurred once, W14 improved by 16 MB.
+> Before that: §21 (2026-09-28 09:10 CEST, pre-release sweep of
 > `v2.0.16-dev.2` before the v2.0.16 promotion) — green, zero findings, new watch points **W19**
 > (first-connect `loop_lag`) and **W20** (`{CET}` gaps on 2026-09-27), **W18** resolved.
 > Before that: §20 (2026-09-26 08:50 CEST, pre-release sweep of
@@ -1749,3 +1752,98 @@ Four `handler` stalls (587–950 ms, `_storage_handler`), in line with §20.
   signed off on the local gates.
 - **W17**, **W14**, **W13**, **W16**, **W1**, **W12**, **W2**, **W3**, **W6**, **W7**, **W10**
   unchanged.
+
+## 22. 2026-09-28 12:25 CEST — pre-release sweep before promoting v2.0.17-dev.1 to v2.0.17
+
+Sign-off sweep for the **v2.0.17** promotion (backlog review 2026-09-28: pywebpush replaced by
+`push_send.py`, unused uvicorn extras dropped, `health.sh` venv probe, webapp release-notes card,
+`msg_www` split). Verdict: **green, zero findings, W20 recurred once, W14 improved.** The soak is
+**short: 53 minutes** since the 11:32 deploy, 0 restarts, 0 warnings.
+
+### Anchors
+
+| Anchor              | Value                                                                      |
+| ------------------- | -------------------------------------------------------------------------- |
+| Snapshot            | 2026-09-28 12:19–12:30 CEST                                                |
+| Release             | `v2.0.17-dev.1` (`/webapp/version.html` agrees)                            |
+| Active slot         | **slot-0** (slot-2 `v2.0.16`)                                              |
+| Schema              | **32** = `LATEST_SCHEMA_VERSION` ✓                                         |
+| System epoch        | box **5** = `REQUIRED_SYSTEM_EPOCH` 5 ✓                                    |
+| Service start       | mcapp 11:32:31 CEST, mcapp-ble 11:32:27 CEST                               |
+| `systemd NRestarts` | **0** (mcapp and mcapp-ble)                                                |
+| Host uptime         | 4 days 01:49, load 0.18 / 0.08 / 0.02                                      |
+| Classifier          | version **5**, **38** rules, 0 unclassified (1 h)                          |
+| UDP provenance      | **`identified`**, 0 untrusted, not multiple, 0 suppressed changes          |
+| On-box gate         | `run_startup_tests.py` in the active slot: exit 0, `config_migration` PASS |
+
+### Rate table re-measured
+
+| Signal                     | §1 baseline | This run      | Window |
+| -------------------------- | ----------- | ------------- | ------ |
+| `messages` type `msg`      | 11 / h      | **27 / h**    | 1 h    |
+| `messages` type `pos`      | 87 / h      | **83 / h**    | 1 h    |
+| `signal_log`               | 347 / h     | **228 / h**   | 1 h    |
+| journal warnings           | 0 / 24 h    | **0**         | 24 h   |
+| unclassified `msg`         | 0           | **0**         | 1 h    |
+| `{CET}` rows in `messages` | 0           | **0**         | all    |
+| last `{CET}` beacon        | —           | **477 s** ago | live   |
+| heartbeat age              | < 60 s      | **7 s**       | live   |
+
+### Change under test
+
+- **Push via `push_send.py`, live 12:29:** one test notification to the only stored subscription
+  (`web.push.apple.com`) returned **201**; the operator confirmed it arrived on the iPhone. No
+  Chrome subscriber exists, so the Chrome path is untested live.
+- **Environment:** `pywebpush`, `aiohttp`, `requests`, `websockets`, `watchfiles` absent from the
+  active slot's venv; `uvloop`, `httptools`, `http_ece`, `py_vapid` present. `mcapp-ble` runs with
+  `--ws none`. The deploy's `python venv` health check passed on the new probe.
+- **Memory (W14), matched uptime:** mcapp Pss **97.3 MB** at 47 min vs **113.4 MB** for v2.0.16
+  at 46 min (and still 113.4 MB at ~3 h); cgroup peak 132.0 vs 158.7 MB. mcapp-ble 43.5 vs
+  43.2 MB — no visible change there.
+
+### Uptime
+
+`/api/uptime?range=24h`: `active`, **89.4 %** uptime, **100.0 %** coverage, longest outage 33 min.
+One new gap today, **11:54:07–12:14:58**; see W20.
+
+### Stalls
+
+Old build 10:35–11:25: none (quiet window). Deploy window 11:25–11:40: 2 × `loop_lag` critical,
+3 × stall, 2 × `handler` — the bootstrap on the box, as in §18–§21. New build 11:40–12:30: one
+506 ms `handler` stall (11:42), one 413 ms `loop_lag` stall at the first client connect (12:08:35,
+below the W19 critical line this time), and `sse_answer` on `/api/send` at 12:08:41 (4848 ms,
+critical), 12:15:01 (1130 ms) and 12:16:05 (1099 ms) — the operator's first sends after
+connecting. `sse_answer` rows only exist when someone sends from the webapp, so there is no
+earlier rate to compare with; see W21.
+
+### Host and hygiene
+
+| Signal       | Value                                                            |
+| ------------ | ---------------------------------------------------------------- |
+| Disk         | 52 G free, **9 %**                                               |
+| RAM          | **MemAvailable 189 MB**                                          |
+| Swap         | **26 MB out** (SwapFree 446340 of 473084 kB)                     |
+| Temp         | **49.4 °C**                                                      |
+| DB / WAL     | **48 MB** / **4.2 MB**                                           |
+| `vapid.json` | `0600` ✓                                                         |
+| TLS          | Caddy internal leaf, `Sep 28 07:43 → Sep 28 19:43 GMT`, mid-life |
+
+### Absent signals — the zero is the result
+
+- **0** journal warnings in 24 h; **0** `NRestarts`; **0** unclassified; **0** `{CET}` rows.
+- `udp_untrusted_source_ips` **empty**, `udp_multiple_sources` **false**,
+  `udp_suppressed_target_changes` **0**.
+
+### Watch points
+
+- **W14 improved:** see Change under test. The growth question stays open with 24 h and 72 h
+  reads due (`doc/backlog.md` B4).
+- **W20 recurred:** one 21 min `{CET}` gap on the new build. Seven `udp` chat frames arrived over
+  the same node uplink inside it and were stored normally, so the ingest path worked and only the
+  beacon was missing. No code in this release touches the uptime hook. Upstream or link, as on
+  2026-09-27.
+- **W21 (new):** `sse_answer` on `/api/send` — 4.8 s on the first send after a connect, about
+  1.1 s after. Re-read next sweep: a critical row on every first send is the finding.
+- **W19:** 413 ms this time, below critical. **W9** unchanged: CI runs only the dependency-graph
+  jobs on `development`; the promotion is signed off on the local gates plus the on-box gate.
+- **W17**, **W13**, **W16**, **W1**, **W12**, **W2**, **W3**, **W6**, **W7**, **W10** unchanged.

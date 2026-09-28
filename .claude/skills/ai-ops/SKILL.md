@@ -242,7 +242,7 @@ curl -skI https://mcapp.local/ | head -3
 - **`vapid.json` must be `0600`.** A world-readable raw private scalar lets any local account
   forge VAPID JWTs as this node. `load_or_create_vapid` re-tightens a wider file on load, so a
   wide mode here means it has not been reloaded since someone changed it.
-- It must hold the **raw base64url scalar, not PEM** — pywebpush's `Vapid.from_string` dies on
+- It must hold the **raw base64url scalar, not PEM** — py_vapid's `Vapid.from_string` dies on
   a PEM. And it must not be regenerating on every restart: an ephemeral key silently kills
   every stored push subscription.
 - Web Push needs outbound internet from the Pi and **degrades silently without it**.

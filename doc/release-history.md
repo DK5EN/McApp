@@ -1,5 +1,52 @@
 # Release History
 
+## v2.0.17 (2026-09-28)
+
+The Update page shows what a release changes before you install it, McApp uses about 16 MB less
+memory, and the single ✓ on your own messages now says which signal it rests on. Schema stays at
+32 and `SYSTEM_EPOCH` at 5, so there is no migration and no bootstrap convergence.
+
+### Highlights
+
+- **Release notes on the Update page.** Next to the "Update to vX.Y.Z" button a "What's new" card
+  shows these notes for the release that button installs. Long notes start collapsed. Links open
+  in a new tab; images and any script in the notes are removed before display.
+- **16 MB less memory.** Web Push no longer loads `aiohttp` and `requests` for one HTTP request
+  per notification, and both services stop loading two web-server extras they never used.
+  Measured on mcapp.local at the same uptime: 97 MB instead of 113 MB for the main service.
+- **What the ✓ means.** Hover the single check on your own message: "sent" (your node or a gateway
+  confirmed it), "seen on the internet" (the message came back from the MeshCom server), or
+  "echoed by our own node". "Seen on the internet" used to be hidden behind the echo, and on a
+  BLE-connected box it never showed at all. ✓✓ Delivered still means the addressee answered.
+
+### Backend (MCProxy)
+
+- Web Push is sent by `push_send.py`: the same encryption (`http_ece`) and signing (`py_vapid`)
+  libraries as before, posted with `httpx`. Headers and signature were checked identical against
+  the old sender; a live notification to an iPhone arrived. Subscriptions are still removed on
+  401/403/404/410 only.
+- An unreachable push service now logs one warning line per attempt instead of a full traceback.
+- Both services depend on plain `uvicorn` plus `uvloop` and `httptools`, and run with WebSockets
+  off. `websockets`, `watchfiles`, `pyyaml` and `python-dotenv` are no longer installed.
+- The deploy health check probes `uvicorn`, `httptools` and `dbus_next`; it used to import
+  `websockets`, which would have failed every deploy once that package was gone. A new test
+  suite checks that every module the probe imports is installed.
+
+### Frontend (webapp)
+
+- Release notes card on the Update page (Markdown rendered through a sanitizer).
+- `msg_www` is split: `msg_echo` for your own node's echo, `msg_www` only for a copy from the
+  MeshCom server. Messages cached before this release are read as echoes, so they never claim an
+  internet sighting they did not have.
+- Dependencies refreshed (`browserslist` 4.29.2, `earcut` 3.2.4, transitive).
+
+### Upgrade notes
+
+- Nothing to configure. Existing push subscriptions keep working; no browser needs to subscribe
+  again.
+- A box on v2.0.16 or older updates from the old Update page, so it sees the notes card from the
+  next release on.
+
 ## v2.0.16 (2026-09-28)
 
 McApp copes with the new MeshCom firmware that resends every direct message on its own, and the
