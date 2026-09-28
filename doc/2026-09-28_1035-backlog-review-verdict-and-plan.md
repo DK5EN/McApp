@@ -6,15 +6,27 @@ finder per item, every load-bearing claim re-verified by hand before it landed h
 
 ## Wave status log
 
-| Wave | Content                                       | Owner           | Status  |
-| ---- | --------------------------------------------- | --------------- | ------- |
-| W1   | Backlog rewrite: close/narrow/split           | agent (docs)    | done    |
-| W2   | Drop unused uvicorn extras (both services)    | agent (MCProxy) | pending |
-| W3   | Replace pywebpush's HTTP layer with httpx     | agent (MCProxy) | pending |
-| W4   | Webapp: release notes card (webapp B5)        | agent (webapp)  | pending |
-| W5   | Webapp: split `msg_www` (narrowed B2)         | agent (webapp)  | pending |
-| W6   | B4 open question: PSS re-measure after deploy | agent (ops)     | pending |
-| W7   | B5 Winlink phase 0 on air, then phase 1 check | operator, agent | pending |
+| Wave | Content                                       | Owner           | Status         |
+| ---- | --------------------------------------------- | --------------- | -------------- |
+| W1   | Backlog rewrite: close/narrow/split           | agent (docs)    | done 6cf9527   |
+| W2   | Drop unused uvicorn extras (both services)    | agent (MCProxy) | done a81ea8b   |
+| W3   | Replace pywebpush's HTTP layer with httpx     | agent (MCProxy) | done 3d960d9   |
+| W4   | Webapp: release notes card (webapp B5)        | agent (webapp)  | done ac20373   |
+| W5   | Webapp: split `msg_www` (narrowed B2)         | agent (webapp)  | done 6972088   |
+| W6   | B4 open question: PSS re-measure after deploy | agent (ops)     | needs deploy   |
+| W7   | B5 Winlink phase 0 on air, then phase 1 check | operator, agent | needs operator |
+
+Found and fixed at the advisor gates, beyond the plan:
+
+- W2: `bootstrap/lib/health.sh`'s venv probe imported `websockets` and would have failed every
+  deploy and `--converge` once it left the env; now probes `uvicorn, httptools, dbus_next`, pinned
+  by the new `health_probe` suite.
+- W3: a timeout or connection error is one warning line instead of a traceback per push.
+- W5: the firehose branch marked only `src_type == 'node'` (a pre-BLE leftover), so "seen on the
+  internet" could never fire on a BLE box; cached pre-split rows are normalised on hydrate so they
+  do not claim an internet sighting.
+- Left open, recorded as webapp backlog B7: the firehose marking looks a message up by its raw
+  `msg_id`, so a copy of a PN-retry XOR variant dedups but marks nothing.
 
 ## Verdict per item
 
