@@ -1,6 +1,9 @@
 # McApp production health log — mcapp.local
 
-> **Status:** Current — newest section: §20 (2026-09-26 08:50 CEST, pre-release sweep of
+> **Status:** Current — newest section: §21 (2026-09-28 09:10 CEST, pre-release sweep of
+> `v2.0.16-dev.2` before the v2.0.16 promotion) — green, zero findings, new watch points **W19**
+> (first-connect `loop_lag`) and **W20** (`{CET}` gaps on 2026-09-27), **W18** resolved.
+> Before that: §20 (2026-09-26 08:50 CEST, pre-release sweep of
 > `v2.0.15-dev.2` before the v2.0.15 promotion) — green, zero findings, no new watch point.
 > Before that: §19 (2026-09-24 22:55 CEST, pre-release sweep of
 > `v2.0.14-dev.3` before the v2.0.14 promotion) — green, zero findings, new watch point **W18**
@@ -13,9 +16,9 @@
 > cost ~1 s of wall time, so `/api/send` `http` rows remain and are expected. Newest full sweep:
 > §15 (2026-09-19 07:50) — all green, zero findings; `handler` stalls down from ~42–54/day to
 > 1 in 7 h. Last finding was **F13** (§7), upstream and resolved 2026-09-01.
-> Open watch points: **W18** (§19), **W17** (§18), **W13** (reduced, §17), **W14** (§15), **W16** (§16), **W1** (zram swap,
+> Open watch points: **W20** (§21), **W19** (§21), **W17** (§18), **W13** (reduced, §17), **W14** (§15), **W16** (§16), **W1** (zram swap,
 > trend watch only), **W12** (§12), **W2**, **W3**, **W6**, **W7**, **W9**, **W10**.
-> **W15** (§15/§16/§17), **W4**, **W5**, **W8** and **W11** are resolved.
+> **W18** (§19/§21), **W15** (§15/§16/§17), **W4**, **W5**, **W8** and **W11** are resolved.
 >
 > **Kind:** Recurring ops review; one dated section per run, appended, never edited in place.
 > **Produced by:** the `ai-ops` skill (`.claude/skills/ai-ops/SKILL.md`).
@@ -1646,3 +1649,103 @@ W17, unchanged.
   signed off on the local gates.
 - Soak is short: `dev.2` had run **20 minutes**, `dev.1` (IS1/SN1) about **10 h 20 min**.
 - **W13**, **W16**, **W1**, **W12**, **W2**, **W3**, **W6**, **W7**, **W10** unchanged.
+
+## 21. 2026-09-28 09:10 CEST — pre-release sweep before promoting v2.0.16-dev.2 to v2.0.16
+
+Sign-off sweep for the **v2.0.16** promotion (firmware PN retry XOR dedup, dedup contract v2, ACK
+popover peer fix). Verdict: **green, zero findings, two new watch points (W19, W20), W18
+resolved.** The box is 30 minutes past the `v2.0.16-dev.2` deploy; the backend is byte-identical
+to `v2.0.16-dev.1`, deployed 03:50, so the backend soak is about 5 h 20 min.
+
+### Anchors
+
+| Anchor              | Value                                                                       |
+| ------------------- | --------------------------------------------------------------------------- |
+| Snapshot            | 2026-09-28 09:10–09:15 CEST                                                 |
+| Release             | `v2.0.16-dev.2` (`/webapp/version.html` agrees)                             |
+| Active slot         | **slot-2** (slot-0 `v2.0.16-dev.1`)                                         |
+| Schema              | **32** = `LATEST_SCHEMA_VERSION` ✓                                          |
+| System epoch        | box **5** = `REQUIRED_SYSTEM_EPOCH` 5 ✓                                     |
+| Service start       | mcapp 08:41:22 CEST                                                         |
+| `systemd NRestarts` | **0** (mcapp and mcapp-ble)                                                 |
+| Host uptime         | 3 days 22:37, load 0.11 / 0.06 / 0.09                                       |
+| Classifier          | version **5**, **38** rules, 0 unclassified (1 h)                           |
+| UDP provenance      | **`identified`**, 0 untrusted, not multiple, 0 suppressed changes — W18 off |
+
+### Rate table re-measured
+
+| Signal                     | §1 baseline | This run      | Window |
+| -------------------------- | ----------- | ------------- | ------ |
+| `messages` type `msg`      | 11 / h      | **42 / h**    | 1 h    |
+| `messages` type `pos`      | 87 / h      | **76 / h**    | 1 h    |
+| `signal_log`               | 347 / h     | **218 / h**   | 1 h    |
+| journal warnings           | 0 / 24 h    | **0**         | 24 h   |
+| unclassified `msg`         | 0           | **0**         | 1 h    |
+| `{CET}` rows in `messages` | 0           | **0**         | all    |
+| last `{CET}` beacon        | —           | **519 s** ago | live   |
+| heartbeat age              | < 60 s      | **28 s**      | live   |
+
+`msg` is high because it is Monday-morning greeting traffic, not a duplicate: 0 XOR retry pairs
+(same sender, msg_id equal under `0xFFFFF3FF`) in the last 6 h.
+
+### Change under test
+
+- **PN retry XOR, live 08:43–08:47:** a PM to the unreachable DK5EN-2 went out as `1AE1E330`,
+  then k = 1..3 as `1AE1E730` / `1AE1EB30` / `1AE1EF30` (DK5EN-98 LoRa log), give-up 08:47:16.
+  The proxy holds **one** row, `delivery_status = failed`, holder DK5EN-2; every heard-ack and
+  the `0x03` landed on the original msg_id. Retry copies never reached the proxy.
+- **ACK popover (dev.2):** a test DM to DK5EN-1 shows only "Acknowledged by DK5EN-1 via lora",
+  no "unknown station" line. Three real DMs (OE1KFR-1, DK1TCP-77) acked within 12–13 s.
+
+### Uptime
+
+`/api/uptime?range=24h`: `active`, **90.9 %** uptime, **100.0 %** coverage, longest outage
+**33 min**. All six gap segments fall on 2026-09-27 between 14:38 and 22:04 (about 2 h in total),
+none since. See W20.
+
+### Stalls, last 6 h
+
+`loop_lag` in the two restart windows as in §18–§20 (03:50: 2 × critical, max 1166 ms; 08:41:
+2 × critical, max 1189 ms), plus two outside them:
+
+- 08:39:57, 1277 ms, unsampled: the `v2.0.16-dev.2` bootstrap was running on the box (apt / uv).
+- 08:28:49, 511 ms, stack in pydantic `_dict_not_none`: the first browser connect of the morning.
+  See W19.
+
+Four `handler` stalls (587–950 ms, `_storage_handler`), in line with §20.
+
+### Host and hygiene
+
+| Signal       | Value                                                            |
+| ------------ | ---------------------------------------------------------------- |
+| Disk         | 52 G free, **9 %**                                               |
+| RAM          | **MemAvailable 172 MB**                                          |
+| Swap         | **23 MB out** (SwapFree 449432 of 473084 kB)                     |
+| Temp         | **42.9 °C**                                                      |
+| mcapp RSS    | **122 MB** at 30 min (W14 data point)                            |
+| DB / WAL     | **48 MB** / **4.2 MB**                                           |
+| `vapid.json` | `0600` ✓                                                         |
+| TLS          | Caddy internal leaf, `Sep 27 23:43 → Sep 28 11:43 GMT`, mid-life |
+
+### Absent signals — the zero is the result
+
+- **0** journal warnings in 24 h; **0** `NRestarts`; **0** unclassified; **0** `{CET}` rows;
+  **0** XOR retry pairs in 6 h.
+- `udp_untrusted_source_ips` **empty**, `udp_multiple_sources` **false**,
+  `udp_suppressed_target_changes` **0**.
+
+### Watch points
+
+- **W18 resolved:** Extern-UDP is on again on DK5EN-98 (`[EXT] Out` lines in its log),
+  `udp_target_kind` reads `identified`.
+- **W19 (new):** a first client connect produced a 511 ms `loop_lag` critical with the stack in
+  pydantic serialisation. Previous sweeps saw sub-threshold rows there. Re-read next sweep: a
+  critical row on every connect is the finding.
+- **W20 (new):** six `{CET}` gaps on 2026-09-27 14:38–22:04 (14–33 min each), coverage 100 %,
+  so the proxy was up and the beacon did not arrive. Five of them follow the DK5EN-98 soak reflash
+  (17:25–17:32), one precedes it. None in the 11 h since. Link or upstream, not MCProxy code (the
+  box ran v2.0.15 throughout).
+- **W9** unchanged: CI runs only the dependency-graph jobs on `development`; the promotion is
+  signed off on the local gates.
+- **W17**, **W14**, **W13**, **W16**, **W1**, **W12**, **W2**, **W3**, **W6**, **W7**, **W10**
+  unchanged.
