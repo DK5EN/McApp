@@ -60,7 +60,8 @@ One entry per release. The full notes as published are in
 
 ### v2.0.15 (2026-09-26)
 
-- New node registers `IS1` and `SN1` (build date, via state).
+- New node registers `IS1` and `SN1` (build date, via state), needs firmware upstream `dev` or a
+  DK5EN fork build from 2026-09-25 or later.
 - The own station on the map no longer shows a relay's signal.
 
 ### v2.0.14 (2026-09-24)
@@ -76,16 +77,18 @@ One entry per release. The full notes as published are in
 
 ### v2.0.12 (2026-09-21)
 
-- A firmware message ID repeats over time; acknowledgements are now bound within a 4 h window, so
-  an old message no longer shows another message's ACK, and new ACKs are no longer swallowed.
+- A firmware message ID repeats roughly every 1000 frames a node sends; a newer broadcast could
+  show the ACK of an older, unrelated message that had reused the same ID. Acknowledgements are
+  now bound within a 4 h window, and a reused ID no longer swallows the new message's own ACKs.
 - A peer ACK that arrives as text shows who sent it.
 
 ### v2.0.11 (2026-09-20)
 
 - An unread `+1` that could never be cleared is fixed; a bare link is no longer hidden as an
   advert.
-- `@`-mentions raise a push notification. **Push contract v11.** First start re-classifies stored
-  messages once in the background.
+- `@`-mentions raise a push notification, off by default (enable it in the notification
+  settings). **Push contract v11.** First start re-classifies stored messages once in the
+  background.
 
 ### v2.0.10 (2026-09-19)
 
@@ -138,7 +141,8 @@ One entry per release. The full notes as published are in
 ### v2.0.2 (2026-09-01)
 
 - Gateway Availability read 0 % while the link was fine; fixed and the spurious gaps removed.
-- The blocklist applies to messages already stored; relayed MHeard beacons credit the sender.
+- The blocklist applies to messages already stored; relayed MHeard beacons credit the sender
+  (inert since the upstream 2026-08-28 firmware revert of MH `SRC`/`GW`/`PP` — parser retained).
 - The dark map needs an API key. **Schema v28.**
 
 ### v2.0.1 (2026-08-22)
@@ -149,27 +153,11 @@ One entry per release. The full notes as published are in
 ### v2.0.0 (2026-08-21)
 
 - Major release, 765 commits since v1.6.13: Link Check, Web Push, hashtag channels, admin module
-  with a backend-authoritative blocklist, self-converging deployments.
+  with a backend-authoritative blocklist, self-converging deployments. **Schema v17 → v24, push
+  contract v7.**
 - Building the webapp needs Node 26 or later; the backend stays on Python 3.11 or later.
 
-## v1.6.13 (2026-06-20)
+### v1.6.13 (2026-06-20)
 
-Maintenance release: reduces journal log noise and rolls up dependency updates. No functional changes.
-
-### Backend (MCProxy)
-
-- **[perf]** High-frequency INFO log lines for UDP telemetry, ACK receipt, and UDP send are demoted to DEBUG. All three are confirmed to land in the database (`telemetry` table, `messages.send_success`, and echo-back ingest respectively), so logging them at INFO produced constant journald noise with no diagnostic value. Error and warning paths are untouched.
-- **[chore]** `uv lock --upgrade` dependency sweeps.
-
-### Frontend (webapp)
-
-- **[feat]** **Link Check** button and result row per station in the station list, with a
-  `LinkCheckStore` driven by the four `proxy:linkcheck_*` SSE events. Copy is deliberately careful:
-  "response time" in whole seconds (never RTT), RSSI/SNR attributed to the pinged station only when
-  the reply arrived direct (`hops === 0`), and a timeout described as "no direct-RF answer" rather
-  than "station down".
-- **[fix]** The station card no longer nests interactive controls inside a `role="button"`
-  ancestor — the callsign is now a real button and the card keeps a mouse-only click, matching
-  `MheardListPanel`/`WxListPanel`. Pinned with a regression test.
-
-- **[chore]** `npm update` — minor and patch dependency bumps (vue, vue-tsc, vite-plugin-vue, typescript-eslint, transitive patches).
+- Maintenance release: high-frequency UDP/ACK log lines demoted from INFO to DEBUG, dependency
+  updates only. No functional changes.

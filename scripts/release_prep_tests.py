@@ -33,6 +33,13 @@ Three invariants are pinned:
    re-runnable — the MCProxy half commits unconditionally and would abort on an
    empty commit. It runs once per release, and the trap rolls the release back
    on any failure.
+4. **Both ``uv.lock`` files move with the ``pyproject.toml``s, in the same
+   commit.** ``post_release_prep`` bumps ``pyproject.toml`` but never touched
+   the local-package ``version = "..."`` line each ``uv.lock`` carries for its
+   own workspace member, which left ``uv lock --check`` failing after every
+   production release. ``bump_lock_versions``/``set_lock_version`` rewrite that
+   line directly (no ``uv`` call) and the lock files are staged alongside the
+   ``pyproject.toml``s in the same MCProxy commit.
 
 Like ``caddy_config_tests.py`` and ``update_runner_tests.py`` this exercises
 shell code rather than an importable module, so it drives the real function via
@@ -63,7 +70,13 @@ _JQ = shutil.which("jq")
 _REPO = Path(__file__).resolve().parent.parent
 _RELEASE_SH = _REPO / "scripts" / "release.sh"
 
-_FUNCTIONS = ("bump_patch_version", "set_pyproject_version", "post_release_prep")
+_FUNCTIONS = (
+    "bump_patch_version",
+    "set_pyproject_version",
+    "set_lock_version",
+    "bump_lock_versions",
+    "post_release_prep",
+)
 
 
 def _extract_function(source: str, name: str) -> str:
@@ -152,6 +165,30 @@ post_release_prep "$CURRENT"
 """
 
 
+_UV_LOCK_FIXTURE = """version = 1
+revision = 2
+
+[[package]]
+name = "mcapp"
+version = "2.0.1"
+source = { editable = "." }
+
+[[package]]
+name = "mcapp-ble-service"
+version = "2.0.1"
+source = { editable = "ble_service" }
+"""
+
+_BLE_UV_LOCK_FIXTURE = """version = 1
+revision = 2
+
+[[package]]
+name = "mcapp-ble-service"
+version = "2.0.1"
+source = { editable = "." }
+"""
+
+
 def _build_fixture(tmp: Path) -> tuple[Path, Path, Path, Path, Path]:
     project = tmp / "proj"
     project_origin = _init_repo(
@@ -159,6 +196,12 @@ def _build_fixture(tmp: Path) -> tuple[Path, Path, Path, Path, Path]:
         {
             "pyproject.toml": '[project]\nname = "mcapp"\nversion = "2.0.1"\n',
             "ble_service/pyproject.toml": '[project]\nname = "ble"\nversion = "2.0.1"\n',
+            # Mirrors the real repo's shape: the root uv.lock carries BOTH
+            # workspace members' own [[package]] entries; ble_service also
+            # ships its own standalone lock (see CLAUDE.md's "Vendored
+            # Subtrees" note's sibling, the ble_service standalone lock doc).
+            "uv.lock": _UV_LOCK_FIXTURE,
+            "ble_service/uv.lock": _BLE_UV_LOCK_FIXTURE,
         },
     )
     webapp = tmp / "webapp"
@@ -212,6 +255,14 @@ def _pushed_head_message(origin: Path) -> str:
     return _run([_GIT, "log", "-1", "--format=%s", "development"], origin)
 
 
+def _pushed_head_files(origin: Path) -> list[str]:
+    """Files changed in the pushed HEAD commit -- proves a path was actually
+    staged into the commit, not merely present on disk when it was made."""
+    assert _GIT is not None
+    out = _run([_GIT, "diff-tree", "--no-commit-id", "--name-only", "-r", "development"], origin)
+    return out.splitlines() if out else []
+
+
 _Record = Callable[..., None]
 
 
@@ -233,6 +284,28 @@ def _case_bump_and_push(record: _Record) -> None:
             'version = "2.0.2"'
             in (project / "ble_service" / "pyproject.toml").read_text(encoding="utf-8"),
         )
+
+        # 4 — the uv.lock fix: both local-package version lines in the root
+        # lock, and the one in the standalone ble_service lock, move with the
+        # pyproject.toml bump (`uv lock --check` failed on all three before).
+        uv_lock_text = (project / "uv.lock").read_text(encoding="utf-8")
+        record(
+            "root uv.lock's mcapp entry bumped to the next patch version",
+            'name = "mcapp"\nversion = "2.0.2"' in uv_lock_text,
+            f"(uv.lock: {uv_lock_text!r})",
+        )
+        record(
+            "root uv.lock's mcapp-ble-service entry bumped in the same step",
+            'name = "mcapp-ble-service"\nversion = "2.0.2"' in uv_lock_text,
+            f"(uv.lock: {uv_lock_text!r})",
+        )
+        ble_uv_lock_text = (project / "ble_service" / "uv.lock").read_text(encoding="utf-8")
+        record(
+            "ble_service/uv.lock's own entry bumped in the same step",
+            'name = "mcapp-ble-service"\nversion = "2.0.2"' in ble_uv_lock_text,
+            f"(ble_service/uv.lock: {ble_uv_lock_text!r})",
+        )
+
         webapp_pkg = json.loads((webapp / "package.json").read_text(encoding="utf-8"))
         record(
             "webapp package.json bumped to the next patch version",
@@ -273,6 +346,20 @@ def _case_bump_and_push(record: _Record) -> None:
             f"(remote head: {_pushed_head_message(webapp_origin)!r})",
         )
 
+        # The lock files must ride in the SAME MCProxy commit as the
+        # pyproject.toml bumps, not be left modified-but-unstaged.
+        mcproxy_files = _pushed_head_files(project_origin)
+        record(
+            "uv.lock staged and pushed alongside pyproject.toml",
+            "uv.lock" in mcproxy_files,
+            f"(commit files: {mcproxy_files})",
+        )
+        record(
+            "ble_service/uv.lock staged and pushed alongside ble_service/pyproject.toml",
+            "ble_service/uv.lock" in mcproxy_files,
+            f"(commit files: {mcproxy_files})",
+        )
+
 
 def _case_webapp_already_at_target(record: _Record) -> None:
     """Case 3: a webapp already sitting at the target version must not abort
@@ -289,6 +376,7 @@ def _case_webapp_already_at_target(record: _Record) -> None:
     to, can't tell that apart: origin already holds the expected commit before
     post_release_prep ever runs, so the assertion passes either way.
     """
+    assert _GIT is not None
     with tempfile.TemporaryDirectory() as raw:
         tmp = Path(raw)
         project, _, webapp, webapp_origin, bin_dir = _build_fixture(tmp)
@@ -327,6 +415,7 @@ def _case_webapp_missing_version(record: _Record) -> None:
     silently treated as "not yet at the target version" and pushed through
     as though it were an ordinary bump.
     """
+    assert _GIT is not None
     with tempfile.TemporaryDirectory() as raw:
         tmp = Path(raw)
         project, _, webapp, _, bin_dir = _build_fixture(tmp)

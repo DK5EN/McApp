@@ -6,15 +6,15 @@ finder per item, every load-bearing claim re-verified by hand before it landed h
 
 ## Wave status log
 
-| Wave | Content                                       | Owner           | Status                            |
-| ---- | --------------------------------------------- | --------------- | --------------------------------- |
-| W1   | Backlog rewrite: close/narrow/split           | agent (docs)    | done 6cf9527                      |
-| W2   | Drop unused uvicorn extras (both services)    | agent (MCProxy) | done a81ea8b                      |
-| W3   | Replace pywebpush's HTTP layer with httpx     | agent (MCProxy) | done 3d960d9, live push verified  |
-| W4   | Webapp: release notes card (webapp B5)        | agent (webapp)  | done ac20373                      |
-| W5   | Webapp: split `msg_www` (narrowed B2)         | agent (webapp)  | done 6972088                      |
-| W6   | B4 open question: PSS re-measure after deploy | agent (ops)     | 47 min read done; 24 h + 72 h due |
-| W7   | B5 Winlink phase 0 on air, then phase 1 check | operator, agent | needs operator                    |
+| Wave | Content                                       | Owner           | Status                                    |
+| ---- | --------------------------------------------- | --------------- | ----------------------------------------- |
+| W1   | Backlog rewrite: close/narrow/split           | agent (docs)    | done 6cf9527                              |
+| W2   | Drop unused uvicorn extras (both services)    | agent (MCProxy) | done a81ea8b                              |
+| W3   | Replace pywebpush's HTTP layer with httpx     | agent (MCProxy) | done 3d960d9, live push verified          |
+| W4   | Webapp: release notes card (webapp B5)        | agent (webapp)  | done ac20373                              |
+| W5   | Webapp: split `msg_www` (narrowed B2)         | agent (webapp)  | done 6972088                              |
+| W6   | B4 open question: PSS re-measure after deploy | agent (ops)     | open; restart re-anchors (see backlog B4) |
+| W7   | B5 Winlink phase 0 on air, then phase 1 check | operator, agent | needs operator                            |
 
 Found and fixed at the advisor gates, beyond the plan:
 

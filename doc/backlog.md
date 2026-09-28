@@ -21,11 +21,20 @@ mcapp is ~16 MB lighter at equal uptime, matching the import-cost estimate (13.4
 shows no measurable change; the extras drop saved nothing visible there. The old build was flat
 between 46 min and 3 h, which already argues against a leak.
 
-**Open question — does mcapp grow? (plan wave W6; 47 min read done, 24 h and 72 h reads due 2026-09-29 12:35 and 2026-10-01 12:35, anchored on the v2.0.17 restart at 12:33:37).** The 2026-09-15
+**Open question — does mcapp grow? (plan wave W6; open, no read of the v2.0.17 process yet).** The 2026-09-15
 note measured 67 MB at import and 85-95 MB live with 40 MB swapped; the 2026-09-28 figure is
 113 MB Pss with nothing swapped, so the two are not comparable. Read Pss at ~1 h, ~24 h and
 ~72 h uptime: growth under ~5 MB/day that flattens closes this as baseline (page cache +
 arenas); steady linear growth opens a `tracemalloc` investigation behind a dev flag.
+
+Every read must come from ONE process: record its start time with the figure
+(`systemctl show mcapp -p ExecMainStartTimestamp`) and compare only reads that share it. The
+47 min read above belongs to the v2.0.17-dev.1 process, which the v2.0.17 restart at 12:33:37
+replaced, so it is not the ~1 h point of the current series — and dev.1's own warm-up (85.9 to
+97.3 MB in ~44 min) is as large as the 5 MB/day threshold. Any deploy restarts the series, and
+the release cadence has not yet left a 72 h window; the cheaper source is `stall_events`, whose
+server context carries `rss_kb`, `version` and `slot`, so the trend can be read per process
+after the fact (RSS, not Pss — a trend source, not a substitute for the three reads).
 
 ## B5 — Winlink over MeshCom
 

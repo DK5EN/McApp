@@ -36,8 +36,9 @@ cd ../webapp && npm run typecheck && npm run lint && npm run format:check && npm
 
 # 4. pre-conditions (see Stops 1 and 2), then commit the dependency bumps
 for d in . ../webapp; do git -C $d rev-list --count development..origin/main; done   # both 0
-$EDITOR doc/release-history.md                     # new section at the TOP
-git add doc/release-history.md
+$EDITOR doc/release-history.md doc/archive/release-history-full.md   # new section at the TOP;
+                                                    # condense + archive the previous one (Stop 1)
+git add doc/release-history.md doc/archive/release-history-full.md
 git commit -m "[docs] Add release notes for vX.Y.Z" && git push origin development
 
 # 5. publish — newline on stdin, output to a file, read the exit code
@@ -185,23 +186,43 @@ prompt. It aborts with "MCProxy has uncommitted changes".
 
 So the working order is: **write the notes, commit them, push, then run the script.**
 `commit_release_notes` then finds nothing to do and logs
-`release-history.md unchanged (already committed)`. That is the success path, not a warning.
+`release-history.md / release-history-full.md unchanged (already committed)`. That is the
+success path, not a warning.
+
+### The top-section guard
+
+Right after you press Enter at the notes prompt, `validate_release_notes_top` re-reads
+`doc/release-history.md` and aborts — before any commit, merge or tag — unless the first `## `
+heading is `## vX.Y.Z` (the `(YYYY-MM-DD)` date suffix is expected; a prefix such as `## v2.0.1`
+for 2.0.17 does not match) and that section is non-empty. This is what would have caught the
+v1.6.8 incident, where the body sitting under Enter was actually the old v1.6.4 section.
+
+`commit_release_notes` then stages and commits whichever of `doc/release-history.md` and
+`doc/archive/release-history-full.md` changed.
 
 ### What the notes have to look like
 
-`upload_production` publishes with `--notes-file doc/release-history.md` — **the whole file**, not a
-section. So:
+`upload_production` publishes **only the top `## vX.Y.Z` section** of `doc/release-history.md`
+(heading excluded, up to the next `## `), plus a trailing footer line pointing back at the full
+file — not the whole file anymore. So:
 
 - the new section goes at the **top**, directly under `# Release History`
-- the file has to read well from the top down, because that is the GitHub release body
+- **the top section has to stand alone.** It is now the entire GitHub release body, and it is also
+  exactly what the webapp's Update page renders per release (`src/views/Update.vue`'s
+  `ReleaseNotesCard`) — nothing outside it reaches either surface.
 - follow the existing shape: `## vX.Y.Z (YYYY-MM-DD)`, a lead paragraph, `### Highlights`,
   `### Backend (MCProxy)`, `### Frontend (webapp)`, `### Upgrade notes`
-- **only the newest release keeps its full notes.** The whole file is also what the webapp's Update
-  page renders. When you add the new section, append the previous full section verbatim to
-  `doc/archive/release-history-full.md` (at the top, under its intro — newest first), and
-  replace it in `release-history.md` with a 1-3 bullet `### vX.Y.Z (date)` entry at the top of
-  `## Earlier releases, in brief`. Keep schema, `SYSTEM_EPOCH` and contract changes and any
-  one-off operator action (a reboot, a firmware minimum) in the brief entry; drop the rest.
+- **only the newest release keeps its full notes.** When you add the new section:
+  1. Fetch the previous top section **as it was actually published**:
+     `git show v<prev>:doc/release-history.md` — not the working copy, which may carry
+     post-publication edits that were never in the release body.
+  2. Prepend that published text, unchanged, to `doc/archive/release-history-full.md` (at the top,
+     under its intro — newest first).
+  3. Replace it in `release-history.md` with a 1-3 bullet `### vX.Y.Z (date)` entry, placed under
+     `## Earlier releases, in brief`'s own intro paragraph (leave a blank line after the intro,
+     then the new entry) — not directly under the `##` heading.
+  4. Keep schema, `SYSTEM_EPOCH` and contract changes and any one-off operator action (a reboot, a
+     firmware minimum) in the brief entry; drop the rest.
 
 Get the material from the commit range in both repos:
 
@@ -211,12 +232,15 @@ git -C ../webapp log v<prev>..HEAD --oneline --no-merges
 ```
 
 Write what changed **for the operator**, not a commit transcript. If the release shipped a metric or
-a measurement, put the field numbers in — the release notes are where a future reader finds out that
-99 % availability means one lost frame, not a degraded link.
+a measurement, put the field numbers in the release's own **full** section — that section is what
+gets published, then archived verbatim, so it is where a future reader actually finds them. The
+brief entry that replaces it next release keeps only what the condense rule above lists
+(schema/epoch/contract changes, one-off operator actions) — measurements do not survive into the
+brief.
 
-Run `npx --yes prettier@3 --write doc/release-history.md`, then `uvx ruff format --check .` — in
-that order. A docs-only commit has turned CI red here twice, because `ruff format` also formats
-fenced `python` blocks inside `.md`.
+Run `npx --yes prettier@3 --write doc/release-history.md doc/archive/release-history-full.md`, then
+`uvx ruff format --check .` — in that order. A docs-only commit has turned CI red here twice,
+because `ruff format` also formats fenced `python` blocks inside `.md`.
 
 ## Stop 2 — `main` must not be ahead of `development`, in EITHER repo
 
@@ -272,7 +296,8 @@ Production path, after `validate_tools` / `validate_on_development` / `validate_
 
 1. resolve `v${pyproject version}`; refuse if that tag already exists in either repo
 2. `validate_main_mergeable` (Stop 2)
-3. print the notes prompt, wait for Enter (Stop 3), commit the notes if dirty (Stop 1)
+3. print the notes prompt, wait for Enter (Stop 3), `validate_release_notes_top` (Stop 1), commit
+   the notes if dirty (Stop 1)
 4. merge `development` → `main` in **both** repos
 5. `npm run build:strict` — writes `version.html` with the new tag
 6. build the combined tarball (backend + webapp)
@@ -282,9 +307,10 @@ Production path, after `validate_tools` / `validate_on_development` / `validate_
 10. sha256 verified, artefacts cleaned up — **and `_RELEASE_SUCCESS=true` is set here**, because
     from this point the release is published and irreversible
 11. post-publish housekeeping: back to `development`, merge `main` back in **both** repos, then
-    `post_release_prep` — bump both `pyproject.toml`s and the webapp's `package.json` /
-    `package-lock.json` (via `npm version --no-git-tag-version`), commit in each, and push
-    **both** repos' `development`
+    `post_release_prep` — bump both `pyproject.toml`s, the local-package version lines in
+    `uv.lock` and `ble_service/uv.lock` (so `uv lock --check` stays clean), and the webapp's
+    `package.json` / `package-lock.json` (via `npm version --no-git-tag-version`), commit in each,
+    and push **both** repos' `development`
 
 **The rollback only covers steps 1-9.** On a failure there the `EXIT` trap removes local + remote
 tags in both repos, the GitHub release, the tarball and checksum, and restores the branch checkout —
@@ -458,5 +484,8 @@ version is already bumped and waiting in `pyproject.toml`.
 - `/dev-release` — cutting and installing the `vX.Y.Z-dev.N` that this skill promotes
 - `/ai-ops` — the health check that decides whether promotion is warranted, and its log
 - `doc/version-logic.md` — how dev/production versions and tags resolve
-- `doc/release-history.md` — the notes file, published verbatim as the GitHub release body
+- `doc/release-history.md` — the notes file; only its top `## vX.Y.Z` section (plus a footer link)
+  is published as the GitHub release body, see Stop 1
+- `doc/archive/release-history-full.md` — full text of every earlier release, archived verbatim at
+  promotion time
 - `bootstrap/README.md` — installer flags, for the cases the Update page cannot cover

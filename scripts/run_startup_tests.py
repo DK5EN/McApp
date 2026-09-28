@@ -29,6 +29,7 @@ from bootstrap_pinning_tests import run_bootstrap_pinning_tests
 from caddy_config_tests import run_caddy_config_tests
 from config_migration_tests import run_config_migration_tests
 from health_probe_tests import run_health_probe_tests
+from release_notes_tests import run_release_notes_tests
 from release_prep_tests import run_release_prep_tests
 from system_converge_tests import run_system_converge_tests
 from update_runner_tests import run_update_runner_tests
@@ -255,6 +256,8 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     release_prep_ok = run_release_prep_tests()
     print(f"release_prep: {'PASS' if release_prep_ok else 'FAIL'}")
+    release_notes_ok = run_release_notes_tests()
+    print(f"release_notes: {'PASS' if release_notes_ok else 'FAIL'}")
 
     webapp_deploy_ok = run_webapp_deploy_tests()
     print(f"webapp_deploy: {'PASS' if webapp_deploy_ok else 'FAIL'}")
@@ -335,6 +338,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and health_probe_ok
         and bootstrap_network_safety_ok
         and release_prep_ok
+        and release_notes_ok
         and webapp_deploy_ok
         and config_migration_ok
         and commands_ok
