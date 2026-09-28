@@ -6,13 +6,21 @@ against its own implementation so both backends behave identically) — all
 match_vectors (incl. via-routed dst resolution), all eligibility_vectors, all
 blocklist_vectors, all payload_vectors, and the dedup coalesce scenario — plus
 subscribe/unsubscribe/upsert, prune-on-401/403/404/410, VAPID persistence, and
-an execution-isolation regression.
+an execution-isolation regression. W3 (B4.3, `pywebpush` removal) adds a
+`push_send.webpush()` round trip against a real subscriber keypair, its
+header/JWT shape, prune/no-prune driven through the REAL `_deliver_one` path
+over `httpx.MockTransport` (never a real socket), and the RFC 8291 Appendix A
+fixed vector.
 
-NEVER calls real pywebpush — every `webpush_fn` used here is an injected stub
-— and NEVER generates a real VAPID keypair — `load_or_create_vapid`'s
+NEVER calls a real push service — every `webpush_fn` used here is either an
+injected stub or `push_send.webpush()` pointed at an `httpx.MockTransport` —
+and NEVER generates a real, PERSISTED VAPID keypair — `load_or_create_vapid`'s
 `generator` is always injected, and `build_push_router`'s `vapid`/`dispatcher`
 parameters are always supplied explicitly so router construction never
-touches `/var/lib/mcapp/vapid.json` or performs real crypto. See
+touches `/var/lib/mcapp/vapid.json`. The W3 additions DO run real EC/HKDF/AES-GCM
+crypto (that's the point — they prove `push_send` round-trips through
+`http_ece`/`py_vapid` exactly as `pywebpush` did), but every keypair involved is
+generated in-memory for that one assertion and never written to disk. See
 `push_delivery.py`'s module docstring for the testability seams this suite
 exercises.
 
@@ -26,7 +34,9 @@ points at and broke this suite together with the whole gated runner.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
+import functools
 import hashlib
 import json
 import os
@@ -34,11 +44,13 @@ import pathlib
 import stat
 import tempfile
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any, cast
 
-from pywebpush import WebPushException
+import http_ece
+import httpx
 
+from . import push_send
 from .commands.constants import has_console
 from .push_delivery import (
     COALESCE_WINDOW_SECONDS,
@@ -50,6 +62,7 @@ from .push_delivery import (
     _is_node_local_noise,
     _push_text,
     build_push_payload,
+    generate_vapid_keypair,
     is_eligible,
     is_sender_blocked,
     load_or_create_vapid,
@@ -58,6 +71,7 @@ from .push_delivery import (
     user_state_dir,
     vapid_path,
 )
+from .push_send import WebPushError
 from .sqlite_storage import create_sqlite_storage
 from .sse_routes.push import (
     PushFilter,
@@ -172,7 +186,7 @@ class _StubManager:
 
 
 class _FakeResponse:
-    """Stand-in for `requests.Response`: only `.status_code` is read by
+    """Stand-in for an `httpx.Response`: only `.status_code` is read by
     `push_delivery._status_code`."""
 
     def __init__(self, status_code: int) -> None:
@@ -264,6 +278,16 @@ async def run_push_tests() -> bool:
     for code in contract["prune_status_codes"]:
         await _drive_one_delivery_and_check_prune(_record, status_code=code, expect_pruned=True)
     await _drive_one_delivery_and_check_prune(_record, status_code=500, expect_pruned=False)
+
+    # 4a. W3 (B4.3): the same prune rule, this time through the REAL
+    #     push_send.webpush() over httpx.MockTransport, plus its header shape,
+    #     JWT claims and an RFC 8291 round trip -- pywebpush is gone from
+    #     production; these are what prove its replacement is wire-compatible.
+    _test_push_send_round_trip_and_header_shape(_record)
+    _test_push_send_202_is_success(_record)
+    await _test_prune_via_real_push_send(_record)
+    await _test_timeout_caught_inside_deliver_one(_record)
+    _test_rfc8291_vector(_record)
 
     # 4b. blocklist gate end-to-end: a blocked sender produces ZERO deliveries
     #     through the real dispatcher pipeline — guards the gate WIRING in
@@ -560,14 +584,19 @@ async def _drive_one_delivery_and_check_prune(
     """Seed one subscription, drive one matching message through the REAL
     dispatcher pipeline (handle_mesh_message -> queue -> background drain ->
     _deliver_one), with an injected `webpush_fn` that always raises
-    WebPushException(status_code). Asserts the prune-on-401/403/404/410 rule
+    WebPushError(status_code). Asserts the prune-on-401/403/404/410 rule
     (contract `prune_semantics`) and, for a non-prune code, the opposite.
+
+    This stub exercises `_deliver_one`'s except-clause wiring only, not
+    `push_send` itself — `_test_prune_via_real_push_send` below drives the
+    same rule through the REAL `push_send.webpush()` over an
+    `httpx.MockTransport`.
     """
     calls: list[int] = []
 
     def _stub_webpush(**_kwargs: Any) -> None:
         calls.append(status_code)
-        raise WebPushException(f"stub failure {status_code}", response=_FakeResponse(status_code))
+        raise WebPushError(f"stub failure {status_code}", response=_FakeResponse(status_code))
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         storage = await create_sqlite_storage(
@@ -628,6 +657,370 @@ async def _drive_one_delivery_and_check_prune(
                 await dispatcher.stop()
         finally:
             await storage.close()
+
+
+# ── W3 (B4.3): push_send.webpush() -- the pywebpush replacement -────────────
+# Everything below drives the REAL crypto+HTTP code path `_deliver_one` calls
+# in production, never a stub of it, and never a real socket: `httpx.
+# MockTransport` intercepts the request `push_send.webpush()` builds. These
+# are the only places in this suite that perform real EC/HKDF/AES-GCM/JWT
+# crypto — deliberately, since the point is proving `push_send` reproduces
+# `pywebpush`'s wire behavior, not merely that this suite's stubs agree with
+# themselves.
+
+
+def _b64url(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _b64url_decode(data: str) -> bytes:
+    return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
+
+
+def _generate_subscriber() -> tuple[Any, dict[str, str], bytes]:
+    """A fresh SUBSCRIBER P-256 keypair + 16-byte auth secret (contract: the
+    Web Push client-side identity the payload is encrypted FOR), plus the
+    `keys` dict shape `push_send._subscriber_keys` decodes.
+
+    Returned alongside the raw `auth_secret` and the subscriber's own EC
+    private key object, both needed to decrypt the captured body back."""
+    from cryptography.hazmat.backends import default_backend
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    private_key = ec.generate_private_key(ec.SECP256R1(), default_backend())
+    public_raw = private_key.public_key().public_bytes(
+        serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint
+    )
+    auth_secret = os.urandom(16)
+    keys = {"p256dh": _b64url(public_raw), "auth": _b64url(auth_secret)}
+    return private_key, keys, auth_secret
+
+
+def _real_vapid_for_tests() -> dict[str, str]:
+    """A REAL, freshly-generated VAPID keypair, never persisted to disk —
+    `push_send.webpush()`'s `Vapid.from_string` needs an actual EC scalar,
+    unlike the stub-`webpush_fn` tests above which use `_FAKE_VAPID` and never
+    reach real crypto at all."""
+    return generate_vapid_keypair(subject="mailto:test@example.test")
+
+
+def _test_push_send_round_trip_and_header_shape(record: _RecordFn) -> None:
+    """Drive `push_send.webpush()` directly (no dispatcher, no queue) against
+    an `httpx.MockTransport` and check three independent claims about the ONE
+    captured request: (1) round trip — `http_ece.decrypt`, using the
+    SUBSCRIBER's own private key + auth secret, recovers the exact JSON
+    payload from the captured body; (2) header shape — `Content-Encoding:
+    aes128gcm`, a `TTL` header, `Authorization` starting `vapid t=` and
+    containing `,k=`; (3) VAPID JWT claims — `aud` is the endpoint's origin
+    and `sub` is the subject passed in, decoded without signature
+    verification (py_vapid's own suite already covers the signature itself).
+    """
+    subscriber_key, subscriber_keys, auth_secret = _generate_subscriber()
+    vapid = _real_vapid_for_tests()
+    endpoint = "https://push.example.test/subscription/abc123"
+    payload = {"type": "msg", "src": "OE1ABC-1", "text": "hi there", "msg_id": 42}
+
+    captured: dict[str, httpx.Request] = {}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        captured["request"] = request
+        return httpx.Response(201)
+
+    client = httpx.Client(transport=httpx.MockTransport(_handler))
+    try:
+        push_send.webpush(
+            subscription_info={"endpoint": endpoint, "keys": subscriber_keys},
+            data=json.dumps(payload),
+            vapid_private_key=vapid["private_key"],
+            vapid_claims={"sub": vapid["subject"]},
+            timeout=(3.0, 5.0),
+            client=client,
+        )
+    finally:
+        client.close()
+
+    request = captured.get("request")
+    record("push_send round trip: request was sent", request is not None)
+    if request is None:
+        return
+
+    record(
+        "push_send round trip: Content-Encoding is aes128gcm",
+        request.headers.get("content-encoding") == "aes128gcm",
+    )
+    record("push_send round trip: TTL header is exactly '0'", request.headers.get("ttl") == "0")
+    auth_header = request.headers.get("authorization", "")
+    record(
+        "push_send round trip: Authorization starts with 'vapid t='",
+        auth_header.startswith("vapid t="),
+    )
+    record("push_send round trip: Authorization contains ',k='", ",k=" in auth_header)
+
+    claims: dict[str, Any] = {}
+    if auth_header.startswith("vapid t=") and ",k=" in auth_header:
+        jwt = auth_header[len("vapid t=") :].split(",k=", 1)[0]
+        claims_b64 = jwt.split(".")[1]
+        claims = json.loads(_b64url_decode(claims_b64))
+    record(
+        "push_send round trip: JWT aud is the endpoint's origin",
+        claims.get("aud") == "https://push.example.test",
+    )
+    record(
+        "push_send round trip: JWT sub is the configured subject",
+        claims.get("sub") == vapid["subject"],
+    )
+
+    decrypted = http_ece.decrypt(
+        request.content,
+        private_key=subscriber_key,
+        auth_secret=auth_secret,
+        version="aes128gcm",
+    )
+    record(
+        "push_send round trip: http_ece decrypt recovers the exact payload",
+        json.loads(decrypted) == payload,
+    )
+
+
+def _test_push_send_202_is_success(record: _RecordFn) -> None:
+    """A 202 Accepted response must NOT raise `WebPushError` — a push service
+    may legitimately answer 202 for a message accepted but queued for later
+    delivery. This guards `push_send._MAX_SUCCESS_STATUS_CODE` against a
+    `> 201` mutation specifically: the prune-based tests below cannot catch
+    that regression, because a 202 wrongly treated as a failure still isn't
+    in `PRUNE_STATUS_CODES` and so would look identical to a legitimate
+    non-prune outcome there. Only a direct call can tell the two apart.
+    """
+    _, subscriber_keys, _ = _generate_subscriber()
+    vapid = _real_vapid_for_tests()
+    endpoint = "https://push.example.test/subscription/202-ok"
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(202)
+
+    raised = False
+    with httpx.Client(transport=httpx.MockTransport(_handler)) as client:
+        try:
+            push_send.webpush(
+                subscription_info={"endpoint": endpoint, "keys": subscriber_keys},
+                data=json.dumps({"type": "msg"}),
+                vapid_private_key=vapid["private_key"],
+                vapid_claims={"sub": vapid["subject"]},
+                client=client,
+            )
+        except WebPushError:
+            raised = True
+    record("push_send: a 202 Accepted response is treated as success (no WebPushError)", not raised)
+
+
+async def _drive_real_push_send_and_check_prune(
+    record: _RecordFn,
+    *,
+    label: str,
+    handler: Callable[[httpx.Request], httpx.Response],
+    expect_pruned: bool,
+) -> None:
+    """Same shape as `_drive_one_delivery_and_check_prune`, but the injected
+    `webpush_fn` is `push_send.webpush()` itself (over an `httpx.
+    MockTransport`), not a stub that raises `WebPushError` by hand — this is
+    what proves `_deliver_one`'s except-clause actually lines up with what
+    `push_send` raises for a real rejected response, not just with what this
+    suite's own stub happens to raise. The `httpx.Client` is scoped to this
+    call (`with`) so it's always closed, even on failure.
+    """
+    _, subscriber_keys, _ = _generate_subscriber()
+    calls: list[httpx.Request] = []
+
+    def _counting_handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return handler(request)
+
+    with (
+        tempfile.TemporaryDirectory() as tmp_dir,
+        httpx.Client(transport=httpx.MockTransport(_counting_handler)) as client,
+    ):
+        storage = await create_sqlite_storage(pathlib.Path(tmp_dir) / f"push_real_{label}.db")
+        try:
+            endpoint = f"https://push.example.test/real-{label}"
+            await storage.upsert_push_subscription(
+                endpoint,
+                {"endpoint": endpoint, "keys": subscriber_keys},
+                {"dm": True, "groups": [], "broadcast": False},
+            )
+            dispatcher = PushDispatcher(
+                storage=storage,
+                vapid=_real_vapid_for_tests(),
+                webpush_fn=functools.partial(push_send.webpush, client=client),
+                now=lambda: 0.0,
+            )
+            dispatcher.start()
+            try:
+                raw_msg = {
+                    "src": "OE1ABC-1",
+                    "dst": "DK5EN-99",
+                    "type": "msg",
+                    "msg": "hi",
+                    "msg_id": 1,
+                    "timestamp": 0,
+                }
+                await dispatcher.handle_mesh_message(raw_msg, "DK5EN-99")
+
+                for _ in range(100):
+                    if calls:
+                        break
+                    await asyncio.sleep(0.02)
+                record(f"real push_send {label}: request was sent", bool(calls))
+
+                if expect_pruned:
+                    still_present = True
+                    for _ in range(100):
+                        subs = await storage.list_push_subscriptions()
+                        still_present = any(s["endpoint"] == endpoint for s in subs)
+                        if not still_present:
+                            break
+                        await asyncio.sleep(0.02)
+                    record(f"real push_send {label}: subscription deleted", not still_present)
+                else:
+                    for _ in range(15):
+                        await asyncio.sleep(0.02)
+                    subs = await storage.list_push_subscriptions()
+                    still_present = any(s["endpoint"] == endpoint for s in subs)
+                    record(
+                        f"real push_send {label}: subscription NOT deleted (non-prune case)",
+                        still_present,
+                    )
+            finally:
+                await dispatcher.stop()
+        finally:
+            await storage.close()
+
+
+async def _test_prune_via_real_push_send(record: _RecordFn) -> None:
+    """Contract `prune_semantics`, driven through the REAL `push_send.webpush()`
+    over `httpx.MockTransport`: 404 and 410 prune, 500 and 202 do not, and a
+    simulated timeout (no response at all — `push_send` raises no
+    `WebPushError` for this, since `_status_code` has nothing to read;
+    `_deliver_one` catches the underlying `httpx.HTTPError` itself, see its
+    own docstring) does not either. `_test_timeout_caught_inside_deliver_one`
+    below pins the catch site directly; this only pins the observable
+    outcome (not pruned) through the full dispatcher pipeline.
+    """
+    await _drive_real_push_send_and_check_prune(
+        record,
+        label="404",
+        handler=lambda request: httpx.Response(404),
+        expect_pruned=True,
+    )
+    await _drive_real_push_send_and_check_prune(
+        record,
+        label="410",
+        handler=lambda request: httpx.Response(410),
+        expect_pruned=True,
+    )
+    await _drive_real_push_send_and_check_prune(
+        record,
+        label="500",
+        handler=lambda request: httpx.Response(500),
+        expect_pruned=False,
+    )
+    await _drive_real_push_send_and_check_prune(
+        record,
+        label="202",
+        handler=lambda request: httpx.Response(202),
+        expect_pruned=False,
+    )
+
+    def _raise_timeout(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("simulated push-service timeout", request=request)
+
+    await _drive_real_push_send_and_check_prune(
+        record,
+        label="timeout",
+        handler=_raise_timeout,
+        expect_pruned=False,
+    )
+
+
+async def _test_timeout_caught_inside_deliver_one(record: _RecordFn) -> None:
+    """A network-level failure (timeout, connection error — no response at
+    all) must be caught INSIDE `_deliver_one` itself, by its own `except
+    httpx.HTTPError` clause, not merely by `_drain_loop`'s outer backstop
+    `except Exception` — the backstop would still protect the loop, but would
+    also `logger.exception` (a full traceback) per attempt, which is what an
+    offline Pi would otherwise write for every mesh message with a push
+    subscriber. Calls `_deliver_one` directly (bypassing the queue/drain
+    loop) to pin the catch site: no exception escapes, and — since there is
+    no response at all — no status code, so nothing could be pruned either.
+    `storage=None` is safe here because the non-prune path never touches it.
+    """
+    _, subscriber_keys, _ = _generate_subscriber()
+    endpoint = "https://push.example.test/subscription/timeout-direct"
+
+    def _raise_timeout(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("simulated push-service timeout", request=request)
+
+    raised = False
+    with httpx.Client(transport=httpx.MockTransport(_raise_timeout)) as client:
+        dispatcher = PushDispatcher(
+            storage=None,
+            vapid=_real_vapid_for_tests(),
+            webpush_fn=functools.partial(push_send.webpush, client=client),
+            now=lambda: 0.0,
+        )
+        sub = {
+            "endpoint": endpoint,
+            "subscription": {"endpoint": endpoint, "keys": subscriber_keys},
+        }
+        try:
+            await dispatcher._deliver_one(sub, {"type": "msg"})
+        except httpx.HTTPError:
+            raised = True
+    record(
+        "timeout: httpx.HTTPError is caught inside _deliver_one and never propagates to its caller",
+        not raised,
+    )
+
+
+def _test_rfc8291_vector(record: _RecordFn) -> None:
+    """Pin `http_ece.encrypt` against the RFC 8291 Appendix A worked example
+    (fetched from rfc-editor.org and cross-checked by decrypting it back to
+    the known plaintext with `http_ece.decrypt` before pinning it here). This
+    calls `http_ece.encrypt` directly, NOT `push_send.webpush()` — production
+    `webpush()` always generates a fresh ephemeral sender keypair internally
+    (the same choice `pywebpush.WebPusher.encode()` makes: reusing a sender
+    key across messages would let a push service correlate them), so there is
+    no way to inject the Appendix A sender key/salt through the public
+    `push_send` API, only through `http_ece` itself.
+    """
+    from cryptography.hazmat.backends import default_backend
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    plaintext = b"When I grow up, I want to be a watermelon"
+    ua_public_raw = _b64url_decode(
+        "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4"
+    )
+    as_private_raw = _b64url_decode("yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw")
+    salt = _b64url_decode("DGv6ra1nlYgDCS1FRnbzlw")
+    auth_secret = _b64url_decode("BTBZMqHH6r4Tts7J_aSIgg")
+    expected = _b64url_decode(
+        "DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27ml"
+        "mlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A_yl95bQpu6cVPT"
+        "pK4Mqgkf1CXztLVBSt2Ks3oZwbuwXPXLWyouBWLVWGNWQexSgSxsj_Qulcy4a-fN"
+    )
+
+    as_private_key = ec.derive_private_key(
+        int.from_bytes(as_private_raw, "big"), ec.SECP256R1(), default_backend()
+    )
+    body = http_ece.encrypt(
+        plaintext,
+        salt=salt,
+        private_key=as_private_key,
+        dh=ua_public_raw,
+        auth_secret=auth_secret,
+        version="aes128gcm",
+    )
+    record("http_ece: RFC 8291 Appendix A vector reproduces the exact ciphertext", body == expected)
 
 
 async def _test_blocklist_gate_suppresses_delivery(record: _RecordFn) -> None:

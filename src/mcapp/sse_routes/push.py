@@ -43,7 +43,7 @@ class PushSubscriptionKeys(BaseModel):
 
 
 class PushSubscriptionInfo(BaseModel):
-    """The `subscription` object pywebpush needs verbatim as subscription_info."""
+    """The `subscription` object `push_send.webpush` needs verbatim as subscription_info."""
 
     endpoint: str = Field(min_length=1)
     keys: PushSubscriptionKeys
