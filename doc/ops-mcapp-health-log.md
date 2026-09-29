@@ -26,9 +26,9 @@
 > cost ~1 s of wall time, so `/api/send` `http` rows remain and are expected. Newest full sweep:
 > §15 (2026-09-19 07:50) — all green, zero findings; `handler` stalls down from ~42–54/day to
 > 1 in 7 h. Last finding was **F13** (§7), upstream and resolved 2026-09-01.
-> Open watch points: **W20** (§21), **W22** (§24), **W19** (§21), **W17** (§18), **W13** (reduced, §17), **W14** (§15), **W16** (§16), **W1** (zram swap,
+> Open watch points: **W20** (§21), **W19** (§21), **W17** (§18), **W13** (reduced, §17), **W14** (§15), **W16** (§16), **W1** (zram swap,
 > trend watch only), **W12** (§12), **W2**, **W3**, **W6**, **W7**, **W9**, **W10**.
-> **W18** (§19/§21), **W15** (§15/§16/§17), **W4**, **W5**, **W8** and **W11** are resolved.
+> **W22** (§24), **W18** (§19/§21), **W15** (§15/§16/§17), **W4**, **W5**, **W8** and **W11** are resolved.
 >
 > **Kind:** Recurring ops review; one dated section per run, appended, never edited in place.
 > **Produced by:** the `ai-ops` skill (`.claude/skills/ai-ops/SKILL.md`).
@@ -2063,3 +2063,10 @@ for a 2 h 55 min window**. Re-measured with `since` and sample rows excluded:
   pattern. **W21** unchanged: no `sse_answer` rows in the soak window.
 - **W9** unchanged. **W17**, **W13**, **W16**, **W1**, **W12**, **W2**, **W3**, **W6**, **W7**,
   **W10** unchanged.
+
+### Addendum 10:12 CEST — W22 resolved
+
+`udp_target_kind` went back to **`identified`** by 10:12, 14 min after the restart, with the one
+known source (192.168.68.63), `udp_multiple_sources` false and no untrusted source. It strengthened
+on its own while GW was still off, so the `first_seen` reading was the post-restart state and not a
+fault. The W22 bullet above stays as written; it is closed by this addendum.
