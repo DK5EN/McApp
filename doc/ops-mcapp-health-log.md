@@ -1,6 +1,10 @@
 # McApp production health log — mcapp.local
 
-> **Status:** Current — newest section: §23 (2026-09-29 09:55 CEST, pre-release sweep of
+> **Status:** Current — newest section: §24 (2026-09-29 10:03 CEST, post-release sweep of
+> production `v2.0.18`, 5 min after the deploy) — green, zero findings; the `{CET}` gap open since
+> 08:00:46 is the operator's deliberate GW-off on DK5EN-98, not a W20 instance; §23's stall
+> figures and its W20 reading are corrected here.
+> Before that: §23 (2026-09-29 09:55 CEST, pre-release sweep of
 > `v2.0.18-dev.1` before the v2.0.18 promotion) — green, zero findings, 2 h 52 min soak, W20
 > recurred as a 113 min uplink outage that is still open at the snapshot (upstream, every `udp`
 > row stopped with it). Before that: §22 (2026-09-28 12:25 CEST, pre-release sweep of
@@ -22,7 +26,7 @@
 > cost ~1 s of wall time, so `/api/send` `http` rows remain and are expected. Newest full sweep:
 > §15 (2026-09-19 07:50) — all green, zero findings; `handler` stalls down from ~42–54/day to
 > 1 in 7 h. Last finding was **F13** (§7), upstream and resolved 2026-09-01.
-> Open watch points: **W20** (§21), **W19** (§21), **W17** (§18), **W13** (reduced, §17), **W14** (§15), **W16** (§16), **W1** (zram swap,
+> Open watch points: **W20** (§21), **W22** (§24), **W19** (§21), **W17** (§18), **W13** (reduced, §17), **W14** (§15), **W16** (§16), **W1** (zram swap,
 > trend watch only), **W12** (§12), **W2**, **W3**, **W6**, **W7**, **W9**, **W10**.
 > **W18** (§19/§21), **W15** (§15/§16/§17), **W4**, **W5**, **W8** and **W11** are resolved.
 >
@@ -1949,3 +1953,113 @@ The 200-row cap means the window is not complete; no earlier rate exists for `ss
   covers it, the box does not until the production deploy.
 - **W19**, **W17**, **W13**, **W16**, **W1**, **W12**, **W2**, **W3**, **W6**, **W7**, **W10**
   unchanged.
+
+## 24. 2026-09-29 10:03 CEST — post-release sweep of production v2.0.18
+
+First sweep after the **v2.0.18** production deploy (Update page, 09:58:22, slot-1 to slot-0).
+Verdict: **green, zero findings.** The box is only **5 minutes** past the restart, so the memory
+and stall readings below are startup readings, not steady state. No open finding.
+
+### Anchors
+
+| Anchor              | Value                                                                          |
+| ------------------- | ------------------------------------------------------------------------------ |
+| Snapshot            | 2026-09-29 10:00–10:03 CEST                                                    |
+| Release             | `v2.0.18` (`/webapp/version.html` agrees, HTTP and HTTPS)                      |
+| Active slot         | **slot-0** (slot-1 `v2.0.18-dev.1`, slot-2 `v2.0.17`)                          |
+| Schema              | **32** = `LATEST_SCHEMA_VERSION` ✓                                             |
+| System epoch        | box **5** = `REQUIRED_SYSTEM_EPOCH` 5 ✓                                        |
+| Service start       | mcapp 09:58:22 CEST                                                            |
+| `systemd NRestarts` | **0** (mcapp and mcapp-ble)                                                    |
+| Host uptime         | 4 days 23:28, load 0.69 / 0.68 / 0.30 (startup)                                |
+| Classifier          | version **5**, **38** rules, 0 unclassified (1 h)                              |
+| UDP provenance      | **`first_seen`**, 1 known source, 0 untrusted, not multiple, 0 suppressed      |
+| On-box gate         | not applicable: a production slot carries no harness (0 test files or corpora) |
+
+### Rate table re-measured
+
+| Signal                     | §1 baseline | This run       | Window |
+| -------------------------- | ----------- | -------------- | ------ |
+| `messages` type `msg`      | 11 / h      | **44 / h**     | 1 h    |
+| `messages` type `pos`      | 87 / h      | **66 / h**     | 1 h    |
+| `signal_log`               | 347 / h     | **228 / h**    | 1 h    |
+| journal warnings           | 0 / 24 h    | **0**          | 24 h   |
+| unclassified `msg`         | 0           | **0**          | 1 h    |
+| `{CET}` rows in `messages` | 0           | **0**          | all    |
+| last `{CET}` beacon        | —           | **7214 s** ago | live   |
+| heartbeat age              | < 60 s      | **11 s**       | live   |
+
+The 44 chat rows per hour are the morning greeting traffic, not a rate change.
+
+### Change under test
+
+- **Production shape:** 0 `*_tests.py` and 0 `.json` corpora in the slot, as designed for a
+  production tarball. `sse-starlette` **3.5.0** is what the venv imports.
+- **SSE on 3.5.0, live 10:02:** `GET /events` answered 200 and delivered the connect burst in the
+  required order: `system:connected`, `proxy:blocked_callsigns`, then `proxy:initial`, followed by
+  summary, read cursors, mheard and weather sidebars and two `ble:status`. This is the first run
+  of that dependency on the box; no stream error in the journal.
+- **Startup memory:** mcapp Pss **99.2 MB** and mcapp-ble **36.5 MB** at 3 min uptime. The cgroup
+  peak is **171.6 MB** for mcapp (v2.0.17 at 47 min: 132.0 MB). A peak only grows, so a startup
+  burst above the earlier steady-state peak is possible; it is not a matched comparison. See W14.
+- **Deploy path:** the Update page showed the v2.0.18 notes card, the confirm dialog read
+  Production, and the box moved slot and restarted with no rollback.
+
+### Uptime — the 08:00:46 gap is deliberate
+
+State `off`, **80.3 %** uptime over 24 h, **100.0 %** coverage. The gap that opened at
+**08:00:46** was still open at 10:01 (2 h 0 min). **Cause, from the operator: GW was deliberately
+switched off on DK5EN-98.** With the gateway off the node neither uplinks nor receives from the
+MeshCom server, so the `{CET}` beacon stops and so does every internet-sourced (`udp`-transport)
+row: the newest is **07:59:51**, and since the deploy the only rows are `ble` (7), `ble_remote`
+(2) and `lora` (4). The two signals stopping together is what that predicts.
+
+This **corrects §23**, which read the same gap as W20 recurring and sent the operator to look at
+the node's gateway link. It was neither an upstream outage nor a fault. It also means the 80.3 %
+uptime figure is depressed by an intended state, and the Gateway Availability card will keep
+reading `off` until GW is switched back on. W20 itself (the 2026-09-27/28 gaps with the gateway
+on) has no new evidence today.
+
+### Stalls (corrected)
+
+`/api/stalls` filters with **`since`**, not `since_ms`. The §23 sweep sent `since_ms`, which the
+endpoint ignores, so its stall paragraph described the newest 200 rows of any age and **is wrong
+for a 2 h 55 min window**. Re-measured with `since` and sample rows excluded:
+
+- **`dev.1` soak 07:00:37–09:58:22:** **19** rows. 4 `loop_lag` stall and 2 critical, 7
+  `client_http` stall and 2 critical, 4 `http` stall. **No** `handler` stall and **no**
+  `sse_answer` row.
+- **`v2.0.18`, first 3 min:** **7** rows. 3 `loop_lag` stall and 2 critical, 1 `http`, 1
+  `client_http`: the restart and first-connect pattern of W19.
+
+### Host and hygiene
+
+| Signal       | Value                                                            |
+| ------------ | ---------------------------------------------------------------- |
+| Disk         | 52 G free, **9 %**                                               |
+| RAM          | **MemAvailable 196 MB**                                          |
+| Swap         | **34 MB out** (SwapFree 438216 of 473084 kB)                     |
+| Temp         | **47.8 °C**                                                      |
+| DB / WAL     | **48 MB** / **2.9 MB**                                           |
+| `vapid.json` | `0600` ✓                                                         |
+| TLS          | Caddy internal leaf, `Sep 29 07:43 → Sep 29 19:43 GMT`, mid-life |
+
+### Absent signals — the zero is the result
+
+- **0** journal warnings in 24 h; **0** `NRestarts`; **0** unclassified; **0** `{CET}` rows.
+- `udp_untrusted_source_ips` **empty**, `udp_multiple_sources` **false**,
+  `udp_suppressed_target_changes` **0**.
+
+### Watch points
+
+- **W20:** unchanged. Today's gap is deliberate and is not an instance; the next sweep with GW
+  on is what tests it. After GW goes back on, expect the first beacon within about 10 min
+  (cadence 606 s).
+- **W22 (new):** `udp_target_kind` is `first_seen`, where it read `identified` before the restart.
+  It strengthens on the first identifying frame, and with GW off that frame may not come.
+  Re-read once GW is back on: `first_seen` after the uplink returns would be the finding.
+- **W14:** re-read mcapp Pss and cgroup peak at 47 min and 24 h against §22's 97.3 MB / 132.0 MB.
+- **W19:** the 2 critical `loop_lag` rows in the first 3 min match the known first-connect
+  pattern. **W21** unchanged: no `sse_answer` rows in the soak window.
+- **W9** unchanged. **W17**, **W13**, **W16**, **W1**, **W12**, **W2**, **W3**, **W6**, **W7**,
+  **W10** unchanged.
