@@ -23,6 +23,7 @@ from .ble_protocol import (
     dispatcher,
     parse_ack_appendix,
     parse_aprs_position,
+    split_path,
     timestamp_from_date_time,
     transform_mh,
     transform_msg,
@@ -1972,6 +1973,68 @@ def _test_ack_store_forward_status(results: list[tuple[str, bool]]) -> None:
     )
 
 
+def _test_split_path_own_call_origin(results: list[tuple[str, bool]]) -> None:
+    """split_path: the first path component is the origin and is NEVER
+    stripped, even when it equals our own callsign — a frame originated
+    under our own callsign elsewhere (second device, replay, server
+    injection) and relayed back must still resolve to us, not to the relay
+    that repeated it (V-C5)."""
+    src, via = split_path("DK5EN-99,OE1GW-12>", "DK5EN-99")
+    _check(
+        results,
+        "split_path: own callsign as ORIGIN (position 0) resolves src to us, not the relay",
+        src == "DK5EN-99",
+    )
+    _check(
+        results,
+        "split_path: own-as-origin via keeps the relay hop untouched",
+        via == "OE1GW-12",
+    )
+
+    # Direct, relay-free reception (own callsign is the ONLY component) must
+    # still collapse to via == "" — the pre-existing "direct reception"
+    # signal this fix must not disturb.
+    src_direct, via_direct = split_path("DK5EN-99>", "DK5EN-99")
+    _check(
+        results,
+        "split_path: own-callsign-only path still resolves src to us",
+        src_direct == "DK5EN-99",
+    )
+    _check(
+        results,
+        "split_path: own-callsign-only path still yields via == '' "
+        "(direct reception, unchanged by this fix)",
+        via_direct == "",
+    )
+
+    # Own callsign as a RELAY (not the origin) is unaffected: still stripped
+    # from via, src stays the true origin.
+    src_relay, via_relay = split_path("DL8DD-7,DK5EN-99>", "DK5EN-99")
+    _check(
+        results,
+        "split_path: own callsign as a relay hop -> src is still the origin",
+        src_relay == "DL8DD-7",
+    )
+    _check(
+        results,
+        "split_path: own callsign as a relay hop -> via drops it, docstring example",
+        via_relay == "DL8DD-7",
+    )
+
+    src_multi, via_multi = split_path("DO7TW-1,DB0FHR-12,DK5EN-99>", "DK5EN-99")
+    _check(
+        results,
+        "split_path: own callsign as the trailing relay of a 2-hop path -> src is the origin",
+        src_multi == "DO7TW-1",
+    )
+    _check(
+        results,
+        "split_path: own callsign as the trailing relay of a 2-hop path -> "
+        "via keeps the intermediate relay",
+        via_multi == "DO7TW-1,DB0FHR-12",
+    )
+
+
 def run_ble_protocol_tests() -> bool:
     """Run all ble_protocol golden-frame tests. Returns True iff all pass."""
     results: list[tuple[str, bool]] = []
@@ -2004,6 +2067,7 @@ def run_ble_protocol_tests() -> bool:
     _test_lora_mod_mask(results)
     _test_flag_bits(results)
     _test_i_register_fwdate_passthrough(results)
+    _test_split_path_own_call_origin(results)
 
     for label, ok in results:
         status = "✅ PASS" if ok else "❌ FAIL"

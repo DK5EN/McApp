@@ -47,7 +47,12 @@ from typing import Any
 
 from ..logging_setup import get_logger
 from ..sqlite_storage import create_sqlite_storage
-from .constants import ACK_MSG_ID_WINDOW_MS, DEDUP_WINDOW_MS, HELD_ACK_WINDOW_MS
+from .constants import (
+    ACK_MSG_ID_WINDOW_MS,
+    ACK_SINCE_SLACK_MS,
+    DEDUP_WINDOW_MS,
+    HELD_ACK_WINDOW_MS,
+)
 
 logger = get_logger(__name__)
 
@@ -1686,6 +1691,298 @@ async def run_ack_status_tests() -> bool:  # noqa: PLR0915 - seven independent A
                     and await storage.get_message_acks("E1E05458") == [],
                 )
             )
+
+            # 20. `?since=` anchor (GET /api/messages/{msg_id}/acks): the
+            #     newest-ack clamp above still guesses wrong whenever the
+            #     CALLER already knows which message it means — the webapp's
+            #     bubble popover fetches by msg_id alone (ChatBubble.vue), so
+            #     an OLDER message A's popover renders a NEWER message B's
+            #     acks whenever they share a reused msg_id, exactly like
+            #     REUSE001 above but for a caller with no other recourse than
+            #     "give me msg_id X's acks". `since` (the caller's own message
+            #     row timestamp) anchors the window on that specific row
+            #     instead of "whatever is newest for this msg_id".
+            router.published.clear()
+            since_gap = 25 * 3600 * 1000  # 25 h: past ACK_MSG_ID_WINDOW_MS, like REUSE001
+            t_a = _BASE_TS + 700
+            t_b = t_a + since_gap
+            await storage.store_message(
+                {
+                    "msg_id": "SINCE001",
+                    "src": "DK5EN-98",
+                    "dst": "OE5HWN-13",
+                    "msg": "old message A, never acked before the reuse",
+                    "type": "msg",
+                    "src_type": "ble",
+                    "timestamp": t_a,
+                },
+                "{}",
+            )
+            await storage.store_message(
+                {
+                    "msg_id": "SINCE001",
+                    "src": "DK5EN-98",
+                    "dst": "OE5HWN-13",
+                    "msg": "new message B, same reused counter",
+                    "type": "msg",
+                    "src_type": "ble",
+                    "timestamp": t_b,
+                },
+                "{}",
+            )
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "SINCE001",
+                    "ack_type": 0x00,
+                    "ack_type_text": "Node ACK",
+                    "ack_from": "DB0ED-99",
+                    "timestamp": t_b + 1000,
+                },
+                "{}",
+            )
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "SINCE001",
+                    "ack_type": 0x02,
+                    "ack_type_text": "Peer ACK",
+                    "ack_from": "OE5HWN-13",
+                    "timestamp": t_b + 2000,
+                },
+                "{}",
+            )
+            since_a_acks = await storage.get_message_acks("SINCE001", since=t_a)
+            results.append(
+                (
+                    (
+                        "since anchor: message A's own popover (since=A's timestamp)"
+                        " sees no acks, never B's (fails without the `since` branch:"
+                        " the only pre-existing call shape, get_message_acks(msg_id)"
+                        " with no since, returns B's acks for ANY caller, A included)"
+                    ),
+                    since_a_acks == [],
+                )
+            )
+            since_b_acks = await storage.get_message_acks("SINCE001", since=t_b)
+            results.append(
+                (
+                    "since anchor: message B's own popover (since=B's timestamp) sees B's acks",
+                    [(a["kind"], a["from"]) for a in since_b_acks]
+                    == [("node", "DB0ED-99"), ("peer", "OE5HWN-13")],
+                )
+            )
+            results.append(
+                (
+                    (
+                        "since anchor: omitting `since` is byte-for-byte the old"
+                        " behaviour (newest-ack clamp), unchanged for mc-chat and"
+                        " older webapps"
+                    ),
+                    [(a["kind"], a["from"]) for a in await storage.get_message_acks("SINCE001")]
+                    == [("node", "DB0ED-99"), ("peer", "OE5HWN-13")],
+                )
+            )
+
+            # 20b. A `since` anchor on a message that turns out to be HELD:
+            #      the held probe must use the WIDE window even though the
+            #      narrow one is what a non-held message would get, or a
+            #      message that turns out to be held would be judged by the
+            #      window it doesn't qualify for. The held ack itself (+2 s)
+            #      stays inside ACK_MSG_ID_WINDOW_MS on purpose — it is what
+            #      FIRST transitions delivery_status to 'held' via
+            #      `_resolve_ack_target`'s normal (non-carve-out) branch,
+            #      which a held frame arriving after that 4 h window could
+            #      never do (out of scope: ingest.py). It is the SUBSEQUENT
+            #      peer ack that exercises the carve-out, at +50 h.
+            router.published.clear()
+            t_h = _BASE_TS + 900
+            await storage.store_message(
+                {
+                    "msg_id": "SINCHELD",
+                    "src": "DK5EN-98",
+                    "dst": "DL9XYZ-3",
+                    "msg": "since anchor covers the held window too",
+                    "type": "msg",
+                    "src_type": "ble",
+                    "timestamp": t_h,
+                },
+                "{}",
+            )
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "SINCHELD",
+                    "ack_type": 0x00,
+                    "ack_type_text": "Node ACK",
+                    "ack_from": "DB0ED-99",
+                    "timestamp": t_h + 1000,
+                },
+                "{}",
+            )
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "SINCHELD",
+                    "ack_type": 0x04,
+                    "ack_type_text": "Store Held",
+                    "ack_from": "DK5EN-90",
+                    "timestamp": t_h + 2000,
+                },
+                "{}",
+            )
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "SINCHELD",
+                    "ack_type": 0x02,
+                    "ack_type_text": "Peer ACK",
+                    "ack_from": "DL9XYZ-3",
+                    "timestamp": t_h + 50 * 3600 * 1000,
+                },
+                "{}",
+            )
+            since_held_acks = await storage.get_message_acks("SINCHELD", since=t_h)
+            results.append(
+                (
+                    (
+                        "since anchor + held: node (+1 s), held (+2 s) and the late"
+                        " peer ack (+50 h) are ALL returned once a held row widens the"
+                        " window past ACK_MSG_ID_WINDOW_MS"
+                    ),
+                    [(a["kind"], a["from"]) for a in since_held_acks]
+                    == [("node", "DB0ED-99"), ("held", "DK5EN-90"), ("peer", "DL9XYZ-3")],
+                )
+            )
+
+            # 20c. The slack boundary itself, both sides, below `since` — the
+            #      jitter ACK_SINCE_SLACK_MS exists to absorb (the message
+            #      row's own timestamp vs. its first ack can commit in either
+            #      order by a few ms to a few seconds).
+            router.published.clear()
+            t_s = _BASE_TS + 1100
+            await storage.store_message(
+                {
+                    "msg_id": "SINCSLAK",
+                    "src": "DK5EN-98",
+                    "dst": "DL2ABC-5",
+                    "msg": "slack boundary probe",
+                    "type": "msg",
+                    "src_type": "ble",
+                    "timestamp": t_s,
+                },
+                "{}",
+            )
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "SINCSLAK",
+                    "ack_type": 0x00,
+                    "ack_type_text": "Node ACK",
+                    "ack_from": "DB0ED-99",
+                    "timestamp": t_s - 30_000,  # 30 s before `since`: inside the slack
+                },
+                "{}",
+            )
+            await storage.store_message(
+                {
+                    "type": "ack",
+                    "msg_id": "SINCSLAK",
+                    "ack_type": 0x01,
+                    "ack_type_text": "Gateway ACK",
+                    "ack_from": "OE1GW-2",
+                    "timestamp": t_s - 5 * 60 * 1000,  # 5 min before `since`: outside it
+                },
+                "{}",
+            )
+            since_slack_acks = await storage.get_message_acks("SINCSLAK", since=t_s)
+            results.append(
+                (
+                    (
+                        "since anchor slack: an ack 30 s before `since` is included,"
+                        " one 5 min before is not"
+                    ),
+                    [(a["kind"], a["from"]) for a in since_slack_acks] == [("node", "DB0ED-99")],
+                )
+            )
+            results.append(
+                (
+                    f"ACK_SINCE_SLACK_MS is 60 s, below DEDUP_WINDOW_MS ({DEDUP_WINDOW_MS} ms)",
+                    ACK_SINCE_SLACK_MS == 60_000 and ACK_SINCE_SLACK_MS < DEDUP_WINDOW_MS,
+                )
+            )
+
+            # 20c2. A NEWER message's `held` row must not widen an OLDER
+            #       message's window. A reuses the msg_id with B 25 h later; B
+            #       is node-acked and then held. The held probe looks only in
+            #       A's NARROW window (a message's first `held` row always
+            #       binds within ACK_MSG_ID_WINDOW_MS, see _resolve_ack_target),
+            #       so B's held row 25 h out leaves A at 4 h and A sees nothing.
+            #       With the probe on the 168 h window, A showed B's node and
+            #       held acks: the v2.0.12 symptom from the other side.
+            router.published.clear()
+            t_ha = _BASE_TS + 1100
+            t_hb = t_ha + since_gap
+            for ts, text in ((t_ha, "old message A"), (t_hb, "new message B, reused id")):
+                await storage.store_message(
+                    {
+                        "msg_id": "SINCEHB1",
+                        "src": "DK5EN-98",
+                        "dst": "OE5HWN-13",
+                        "msg": text,
+                        "type": "msg",
+                        "src_type": "ble",
+                        "timestamp": ts,
+                    },
+                    "{}",
+                )
+            for ts, ack_type, text, frm in (
+                (t_ha + 1000, 0x00, "Node ACK", "DB0ED-99"),
+                (t_hb + 1000, 0x00, "Node ACK", "DB0ED-99"),
+                (t_hb + 2000, 0x04, "Store Held", "DK5EN-90"),
+            ):
+                await storage.store_message(
+                    {
+                        "type": "ack",
+                        "msg_id": "SINCEHB1",
+                        "ack_type": ack_type,
+                        "ack_type_text": text,
+                        "ack_from": frm,
+                        "timestamp": ts,
+                    },
+                    "{}",
+                )
+            results.append(
+                (
+                    (
+                        "since anchor: a NEWER message's held row does not widen an OLDER"
+                        " message's window (A sees none of B's acks)"
+                    ),
+                    await storage.get_message_acks("SINCEHB1", since=t_ha) == [],
+                )
+            )
+            results.append(
+                (
+                    "since anchor: B, held inside its own narrow window, keeps node + held",
+                    [
+                        (a["kind"], a["from"])
+                        for a in await storage.get_message_acks("SINCEHB1", since=t_hb)
+                    ]
+                    == [("node", "DB0ED-99"), ("held", "DK5EN-90")],
+                )
+            )
+
+            # 20d. HTTP-level `?since=` validation (422 on a bad value, filtering
+            #      through the real route): no existing suite drives
+            #      build_acks_router through a TestClient/ASGI harness (grepped
+            #      `build_acks_router`/`TestClient` across src/mcapp — only the
+            #      production wiring in sse_handler.py and this router's own
+            #      module reference it), so per the brief that case is skipped
+            #      here rather than standing up a new HTTP harness for it. The
+            #      FastAPI `Query(default=None, ge=0)` annotation on the route
+            #      (`sse_routes/acks.py`) is what produces the 422 for a
+            #      non-integer or negative value; it is exercised by FastAPI's
+            #      own request validation, not by this storage-level suite.
 
         finally:
             await storage.close()

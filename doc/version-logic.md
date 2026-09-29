@@ -24,7 +24,7 @@ flowchart TD
     E --> F["release.sh → choose Dev<br/>→ v1.4.1-dev.2 (pre-release)"]
     F --> G["Ready for production release"]
     G --> H["release.sh → choose Production"]
-    H --> I["Write release notes on development<br/>Commit doc/release-history.md"]
+    H --> I["Write release notes on development<br/>Guard: top section must be vX.Y.Z<br/>Commit release-history.md + archive"]
     I --> J["Merge development → main<br/>(both repos, --no-ff)"]
     J --> K["Build, tag v1.4.1, push, publish<br/>(both repos get annotated tag)"]
     K --> L["Checkout development<br/>pyproject.toml bumped to 1.4.2<br/>(automatic post-release prep)"]
@@ -143,10 +143,14 @@ Starting from `development` in both repos:
  3. Find previous prod tag (e.g., v1.4.0)
  4. Verify tag v1.4.1 doesn't already exist in either repo
  5. Verify main has no commits ahead of development (no divergence)
- 6. Print Claude prompt for release notes (commits from both repos)
+ 6. Print Claude prompt for release notes: new "## v1.4.1 (date)" section at the top of
+    doc/release-history.md; condense the previous top section into a brief entry under
+    "## Earlier releases, in brief"; prepend that previous section's published text, unchanged,
+    to doc/archive/release-history-full.md
  7. Wait for user to press Enter
- 8. Verify doc/release-history.md exists
- 9. Commit release-history.md on development (if dirty)
+ 8. validate_release_notes_top: the first "## " heading must be "## v1.4.1" and its section
+    non-empty, else abort before any commit/merge/tag
+ 9. Commit release-history.md AND archive/release-history-full.md on development (if dirty)
 10. Checkout main in both repos
 11. Merge development → main (--no-ff) in both repos
 12. Build webapp
@@ -154,9 +158,11 @@ Starting from `development` in both repos:
 14. Tag v1.4.1 (annotated) in both repos
 15. Push main + tags for both repos
 16. Generate checksum
-17. Upload GitHub release (--notes-file doc/release-history.md)
+17. Upload GitHub release: only the "## v1.4.1" section (heading excluded, up to the next "## "),
+    plus a footer line linking back to doc/release-history.md — not the whole file
 18. Checkout development in both repos
-19. Bump pyproject.toml to 1.4.2 (next patch), commit, push
+19. Bump pyproject.toml to 1.4.2 (next patch) plus the local-package version lines in uv.lock and
+    ble_service/uv.lock, commit, push
 20. Done
 ```
 
@@ -202,7 +208,13 @@ git -C "$WEBAPP_DIR"  push origin "$version"
 
 ### Release Notes Generation
 
-Before a production release, the script prints a prompt with commits from both repos since the last production tag. The user runs this prompt with Claude to generate `doc/release-history.md`, then presses Enter to continue. The file is committed on `development` before the merge to `main`, so it arrives on `main` naturally.
+Before a production release, the script prints a prompt with commits from both repos since the
+last production tag, asking for a new top section in `doc/release-history.md`, a condensed brief
+entry for the previous top release, and that previous section prepended verbatim to
+`doc/archive/release-history-full.md`. The user runs this prompt with Claude, then presses Enter to
+continue. `validate_release_notes_top` immediately checks that the first `## ` heading is
+`## vX.Y.Z` and non-empty, aborting before anything is committed if not. Both files are then
+committed together on `development` before the merge to `main`, so they arrive on `main` naturally.
 
 ```bash
 # The script prints something like:
@@ -213,7 +225,10 @@ Before a production release, the script prints a prompt with commits from both r
 #   Frontend commits (webapp):
 #     f3a1b2c [feat] Add dark mode toggle
 #     d4e5f6a [fix] Fix mobile layout
-#   Write the summary to doc/release-history.md
+#   Add a new "## v1.4.1 (date)" section at the top of doc/release-history.md.
+#   Condense the previous top section into a brief entry under
+#   "## Earlier releases, in brief", and prepend its full section, unchanged,
+#   to doc/archive/release-history-full.md.
 ```
 
 ### Failure Recovery
@@ -233,6 +248,8 @@ The `on_failure()` trap handler:
 - Allow release without clean working trees in both repos
 - Allow release from any branch other than `development`
 - Tag only one repo — both repos are always tagged together
+- Publish more than the newest release's top section as the GitHub release body — older sections
+  live on in `doc/release-history.md`'s brief list and in the archive file, never in a release body
 
 ## 6. Piped Install Pinning (Bootstrap Install-Ref Resolution)
 

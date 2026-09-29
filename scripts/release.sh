@@ -38,6 +38,7 @@ _CLEANUP_RELEASE=""       # GitHub release to delete on failure
 _CLEANUP_TARBALL=""       # tarball file to remove
 _CLEANUP_CHECKSUM=""      # checksum file to remove
 _CLEANUP_TMPDIR=""        # temp staging dir to remove
+_CLEANUP_NOTES_FILE=""    # temp extracted-release-notes file to remove
 _CLEANUP_SWITCHED_MAIN=false  # did we switch repos to main?
 _RELEASE_SUCCESS=false    # set true once the release is genuinely published and
                           # irreversible (tag + release on GitHub) — NOT the same
@@ -75,6 +76,12 @@ on_failure() {
   if [[ -n "$_CLEANUP_TMPDIR" && -d "$_CLEANUP_TMPDIR" ]]; then
     rm -rf "$_CLEANUP_TMPDIR"
     log_warn "  Removed staging directory"
+  fi
+
+  # Remove temp extracted-release-notes file
+  if [[ -n "$_CLEANUP_NOTES_FILE" && -f "$_CLEANUP_NOTES_FILE" ]]; then
+    rm -f "$_CLEANUP_NOTES_FILE"
+    log_warn "  Removed temporary release-notes file"
   fi
 
   # Delete GitHub release (the tag it referenced is removed by the block below)
@@ -304,7 +311,10 @@ generate_release_notes_prompt() {
   echo "$backend_log" | sed 's/^/    /'
   echo "  Frontend commits (webapp):"
   echo "$frontend_log" | sed 's/^/    /'
-  echo "  Write the summary to doc/release-history.md"
+  echo "  Add a '## v${version} (<date>)' section at the TOP of doc/release-history.md."
+  echo "  Condense the release currently at the top into a brief entry under"
+  echo "  '## Earlier releases, in brief', and prepend its full section, unchanged, to"
+  echo "  doc/archive/release-history-full.md. Follow .claude/skills/prod-release/SKILL.md."
   echo -e "  ${CYAN}────────────────────────────────────────${NC}"
   echo ""
 }
@@ -321,16 +331,99 @@ wait_for_release_notes() {
   log_info "Found doc/release-history.md"
 }
 
+# Print only one release's own section from doc/release-history.md: the lines
+# after the `## v<version>` heading (heading itself excluded; a date suffix
+# like `## v2.0.18 (2026-09-29)` is fine) up to, not including, the next `## `
+# heading (or EOF). Leading/trailing blank lines are trimmed, then a footer
+# pointing at the full history is appended. Errors (stderr + non-zero) on an
+# empty section -- a silently empty body would otherwise be published as the
+# GitHub release notes.
+#
+# `version` is given WITHOUT a leading "v" (like `$current`/
+# `read_pyproject_version`, never like `$version` at the call sites below,
+# which already carries one -- callers strip it with `${version#v}`).
+extract_release_notes_section() {
+  local version="$1" file="$2"
+  local ver_re="${version//./\\.}"
+  local section
+
+  section=$(awk -v ver="$ver_re" '
+    BEGIN { state = 0; n = 0 }
+    /^## / {
+      if (state == 1) { exit }
+      if ($0 ~ ("^## v" ver "( |$)")) { state = 1; next }
+      next
+    }
+    state == 1 { lines[n++] = $0 }
+    END {
+      start = 0
+      last = n - 1
+      while (start < n && lines[start] ~ /^[ \t]*$/) start++
+      while (last >= start && lines[last] ~ /^[ \t]*$/) last--
+      for (i = start; i <= last; i++) print lines[i]
+    }
+  ' "$file")
+
+  if [[ -z "$section" ]]; then
+    log_error "extract_release_notes_section: no (non-empty) '## v${version}' section found in ${file}"
+    return 1
+  fi
+
+  printf '%s\n\nFull release history: https://github.com/%s/blob/main/doc/release-history.md\n' \
+    "$section" "$GITHUB_REPO"
+}
+
+# Guard against publishing a release under a stale top heading -- the
+# v1.6.8-published-as-v1.6.4 incident, where the body sitting under Enter at
+# the notes prompt was actually the previous release's section. The FIRST
+# `## ` heading in doc/release-history.md must be this release's own (a date
+# suffix is fine), and its section must be non-empty. Runs right after
+# wait_for_release_notes and BEFORE commit_release_notes / merge_to_main --
+# any later and the merge and tag are already public and can't be walked back.
+validate_release_notes_top() {
+  local version="$1"
+  local file="${PROJECT_DIR}/doc/release-history.md"
+  local ver_re="${version//./\\.}"
+  local top_heading
+
+  top_heading=$(grep -m1 '^## ' "$file" || true)
+
+  if [[ -z "$top_heading" ]]; then
+    log_error "validate_release_notes_top: no '## ' heading found in ${file}"
+    exit 1
+  fi
+
+  if ! printf '%s\n' "$top_heading" | grep -qE "^## v${ver_re}( |\$)"; then
+    log_error "validate_release_notes_top: top heading is '${top_heading}', expected '## v${version}' (a date suffix is fine)"
+    log_error "  doc/release-history.md must have v${version}'s own section at the top before publishing"
+    exit 1
+  fi
+
+  if ! extract_release_notes_section "$version" "$file" >/dev/null; then
+    log_error "validate_release_notes_top: the '## v${version}' section is empty"
+    exit 1
+  fi
+}
+
 commit_release_notes() {
-  # Commit release-history.md on development if it was changed
-  if git -C "$PROJECT_DIR" diff --name-only | grep -q 'doc/release-history.md' || \
-     git -C "$PROJECT_DIR" diff --cached --name-only | grep -q 'doc/release-history.md' || \
-     git -C "$PROJECT_DIR" status --porcelain | grep -q 'doc/release-history.md'; then
-    git -C "$PROJECT_DIR" add doc/release-history.md
-    git -C "$PROJECT_DIR" commit -m "[docs] Add release notes for v${1}"
-    log_info "Committed release notes on development"
+  local version="$1"
+  local -a paths=("doc/release-history.md" "doc/archive/release-history-full.md")
+  local -a changed=()
+  local path
+
+  for path in "${paths[@]}"; do
+    if [[ -f "${PROJECT_DIR}/${path}" ]] && \
+       git -C "$PROJECT_DIR" status --porcelain -- "$path" | grep -q .; then
+      changed+=("$path")
+    fi
+  done
+
+  if [[ ${#changed[@]} -gt 0 ]]; then
+    git -C "$PROJECT_DIR" add "${changed[@]}"
+    git -C "$PROJECT_DIR" commit -m "[docs] Add release notes for v${version}"
+    log_info "Committed release notes on development (${changed[*]})"
   else
-    log_info "release-history.md unchanged (already committed)"
+    log_info "release-history.md / release-history-full.md unchanged (already committed)"
   fi
 }
 
@@ -478,6 +571,79 @@ set_pyproject_version() {
   fi
 }
 
+# Rewrite the `version = "..."` line immediately following a `name = "<name>"`
+# line in a uv.lock file (TOML, but a full parser is overkill for one field).
+# The root uv.lock carries TWO such entries (`mcapp` and `mcapp-ble-service`,
+# both workspace members); ble_service/uv.lock carries one. awk over sed
+# because "the line right after a match" is a two-line lookahead, and BSD
+# sed's address-range syntax for that is far less portable across the GNU/BSD
+# split than the same logic in awk -- this must run on macOS (the release
+# machine) and under CI's ubuntu runner alike, same reasoning as
+# set_pyproject_version's `sed -i` note above.
+#
+# A missing lock file is a silent no-op (return 0): a test fixture may omit
+# one, but the real repo ships both and `bump_lock_versions` covers both
+# paths explicitly.
+set_lock_version() {
+  local file="$1" name="$2" version="$3" tmp
+
+  if [[ ! -f "$file" ]]; then
+    return 0
+  fi
+
+  tmp=$(mktemp)
+  # Called as `if ! awk ...` so a no-match (awk's own `exit 1`) is checked
+  # explicitly rather than letting `set -e` kill the script before the branch
+  # below can report which file/name was at fault -- same caveat as
+  # checkout_development and post_release_prep's own steps.
+  if ! awk -v name="$name" -v version="$version" '
+    BEGIN { want = 0; matched = 0 }
+    {
+      if (want && $0 ~ /^version = "/) {
+        print "version = \"" version "\""
+        want = 0
+        matched++
+        next
+      }
+      want = 0
+      print
+      if ($0 == "name = \"" name "\"") { want = 1 }
+    }
+    END { exit (matched > 0 ? 0 : 1) }
+  ' "$file" > "$tmp"; then
+    rm -f "$tmp"
+    log_error "set_lock_version: no 'name = \"${name}\"' entry found in ${file}"
+    return 1
+  fi
+
+  cat "$tmp" > "$file"
+  rm -f "$tmp"
+
+  if ! grep -qF "version = \"${version}\"" "$file"; then
+    log_error "set_lock_version: ${file} does not contain version = \"${version}\" after rewrite"
+    return 1
+  fi
+}
+
+# Bump the local-package version lines in both uv.lock files to $version.
+# Called from post_release_prep, alongside the pyproject.toml bump -- neither
+# `uv sync` nor `uv lock` runs here (this is a text edit, not a resolve), so
+# `uv lock --check` staying clean after a production release depends on this
+# landing in the SAME commit as the pyproject.toml bump.
+bump_lock_versions() {
+  local version="$1"
+
+  if ! set_lock_version "${PROJECT_DIR}/uv.lock" "mcapp" "$version"; then
+    return 1
+  fi
+  if ! set_lock_version "${PROJECT_DIR}/uv.lock" "mcapp-ble-service" "$version"; then
+    return 1
+  fi
+  if ! set_lock_version "${PROJECT_DIR}/ble_service/uv.lock" "mcapp-ble-service" "$version"; then
+    return 1
+  fi
+}
+
 post_release_prep() {
   local current_version="$1"
   local next_version
@@ -498,7 +664,21 @@ post_release_prep() {
     return 1
   fi
 
-  if ! git -C "$PROJECT_DIR" add pyproject.toml ble_service/pyproject.toml; then
+  # uv.lock records each workspace member's own version in its [[package]]
+  # entry (`name = "..."` immediately followed by `version = "..."`); the
+  # pyproject.toml bump above never touches it, which left `uv lock --check`
+  # failing after every production release until now. Rewritten as a direct
+  # text edit rather than through `uv lock`, which would need a
+  # network-capable `uv` on the release machine for what is a single field.
+  if ! bump_lock_versions "$next_version"; then
+    return 1
+  fi
+
+  local -a mcproxy_paths=(pyproject.toml ble_service/pyproject.toml)
+  [[ -f "${PROJECT_DIR}/uv.lock" ]] && mcproxy_paths+=(uv.lock)
+  [[ -f "${PROJECT_DIR}/ble_service/uv.lock" ]] && mcproxy_paths+=(ble_service/uv.lock)
+
+  if ! git -C "$PROJECT_DIR" add "${mcproxy_paths[@]}"; then
     log_error "post_release_prep: git add failed in MCProxy"
     return 1
   fi
@@ -748,14 +928,31 @@ upload_production() {
 
   local -a assets=("${PROJECT_DIR}/${tarball}" "${PROJECT_DIR}/${checksum}")
 
+  # Publish only this release's own section (extract_release_notes_section),
+  # not the whole history file -- that used to make every release's GitHub
+  # page grow to contain the entire project history.
+  local notes_file
+  notes_file=$(mktemp)
+  _CLEANUP_NOTES_FILE="$notes_file"
+
+  if ! extract_release_notes_section "${version#v}" "${PROJECT_DIR}/doc/release-history.md" > "$notes_file"; then
+    rm -f "$notes_file"
+    _CLEANUP_NOTES_FILE=""
+    log_error "upload_production: could not extract release notes for ${version}"
+    exit 1
+  fi
+
   # Tag is already on the remote via push_main_and_tags — see upload_dev for why
   # --verify-tag matters.
   gh release create "$version" \
     --repo "$GITHUB_REPO" \
     --title "McApp ${version}" \
-    --notes-file "${PROJECT_DIR}/doc/release-history.md" \
+    --notes-file "$notes_file" \
     --verify-tag \
     "${assets[@]}"
+
+  rm -f "$notes_file"
+  _CLEANUP_NOTES_FILE=""
 
   _CLEANUP_RELEASE="$version"
 
@@ -930,6 +1127,11 @@ main() {
       log_warn "No previous production tag found — skipping release notes prompt"
     fi
     wait_for_release_notes
+
+    # Guard: the section actually at the top of release-history.md must be
+    # this release's own -- catches a stale/missed edit before the merge and
+    # tag make it irreversible (the v1.6.8-published-as-v1.6.4 incident).
+    validate_release_notes_top "$current"
 
     # Step 2: Commit release notes on development (if changed)
     commit_release_notes "$current"

@@ -23,6 +23,7 @@ from ._base import StorageBase
 from .constants import (
     _MSG_SELECT,
     ACK_MSG_ID_WINDOW_MS,
+    ACK_SINCE_SLACK_MS,
     BUCKET_SECONDS,
     CORE_DUMP_FILTER_TEXT,
     DEDUP_WINDOW_MS,
@@ -1762,7 +1763,7 @@ class QueryMixin(StorageBase):
             (cutoff,),
         )
 
-    async def get_message_acks(self, msg_id: str) -> list[dict[str, Any]]:
+    async def get_message_acks(self, msg_id: str, since: int | None = None) -> list[dict[str, Any]]:
         """Every acknowledgement recorded for one outbound message, oldest first.
 
         Rows come from `message_acks` (schema v29). `from_call` is exposed as
@@ -1770,29 +1771,79 @@ class QueryMixin(StorageBase):
         the storage-side sentinel is an implementation detail of the UNIQUE
         constraint and must not leak to the API.
 
-        The result is clamped to `ACK_MSG_ID_WINDOW_MS` before the NEWEST ack
-        recorded for this msg_id, because the ledger key carries no message
-        identity beyond the msg_id and a firmware msg_id is reused every ~1000
-        frames the sending node originates (see the constant). Without the
-        clamp a bubble showed the acks of whichever earlier message last held
-        the same counter value. `_record_message_ack` already prunes those rows
-        as it writes, so this is what makes ledger rows written BEFORE that
-        prune existed read correctly too — no backfill, no migration. A msg_id
-        with a `held` row gets `HELD_ACK_WINDOW_MS` instead, for the same reason
-        the binding does: a store-and-forward ack arrives days after the node
-        and gateway acks, and all of them belong to the one message.
+        Two modes, because a bare msg_id is ambiguous (see below) but the
+        caller sometimes has a stronger anchor:
+
+        `since` omitted (unchanged behaviour, relied on by mc-chat and older
+        webapps): the result is clamped to `ACK_MSG_ID_WINDOW_MS` before the
+        NEWEST ack recorded for this msg_id, because the ledger key carries no
+        message identity beyond the msg_id and a firmware msg_id is reused
+        every ~1000 frames the sending node originates (see the constant).
+        Without the clamp a bubble showed the acks of whichever earlier
+        message last held the same counter value. `_record_message_ack`
+        already prunes those rows as it writes, so this is what makes ledger
+        rows written BEFORE that prune existed read correctly too — no
+        backfill, no migration. A msg_id with a `held` row gets
+        `HELD_ACK_WINDOW_MS` instead, for the same reason the binding does: a
+        store-and-forward ack arrives days after the node and gateway acks,
+        and all of them belong to the one message.
+
+        `since` given (the specific message row's own timestamp, e.g. the
+        webapp's bubble popover): the newest-ack anchor above is NOT applied —
+        `since` anchors the window instead, which is what makes this mode
+        immune to the msg_id-reuse ambiguity the other mode has to guess
+        around. Rows with `since - ACK_SINCE_SLACK_MS <= timestamp <
+        since + W` are returned, where W is `HELD_ACK_WINDOW_MS` if a `held`
+        row for this msg_id falls in the NARROW window `[since -
+        ACK_SINCE_SLACK_MS, since + ACK_MSG_ID_WINDOW_MS)`, else
+        `ACK_MSG_ID_WINDOW_MS`. The probe is narrow on purpose: a message's
+        first `held` row always binds inside that window
+        (`_resolve_ack_target` only extends to 168 h for a row that is
+        ALREADY held, and `INSERT OR IGNORE` keeps that first row), while a
+        wide probe also finds the `held` row of a NEWER message that reused
+        the msg_id and would widen this older message's window over that
+        message's acks. The slack below `since` covers the BLE row's node
+        clock, which may lead the Pi-stamped ack by up to the trailer skew
+        allowance (`ACK_SINCE_SLACK_MS`).
         """
-        rows = await self._query(
-            "SELECT kind, from_call, via, timestamp FROM message_acks"
-            " WHERE msg_id = ?"
-            "   AND timestamp >= ("
-            "        SELECT MAX(timestamp) FROM message_acks WHERE msg_id = ?"
-            "   ) - CASE WHEN EXISTS ("
-            "        SELECT 1 FROM message_acks WHERE msg_id = ? AND kind = 'held'"
-            "   ) THEN ? ELSE ? END"
-            " ORDER BY timestamp ASC",
-            (msg_id, msg_id, msg_id, HELD_ACK_WINDOW_MS, ACK_MSG_ID_WINDOW_MS),
-        )
+        if since is not None:
+            rows = await self._query(
+                "SELECT kind, from_call, via, timestamp FROM message_acks"
+                " WHERE msg_id = ?"
+                "   AND timestamp >= ? - ?"
+                "   AND timestamp < ? + CASE WHEN EXISTS ("
+                "        SELECT 1 FROM message_acks"
+                "         WHERE msg_id = ? AND kind = 'held'"
+                "           AND timestamp >= ? - ?"
+                "           AND timestamp < ? + ?"
+                "   ) THEN ? ELSE ? END"
+                " ORDER BY timestamp ASC",
+                (
+                    msg_id,
+                    since,
+                    ACK_SINCE_SLACK_MS,
+                    since,
+                    msg_id,
+                    since,
+                    ACK_SINCE_SLACK_MS,
+                    since,
+                    ACK_MSG_ID_WINDOW_MS,
+                    HELD_ACK_WINDOW_MS,
+                    ACK_MSG_ID_WINDOW_MS,
+                ),
+            )
+        else:
+            rows = await self._query(
+                "SELECT kind, from_call, via, timestamp FROM message_acks"
+                " WHERE msg_id = ?"
+                "   AND timestamp >= ("
+                "        SELECT MAX(timestamp) FROM message_acks WHERE msg_id = ?"
+                "   ) - CASE WHEN EXISTS ("
+                "        SELECT 1 FROM message_acks WHERE msg_id = ? AND kind = 'held'"
+                "   ) THEN ? ELSE ? END"
+                " ORDER BY timestamp ASC",
+                (msg_id, msg_id, msg_id, HELD_ACK_WINDOW_MS, ACK_MSG_ID_WINDOW_MS),
+            )
         return [
             {
                 "kind": row["kind"],

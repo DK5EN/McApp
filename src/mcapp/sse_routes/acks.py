@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 if TYPE_CHECKING:
     from ..sse_handler import SSEManager
@@ -25,10 +25,21 @@ def build_acks_router(manager: SSEManager) -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/messages/{msg_id}/acks")
-    async def get_message_acks(msg_id: str) -> dict[str, Any]:
+    async def get_message_acks(
+        msg_id: str, since: int | None = Query(default=None, ge=0)
+    ) -> dict[str, Any]:
         """Acknowledgements recorded for one message, oldest first. An unknown
         msg_id is an empty list, not a 404 — "nobody acked" is a valid answer.
         A malformed id is rejected, never looked up.
+
+        `since` (optional, ms epoch) is the caller's own anchor for the
+        specific message row it means — its own timestamp — which lets
+        `get_message_acks` bind the ledger window around that row instead of
+        guessing from "newest ack for this msg_id", the only option when a
+        firmware msg_id has been reused (see that method's docstring).
+        Omitted, behaviour is unchanged for mc-chat and older webapps. FastAPI
+        rejects a non-integer or negative value with 422 before this body
+        runs.
         """
         candidate = msg_id.strip().upper()
         if len(candidate) != _MSG_ID_LEN:
@@ -38,7 +49,7 @@ def build_acks_router(manager: SSEManager) -> APIRouter:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="msg_id must be 8 hex digits") from exc
         storage = manager.require_storage()
-        acks = await storage.get_message_acks(candidate)
+        acks = await storage.get_message_acks(candidate, since=since)
         return {"msg_id": candidate, "acks": acks}
 
     return router

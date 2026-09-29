@@ -755,14 +755,25 @@ def parse_aprs_telemetry(message: str) -> dict[str, Any] | None:
 
 
 def split_path(path: str, own_callsign: str = "") -> tuple[str, str]:
-    """Split BLE path into (src, via), stripping own callsign.
+    """Split BLE path into (src, via), stripping own callsign from `via`.
 
     path: e.g. "DL8DD-7,DK5EN-99>" or "DO7TW-1,DB0FHR-12,DK5EN-99>"
-    Returns: ("DL8DD-7", "") or ("DO7TW-1", "DO7TW-1,DB0FHR-12")
+    Returns: ("DL8DD-7", "DL8DD-7") or ("DO7TW-1", "DO7TW-1,DB0FHR-12")
+
+    `src` is always the FIRST component — the origin — and is never stripped,
+    even when it equals our own callsign: a frame originated under our own
+    callsign elsewhere (second device, replay, server injection) and relayed
+    back has us as the genuine sender, not the relay that repeated it. Only
+    `via`'s stripping still runs over every component, because own callsign
+    there normally sits LAST (the hop into us) and dropping it is what
+    collapses a direct, relay-free reception (a single-component,
+    all-own-callsign path) to `via == ""` — the "direct reception" signal
+    `PositionListPanel`/`preferShorterPath` (webapp) and
+    `is_uplink_time_beacon` (`storage/uptime.py`) both key on.
     """
     parts = path.rstrip(">").strip().split(",")
     filtered = [p for p in parts if p.upper() != own_callsign.upper()] if own_callsign else parts
-    src = filtered[0] if filtered else parts[0]
+    src = parts[0] if parts else ""
     via = ",".join(filtered)
     return src, via
 
