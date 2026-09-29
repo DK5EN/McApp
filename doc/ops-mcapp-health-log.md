@@ -1,6 +1,9 @@
 # McApp production health log — mcapp.local
 
-> **Status:** Current — newest section: §22 (2026-09-28 12:25 CEST, pre-release sweep of
+> **Status:** Current — newest section: §23 (2026-09-29 09:55 CEST, pre-release sweep of
+> `v2.0.18-dev.1` before the v2.0.18 promotion) — green, zero findings, 2 h 52 min soak, W20
+> recurred as a 113 min uplink outage that is still open at the snapshot (upstream, every `udp`
+> row stopped with it). Before that: §22 (2026-09-28 12:25 CEST, pre-release sweep of
 > `v2.0.17-dev.1` before the v2.0.17 promotion) — green, zero findings, short 53 min soak, new
 > watch point **W21** (`sse_answer` on the first send), W20 recurred once, W14 improved by 16 MB.
 > Before that: §21 (2026-09-28 09:10 CEST, pre-release sweep of
@@ -1847,3 +1850,102 @@ earlier rate to compare with; see W21.
 - **W19:** 413 ms this time, below critical. **W9** unchanged: CI runs only the dependency-graph
   jobs on `development`; the promotion is signed off on the local gates plus the on-box gate.
 - **W17**, **W13**, **W16**, **W1**, **W12**, **W2**, **W3**, **W6**, **W7**, **W10** unchanged.
+
+## 23. 2026-09-29 09:55 CEST — pre-release sweep before promoting v2.0.18-dev.1 to v2.0.18
+
+Sign-off sweep for the **v2.0.18** promotion (BLE `split_path` keeps the origin callsign as `src`,
+ACK popover anchored on the message timestamp, release notes limited to the release's own
+section). Verdict: **green, zero findings.** Soak **2 h 52 min** since the 07:00 deploy, 0
+restarts, 0 warnings. W20 recurred, and unlike the earlier gaps it is still open at the snapshot.
+
+### Anchors
+
+| Anchor              | Value                                                                      |
+| ------------------- | -------------------------------------------------------------------------- |
+| Snapshot            | 2026-09-29 09:48–09:56 CEST                                                |
+| Release             | `v2.0.18-dev.1` (`/webapp/version.html` agrees)                            |
+| Active slot         | **slot-1**                                                                 |
+| Schema              | **32** = `LATEST_SCHEMA_VERSION` ✓                                         |
+| System epoch        | box **5** = `REQUIRED_SYSTEM_EPOCH` 5 ✓                                    |
+| Service start       | mcapp 07:00:37 CEST                                                        |
+| `systemd NRestarts` | **0** (mcapp and mcapp-ble)                                                |
+| Host uptime         | 4 days 23:20, load 0.16 / 0.04 / 0.01                                      |
+| Classifier          | version **5**, **38** rules, 0 unclassified (1 h)                          |
+| UDP provenance      | **`identified`**, 0 untrusted, not multiple, 0 suppressed changes          |
+| On-box gate         | `run_startup_tests.py` in the active slot: exit 0, `config_migration` PASS |
+
+### Rate table re-measured
+
+| Signal                     | §1 baseline | This run       | Window |
+| -------------------------- | ----------- | -------------- | ------ |
+| `messages` type `msg`      | 11 / h      | **11 / h**     | 1 h    |
+| `messages` type `pos`      | 87 / h      | **61 / h**     | 1 h    |
+| `signal_log`               | 347 / h     | **185 / h**    | 1 h    |
+| journal warnings           | 0 / 24 h    | **0**          | 24 h   |
+| unclassified `msg`         | 0           | **0**          | 1 h    |
+| `{CET}` rows in `messages` | 0           | **0**          | all    |
+| last `{CET}` beacon        | —           | **6739 s** ago | live   |
+| heartbeat age              | < 60 s      | **10 s**       | live   |
+
+### Change under test
+
+- **`split_path` (cf124dc), live 07:22–08:30:** 12 chat rows watched (5 `lora`, 4 `ble_remote`,
+  3 `udp`). Every `ble_remote` row has `src` equal to the first component of its raw `path`;
+  multi-hop BLE copies carry origin plus relays in `via`. No msg_id with two senders, no
+  same-msg_id pair with differing text. Small sample and no duplicated pair inside it, so the
+  dedup path itself was not exercised.
+- **Memory (W14), matched uptime:** mcapp Pss **102.0 MB** at 2 h 52 min (v2.0.17: 97.3 MB at
+  47 min, v2.0.16: 113.4 MB at ~3 h); cgroup peak **151.9 MB**. mcapp-ble **35.3 MB**, peak
+  55.6 MB.
+
+### Uptime — W20
+
+`/api/uptime?range=24h`: state `off`, **80.9 %** uptime, **100.0 %** coverage. The `{CET}` link ran
+clean **05:28:49–08:00:46** (152 min, including the first hour of `dev.1`), then **no beacon since
+08:00:46: a 113 min gap, open at the snapshot.** Earlier today 05:10:47–05:28:49 (18 min).
+
+The ingest path is fine: `lora` and `ble_remote` rows kept arriving after 08:00 (21 and 6 chat
+rows, 43 and 21 `pos`). What stopped is every row with `src_type = udp` — the last were 07:58:25
+and 07:59:51, and there are none since 08:00. Reading: the node lost its uplink to the MeshCom
+server, so neither the beacon nor internet-sourced chat reaches it. The hook is unchanged in this
+release and worked for an hour under `dev.1`. Upstream or link, as on 2026-09-27; the operator
+should look at the node's gateway link, not at the box.
+
+### Stalls
+
+Last 2 h 55 min, capped at the newest 200 rows: 25 `loop_lag` (7 critical), 17 `http` and 27
+`client_http` stalls, 6 `handler` stalls, 5 `sse_answer` (2 critical). Cumulative summary:
+`/api/send` p50 863 ms over 55 calls, p99 5.2 s, `/api/ble/ensure_connected` one call at 6.2 s.
+The 200-row cap means the window is not complete; no earlier rate exists for `sse_answer`, see W21.
+
+### Host and hygiene
+
+| Signal       | Value                                                            |
+| ------------ | ---------------------------------------------------------------- |
+| Disk         | 52 G free, **9 %**                                               |
+| RAM          | **MemAvailable 190 MB**                                          |
+| Swap         | **33 MB out** (SwapFree 439240 of 473084 kB)                     |
+| Temp         | **42.4 °C**                                                      |
+| DB / WAL     | **48 MB** / **4.2 MB**                                           |
+| `vapid.json` | `0600` ✓                                                         |
+| TLS          | Caddy internal leaf, `Sep 29 07:43 → Sep 29 19:43 GMT`, mid-life |
+
+### Absent signals — the zero is the result
+
+- **0** journal warnings in 24 h; **0** `NRestarts`; **0** unclassified; **0** `{CET}` rows.
+- `udp_untrusted_source_ips` **empty**, `udp_multiple_sources` **false**,
+  `udp_suppressed_target_changes` **0**.
+
+### Watch points
+
+- **W20 recurred, open:** see Uptime. Re-read next sweep: a gap that outlasts the morning would
+  mean the node's server uplink is down, not a beacon hiccup.
+- **W21:** `sse_answer` rows exist again (5, two critical), consistent with first-send latency
+  after a connect. Still no baseline; unchanged.
+- **W14:** 102.0 MB at 2 h 52 min, between the two previous builds. Growth question stays open.
+- **W9** unchanged: CI runs only the dependency-graph jobs on `development`; the promotion is
+  signed off on the local gates plus the on-box gate. The dependency refresh (`sse-starlette`
+  3.5.0) went in **after** this soak, so the released tree is not the soaked tree; the local gate
+  covers it, the box does not until the production deploy.
+- **W19**, **W17**, **W13**, **W16**, **W1**, **W12**, **W2**, **W3**, **W6**, **W7**, **W10**
+  unchanged.
