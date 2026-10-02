@@ -22,7 +22,7 @@ Coverage:
       8-day pos cutoff by ±30 min are seeded; the correct ones must survive. A
       naive-local cutoff (non-zero UTC offset ≥ 1 h) would shift the boundary
       past both rows and fail this test.
-  (d) The ':ack<N>' predicate seam (ack_predicate_vectors.json v2, single
+  (d) The ':ack<N>' predicate seam (ack_predicate_vectors.json v3 adds the :sto<N> notice; single
       strict tier) — replays the vendored fixture's `is_ack` column against
       BOTH directions of the REAL SQL clause pair query.py's read paths use
       (exclusion "... AND msg NOT GLOB '*:ack[0-9]*'", acks query
@@ -62,6 +62,7 @@ Coverage:
 All timestamps are MILLISECONDS (project-wide DB convention).
 """
 
+import hashlib
 import json
 import math
 import re
@@ -81,6 +82,7 @@ from .constants import (
     TELEMETRY_DEDUP_WINDOW_MS,
     compute_conversation_key,
 )
+from .ingest import _STO_NOTICE_RE
 from .query import _NOT_ACK_SQL, _PEER_ACK_SQL, MHEARD_PROGRESS_CHUNK
 
 logger = get_logger(__name__)
@@ -96,6 +98,10 @@ _POS_RETENTION_MS = DEFAULT_POS_RETENTION_HOURS * _MS_PER_HOUR  # 8 days
 # must stay byte-identical (webapp's predicates.spec.ts drift-checks its own
 # copy, parsed, against both this file and mc-chat's).
 _ACK_VECTORS_PATH = Path(__file__).parent / "ack_predicate_vectors.json"
+# sha256 of the vendored v3 corpus (v3 adds the ':sto<N>' store-notice vectors).
+# Re-capture in the SAME change as any edit, and copy the file to mc-chat
+# (tests/fixtures/) and the webapp — nothing syncs it for you.
+_ACK_VECTORS_EXPECTED_SHA256 = "e80bbee4d9961cd42fa0bbcc64904ebf0726d7238f1fabe380cfb0757a1e0b23"
 
 # Mirrors ingest.py's inline ack-number regex BYTE FOR BYTE. That call
 # site (`if msg and ":ack" in msg: ack_match = re.search(r":ack([0-9]+)", msg)`)
@@ -469,6 +475,13 @@ async def run_query_tests() -> bool:  # noqa: PLR0915 - test suite lists one cas
                 " (guards against a silently empty loop)"
             )
             results.append((ack_vectors_present_label, len(ack_vectors) > 0))
+            results.append(
+                (
+                    "ack predicate: vendored corpus sha256 pin (v3) — re-capture on any edit",
+                    hashlib.sha256(_ACK_VECTORS_PATH.read_bytes()).hexdigest()
+                    == _ACK_VECTORS_EXPECTED_SHA256,
+                )
+            )
 
             for i, vector in enumerate(ack_vectors):
                 # (d1) is_ack, replayed against BOTH directions of the REAL SQL
@@ -498,14 +511,39 @@ async def run_query_tests() -> bool:  # noqa: PLR0915 - test suite lists one cas
                 survives_exclusion = not_glob_rows[0]["c"] == 1
                 matches_acks_query = glob_rows[0]["c"] == 1
                 is_ack = bool(vector["is_ack"])
-                side_word = "ack side" if is_ack else "message side"
+                # v3: a store-and-forward notice (':sto<N>') is hidden from every
+                # message/history query like an ack, but is NOT served on the acks
+                # side (it is not a delivery receipt). Absent key = false.
+                is_sto = bool(vector.get("is_sto", False))
+                side_word = (
+                    "ack side"
+                    if is_ack
+                    else "hidden, served to nobody"
+                    if is_sto
+                    else "message side"
+                )
                 glob_pair_label = (
                     f"ack predicate SQL GLOB pair: {vector['name']} (partitions to the {side_word})"
                 )
                 results.append(
                     (
                         glob_pair_label,
-                        survives_exclusion == (not is_ack) and matches_acks_query == is_ack,
+                        survives_exclusion == (not (is_ack or is_sto))
+                        and matches_acks_query == is_ack,
+                    )
+                )
+                # (d1b) is_sto / sto_number against the PRODUCTION notice regex
+                # (a plain import, unlike the ack mirror below: the regex is a
+                # module-level constant). fullmatch, as ingest.py applies it.
+                # One direction only: `is_sto` is the WIDE hide predicate (the
+                # GLOB), the regex the strict absorb tier, so a match implies
+                # is_sto but free text like "x :sto071 y" is hidden, not absorbed.
+                sto_match = _STO_NOTICE_RE.fullmatch(vector["text"])
+                results.append(
+                    (
+                        f"sto predicate ingest.py regex: {vector['name']} match implies is_sto",
+                        sto_match is None
+                        or (is_sto and sto_match.group(1) == vector.get("sto_number")),
                     )
                 )
 

@@ -1,10 +1,12 @@
 {
-  "version": 2,
-  "description": "Canonical cross-repo truth table for the ':ack<N>' message-classification predicate. v2 collapses v1's two semantic tiers (is_ack_strict vs contains_ack_marker) into ONE strict tier: a message is an ack marker iff it contains case-sensitive ':ack' immediately followed by an ASCII digit [0-9]. Rationale: MeshCom firmware emits acks as '%-9.9s:ack%03i' (lowercase, exactly 3 ASCII digits -- lora_functions.cpp, documented in mc-chat chat.py), and a 2026-07-27 audit of both production DBs found 41 ack rows, 100% strict-format, zero case variants, zero Unicode digits, zero bare ':ack'. The v1 tier split existed only to document implementation drift, now resolved: MCProxy query.py's SQL moved from case-insensitive LIKE '%:ack%' to case-sensitive GLOB '*:ack[0-9]*' (a human message containing ':ACK99' no longer silently vanishes from history sync), both backends' Python regexes moved from \\d (Unicode Nd) to [0-9] (ASCII), and webapp messageProcessor.ts's gate moved from bare .includes(':ack') to the digit-anchored isAckMessage. Every implementation now replays the SAME is_ack column; there are no runtime_overrides because the strict semantics is engine-independent by construction (JS \\d is ASCII-only, Python [0-9] is ASCII-only, SQLite GLOB [0-9] is ASCII-only and case-sensitive).\n\nack_number is a STRING, not a number -- ':ack042' must extract '042' with the leading zero preserved (matches mc-chat decoder.py's DecodedText.ack_id contract, see TestStructuredDecode.test_decoded_text_ack_response in tests/test_decoder.py). null whenever is_ack is false. webapp's isAckMessage is boolean-only and does not extract a number; the backends' ':ack([0-9]+)' capture group defines this column.\n\nOne deliberate width difference SURVIVES v2, in push only: the push eligibility noise predicate (MCProxy push_delivery.py / mc-chat push.py / webapp pushFilter.ts) keeps the broad ':ack' substring test because it is push_contract.json-governed. Residual effect: a bare ':ack' with no digit is push-silent but history-visible. That predicate is tested by the push suites against push_contract.json, not by this fixture.",
+  "version": 3,
+  "description": "Canonical cross-repo truth table for the ':ack<N>' message-classification predicate. v2 collapses v1's two semantic tiers (is_ack_strict vs contains_ack_marker) into ONE strict tier: a message is an ack marker iff it contains case-sensitive ':ack' immediately followed by an ASCII digit [0-9]. Rationale: MeshCom firmware emits acks as '%-9.9s:ack%03i' (lowercase, exactly 3 ASCII digits -- lora_functions.cpp, documented in mc-chat chat.py), and a 2026-07-27 audit of both production DBs found 41 ack rows, 100% strict-format, zero case variants, zero Unicode digits, zero bare ':ack'. The v1 tier split existed only to document implementation drift, now resolved: MCProxy query.py's SQL moved from case-insensitive LIKE '%:ack%' to case-sensitive GLOB '*:ack[0-9]*' (a human message containing ':ACK99' no longer silently vanishes from history sync), both backends' Python regexes moved from \\d (Unicode Nd) to [0-9] (ASCII), and webapp messageProcessor.ts's gate moved from bare .includes(':ack') to the digit-anchored isAckMessage. Every implementation now replays the SAME is_ack column; there are no runtime_overrides because the strict semantics is engine-independent by construction (JS \\d is ASCII-only, Python [0-9] is ASCII-only, SQLite GLOB [0-9] is ASCII-only and case-sensitive).\n\nack_number is a STRING, not a number -- ':ack042' must extract '042' with the leading zero preserved (matches mc-chat decoder.py's DecodedText.ack_id contract, see TestStructuredDecode.test_decoded_text_ack_response in tests/test_decoder.py). null whenever is_ack is false. webapp's isAckMessage is boolean-only and does not extract a number; the backends' ':ack([0-9]+)' capture group defines this column.\n\nOne deliberate width difference SURVIVES v2, in push only: the push eligibility noise predicate (MCProxy push_delivery.py / mc-chat push.py / webapp pushFilter.ts) keeps the broad ':ack' substring test because it is push_contract.json-governed. Residual effect: a bare ':ack' with no digit is push-silent but history-visible. That predicate is tested by the push suites against push_contract.json, not by this fixture.\n\nv3 (2026-10-02) adds the store-and-forward notice marker ':sto<N>' as a SECOND, independent predicate carried by the same corpus. A store node tells the original sender it is holding a DM with the text '%-9.9s:sto%03i' optionally followed by ' <held destination>' (firmware docs/client-integration-store-forward.md section 3). Like ':ack' it is machine chatter, so it is HIDDEN from every message/history/unread view (is_sto true => not rendered as a chat message), but unlike ':ack' it is NOT a delivery receipt: it must never be served on the acks side. Backends additionally absorb a matched notice into the original DM's 'held' delivery state (MCProxy ingest.py; not part of this truth table). Every v1/v2 vector is unchanged; a vector WITHOUT the is_sto/sto_number keys means is_sto=false, sto_number=null, so v2 consumers that ignore the new keys keep passing (a ':sto' row is is_ack=false, i.e. on their 'message' side -- consumers that implement v3 hide it as well).",
   "canonical": "mc-chat/tests/fixtures/ack_predicate_vectors.json",
   "semantics": {
     "is_ack": "Strict tier, the only tier in v2. True iff the text contains the case-sensitive literal ':ack' immediately followed by at least one ASCII digit [0-9] -- no separator, no uppercase, no Unicode digits. Implementations: webapp isAckMessage (src/stores/messages/predicates.ts, /:ack\\d/ -- JS \\d is ASCII-only, so it equals [0-9]) gating messageProcessor.ts's ack consumption; mc-chat decoder.py's re.search(r':ack([0-9]+)', message); MCProxy ingest.py's re.search(r':ack([0-9]+)', msg); MCProxy query.py's SQL pair msg GLOB '*:ack[0-9]*' (acks query) / msg NOT GLOB '*:ack[0-9]*' (every message/history query) -- exact complements, so messages and acks partition cleanly.",
-    "ack_number": "String captured by the digit-anchored regex ':ack([0-9]+)' at the first match (leading zeros preserved, first marker wins). null whenever is_ack is false."
+    "ack_number": "String captured by the digit-anchored regex ':ack([0-9]+)' at the first match (leading zeros preserved, first marker wins). null whenever is_ack is false.",
+    "is_sto": "v3. True iff the text contains the case-sensitive literal ':sto' immediately followed by at least one ASCII digit [0-9]. Same strict tier as is_ack. Implementations: MCProxy query.py's SQL msg NOT GLOB '*:sto[0-9]*' on every message/history query (and NOT on the acks query -- a notice is hidden, served to nobody). Rows with is_sto=true are never is_ack=true in this corpus and vice versa. Absent key = false.",
+    "sto_number": "v3. String captured by ':sto([0-9]+)' at the first match (leading zeros preserved), the sender's {NNN echo counter the notice refers to. null whenever is_sto is false or the key is absent."
   },
   "vectors": [
     {
@@ -129,6 +131,60 @@
       "is_ack": false,
       "ack_number": null,
       "note": "The digit must IMMEDIATELY follow ':ack' -- a separator breaks the marker. Pre-v2, webapp messageProcessor.ts's bare .includes(':ack') gate let this human message be consumed as a delivery receipt for a pending message carrying {169 (split(':ack')[1].trim() yields '169'); the digit-anchored gate keeps it a visible chat message."
+    },
+    {
+      "name": "real_store_notice_with_destination",
+      "text": "DK5EN-98 :sto071 DJ8MEH-81",
+      "is_ack": false,
+      "ack_number": null,
+      "is_sto": true,
+      "sto_number": "071",
+      "note": "Real production shape: firmware '%-9.9s:sto%03i' + ' <held destination>' -- padded original sender, our {NNN counter, the destination the store node is holding for."
+    },
+    {
+      "name": "store_notice_without_destination",
+      "text": "DK5EN-98 :sto071",
+      "is_ack": false,
+      "ack_number": null,
+      "is_sto": true,
+      "sto_number": "071",
+      "note": "Same notice from a store node that does not name the destination (optional trailing token)."
+    },
+    {
+      "name": "store_notice_no_padding",
+      "text": "DK5EN-98:sto071",
+      "is_ack": false,
+      "ack_number": null,
+      "is_sto": true,
+      "sto_number": "071",
+      "note": "No separator between the padded callsign and the marker, the same real-traffic variant as the ':ack' no-separator case."
+    },
+    {
+      "name": "sto_bare_no_digit",
+      "text": ":sto",
+      "is_ack": false,
+      "ack_number": null,
+      "is_sto": false,
+      "sto_number": null,
+      "note": "No digit after ':sto' -> not a notice; stays an ordinary visible message."
+    },
+    {
+      "name": "sto_stop_word",
+      "text": ":stop",
+      "is_ack": false,
+      "ack_number": null,
+      "is_sto": false,
+      "sto_number": null,
+      "note": "':sto' must be followed by a digit; ':stop' is ordinary text."
+    },
+    {
+      "name": "sto_word_storage",
+      "text": "custom :storage",
+      "is_ack": false,
+      "ack_number": null,
+      "is_sto": false,
+      "sto_number": null,
+      "note": "Contains ':sto' as a prefix of a word, never followed by a digit."
     }
   ]
 }

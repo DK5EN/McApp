@@ -5,6 +5,65 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.0.18 (2026-09-29)
+
+Message details show the right acknowledgements again after a firmware message ID is reused, a
+message you sent from another node and got relayed back is one bubble instead of two, and
+retried direct messages are recognised on every path. Schema stays at 32 and `SYSTEM_EPOCH` at 5,
+so there is no migration and no bootstrap convergence.
+
+### Highlights
+
+- **The right ACKs on the right message.** Firmware message IDs repeat after roughly a thousand
+  frames from one node. An older message's "Acknowledged by" list used to show the stations that
+  acknowledged the newer message that reused its ID. The list is now anchored on the message
+  itself. The older message's own records are already gone by then, so it shows nothing rather
+  than the wrong station. An acknowledgement without a sender no longer appears next to the same
+  acknowledgement from a named station.
+- **One bubble for your own relayed message.** A message you sent from another node and got back
+  through the mesh arrived over Bluetooth with the relay as sender and over UDP with you as
+  sender, so it appeared twice. The first station in the path is now always the sender; only
+  relay positions drop your own callsign.
+- **Retried direct messages count once on every path.** Scrolling back through history, the
+  offline cache and the send outbox now use the same identity as live messages. A message the
+  firmware resent up to three times no longer comes back as separate bubbles there, and a direct
+  message you send is no longer always transmitted twice because its echo was not recognised.
+- **"Echoed" and "seen on the internet" no longer depend on arrival order.** Your own message
+  reads the same whether the node echo or the MeshCom server copy arrives first, and a message
+  loaded by scrolling back is marked as echoed by your own node.
+- **No beep for a retry of a message that was already pushed.** A resend of a direct message that
+  reached you as a push while the app was closed no longer plays the foreground sound with no
+  bubble behind it.
+
+### Backend (MCProxy)
+
+- `split_path` in the Bluetooth protocol keeps the first path component as `src`; only relay
+  positions drop the own callsign.
+- `GET /api/messages/{msg_id}/acks` takes an optional `?since=<ms>` (the message's own timestamp).
+  The window is 60 s before to 4 h after it, or 168 h when a held record lies inside the narrow
+  window. Without `since` the answer is unchanged, which is what an older webapp gets.
+- Release tooling: the GitHub release body is the release's own section plus a footer link, the
+  script refuses to start a release whose notes are not on top, and `uv.lock` versions follow the
+  bump.
+- Dependencies refreshed: `sse-starlette` 3.5.0, `librt` 0.16.0.
+
+### Frontend (webapp)
+
+- The ACK details send the message timestamp as `since`; a backend without the parameter ignores
+  it.
+- Message identity follows the dedup key on history paging, offline hydration and the outbox
+  echo scan; an own message keeps its identity when a foreign one shares its raw ID.
+- Echo and internet-sighting flags are set by the same rule on first insert and on duplicates.
+- The "What's new" card on the Update page shows only its own release's section. Its Markdown
+  sanitizer uses an explicit allowlist, and `marked` and `DOMPurify` load as separate chunks so an
+  installed PWA stops downloading them again on every release.
+- Dependencies refreshed (`typescript-eslint` 8.71.0, transitive).
+
+### Upgrade notes
+
+- Nothing to configure. A webapp from before this release works against this backend, and this
+  webapp works against an older backend; only the ACK details fix needs both halves.
+
 ## v2.0.17 (2026-09-28)
 
 The Update page shows what a release changes before you install it, McApp uses about 16 MB less
