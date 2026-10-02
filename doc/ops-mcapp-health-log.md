@@ -2100,3 +2100,14 @@ Deployed from the Update page: `slot-1` active, `version.html` `v2.0.19`, `mcapp
 `caddy`/`lighttpd` active, `NRestarts` 0, schema 32, no test harness in the slot (production
 shape), `_apply_held_notice` present, 0 journal warnings in the first 5 min. The browser runs the
 served bundle after the reload. A full `/ai-ops` post-release sweep is still due.
+
+### Addendum 16:20 CEST — v2.1.0 replaces v2.0.19
+
+The v2.0.19 GitHub release was deleted by accident, so the same code was re-released as **v2.1.0**,
+the release that pairs with node firmware v4.40a. Deployed from the Update page: `slot-0` active,
+`version.html` `v2.1.0`, all four services active, `NRestarts` 0, no test harness in the slot,
+`_apply_held_notice` present, 0 journal warnings in the first 5 min. The webapp bundle hash is
+unchanged from v2.0.19 (same code; only `version.html` differs).
+
+GitHub now lists only two releases, **v2.1.0** and **v2.0.0**: every other release and pre-release
+is gone, while all git tags remain in both repos.
