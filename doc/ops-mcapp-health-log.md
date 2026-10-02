@@ -2093,3 +2093,10 @@ this entry records only what was checked.
   one arrives whenever a store node holds a DM of ours. Watch for it in the post-release sweep: a
   `held` row whose holder matches a hidden `:sto` row from the same minute.
 - The scroll fix on the reporter's tablet (Xiaomi Pad 7, Chrome).
+
+### Addendum 16:10 CEST — v2.0.19 deployed
+
+Deployed from the Update page: `slot-1` active, `version.html` `v2.0.19`, `mcapp`/`mcapp-ble`/
+`caddy`/`lighttpd` active, `NRestarts` 0, schema 32, no test harness in the slot (production
+shape), `_apply_held_notice` present, 0 journal warnings in the first 5 min. The browser runs the
+served bundle after the reload. A full `/ai-ops` post-release sweep is still due.
