@@ -68,10 +68,8 @@ class _FakeRouter:
         return evs
 
     def done_for(self, target: str) -> dict[str, Any] | None:
-        for e in reversed(self.events):
-            if e["event"] == "linkcheck_done" and e["target"] == target:
-                return e
-        return None
+        done = [e for e in self.events if e["event"] == "linkcheck_done" and e["target"] == target]
+        return done[-1] if done else None
 
 
 class _Harness(LinkCheckMixin):
