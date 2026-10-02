@@ -1,10 +1,11 @@
 # Release History
 
-## v2.0.19 (2026-10-02)
+## v2.1.0 (2026-10-02)
 
-Scrolling up to read a conversation no longer gets pulled back down by new messages, and a store
-node's `:sto` notice now shows as "held by …" on your message instead of as a chat bubble. Schema
-stays at 32 and `SYSTEM_EPOCH` at 5, so there is no migration and no bootstrap convergence.
+McApp 2.1.0 is the release that matches MeshCom node firmware **v4.40a**. Scrolling up to read a
+conversation no longer gets pulled back down by new messages, and a store node's `:sto` notice now
+shows as "held by …" on your message instead of as a chat bubble. Schema stays at 32 and
+`SYSTEM_EPOCH` at 5, so there is no migration and no bootstrap convergence.
 
 ### Highlights
 
@@ -49,6 +50,10 @@ stays at 32 and `SYSTEM_EPOCH` at 5, so there is no migration and no bootstrap c
 
 ### Upgrade notes
 
+- Matching node firmware: **v4.40a**. Store-and-forward status (`held`, `failed`) and the `:sto`
+  handling above come from the firmware's store node; older nodes keep working, they just send
+  fewer of these signals.
+- Same code as the short-lived v2.0.19, whose GitHub release was removed; v2.1.0 replaces it.
 - Nothing to configure. Reload the app once (the "Update available" banner) so the scroll fix
   takes effect. Older `:sto` texts disappear from history, but the messages they refer to are not
   marked held retroactively.
