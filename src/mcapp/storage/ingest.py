@@ -179,6 +179,27 @@ def _ack_attribution_fields(ack_from: str | None, ack_via: str | None) -> dict[s
     return fields
 
 
+def _held_status_payload(msg_id: str, ack_from: str | None, ack_via: str | None) -> dict[str, Any]:
+    """The `msg_status` event for a `held` DM — ONE builder for both sources of
+    it (the binary 0x04 frame in `_handle_ack` and the inline `:stoNNN` notice
+    in `_apply_held_notice`), so the two events cannot drift.
+
+    `holder` is a deliberate alias of `from` (plan §5; the firmware spec names
+    it directly) so the webapp can render "held by DK5EN-90" without knowing
+    this repo's attribution convention. Both keys, same value — present only
+    when attribution is known, exactly like `from` itself.
+    """
+    payload: dict[str, Any] = {
+        "msg_id": msg_id,
+        "sent": True,
+        "ack_kind": "held",
+        **_ack_attribution_fields(ack_from, ack_via),
+    }
+    if ack_from is not None:
+        payload["holder"] = ack_from
+    return payload
+
+
 def _inline_ack_original(
     candidates: list[dict[str, Any]], acking_station: str, ack_addressed_to: str
 ) -> dict[str, Any] | None:
@@ -216,6 +237,45 @@ def _inline_ack_original(
         original_target = resolve_dst_target(row["dst"] or "").upper()
         if original_sender == ack_to and original_target == ack_from:
             return row
+    return None
+
+
+# Inbound store-and-forward NOTICE text, the TEXT form of the binary 0x04 held
+# frame: a store node answers the original sender with a plain DM
+# `'%-9.9s:sto%03i'` (+ ' <held destination>'), e.g. src=DB0AAT-3 dst=DK5EN-98
+# msg="DK5EN-98 :sto071 DJ8MEH-81". Grammar: MeshCom-Firmware-DEV-Main
+# docs/client-integration-store-forward.md §3. `[0-9]`, not `\d` (same ASCII-only
+# reasoning as the `:ack` marker); fullmatch, so trailing text is not a notice.
+_STO_NOTICE_RE = re.compile(r"\S{1,9}\s*:sto([0-9]{3})(?: (\S+))?", re.ASCII)
+
+
+def _inline_sto_original(
+    candidates: list[dict[str, Any]], original_sender: str, held_destination: str | None
+) -> dict[str, Any] | None:
+    """Pick the message an inbound `:stoNNN` notice reports as held, or None.
+
+    Same counter caveat as `_inline_ack_original`: `echo_id` is a per-sender
+    3-digit counter, unique only within that sender and about an hour, so it
+    identifies nothing alone. The notice is a DM from the HOLDER back to the
+    original sender, so the original is the message whose sender is who the
+    notice is addressed TO (`original_sender`). The holder (the frame's src)
+    is deliberately NOT compared: it is a store node en route, never the
+    original's target. The firmware names the held destination in the notice
+    when it knows it; when present it must equal the original's target, which
+    separates two own DMs that happen to share a counter value. `candidates`
+    arrive newest first, so the newest match wins.
+    """
+    sender = original_sender.strip().upper()
+    if not sender:
+        return None
+    held = held_destination.strip().upper() if held_destination else None
+    for row in candidates:
+        row_sender = (row["src"] or "").split(",")[0].strip().upper()
+        if row_sender != sender:
+            continue
+        if held is not None and resolve_dst_target(row["dst"] or "").upper() != held:
+            continue
+        return row
     return None
 
 
@@ -1370,22 +1430,13 @@ class IngestMixin(StorageBase):
                 )
             if rows and self._message_router:
                 try:
-                    payload: dict[str, Any] = {
-                        # PN retry XOR (plan §3) — see the peer branch's
-                        # identical comment above.
-                        "msg_id": target["msg_id"] if target is not None else ack_for_msg_id,
-                        "sent": True,
-                        "ack_kind": "held",
-                        **_ack_attribution_fields(ack_from, ack_via),
-                    }
-                    # `holder` is a deliberate alias of `from` on this event
-                    # (plan §5; the firmware spec names it directly) so the
-                    # webapp can render "held by DK5EN-90" without knowing
-                    # this repo's attribution convention. Both keys, same
-                    # value — present only when attribution is known, exactly
-                    # like `from` itself.
-                    if ack_from is not None:
-                        payload["holder"] = ack_from
+                    # PN retry XOR (plan §3) — see the peer branch's identical
+                    # comment above. Shared builder: see `_held_status_payload`.
+                    payload = _held_status_payload(
+                        target["msg_id"] if target is not None else ack_for_msg_id,
+                        ack_from,
+                        ack_via,
+                    )
                     await self._message_router.publish("storage", "msg_status", payload)
                 except Exception:
                     logger.exception(
@@ -1428,6 +1479,50 @@ class IngestMixin(StorageBase):
                     **_ack_attribution_fields(ack_from, ack_via),
                 },
             )
+
+    async def _apply_held_notice(
+        self,
+        original: dict[str, Any],
+        holder: str | None,
+        via: str | None,
+        timestamp: int,
+    ) -> None:
+        """Record an inline `:stoNNN` notice against the original DM it matched.
+
+        Mirrors the binary 0x04 branch of `_handle_ack` step for step: KEEPS the
+        `send_success` write (a store node demonstrably took the frame off the
+        air), writes `held` through the rank-enforcing `_write_delivery_status`
+        pinned to `original["id"]`, records the `kind="held"` ledger row under the
+        row's own stored msg_id, and publishes the `held` event only on an actual
+        row match. Does NOT touch `acked`: a hold is not the addressee answering.
+        A repeat of the same notice (UDP + BLE copy, or after a 0x04 frame) leaves
+        the rank and the ledger at one row; like the 0x04 branch it still
+        re-publishes, which is idempotent for the webapp.
+        """
+        rows = await self._mutate(
+            "UPDATE messages SET send_success = 1 WHERE id = ?",
+            (original["id"],),
+        )
+        if not rows:
+            return
+        await self._write_delivery_status(original["msg_id"], "held", holder, row_id=original["id"])
+        # The notice window (DEDUP_WINDOW_MS, 1 h) is inside ACK_MSG_ID_WINDOW_MS
+        # (4 h), so the original is always inside the ledger's clamp: evict rows a
+        # previous owner of this msg_id left, or `INSERT OR IGNORE` drops ours.
+        await self._prune_stale_message_acks(original["msg_id"], timestamp - ACK_MSG_ID_WINDOW_MS)
+        await self._record_message_ack(original["msg_id"], "held", holder, via, timestamp)
+        if self._message_router:
+            try:
+                await self._message_router.publish(
+                    "storage",
+                    "msg_status",
+                    _held_status_payload(original["msg_id"], holder, via),
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to publish msg_status for :sto notice of msg_id=%s",
+                    original["msg_id"],
+                )
 
     async def _resolve_ack_target(self, msg_id: str, ack_ts: int) -> dict[str, Any] | None:
         """The message row a binary ACK belongs to, or None when there is none.
@@ -1986,6 +2081,36 @@ class IngestMixin(StorageBase):
                                 "Failed to publish msg_status for inline ACK of msg_id=%s",
                                 original["msg_id"],
                             )
+
+        # --- Inline store-and-forward notice (:stoNNN → set held on original) ---
+        # The TEXT twin of the binary 0x04 branch in `_handle_ack`; it is the only
+        # signal on the extUDP path and behind a node without the 0x41 frame. The
+        # notice row itself is stored like any message and hidden on the READ side
+        # (`storage/query.py` `_STORE_NOTICE_GLOBS`) — an unmatched notice is
+        # dropped from view too. Window is DEDUP_WINDOW_MS flat: `held` is the
+        # state being SET here, so the HELD_ACK_WINDOW_MS carve-out (which exists
+        # for a message ALREADY held) has no role. Rank precedence is enforced
+        # by `_write_delivery_status`, so this can never downgrade `failed` or
+        # `acked`, and a repeat (UDP + BLE copy of one notice) does not overwrite.
+        if msg_type == "msg" and msg and ":sto" in msg:
+            sto_match = _STO_NOTICE_RE.fullmatch(msg)
+            if sto_match:
+                sto_candidates = await self._query(
+                    "SELECT id, msg_id, src, dst, timestamp FROM messages"
+                    " WHERE echo_id = ? AND type = 'msg' AND timestamp > ?"
+                    " ORDER BY timestamp DESC",
+                    (sto_match.group(1), timestamp - DEDUP_WINDOW_MS),
+                )
+                sto_original = _inline_sto_original(
+                    sto_candidates, resolve_dst_target(dst), sto_match.group(2)
+                )
+                if sto_original is not None:
+                    await self._apply_held_notice(
+                        sto_original,
+                        normalise_ack_callsign(callsign),
+                        _coerce_ack_via(src_type),
+                        timestamp,
+                    )
 
         # Time-windowed dedup: reject only if the SAME SENDER's same msg_id was seen
         # within DEDUP_WINDOW_MS. MHeard beacons (msg_id=None) skip this check — they

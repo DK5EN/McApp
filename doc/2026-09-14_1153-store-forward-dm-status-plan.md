@@ -137,6 +137,13 @@ is about suppressing `:rej` / `:sto` chatter, not about announcing status.
 
 ### 6.2 No `held` synthesis from the legacy `:sto` text
 
+> **Superseded 2026-10-02.** The notice text is now absorbed into `held` like the inline `:ack`
+> and hidden from every read path, matched or not (`_inline_sto_original` / `_apply_held_notice`
+> in `storage/ingest.py`, `_STORE_NOTICE_GLOBS` in `storage/query.py`, corpus
+> `ack_predicate_vectors.json` v3; same change in mc-chat and the webapp). The double-count
+> objection below does not hold: equal rank never overwrites and the ledger key collapses the
+> 0x04 and the text for the same holder. The text below is kept as the original decision.
+
 Spec §3 recommends treating a `^\S{1,9}\s*:sto\d{3}( \S+)?$` DM as informational — but only "from
 a node that never sends `0x04`", a condition we cannot cheaply establish. Synthesising `held` from
 the text unconditionally would double-count on fork firmware, which consumes the text and emits

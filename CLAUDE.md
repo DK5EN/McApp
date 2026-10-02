@@ -545,13 +545,21 @@ Plan and the decisions: `doc/2026-09-14_1153-store-forward-dm-status-plan.md`; f
 - **Do not fold this into the existing `send_failed` event.** `_publish_send_failed` (`main.py`) is
   a LOCAL send failure, emitted before a msg_id exists, which is why the webapp matches it by
   `dst` + `msg`. `0x03` has a msg_id and is a different fact. Same display fields, distinct events.
-- **`:sto` is push-silent but history-VISIBLE, and the asymmetry with `:ack` is intended.** Push
-  contract **v10** widens the noise clause to `:ack` / `:rej` / `:sto`; `query.py`'s exclusion
-  stays `msg NOT GLOB '*:ack[0-9]*'` so the text keeps showing, because behind a node without the
-  `0x41` frame it is the only signal the operator gets that the DM is held (spec §3 forbids
-  filtering it silently). Never "fix" this into symmetry.
-- **No `held` is synthesised from that `:sto` text**, and no push is emitted for `failed` or for
-  `acked`-after-`held` — both deliberate, reasons in the plan's §6.1/§6.2.
+- **The `:sto` notice text is absorbed like `:ack`, not shown** (reversed 2026-10-02; plan §6.2).
+  A store node answers the original sender with `'%-9.9s:sto%03i[ <held destination>]'`
+  (firmware `docs/client-integration-store-forward.md` §3). `store_message` matches it in
+  `_inline_sto_original` (original sender == notice `dst`, `echo_id` == NNN, original target ==
+  the held destination when named, `DEDUP_WINDOW_MS` = 1 h) and `_apply_held_notice` writes it
+  exactly like the 0x04 branch: `send_success`, rank `held`, ledger `kind="held"`, and the shared
+  `_held_status_payload` event. The row is still stored but hidden from every read path through
+  `_STORE_NOTICE_GLOBS` in `_HIDDEN_GLOBS` — matched or not, an unmatched notice is dropped from
+  view. It must NOT join `_PEER_ACK_GLOBS`: the acks query serves that shape as a delivery receipt.
+  The old "double count with 0x04" objection does not hold: a fork node with EXTUDP on really does
+  deliver both (text over extUDP, 0x04 over BLE), and they collapse — equal rank never overwrites
+  and the ledger key `(msg_id, kind, from_call)` is the same holder string on both paths. Push is
+  unchanged: contract v10 keeps `:ack` / `:rej` / `:sto` push-silent.
+- **No push is emitted for `failed` or for `acked`-after-`held`** — deliberate, reasons in the
+  plan's §6.1.
 - **The frame decoder needed no change and still needs none.** `parse_ack_appendix` walks by the
   length byte and `_ACK_APPENDIX_MAX_LEN = 10` already covers the spec's `n <= 9`. An unknown
   status byte is reported as `unknown(...)`, never an error — the spec is explicit about that.
@@ -794,7 +802,7 @@ retry k XORs msg_id bits 10-11 with k, text and `{NNN` unchanged. Plan and campa
 
 - **A `#TAG` destination is a hashtag channel, not a callsign — and `is_group()` stays numeric.** The MeshCom FW 4.36 RfC puts a `#OE-SOTA` token in the destination field. All three repos independently misclassified it as a personal DM, which sent it into `compute_conversation_key`'s DM branch where it was **split on its first hyphen** (`"#OE-SOTA"` → key `"#OE<>DK5EN"`), collapsing distinct tags and fragmenting one tag per sender. Fixed in `ea15511` by adding **sibling** predicates `is_hashtag()` / `dst_kind()` / `resolve_dst_target()` beside `is_group()` in `commands/parsing.py` — `is_group` was deliberately NOT widened, because it is pinned by a corpus mirrored in mc-chat and the webapp. Two invariants look like oversights and are load-bearing: classification is **case-insensitive** and **NOT length-bounded** — a tag failing either would fall straight back into the DM branch, which is the defect. The RfC's 9-char cap is send-side grammar, enforced at the API boundary, never in classification. `dst_kind` returns `"unknown"` (never `"direct"`) for a `#`-prefixed value that fails the tag charset: it addresses nobody, and is the shape most likely to arrive from a buggy or hostile sender. Contract: `commands/hashtag_dst_vectors.json` (32 vectors, sha256-pinned by `commands/hashtag_dst_tests.py`). **No prefix/subscription matching exists** (RfC US-3) — its stated rule contradicts its own worked examples, so implementing it would encode a guess. Background: `MeshCom-Hashtag-prep.md`.
 - **Four vector corpora are hand-copied to the sibling repos, and nothing syncs them for you.** `commands/group_dst_vectors.json` (v2), `storage/conversation_key_vectors.json` (v4), `blocklist_decision_vectors.json` (v2) and `commands/hashtag_dst_vectors.json` (v1) are canonical **here**. The first three go to **both** mc-chat (`tests/fixtures/`) and the webapp; `blocklist_decision_vectors.json` goes to the **webapp only** (`src/services/__tests__/`) — mc-chat has its own `sperrliste.py` and never reads this corpus, so do not go looking for a copy there. mc-chat asserts parse-equality against the paths it does carry; the webapp pins a sha256 of the conversation-key corpus and runs drift checks against both siblings. Change one and you must copy it to every repo that carries it **and** bump the webapp's `EXPECTED_SHA256`, or their suites fail the moment anyone runs them with siblings checked out. Unlike `contract/`, these are not a git subtree — there is no `subtree pull` that will do it for you.
-- **Two different ACKs, never conflate them.** `send_success` is the firmware's 7-byte **binary** ack (`ack_type` 0x00 Node / 0x01 Gateway, `ble_protocol.py`) — "my node or a gateway took the frame". `acked` is a matched inline `:ackNNN` text frame — "the addressee answered". `_handle_ack` publishes `msg_status` `{sent, ack_kind: node|gateway}`, the inline path publishes `{acked, ack_kind: "peer"}` with the ORIGINAL message's msg_id; the webapp renders only the latter as ✓✓ Delivered. Wiring the webapp's `msg_ack` to `send_success` is exactly the 2026-08-19 bug where three unanswered `!ctcping` probes all showed as delivered. `ack_status_tests.py` pins both payloads.
+- **Two different ACKs, never conflate them.** `send_success` is the firmware's 7-byte **binary** ack (`ack_type` 0x00 Node / 0x01 Gateway, `ble_protocol.py`) — "my node or a gateway took the frame" — also written by a `held` (binary 0x04 or the `:sto` notice text), which publishes `sent: true`, never `acked`. `acked` is a matched inline `:ackNNN` text frame — "the addressee answered". `_handle_ack` publishes `msg_status` `{sent, ack_kind: node|gateway}`, the inline path publishes `{acked, ack_kind: "peer"}` with the ORIGINAL message's msg_id; the webapp renders only the latter as ✓✓ Delivered. Wiring the webapp's `msg_ack` to `send_success` is exactly the 2026-08-19 bug where three unanswered `!ctcping` probes all showed as delivered. `ack_status_tests.py` pins both payloads.
 - **A BLE `D{` register frame carries at most 244 chars of JSON.** `addBLEComToOutBuffer` clamps at
   245 bytes, minus the `0x44` type byte; the firmware names it `BLE_JSON_PAYLOAD_MAX`. Over that it
   cuts **mid-value**, so the app gets an unparseable object, not a shortened one — every field is

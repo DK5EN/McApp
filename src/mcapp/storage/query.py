@@ -117,6 +117,15 @@ MHEARD_PROGRESS_CHUNK = 10
 # visible. Four and five digits are the whole reachable range: '%04i' pads to
 # four, and an APRS message id is at most five characters.
 _PEER_ACK_GLOBS = ("*:ack[0-9]*",)
+# The store-and-forward NOTICE text '%-9.9s:sto%03i[ <held destination>]' (a store
+# node telling the original sender "I am holding your DM"). Machine chatter like
+# the acks above, but NOT a peer ack: it is excluded from every message/history
+# query (ingest absorbs it into `delivery_status = 'held'`, so the bubble already
+# shows it) and must NOT join `_PEER_ACK_GLOBS` — the acks query serves that
+# shape to clients as a delivery receipt, and a `:sto` there would render as
+# "Delivered". Same three-way split as the bare APRS ack: hidden, served to
+# nobody. Cross-repo: ack_predicate_vectors.json v3 (`is_sto`).
+_STORE_NOTICE_GLOBS = ("*:sto[0-9]*",)
 _APRS_ACK_GLOBS = ("ack[0-9][0-9][0-9][0-9]", "ack[0-9][0-9][0-9][0-9][0-9]")
 
 
@@ -131,13 +140,19 @@ def _ack_sql(globs: tuple[str, ...], col: str = "msg", *, negate: bool = False) 
     return "(" + " OR ".join(f"{col} GLOB '{g}'" for g in globs) + ")"
 
 
-# Every message/history query excludes both shapes; the acks query serves only
-# the peer shape (see the three-way split above).
-_NOT_ACK_SQL = _ack_sql(_PEER_ACK_GLOBS + _APRS_ACK_GLOBS, negate=True)
-_NOT_ACK_SQL_M = _ack_sql(_PEER_ACK_GLOBS + _APRS_ACK_GLOBS, "m.msg", negate=True)
+# Every message/history query excludes all three shapes; the acks query serves
+# only the peer shape (see the three-way split above).
+_HIDDEN_GLOBS = _PEER_ACK_GLOBS + _APRS_ACK_GLOBS + _STORE_NOTICE_GLOBS
+_NOT_ACK_SQL = _ack_sql(_HIDDEN_GLOBS, negate=True)
+_NOT_ACK_SQL_M = _ack_sql(_HIDDEN_GLOBS, "m.msg", negate=True)
+# The DM arm of `get_messages_page` is the one history query that has never
+# excluded the ACK shapes (the webapp's paging contract for a DM conversation
+# keeps them; not changed here), so it excludes ONLY the store notice. `msg IS
+# NULL OR` because `NULL NOT GLOB x` is NULL, which would drop a NULL-msg row.
+_NOT_STORE_NOTICE_SQL = "(msg IS NULL OR " + _ack_sql(_STORE_NOTICE_GLOBS, negate=True) + ")"
 # Same predicate for the dedup anchor's correlated subquery alias, so the
 # anchor is computed over exactly the rows `_conv_dedup_subquery` groups.
-_NOT_ACK_SQL_P = _ack_sql(_PEER_ACK_GLOBS + _APRS_ACK_GLOBS, "p.msg", negate=True)
+_NOT_ACK_SQL_P = _ack_sql(_HIDDEN_GLOBS, "p.msg", negate=True)
 _PEER_ACK_SQL = _ack_sql(_PEER_ACK_GLOBS)
 
 # --- get_conversation_summary shared SQL fragments -------------------------
@@ -1019,7 +1034,7 @@ class QueryMixin(StorageBase):
             conv_key = compute_conversation_key(src or "", dst)
             query = (
                 f"SELECT {_MSG_SELECT} FROM messages"  # noqa: S608 - identifiers from fixed set; values parameterized
-                " WHERE type = 'msg' AND conversation_key = ?"
+                f" WHERE type = 'msg' AND {_NOT_STORE_NOTICE_SQL} AND conversation_key = ?"
                 " AND timestamp < ? ORDER BY timestamp DESC LIMIT ?"
             )
             params = (conv_key, before_timestamp, limit + 1)

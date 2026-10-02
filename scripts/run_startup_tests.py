@@ -77,6 +77,7 @@ from mcapp.storage.migration_chain_tests import run_migration_chain_tests
 from mcapp.storage.query_tests import run_query_tests
 from mcapp.storage.read_cursor_tests import run_read_cursor_tests
 from mcapp.storage.signal_via_tests import run_signal_via_tests
+from mcapp.storage.store_notice_tests import run_store_notice_tests
 from mcapp.storage.suppression_tests import run_suppression_predicate_tests
 from mcapp.storage.telemetry_reconcile_tests import run_telemetry_reconcile_tests
 from mcapp.storage.unread_suppression_tests import run_unread_suppression_tests
@@ -175,6 +176,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     ack_status_ok = await run_ack_status_tests()
     print(f"ack_status: {'PASS' if ack_status_ok else 'FAIL'}")
+
+    store_notice_ok = await run_store_notice_tests()
+    print(f"store_notice: {'PASS' if store_notice_ok else 'FAIL'}")
 
     linkcheck_sse_ok = await run_linkcheck_sse_tests()
     print(f"linkcheck_sse: {'PASS' if linkcheck_sse_ok else 'FAIL'}")
@@ -293,6 +297,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and linkcheck_session_ok
         and linkcheck_ingest_ok
         and ack_status_ok
+        and store_notice_ok
         and linkcheck_sse_ok
         and wire_monitor_ok
         and node_console_ok

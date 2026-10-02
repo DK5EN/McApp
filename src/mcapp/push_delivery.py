@@ -260,14 +260,14 @@ def _is_node_local_noise(payload: dict[str, Any]) -> bool:
     (this one visible-but-silent case) is the accepted cost. See the
     contract's `eligibility_noise_semantics` for the accepted false positive.
 
-    `":sto"` (contract v10) is history-visible ON PURPOSE and must stay that
-    way: behind a node without the 0x41 status frame it is the only signal the
-    operator gets that a store node is holding the DM, and the firmware's
-    client guide forbids filtering it silently. `storage/query.py`'s exclusion
-    matches `:ack[0-9]` only, so nothing here needs to change to keep it
-    visible — but it does make `:sto` another deliberate push-silent yet
-    view-visible case, which is the accepted direction, never the forbidden one
-    (a push for a message no view will show).
+    `":sto"` (contract v10) is push-silent, and since the inline `:stoNNN` notice
+    handling it is no longer history-visible either: the notice is absorbed into
+    the original DM's `delivery_status = 'held'` at ingest and excluded from
+    every history query (`storage/query.py` `_STORE_NOTICE_GLOBS`), which is what
+    the operator now sees. So `:sto<digits>` is no longer a visible-but-silent
+    case (a bare `:sto` with no digits still is, like a bare `:ack`); push stays
+    silent, so a push never announces a message no view will show. This
+    predicate itself is unchanged (still the contract's broad substring test).
     """
     if payload.get("src") == _COMMAND_REPLY_PSEUDO_CALL:
         return True
