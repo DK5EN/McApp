@@ -1,68 +1,67 @@
 # Release History
 
-## v2.0.18 (2026-09-29)
+## v2.0.19 (2026-10-02)
 
-Message details show the right acknowledgements again after a firmware message ID is reused, a
-message you sent from another node and got relayed back is one bubble instead of two, and
-retried direct messages are recognised on every path. Schema stays at 32 and `SYSTEM_EPOCH` at 5,
-so there is no migration and no bootstrap convergence.
+Scrolling up to read a conversation no longer gets pulled back down by new messages, and a store
+node's `:sto` notice now shows as "held by …" on your message instead of as a chat bubble. Schema
+stays at 32 and `SYSTEM_EPOCH` at 5, so there is no migration and no bootstrap convergence.
 
 ### Highlights
 
-- **The right ACKs on the right message.** Firmware message IDs repeat after roughly a thousand
-  frames from one node. An older message's "Acknowledged by" list used to show the stations that
-  acknowledged the newer message that reused its ID. The list is now anchored on the message
-  itself. The older message's own records are already gone by then, so it shows nothing rather
-  than the wrong station. An acknowledgement without a sender no longer appears next to the same
-  acknowledgement from a named station.
-- **One bubble for your own relayed message.** A message you sent from another node and got back
-  through the mesh arrived over Bluetooth with the relay as sender and over UDP with you as
-  sender, so it appeared twice. The first station in the path is now always the sender; only
-  relay positions drop your own callsign.
-- **Retried direct messages count once on every path.** Scrolling back through history, the
-  offline cache and the send outbox now use the same identity as live messages. A message the
-  firmware resent up to three times no longer comes back as separate bubbles there, and a direct
-  message you send is no longer always transmitted twice because its echo was not recognised.
-- **"Echoed" and "seen on the internet" no longer depend on arrival order.** Your own message
-  reads the same whether the node echo or the MeshCom server copy arrives first, and a message
-  loaded by scrolling back is marked as echoed by your own node.
-- **No beep for a retry of a message that was already pushed.** A resend of a direct message that
-  reached you as a push while the app was closed no longer plays the foreground sound with no
-  bubble behind it.
+- **Your reading position holds.** Reported by DJ8MEH on a tablet: after scrolling up to follow a
+  discussion, every incoming message moved the view down again. Two causes, both fixed. Anything
+  within 250 px of the bottom (8 to 12 text lines on a tablet) was scrolled to the newest message;
+  the band is now 80 px. And while you read inside the newest messages, each new one removed the
+  oldest bubble above you, which shifted the text under you. The chat now holds the visible
+  messages in place as soon as you scroll up; a "Jump to latest" button appears once newer
+  messages exist.
+- **Live messages are followed again on a full store.** With 2000 messages held in the browser,
+  every new message replaced an old one, the count stayed the same and auto-follow never fired.
+  It now reacts to the newest message of the open conversation.
+- **The RF Monitor holds its place too.** Scrolled up, live frames no longer remove rows above
+  the one you are reading.
+- **`:sto` becomes "held by …".** A store node that keeps your direct message for later delivery
+  answers with a text like `DK5EN-98 :sto071 DJ8MEH-81`. Behind a node that forwards that text, it
+  used to appear as an ordinary message from the store node. It is now matched to your message
+  and shown as held by that station, the same state the binary `0x04` frame sets, and the text
+  itself is hidden. A notice that matches nothing is hidden as well.
 
 ### Backend (MCProxy)
 
-- `split_path` in the Bluetooth protocol keeps the first path component as `src`; only relay
-  positions drop the own callsign.
-- `GET /api/messages/{msg_id}/acks` takes an optional `?since=<ms>` (the message's own timestamp).
-  The window is 60 s before to 4 h after it, or 168 h when a held record lies inside the narrow
-  window. Without `since` the answer is unchanged, which is what an older webapp gets.
-- Release tooling: the GitHub release body is the release's own section plus a footer link, the
-  script refuses to start a release whose notes are not on top, and `uv.lock` versions follow the
-  bump.
-- Dependencies refreshed: `sse-starlette` 3.5.0, `librt` 0.16.0.
+- `store_message` absorbs an inline `:stoNNN` notice: original sender equals the notice's
+  destination, echo counter matches, the held destination must match when named, within 1 h. It
+  writes `send_success`, rank `held`, a `held` ledger row and the same `msg_status` event as the
+  `0x04` frame. Both arriving for the same holder count once.
+- The notice row stays in the database and is excluded from history, paging, the initial burst
+  and unread counts. It never appears among delivery receipts.
+- `ack_predicate_vectors.json` v3 adds `is_sto`, shared with mc-chat and the webapp.
+- Dependencies refreshed: `cryptography` 50.0.2, `fastapi` 0.142.2, `uvloop` 0.23.0 (also in the
+  standalone BLE service lock).
 
 ### Frontend (webapp)
 
-- The ACK details send the message timestamp as `since`; a backend without the parameter ignores
-  it.
-- Message identity follows the dedup key on history paging, offline hydration and the outbox
-  echo scan; an own message keeps its identity when a foreign one shares its raw ID.
-- Echo and internet-sighting flags are set by the same rule on first insert and on duplicates.
-- The "What's new" card on the Update page shows only its own release's section. Its Markdown
-  sanitizer uses an explicit allowlist, and `marked` and `DOMPurify` load as separate chunks so an
-  installed PWA stops downloading them again on every release.
-- Dependencies refreshed (`typescript-eslint` 8.71.0, transitive).
+- The chat pins its render window when you scroll up, also after returning from another view.
+  Your own send still jumps to the newest message, except while older history is loading.
+- The `:sto` notice is hidden in every view and never lights an unread badge. On the direct
+  internet feed, which bypasses the backend, it is matched locally. A held status never
+  overwrites "acknowledged" or "not delivered", and a repeat keeps the first holder.
+- Dependencies refreshed (transitive).
 
 ### Upgrade notes
 
-- Nothing to configure. A webapp from before this release works against this backend, and this
-  webapp works against an older backend; only the ACK details fix needs both halves.
+- Nothing to configure. Reload the app once (the "Update available" banner) so the scroll fix
+  takes effect. Older `:sto` texts disappear from history, but the messages they refer to are not
+  marked held retroactively.
 
 ## Earlier releases, in brief
 
 One entry per release. The full notes as published are in
 [`doc/archive/release-history-full.md`](https://github.com/DK5EN/McApp/blob/development/doc/archive/release-history-full.md).
+
+### v2.0.18 (2026-09-29)
+
+- Message details show the right acknowledgements after a firmware message ID is reused, your own
+  relayed message is one bubble, and retried direct messages count once on every path.
 
 ### v2.0.17 (2026-09-28)
 

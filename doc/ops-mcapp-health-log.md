@@ -2070,3 +2070,26 @@ for a 2 h 55 min window**. Re-measured with `since` and sample rows excluded:
 known source (192.168.68.63), `udp_multiple_sources` false and no untrusted source. It strengthened
 on its own while GW was still off, so the `first_seen` reading was the post-restart state and not a
 fault. The W22 bullet above stays as written; it is closed by this addendum.
+
+## 25. 2026-10-02 15:55 CEST — pre-release sign-off before promoting v2.0.19-dev.1 to v2.0.19
+
+**Promoted without a soak, at the operator's decision.** v2.0.19-dev.1 had run for about 5
+minutes when the promotion started (deployed 15:44, `slot-2`). No full `/ai-ops` sweep was run;
+this entry records only what was checked.
+
+| Check                         | Result                                                          |
+| ----------------------------- | --------------------------------------------------------------- |
+| Deploy health block           | 14 `[OK]`, webapp `v2.0.19-dev.1`, active slot `slot-2`         |
+| `mcapp` / `mcapp-ble`         | active, `NRestarts` 0                                           |
+| Journal warnings since 15:44  | **0**                                                           |
+| New code in the active slot   | `_apply_held_notice` present; bundle carries `pinToNewest`      |
+| `:sto` rows in the DB         | 5, all excluded by the history predicate                        |
+| Scroll fix, Chrome, live data | anchor unchanged to the pixel across a live message; pill shown |
+| CI                            | not a signal: only Dependabot runs on `development`             |
+
+### Not yet observed on air
+
+- A **new** `:sto` notice turning into `held`. Covered by `store_notice_tests`, but the first live
+  one arrives whenever a store node holds a DM of ours. Watch for it in the post-release sweep: a
+  `held` row whose holder matches a hidden `:sto` row from the same minute.
+- The scroll fix on the reporter's tablet (Xiaomi Pad 7, Chrome).
