@@ -88,6 +88,12 @@ def _session_xml(
     return "".join(parts)
 
 
+def _with_sub_exp(body: str, sub_exp: str | None) -> str:
+    """Swap the free-tier `SubExp` for a subscriber's expiry date, or drop it."""
+    tag = f"<SubExp>{sub_exp}</SubExp>" if sub_exp is not None else ""
+    return body.replace("<SubExp>non-subscriber</SubExp>", tag)
+
+
 DK5EN = {"call": "DK5EN", "fname": "Martin Stefan", "name": "Werner", "addr2": "Freising",
          "state": "BY", "country": "Germany"}  # fmt: skip
 
@@ -110,6 +116,7 @@ class FakeQrz:
         self.responder: Callable[[dict[str, str]], tuple[int, str, dict[str, str]]] = self.default
         self.count = 0
         self.report_count = True
+        self.sub_exp: str | None = "non-subscriber"
 
     def rolling_count(self) -> int:
         """QRZ's Count: lookups in the last 24 h, plus `count` as lookups
@@ -121,9 +128,10 @@ class FakeQrz:
 
     def default(self, form: dict[str, str]) -> tuple[int, str, dict[str, str]]:
         if "username" in form:
-            return 200, _session_xml(count=self.rolling_count()), {}
+            return 200, _with_sub_exp(_session_xml(count=self.rolling_count()), self.sub_exp), {}
         call = form["callsign"]
-        return 200, _session_xml(count=self.rolling_count(), callsign={**DK5EN, "call": call}), {}
+        body = _session_xml(count=self.rolling_count(), callsign={**DK5EN, "call": call})
+        return 200, _with_sub_exp(body, self.sub_exp), {}
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         form = dict(httpx.QueryParams(request.content.decode()))
@@ -680,6 +688,93 @@ async def _test_server_count(env: Env, record: Record) -> None:
     )
 
 
+SUBSCRIBER = "Thu Oct 21 15:45:16 2027"
+
+
+async def _test_server_count_subscriber(env: Env, record: Record) -> None:
+    """A subscriber's Count is not a 24 h tally: DM3KS's login reported 77678
+    while QRZ's account page showed 1 XML lookup that day, and gating on it
+    suspended every login, forever. Our own ledger cap still holds."""
+    for i in range(DAILY_CAP + 10):
+        await env.add_heard(f"DL{i % 10}{chr(65 + i // 26 % 26)}{chr(65 + i % 26)}X", T0 - i)
+    env.qrz.sub_exp = SUBSCRIBER
+    env.qrz.count = 77678
+    await env.service.set_credentials("DM3KS", PASSWORD)
+    await env.run_for(10 * MIN_INTERVAL_MS)
+    status = await env.service.status()
+    record(
+        "Q20b. a subscriber's Count above the cap does not suspend; lookups run",
+        len(env.qrz.lookups()) == 9
+        and status["state"] != "suspended"
+        and status["server_count"] >= 77678,
+    )
+    await env.run_for(WINDOW_MS)
+    stamps = [t for t, _, _ in env.qrz.lookups()]
+    record(
+        "Q20c. a subscriber is still held to our own 50/24 h ledger cap",
+        len([t for t in stamps if t < T0 + WINDOW_MS]) == DAILY_CAP,
+    )
+
+
+async def _test_server_count_unknown_tier(env: Env, record: Record) -> None:
+    await env.add_heard("DK5EN", T0)
+    env.qrz.sub_exp = None
+    env.qrz.count = DAILY_CAP + 10
+    await env.service.set_credentials("DK5EN", PASSWORD)
+    await env.run_for(10 * MIN_INTERVAL_MS)
+    status = await env.service.status()
+    record(
+        "Q20d. no SubExp at all fails closed: Count at the cap still suspends",
+        not env.qrz.lookups() and status["state"] == "suspended",
+    )
+
+
+async def _seed_suspension(env: Env, *, reason: str, subscription: str) -> None:
+    await env.add_heard("DK5EN", T0)
+    await env.service.set_credentials("DM3KS", PASSWORD)
+    await env.storage.update_qrz_state(
+        suspended_until_ms=T0 + SUSPEND_MS - 3_600_000,
+        last_error=reason,
+        last_error_ms=T0 - 3_600_000,
+        subscription=subscription,
+    )
+
+
+async def _test_lift_count_suspension(env: Env, record: Record) -> None:
+    """The box already carrying a Count suspension from the old gate recovers
+    on the update instead of waiting it out."""
+    env.qrz.sub_exp = SUBSCRIBER
+    env.qrz.count = 77678
+    await _seed_suspension(env, reason="QRZ reports 77678 lookups in 24 h", subscription=SUBSCRIBER)
+    await env.run_for(3 * MIN_INTERVAL_MS)
+    status = await env.service.status()
+    record(
+        "Q20e. a stored Count suspension on a subscriber is lifted and lookups resume",
+        len(env.qrz.lookups()) == 1
+        and status["state"] != "suspended"
+        and status["last_error"] is None,
+    )
+
+
+async def _test_keep_other_suspensions(env: Env, record: Record) -> None:
+    """The lift is narrow: a ledger-cap suspension on a subscriber and a Count
+    suspension on a free account both stay."""
+    await _seed_suspension(
+        env, reason=f"daily cap of {DAILY_CAP} lookups reached", subscription=SUBSCRIBER
+    )
+    await env.run_for(3 * MIN_INTERVAL_MS)
+    ledger_kept = not env.qrz.requests
+    await env.storage.update_qrz_state(
+        last_error="QRZ reports 77678 lookups in 24 h", subscription="non-subscriber"
+    )
+    await env.run_for(3 * MIN_INTERVAL_MS)
+    status = await env.service.status()
+    record(
+        "Q20f. ledger-cap and free-tier Count suspensions are never lifted",
+        ledger_kept and not env.qrz.requests and status["state"] == "suspended",
+    )
+
+
 async def _test_refresh(env: Env, record: Record) -> None:
     await env.add_heard("DK5EN", T0)
     await env.add_heard("NO1BODY", T0 - 1)
@@ -859,6 +954,10 @@ async def run_qrz_tests() -> bool:
         _test_refused,
         _test_auth_failed,
         _test_server_count,
+        _test_server_count_subscriber,
+        _test_server_count_unknown_tier,
+        _test_lift_count_suspension,
+        _test_keep_other_suspensions,
         _test_refresh,
         _test_candidates,
         _test_inflight_race,

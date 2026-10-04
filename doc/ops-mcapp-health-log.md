@@ -2158,3 +2158,35 @@ Green, zero findings.
   the ledger inside the suspension, `server_count` never above 50 plus the operator's own manual
   lookups. A `last_error` other than the cap message is the finding.
 - W22 unchanged: `udp_target_kind` `first_seen` right after the restart.
+
+### Addendum 09:52 CEST — v2.1.1 deployed
+
+Deployed through the update runner (`POST /api/update/start {"dev": false}`, the same call the
+Update page's Start Update makes): `slot-0` active after ~60 s, `version.html` `v2.1.1`, all four
+services active, `NRestarts` 0, schema 33 in DB and code, no test harness in the slot (production
+shape), `_publish` present, the connect burst carries `proxy:callsign_info`, 0 journal warnings in
+the first minutes. `slot-1` (`v2.1.1-dev.2`) and `slot-2` (`v2.1.1-dev.1`) remain available for
+Activate.
+
+**W23, first reading:** the 24 h suspension fired at 09:42:33, triggered by QRZ.com's own `Count`
+reaching 50 (47 lookups by the service plus 3 manual probe lookups that morning) — the account-wide
+guard, before the service's own ledger cap of 50. `last_error` reads
+`QRZ reports 50 lookups in 24 h`; 43 names and 4 misses cached. Resume is due 2026-10-05 09:42.
+
+## 27. 2026-10-04 10:31 CEST — pre-release check before the v2.1.2 hotfix (no dev soak)
+
+v2.1.2 promotes `development` directly, without a `-dev.N` soak, at the operator's request: a
+single-module QRZ fix (`e91a593`) plus a webapp `@lucide/vue` 1.52.0 bump. Cause: on a QRZ.com
+subscriber account (DM3KS) the login reported `Count 77678` while QRZ's account page showed 1 XML
+lookup that day and an unlimited limit, so the v2.1.1 Count gate suspended every login with zero
+lookups made. The fix limits that gate to free accounts and lifts a Count suspension already stored
+on a subscriber.
+
+- Box on v2.1.1 (`slot-0`, `version.html` `v2.1.1`), `mcapp mcapp-ble caddy lighttpd` active,
+  `NRestarts` 0, no warning or higher in the mcapp/mcapp-ble journal since the 09:52 deploy, up
+  9 days 23 h, 190 MB available.
+- Both gates green after the dependency refresh (Python locks unchanged); subtrees and all five
+  hand-copied corpora identical across the three repos.
+- **W23 on this box is NOT affected by the fix:** DK5EN is a non-subscriber, so its stored
+  suspension (`QRZ reports 50 lookups in 24 h`, until 2026-10-05 09:42) is kept. Check after the
+  deploy that it is still in place.

@@ -5,6 +5,66 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.1.1 (2026-10-04)
+
+McApp now shows the first name and home town (QTH) of a station next to its callsign, looked up on
+QRZ.com with your own account ([issue #14](https://github.com/DK5EN/McApp/issues/14), suggested by
+dm3ks). The schema goes from 32 to 33 (three new tables, created automatically at startup);
+`SYSTEM_EPOCH` stays at 5.
+
+### Highlights
+
+- **Names and QTH next to callsigns.** Chat bubbles and the station cards (Messages panel and
+  Positions list) show the first name as a chip and the QTH with a 📍 pin. Names appear live as
+  soon as a lookup finds them, without reloading. Callsigns without an entry look as before.
+- **Set up in Settings → QRZ.com Lookup.** Enter your QRZ.com username and password; your browser's
+  password manager can fill them in. A free QRZ.com account is enough: it delivers name, town and
+  country. Two-factor login on the QRZ.com account does not affect this interface.
+- **Gentle on your account.** At most 50 lookups per 24 hours and one request every 30 seconds.
+  At 50 lookups — or when QRZ.com's own counter for your account reaches 50, for example because a
+  logging program uses the same account — lookups pause for 24 hours. Errors back off with growing
+  pauses, and a rejected password stops all attempts until you enter new credentials, so the
+  account cannot be locked by retries. Chat partners are looked up first; names are refreshed after
+  90 days, unknown callsigns are retried after 7 days.
+- **The password stays on the proxy, encrypted.** The key is tied to this installation and to the
+  Raspberry Pi's board: a copy of the database or of the SD card alone does not reveal it. It is
+  never shown again and never appears in logs or stall reports.
+
+### Backend (MCProxy)
+
+- `qrz_service` runs the lookup loop with the limits above, following the QRZ.com XML
+  specification's session and error rules (re-login when a session expires, 24 h pause on
+  `Connection refused`). Each lookup is counted before its request goes out, so a failed request
+  still counts against the daily cap.
+- `secret_box`: AES-256-GCM under a key derived (HKDF) from `/var/lib/mcapp/secret.key` (created
+  with the first credentials, mode 0600) and the board serial; the ciphertext is bound to the
+  username.
+- Migration 33: `callsign_info` (cache by base callsign), `qrz_lookups` (cap ledger), `qrz_state`.
+- New API: `GET /api/qrz/status`, `PUT`/`DELETE /api/qrz/credentials`, `PUT /api/qrz/enabled`,
+  `GET /api/callsign_info`; new SSE event `proxy:callsign_info` (full map on connect, one entry per
+  new lookup). The password is write-only.
+- Stall tracking never records the body of the credentials request and masks every `*password*`
+  key. Without this, a sampled request would have stored the password in `stall_events`.
+- Dependencies refreshed (`ast-serialize` 0.12.1).
+
+### Frontend (webapp)
+
+- New "QRZ.com Lookup" settings card: login form, status, lookups used today, next lookup, last
+  error, enable switch and removal.
+- Name chip and 📍 QTH in chat bubbles and station cards, fed live by `proxy:callsign_info` and kept
+  in memory only.
+- The client stall reporter drops the credentials request body and masks password keys.
+- Dependencies refreshed (`@lucide/vue` 1.51.0, `rollup` 4.64.0, transitive patches).
+
+### Upgrade notes
+
+- Nothing changes until you enter QRZ.com credentials; without them the feature makes no requests.
+- Moving the SD card to another Raspberry Pi means entering the QRZ.com password again: the stored
+  one cannot be decrypted on a different board, by design.
+- QRZ.com delivers the first-name field as registered; a club or repeater entry may read, for
+  example, "REPEATER".
+- Reload the app once (the "Update available" banner) to get the new display.
+
 ## v2.1.0 (2026-10-02)
 
 McApp 2.1.0 is the release that matches MeshCom node firmware **v4.40a**. Scrolling up to read a

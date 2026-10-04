@@ -65,6 +65,10 @@ SESSION_ERRORS_BEFORE_BACKOFF = 2
 
 _RATE_LIMIT_HTTP = frozenset({429, 503})
 
+# `SubExp` on a free account; a subscriber gets the expiry date instead.
+_NON_SUBSCRIBER = "non-subscriber"
+_SERVER_COUNT_REASON = "QRZ reports"
+
 # Called with {BASE: {first_name, qth, country}} whenever a lookup finds data;
 # main.py fans it out as the SSE event `proxy:callsign_info`.
 InfoListener = Callable[[dict[str, dict[str, str | None]]], Awaitable[None]]
@@ -72,6 +76,12 @@ InfoListener = Callable[[dict[str, dict[str, str | None]]], Awaitable[None]]
 
 def _aad(username: str) -> str:
     return f"qrz.password:{username}"
+
+
+def _is_free_tier(sub_exp: str | None) -> bool:
+    """True unless QRZ said the account is a subscriber. Fails closed: an
+    unknown `SubExp` is treated as free, so the Count gate stays on."""
+    return sub_exp is None or sub_exp.strip().lower() == _NON_SUBSCRIBER
 
 
 def _retry_after_ms(response: httpx.Response) -> int:
@@ -252,6 +262,12 @@ class QrzLookupService:
             logger.warning("QRZ password cannot be decrypted on this install; re-enter it")
             return IDLE_POLL_MS
 
+        if self._count_suspension_obsolete(state, now):
+            await self._storage.update_qrz_state(
+                suspended_until_ms=None, last_error=None, last_error_ms=None
+            )
+            state["suspended_until_ms"] = None
+            logger.info("QRZ suspension from the server Count lifted: subscriber account")
         for until in (state["suspended_until_ms"], state["backoff_until_ms"]):
             if until and int(until) > now:
                 return int(until) - now
@@ -400,8 +416,28 @@ class QrzLookupService:
     async def _check_server_count(self, result: QrzResponse, now: int) -> None:
         # QRZ's own 24 h tally includes other software using the same account;
         # at the cap we stop too, which keeps the account under the free tier.
-        if result.count is not None and result.count >= DAILY_CAP:
-            await self._suspend(now, f"QRZ reports {result.count} lookups in 24 h")
+        # Not on a subscriber: there is no free tier to protect, and its Count
+        # is not a 24 h tally — DM3KS's login reported 77678 while QRZ's own
+        # account page showed 1 XML lookup that day and an unlimited limit
+        # (2026-10-04). Gating on it suspended every login, forever. Our own
+        # ledger cap still applies to subscribers.
+        if result.count is None or result.count < DAILY_CAP:
+            return
+        sub_exp = result.sub_exp or (await self._storage.get_qrz_state())["subscription"]
+        if _is_free_tier(sub_exp):
+            await self._suspend(now, f"{_SERVER_COUNT_REASON} {result.count} lookups in 24 h")
+
+    @staticmethod
+    def _count_suspension_obsolete(state: dict[str, Any], now: int) -> bool:
+        """A running suspension set by the server Count on an account now
+        known to be a subscriber — written before the gate learned SubExp."""
+        until = state["suspended_until_ms"]
+        return (
+            bool(until)
+            and int(until) > now
+            and str(state["last_error"] or "").startswith(_SERVER_COUNT_REASON)
+            and not _is_free_tier(state["subscription"])
+        )
 
     async def _suspend(self, now: int, reason: str) -> None:
         await self._storage.update_qrz_state(
