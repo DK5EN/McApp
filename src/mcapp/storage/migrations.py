@@ -779,10 +779,22 @@ class MigrationsMixin(StorageBase):
                         " (QRZ.com lookup, inert until credentials are entered)",
                         current_version,
                     )
+                    _set_schema_version(conn, 33)
+
+                if current_version < 34:  # noqa: PLR2004 - schema migration step
+                    # Why a QRZ suspension was set ('cap', 'server_count',
+                    # 'refused'). `last_error` cannot carry that: replacing the
+                    # credentials clears it while the suspension keeps running,
+                    # which stranded a subscriber's Count suspension on DM3KS
+                    # (2026-10-04). NULL = written before this column existed.
+                    cols = {r[1] for r in conn.execute("PRAGMA table_info(qrz_state)")}
+                    if "suspend_reason" not in cols:
+                        conn.execute("ALTER TABLE qrz_state ADD COLUMN suspend_reason TEXT;")
+                    logger.info("Migration v%d → v34: qrz_state.suspend_reason", current_version)
                     # Adding a step after this one? Bump LATEST_SCHEMA_VERSION in
                     # storage/constants.py in the same commit — the startup suite
                     # asserts every migration chain terminates there.
-                    _set_schema_version(conn, 33)
+                    _set_schema_version(conn, 34)
 
         await asyncio.to_thread(_init_db)
 
