@@ -84,9 +84,9 @@ timestamps within a vector (server order has no id tiebreak).
 | 1a   | MCProxy | implementer  | `storage/ack_match_vectors.json` (new), `storage/ack_match_vectors_tests.py` (new)                                                                                                                                                                                                     | done    |
 | 1b   | webapp  | implementer  | `services/messageProcessor/ackMatch.ts`, `services/messageProcessor.ts`, `constants/index.ts`, `services/__tests__/messageProcessor.{ackGate,core}.spec.ts`, `stores/__tests__/messages.{ack,filter}.spec.ts`, `stores/__tests__/messagesHydrate.spec.ts` (only existing ack fixtures) | done    |
 | 1 G  | both    | orchestrator | register 1a in `scripts/run_startup_tests.py` `main()` (hotspot); gate both repos; advisor pass; commit per repo                                                                                                                                                                       | done    |
-| 2    | webapp  | 1b, resumed  | copy corpus → `services/messageProcessor/__tests__/ack_match_vectors.json` + `ackMatchVectors.spec.ts` (sha256 pin, parsed-JSON drift vs `../MCProxy`, replay through `findAckMessage`)                                                                                                | pending |
-| 3    | webapp  | implementer  | finding 2: `stores/messages.ts`, `types/message.ts`, `stores/__tests__/messagesHydrate.spec.ts` (+ the `msg:status` store method wherever it lives)                                                                                                                                    | pending |
-| 3 G  | webapp  | orchestrator | gate, advisor pass, commit                                                                                                                                                                                                                                                             | pending |
+| 2    | webapp  | 1b, resumed  | copy corpus → `services/messageProcessor/__tests__/ack_match_vectors.json` + `ackMatchVectors.spec.ts` (sha256 pin, parsed-JSON drift vs `../MCProxy`, replay through `findAckMessage`)                                                                                                | done    |
+| 3    | webapp  | implementer  | finding 2: `stores/messages.ts`, `types/message.ts`, `stores/__tests__/messagesHydrate.spec.ts` (+ the `msg:status` store method wherever it lives)                                                                                                                                    | done    |
+| 3 G  | webapp  | orchestrator | gate, advisor pass, commit                                                                                                                                                                                                                                                             | done    |
 | 4    | both    | orchestrator | docs: MCProxy CLAUDE.md corpus list + ACK Attribution note, webapp CLAUDE.md corpus list; push; `/dev-release`; deploy; verify on mcapp.local                                                                                                                                          | pending |
 
 1a and 1b run in parallel: different repos, no shared build tree or runner. Wave 2 waits for the
@@ -139,6 +139,18 @@ and because finding 2 must not ship ahead of finding 1 (it would make false ✓�
   digits after `:ack` (`:ack201 ok` → 201), the webapp requires the tail to be all digits. Only a
   human-typed text produces that shape (firmware emits exactly `%-9.9s:ack%03i`), and treating it
   as an ack on the client would swallow a human message from view; not aligned.
+
+- **Wave 2** (2026-10-04): webapp vendors the corpus (`services/messageProcessor/__tests__/`,
+  sha256 identical to canonical), 23 replay tests + drift check against `../MCProxy` (ran, not
+  skipped). Test-only, no advisor pass. Webapp `44f0370`.
+- **Wave 3** (2026-10-04): ran in parallel with wave 2 (disjoint files). `ack_origin` on
+  `Message`, `'www'` exempt from the snapshot downgrade, `_patchMessage` drops keys patched to
+  `undefined`, rows built from a snapshot/history row with `acked` get `'server'`. Advisor
+  (Fable): APPROVED with one test gap (the `'server'` stamp in `processMessage` was unpinned),
+  closed at the gate with a discriminating test. Webapp `3922e84`. Recorded, not changed: a
+  `'server'` row can still be downgraded by a snapshot without `acked` (only via pre-2026-09-06
+  transport-pair rows in `smart_initial`); pre-existing and order-dependent.
+- Wave 1 commits: MCProxy `2843b0d`, webapp `1dcb3be`.
 
 ## Verification
 
