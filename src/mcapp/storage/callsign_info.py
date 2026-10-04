@@ -30,6 +30,7 @@ _QRZ_STATE_COLUMNS = frozenset(
         "last_error_ms",
         "server_count",
         "subscription",
+        "suspend_reason",
     }
 )
 

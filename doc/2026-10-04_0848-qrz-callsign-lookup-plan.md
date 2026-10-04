@@ -43,6 +43,9 @@ account.
 The gate applies only while `SubExp` is `non-subscriber` or absent (fail closed). On a subscriber it
 suspended every login for good (DM3KS, see §2), so it is skipped there; our own ledger cap still
 applies. A suspension the old gate already stored on a subscriber is lifted at the next step.
+The reason is kept in `qrz_state.suspend_reason` (`cap`, `server_count`, `refused`, migration 34),
+because replacing the credentials clears `last_error` but not the suspension. The status carries
+`account_tier` (`subscriber` / `free`, derived from `SubExp`) for the settings card.
 
 A wrong password stops the service instead of retrying: repeated failed logins are what gets an
 account locked, and nothing changes until the operator enters new credentials.

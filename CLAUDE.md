@@ -750,7 +750,12 @@ Plan, threat model and API: `doc/2026-10-04_0848-qrz-callsign-lookup-plan.md`.
 - **QRZ's `Count` gates free accounts only.** On a subscriber it is not a 24 h tally (DM3KS:
   `Count 77678` on login, QRZ's page: 1 XML lookup that day), so gating on it suspended every
   login forever. `_is_free_tier` fails closed on an absent `SubExp`; the ledger cap applies to
-  everyone. Q20b-Q20f pin it.
+  everyone. Q20b-Q20i pin it.
+- **Why a suspension runs lives in `qrz_state.suspend_reason` (migration 34), never in
+  `last_error`.** Replacing the credentials clears `last_error` while the suspension keeps
+  running; the v2.1.2 lift keyed on that text and left DM3KS stuck after a password re-entry.
+  A row from before the column (`NULL`) with `last_error` cleared is lifted on a subscriber only
+  while our own ledger is under the cap.
 - **The 30 s gate must hold when `step()` is called early** (wake event, restart) — a test
   driver that obeys the returned delay proves nothing about it.
 - **The password is encrypted, not hashed — the login needs the plain text.** `secret_box.py`:

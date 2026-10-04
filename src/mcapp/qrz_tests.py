@@ -684,7 +684,8 @@ async def _test_server_count(env: Env, record: Record) -> None:
         "Q20. QRZ's own Count at the cap suspends us at login, no lookup spent",
         not env.qrz.lookups()
         and status["state"] == "suspended"
-        and status["server_count"] == DAILY_CAP + 10,
+        and status["server_count"] == DAILY_CAP + 10
+        and status["account_tier"] == "free",
     )
 
 
@@ -706,7 +707,8 @@ async def _test_server_count_subscriber(env: Env, record: Record) -> None:
         "Q20b. a subscriber's Count above the cap does not suspend; lookups run",
         len(env.qrz.lookups()) == 9
         and status["state"] != "suspended"
-        and status["server_count"] >= 77678,
+        and status["server_count"] >= 77678
+        and status["account_tier"] == "subscriber",
     )
     await env.run_for(WINDOW_MS)
     stamps = [t for t, _, _ in env.qrz.lookups()]
@@ -729,13 +731,18 @@ async def _test_server_count_unknown_tier(env: Env, record: Record) -> None:
     )
 
 
-async def _seed_suspension(env: Env, *, reason: str, subscription: str) -> None:
+async def _seed_suspension(
+    env: Env, *, reason: str | None, subscription: str, kind: str | None = None
+) -> None:
+    """A running suspension as an earlier step left it; `kind` None is a row
+    written before `suspend_reason` existed (v2.1.1/v2.1.2)."""
     await env.add_heard("DK5EN", T0)
     await env.service.set_credentials("DM3KS", PASSWORD)
     await env.storage.update_qrz_state(
         suspended_until_ms=T0 + SUSPEND_MS - 3_600_000,
+        suspend_reason=kind,
         last_error=reason,
-        last_error_ms=T0 - 3_600_000,
+        last_error_ms=T0 - 3_600_000 if reason else None,
         subscription=subscription,
     )
 
@@ -756,6 +763,59 @@ async def _test_lift_count_suspension(env: Env, record: Record) -> None:
     )
 
 
+async def _test_lift_after_replaced_credentials(env: Env, record: Record) -> None:
+    """Replacing the password clears `last_error` but not the suspension; the
+    lift must not depend on the text that just vanished."""
+    env.qrz.sub_exp = SUBSCRIBER
+    env.qrz.count = 77678
+    await _seed_suspension(
+        env,
+        reason="QRZ reports 77678 lookups in 24 h",
+        subscription=SUBSCRIBER,
+        kind="server_count",
+    )
+    await env.service.set_credentials("DM3KS", PASSWORD)
+    await env.run_for(3 * MIN_INTERVAL_MS)
+    status = await env.service.status()
+    record(
+        "Q20g. a Count suspension is lifted on a subscriber after the password was replaced",
+        len(env.qrz.lookups()) == 1 and status["state"] != "suspended",
+    )
+
+
+async def _test_lift_legacy_cleared_reason(env: Env, record: Record) -> None:
+    """DM3KS after updating to v2.1.2: no `suspend_reason` (older row), and
+    `last_error` already cleared by a password replace. Only our own ledger
+    could have caused it, and the ledger is empty."""
+    env.qrz.sub_exp = SUBSCRIBER
+    env.qrz.count = 77678
+    await _seed_suspension(env, reason=None, subscription=SUBSCRIBER)
+    await env.run_for(3 * MIN_INTERVAL_MS)
+    status = await env.service.status()
+    record(
+        "Q20h. a pre-v34 suspension with its reason cleared is lifted on a subscriber",
+        len(env.qrz.lookups()) == 1 and status["state"] != "suspended",
+    )
+
+
+async def _test_suspend_records_reason(env: Env, record: Record) -> None:
+    reasons: list[str | None] = []
+    env.qrz.count = DAILY_CAP + 10
+    await env.add_heard("DK5EN", T0)
+    await env.service.set_credentials("DK5EN", PASSWORD)
+    await env.run_for(MIN_INTERVAL_MS)
+    reasons.append((await env.storage.get_qrz_state())["suspend_reason"])
+    env.qrz.responder = lambda form: (200, _session_xml(key=None, error="Connection refused"), {})
+    await env.service.set_credentials("DK5EN", PASSWORD)
+    await env.storage.update_qrz_state(suspended_until_ms=None)
+    await env.run_for(MIN_INTERVAL_MS)
+    reasons.append((await env.storage.get_qrz_state())["suspend_reason"])
+    record(
+        "Q20i. every suspension records why: server Count, refusal",
+        reasons == ["server_count", "refused"],
+    )
+
+
 async def _test_keep_other_suspensions(env: Env, record: Record) -> None:
     """The lift is narrow: a ledger-cap suspension on a subscriber and a Count
     suspension on a free account both stay."""
@@ -769,9 +829,30 @@ async def _test_keep_other_suspensions(env: Env, record: Record) -> None:
     )
     await env.run_for(3 * MIN_INTERVAL_MS)
     status = await env.service.status()
+    free_kept = not env.qrz.requests and status["state"] == "suspended"
+    # Reason recorded, then the password replaced: cap and refusal stay.
+    kept = []
+    for kind in ("cap", "refused"):
+        await env.storage.update_qrz_state(
+            suspend_reason=kind, last_error=None, subscription=SUBSCRIBER
+        )
+        await env.service.set_credentials("DM3KS", PASSWORD)
+        await env.run_for(3 * MIN_INTERVAL_MS)
+        kept.append(not env.qrz.requests)
+    # Pre-v34 row, reason cleared, but the ledger is at the cap.
+    for i in range(DAILY_CAP):
+        await env.storage.record_qrz_lookup(T0 + i, f"DL{i % 10}XX")
+    await env.storage.update_qrz_state(suspend_reason=None, last_error=None)
+    await env.run_for(3 * MIN_INTERVAL_MS)
+    # Not lifted at all — a lift would be re-suspended by the ledger gate with
+    # a fresh 24 h, so the original end time is what tells the two apart.
+    state = await env.storage.get_qrz_state()
+    legacy_kept = (
+        not env.qrz.requests and state["suspended_until_ms"] == T0 + SUSPEND_MS - 3_600_000
+    )
     record(
-        "Q20f. ledger-cap and free-tier Count suspensions are never lifted",
-        ledger_kept and not env.qrz.requests and status["state"] == "suspended",
+        "Q20f. ledger-cap, refusal and free-tier Count suspensions are never lifted",
+        ledger_kept and free_kept and all(kept) and legacy_kept,
     )
 
 
@@ -957,6 +1038,9 @@ async def run_qrz_tests() -> bool:
         _test_server_count_subscriber,
         _test_server_count_unknown_tier,
         _test_lift_count_suspension,
+        _test_lift_after_replaced_credentials,
+        _test_lift_legacy_cleared_reason,
+        _test_suspend_records_reason,
         _test_keep_other_suspensions,
         _test_refresh,
         _test_candidates,
