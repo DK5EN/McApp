@@ -2172,3 +2172,21 @@ Activate.
 reaching 50 (47 lookups by the service plus 3 manual probe lookups that morning) — the account-wide
 guard, before the service's own ledger cap of 50. `last_error` reads
 `QRZ reports 50 lookups in 24 h`; 43 names and 4 misses cached. Resume is due 2026-10-05 09:42.
+
+## 27. 2026-10-04 10:31 CEST — pre-release check before the v2.1.2 hotfix (no dev soak)
+
+v2.1.2 promotes `development` directly, without a `-dev.N` soak, at the operator's request: a
+single-module QRZ fix (`e91a593`) plus a webapp `@lucide/vue` 1.52.0 bump. Cause: on a QRZ.com
+subscriber account (DM3KS) the login reported `Count 77678` while QRZ's account page showed 1 XML
+lookup that day and an unlimited limit, so the v2.1.1 Count gate suspended every login with zero
+lookups made. The fix limits that gate to free accounts and lifts a Count suspension already stored
+on a subscriber.
+
+- Box on v2.1.1 (`slot-0`, `version.html` `v2.1.1`), `mcapp mcapp-ble caddy lighttpd` active,
+  `NRestarts` 0, no warning or higher in the mcapp/mcapp-ble journal since the 09:52 deploy, up
+  9 days 23 h, 190 MB available.
+- Both gates green after the dependency refresh (Python locks unchanged); subtrees and all five
+  hand-copied corpora identical across the three repos.
+- **W23 on this box is NOT affected by the fix:** DK5EN is a non-subscriber, so its stored
+  suspension (`QRZ reports 50 lookups in 24 h`, until 2026-10-05 09:42) is kept. Check after the
+  deploy that it is still in place.

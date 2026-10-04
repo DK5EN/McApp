@@ -1,69 +1,48 @@
 # Release History
 
-## v2.1.1 (2026-10-04)
+## v2.1.2 (2026-10-04)
 
-McApp now shows the first name and home town (QTH) of a station next to its callsign, looked up on
-QRZ.com with your own account ([issue #14](https://github.com/DK5EN/McApp/issues/14), suggested by
-dm3ks). The schema goes from 32 to 33 (three new tables, created automatically at startup);
-`SYSTEM_EPOCH` stays at 5.
+A fix for the QRZ.com lookup introduced in v2.1.1: on an account **with a QRZ.com subscription**,
+lookups paused for 24 hours right after every login and never actually ran. Schema stays at 33 and
+`SYSTEM_EPOCH` at 5.
 
 ### Highlights
 
-- **Names and QTH next to callsigns.** Chat bubbles and the station cards (Messages panel and
-  Positions list) show the first name as a chip and the QTH with a 📍 pin. Names appear live as
-  soon as a lookup finds them, without reloading. Callsigns without an entry look as before.
-- **Set up in Settings → QRZ.com Lookup.** Enter your QRZ.com username and password; your browser's
-  password manager can fill them in. A free QRZ.com account is enough: it delivers name, town and
-  country. Two-factor login on the QRZ.com account does not affect this interface.
-- **Gentle on your account.** At most 50 lookups per 24 hours and one request every 30 seconds.
-  At 50 lookups — or when QRZ.com's own counter for your account reaches 50, for example because a
-  logging program uses the same account — lookups pause for 24 hours. Errors back off with growing
-  pauses, and a rejected password stops all attempts until you enter new credentials, so the
-  account cannot be locked by retries. Chat partners are looked up first; names are refreshed after
-  90 days, unknown callsigns are retried after 7 days.
-- **The password stays on the proxy, encrypted.** The key is tied to this installation and to the
-  Raspberry Pi's board: a copy of the database or of the SD card alone does not reveal it. It is
-  never shown again and never appears in logs or stall reports.
+- **QRZ.com lookups work on subscriber accounts.** v2.1.1 paused lookups whenever QRZ.com's own
+  counter for the account reached 50. On a subscriber account that counter is not a daily count:
+  one account reported 77,678 while QRZ.com's own account page showed a single lookup that day and
+  an unlimited daily limit. The proxy therefore paused at every login, with no lookup made. The
+  counter now only pauses lookups on free accounts, where it protects the free tier.
+- **The proxy's own limits are unchanged for everyone:** at most 50 lookups per 24 hours and one
+  request every 30 seconds.
+- **No action needed after the update.** A pause that v2.1.1 set on a subscriber account because
+  of that counter is lifted automatically and lookups start within a minute. A pause after 50 of
+  the proxy's own lookups stays in place, as before.
 
 ### Backend (MCProxy)
 
-- `qrz_service` runs the lookup loop with the limits above, following the QRZ.com XML
-  specification's session and error rules (re-login when a session expires, 24 h pause on
-  `Connection refused`). Each lookup is counted before its request goes out, so a failed request
-  still counts against the daily cap.
-- `secret_box`: AES-256-GCM under a key derived (HKDF) from `/var/lib/mcapp/secret.key` (created
-  with the first credentials, mode 0600) and the board serial; the ciphertext is bound to the
-  username.
-- Migration 33: `callsign_info` (cache by base callsign), `qrz_lookups` (cap ledger), `qrz_state`.
-- New API: `GET /api/qrz/status`, `PUT`/`DELETE /api/qrz/credentials`, `PUT /api/qrz/enabled`,
-  `GET /api/callsign_info`; new SSE event `proxy:callsign_info` (full map on connect, one entry per
-  new lookup). The password is write-only.
-- Stall tracking never records the body of the credentials request and masks every `*password*`
-  key. Without this, a sampled request would have stored the password in `stall_events`.
-- Dependencies refreshed (`ast-serialize` 0.12.1).
+- `qrz_service`: the QRZ.com `Count` gate applies only while `SubExp` reads `non-subscriber` or is
+  missing (an unknown account type keeps the gate on). A running suspension recorded by that gate
+  on an account known to be a subscriber is cleared at the next step.
 
 ### Frontend (webapp)
 
-- New "QRZ.com Lookup" settings card: login form, status, lookups used today, next lookup, last
-  error, enable switch and removal.
-- Name chip and 📍 QTH in chat bubbles and station cards, fed live by `proxy:callsign_info` and kept
-  in memory only.
-- The client stall reporter drops the credentials request body and masks password keys.
-- Dependencies refreshed (`@lucide/vue` 1.51.0, `rollup` 4.64.0, transitive patches).
+- Dependencies refreshed (`@lucide/vue` 1.52.0).
 
 ### Upgrade notes
 
-- Nothing changes until you enter QRZ.com credentials; without them the feature makes no requests.
-- Moving the SD card to another Raspberry Pi means entering the QRZ.com password again: the stored
-  one cannot be decrypted on a different board, by design.
-- QRZ.com delivers the first-name field as registered; a club or repeater entry may read, for
-  example, "REPEATER".
-- Reload the app once (the "Update available" banner) to get the new display.
+- If the QRZ.com card showed "Suspended" with "QRZ reports … lookups in 24 h" on a subscriber
+  account, it switches back to active by itself after the update.
 
 ## Earlier releases, in brief
 
 One entry per release. The full notes as published are in
 [`doc/archive/release-history-full.md`](https://github.com/DK5EN/McApp/blob/development/doc/archive/release-history-full.md).
+
+### v2.1.1 (2026-10-04)
+
+- First name and QTH next to callsigns, looked up on QRZ.com with your own account (Settings →
+  QRZ.com Lookup). Schema 32 → 33 (`callsign_info`, `qrz_lookups`, `qrz_state`).
 
 ### v2.1.0 (2026-10-02)
 
