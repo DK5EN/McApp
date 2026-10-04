@@ -2224,3 +2224,18 @@ journal warning after the restart. `/api/qrz/status` carries `account_tier: "fre
 free-tier suspension is kept (`suspend_reason` NULL, `last_error` intact, until 2026-10-05 09:42).
 `slot-2` (`v2.1.2`) and `slot-0` (`v2.1.1`) remain available for Activate. The subscriber
 recovery itself can only be confirmed on DM3KS's box.
+
+## 29. 2026-10-04 11:45 CEST — pre-release check before the v2.1.4 hotfix (no dev soak)
+
+DM3KS's card on v2.1.3 read `9 / 50`: the 50/24 h ledger cap still applied to a paid
+subscription, which QRZ does not limit per day. v2.1.4 (`a76abd2`, webapp `af88e54`) applies the
+cap only on a free or unknown tier, re-asserts the tier on every login, lifts a running cap
+suspension on a subscriber, and reports `daily_cap: null` there. Promoted directly at the
+operator's request.
+
+- Box unchanged since §28's addendum: v2.1.3 on `slot-1`, all four services active, `NRestarts` 0,
+  no warning in the journal over the last hour, up 10 days.
+- Both gates green; dependency refresh moved no lock in either repo; subtrees and all five
+  hand-copied corpora identical across the three repos.
+- **W23 here:** DK5EN is free tier, so its suspension (`suspend_reason` NULL, `last_error`
+  `QRZ reports 50 lookups in 24 h`) must still be kept after the update.

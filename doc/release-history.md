@@ -1,47 +1,50 @@
 # Release History
 
-## v2.1.3 (2026-10-04)
+## v2.1.4 (2026-10-04)
 
-Completes the QRZ.com fix of v2.1.2: an account **with a QRZ.com subscription** could stay paused
-after the update if its password had been entered again in the meantime. The settings card now
-also shows whether the account is a paid subscription or a free one. Schema goes from 33 to 34
-(one new column, added automatically at startup); `SYSTEM_EPOCH` stays at 5.
+QRZ.com lookups on an account **with a paid QRZ.com subscription** are no longer limited to 50 per
+day. QRZ.com sets no daily limit for subscribers, and the proxy now follows that. Free accounts
+keep every limit they had. Schema stays at 34 and `SYSTEM_EPOCH` at 5.
 
 ### Highlights
 
-- **Subscriber accounts recover after the update, password re-entered or not.** v2.1.2 recognised
-  the wrong pause by its error message, and entering the password again clears that message while
-  the pause kept running. The proxy now records why a pause was set, so a subscriber account starts
-  looking up names within about a minute of the update.
-- **Paid or free at a glance.** Settings → QRZ.com Lookup shows "Paid subscription (until …)" or
-  "Free account" instead of QRZ.com's raw value.
-- **Limits unchanged:** at most 50 lookups per 24 hours and one request every 30 seconds, for
-  every account. A free account still pauses when QRZ.com's own counter reaches 50; a pause after
-  50 of the proxy's own lookups, or after QRZ.com refused the login, is never lifted early.
+- **No daily cap on a paid subscription.** The proxy looked up at most 50 callsigns per 24 hours
+  on every account, which protected the free tier but also held back paid accounts. A subscriber
+  now works through all heard stations, still at most one request every 30 seconds.
+- **A paused subscriber account resumes by itself.** If the 50-lookup pause was already running
+  when the update arrives, it is lifted within about a minute.
+- **Free accounts unchanged:** at most 50 lookups per 24 hours, and a pause when QRZ.com's own
+  counter reaches 50. A pause after QRZ.com refused the login is never lifted early, on any
+  account.
 
 ### Backend (MCProxy)
 
-- Migration 34: `qrz_state.suspend_reason` (`cap`, `server_count`, `refused`), written with every
-  suspension. The subscriber lift keys on it instead of on `last_error`. A suspension written by
-  v2.1.1/v2.1.2 (no reason recorded) is lifted on a subscriber when its message names QRZ.com's
-  counter, or when the message was cleared and the proxy's own lookups are under the cap.
-- `GET /api/qrz/status` gains `account_tier` (`subscriber` / `free`).
+- The 50/24 h ledger cap applies only while `SubExp` reads `non-subscriber`, is missing or is
+  empty (fail closed). Every login rewrites the stored tier, so a stale "subscriber" can never
+  lift the cap on an account that is no longer one.
+- A running cap or Count suspension on a subscriber is lifted on the next step; a refusal stays.
+- `GET /api/qrz/status` returns `daily_cap: null` on a subscriber.
 
 ### Frontend (webapp)
 
-- QRZ.com card: "Account" row with paid subscription and expiry date, or free account.
-- Test-only dependencies refreshed (`jsdom`'s `data-urls` 8.0.0).
+- QRZ.com card: "Lookups (24 h)" reads "N (no daily limit)" on a paid subscription instead of
+  "N / 50", and the state hint no longer mentions a daily limit there.
 
 ### Upgrade notes
 
-- Nothing to do. A subscriber account that still showed "Suspended" switches to active by itself
-  within about a minute of the update.
-- Reload the app once (the "Update available" banner) to see the new Account row.
+- Nothing to do. A subscriber account that showed "Suspended" switches to active by itself within
+  about a minute of the update.
+- Reload the app once (the "Update available" banner) to see the new lookup counter.
 
 ## Earlier releases, in brief
 
 One entry per release. The full notes as published are in
 [`doc/archive/release-history-full.md`](https://github.com/DK5EN/McApp/blob/development/doc/archive/release-history-full.md).
+
+### v2.1.3 (2026-10-04)
+
+- QRZ.com suspensions record why they were set, so a subscriber account recovers after a password
+  re-entry; the settings card shows paid or free. Schema 33 → 34 (`qrz_state.suspend_reason`).
 
 ### v2.1.2 (2026-10-04)
 
