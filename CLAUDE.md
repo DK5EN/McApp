@@ -747,6 +747,10 @@ Plan, threat model and API: `doc/2026-10-04_0848-qrz-callsign-lookup-plan.md`.
   pre-check (`qrz_lookups`, written BEFORE the request), the 24 h suspension set at the 50th
   lookup, and QRZ's own `Count`. Any two mask the third in a combined test, which is how the
   first version of the suite let all three be deleted unnoticed. Keep Q3b/Q8/Q30 discriminating.
+- **QRZ's `Count` gates free accounts only.** On a subscriber it is not a 24 h tally (DM3KS:
+  `Count 77678` on login, QRZ's page: 1 XML lookup that day), so gating on it suspended every
+  login forever. `_is_free_tier` fails closed on an absent `SubExp`; the ledger cap applies to
+  everyone. Q20b-Q20f pin it.
 - **The 30 s gate must hold when `step()` is called early** (wake event, restart) — a test
   driver that obeys the returned delay proves nothing about it.
 - **The password is encrypted, not hashed — the login needs the plain text.** `secret_box.py`:

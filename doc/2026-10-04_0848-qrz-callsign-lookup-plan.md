@@ -17,6 +17,9 @@ in chat and station lists is a follow-up.
 - A free account gets `call fname name addr2 state country`, plus the session message "A
   subscription is required to access the complete record". `SubExp` reads `non-subscriber`.
 - Login does not count as a lookup (`Count 0` after login, `1` after the first lookup).
+- **A subscriber's `Count` is not a 24 h tally** (2026-10-04, account DM3KS, subscribed until 2027):
+  the login reported `Count 77678` while QRZ's own account page showed 1 XML lookup that day and
+  an "unlimited" daily limit. `SubExp` carries the expiry date instead of `non-subscriber`.
 - Raw values need normalising: `fname` can carry middle names (`Martin Stefan`), `addr2` can carry a
   postal code (`A-4060 Leonding`).
 
@@ -31,11 +34,15 @@ in chat and station lists is a follow-up.
 | login: error without key, anything else | credentials wrong                              | stop (`auth_failed`) until new credentials |
 | HTTP 429/503, `limit`/`exceeded` text   | rate limited                                   | exponential backoff                        |
 | network error, other 5xx                | transient                                      | exponential backoff                        |
-| `Count` ≥ daily cap                     | QRZ already counts us at cap                   | suspend 24 h                               |
+| `Count` ≥ daily cap, free account       | QRZ already counts us at cap                   | suspend 24 h                               |
 
 `Count` is QRZ's own 24 h tally for the account, including lookups other software made with it. Using
 it as a second gate keeps us under the free tier's ~100/day even when a logging program shares the
 account.
+
+The gate applies only while `SubExp` is `non-subscriber` or absent (fail closed). On a subscriber it
+suspended every login for good (DM3KS, see §2), so it is skipped there; our own ledger cap still
+applies. A suspension the old gate already stored on a subscriber is lifted at the next step.
 
 A wrong password stops the service instead of retrying: repeated failed logins are what gets an
 account locked, and nothing changes until the operator enters new credentials.
