@@ -1,67 +1,75 @@
 # Release History
 
-## v2.1.0 (2026-10-02)
+## v2.1.1 (2026-10-04)
 
-McApp 2.1.0 is the release that matches MeshCom node firmware **v4.40a**. Scrolling up to read a
-conversation no longer gets pulled back down by new messages, and a store node's `:sto` notice now
-shows as "held by …" on your message instead of as a chat bubble. Schema stays at 32 and
-`SYSTEM_EPOCH` at 5, so there is no migration and no bootstrap convergence.
+McApp now shows the first name and home town (QTH) of a station next to its callsign, looked up on
+QRZ.com with your own account ([issue #14](https://github.com/DK5EN/McApp/issues/14), suggested by
+dm3ks). The schema goes from 32 to 33 (three new tables, created automatically at startup);
+`SYSTEM_EPOCH` stays at 5.
 
 ### Highlights
 
-- **Your reading position holds.** Reported by DJ8MEH on a tablet: after scrolling up to follow a
-  discussion, every incoming message moved the view down again. Two causes, both fixed. Anything
-  within 250 px of the bottom (8 to 12 text lines on a tablet) was scrolled to the newest message;
-  the band is now 80 px. And while you read inside the newest messages, each new one removed the
-  oldest bubble above you, which shifted the text under you. The chat now holds the visible
-  messages in place as soon as you scroll up; a "Jump to latest" button appears once newer
-  messages exist.
-- **Live messages are followed again on a full store.** With 2000 messages held in the browser,
-  every new message replaced an old one, the count stayed the same and auto-follow never fired.
-  It now reacts to the newest message of the open conversation.
-- **The RF Monitor holds its place too.** Scrolled up, live frames no longer remove rows above
-  the one you are reading.
-- **`:sto` becomes "held by …".** A store node that keeps your direct message for later delivery
-  answers with a text like `DK5EN-98 :sto071 DJ8MEH-81`. Behind a node that forwards that text, it
-  used to appear as an ordinary message from the store node. It is now matched to your message
-  and shown as held by that station, the same state the binary `0x04` frame sets, and the text
-  itself is hidden. A notice that matches nothing is hidden as well.
+- **Names and QTH next to callsigns.** Chat bubbles and the station cards (Messages panel and
+  Positions list) show the first name as a chip and the QTH with a 📍 pin. Names appear live as
+  soon as a lookup finds them, without reloading. Callsigns without an entry look as before.
+- **Set up in Settings → QRZ.com Lookup.** Enter your QRZ.com username and password; your browser's
+  password manager can fill them in. A free QRZ.com account is enough: it delivers name, town and
+  country. Two-factor login on the QRZ.com account does not affect this interface.
+- **Gentle on your account.** At most 50 lookups per 24 hours and one request every 30 seconds.
+  At 50 lookups — or when QRZ.com's own counter for your account reaches 50, for example because a
+  logging program uses the same account — lookups pause for 24 hours. Errors back off with growing
+  pauses, and a rejected password stops all attempts until you enter new credentials, so the
+  account cannot be locked by retries. Chat partners are looked up first; names are refreshed after
+  90 days, unknown callsigns are retried after 7 days.
+- **The password stays on the proxy, encrypted.** The key is tied to this installation and to the
+  Raspberry Pi's board: a copy of the database or of the SD card alone does not reveal it. It is
+  never shown again and never appears in logs or stall reports.
 
 ### Backend (MCProxy)
 
-- `store_message` absorbs an inline `:stoNNN` notice: original sender equals the notice's
-  destination, echo counter matches, the held destination must match when named, within 1 h. It
-  writes `send_success`, rank `held`, a `held` ledger row and the same `msg_status` event as the
-  `0x04` frame. Both arriving for the same holder count once.
-- The notice row stays in the database and is excluded from history, paging, the initial burst
-  and unread counts. It never appears among delivery receipts.
-- `ack_predicate_vectors.json` v3 adds `is_sto`, shared with mc-chat and the webapp.
-- Dependencies refreshed: `cryptography` 50.0.2, `fastapi` 0.142.2, `uvloop` 0.23.0 (also in the
-  standalone BLE service lock).
+- `qrz_service` runs the lookup loop with the limits above, following the QRZ.com XML
+  specification's session and error rules (re-login when a session expires, 24 h pause on
+  `Connection refused`). Each lookup is counted before its request goes out, so a failed request
+  still counts against the daily cap.
+- `secret_box`: AES-256-GCM under a key derived (HKDF) from `/var/lib/mcapp/secret.key` (created
+  with the first credentials, mode 0600) and the board serial; the ciphertext is bound to the
+  username.
+- Migration 33: `callsign_info` (cache by base callsign), `qrz_lookups` (cap ledger), `qrz_state`.
+- New API: `GET /api/qrz/status`, `PUT`/`DELETE /api/qrz/credentials`, `PUT /api/qrz/enabled`,
+  `GET /api/callsign_info`; new SSE event `proxy:callsign_info` (full map on connect, one entry per
+  new lookup). The password is write-only.
+- Stall tracking never records the body of the credentials request and masks every `*password*`
+  key. Without this, a sampled request would have stored the password in `stall_events`.
+- Dependencies refreshed (`ast-serialize` 0.12.1).
 
 ### Frontend (webapp)
 
-- The chat pins its render window when you scroll up, also after returning from another view.
-  Your own send still jumps to the newest message, except while older history is loading.
-- The `:sto` notice is hidden in every view and never lights an unread badge. On the direct
-  internet feed, which bypasses the backend, it is matched locally. A held status never
-  overwrites "acknowledged" or "not delivered", and a repeat keeps the first holder.
-- Dependencies refreshed (transitive).
+- New "QRZ.com Lookup" settings card: login form, status, lookups used today, next lookup, last
+  error, enable switch and removal.
+- Name chip and 📍 QTH in chat bubbles and station cards, fed live by `proxy:callsign_info` and kept
+  in memory only.
+- The client stall reporter drops the credentials request body and masks password keys.
+- Dependencies refreshed (`@lucide/vue` 1.51.0, `rollup` 4.64.0, transitive patches).
 
 ### Upgrade notes
 
-- Matching node firmware: **v4.40a**. Store-and-forward status (`held`, `failed`) and the `:sto`
-  handling above come from the firmware's store node; older nodes keep working, they just send
-  fewer of these signals.
-- Same code as the short-lived v2.0.19, whose GitHub release was removed; v2.1.0 replaces it.
-- Nothing to configure. Reload the app once (the "Update available" banner) so the scroll fix
-  takes effect. Older `:sto` texts disappear from history, but the messages they refer to are not
-  marked held retroactively.
+- Nothing changes until you enter QRZ.com credentials; without them the feature makes no requests.
+- Moving the SD card to another Raspberry Pi means entering the QRZ.com password again: the stored
+  one cannot be decrypted on a different board, by design.
+- QRZ.com delivers the first-name field as registered; a club or repeater entry may read, for
+  example, "REPEATER".
+- Reload the app once (the "Update available" banner) to get the new display.
 
 ## Earlier releases, in brief
 
 One entry per release. The full notes as published are in
 [`doc/archive/release-history-full.md`](https://github.com/DK5EN/McApp/blob/development/doc/archive/release-history-full.md).
+
+### v2.1.0 (2026-10-02)
+
+- Matches node firmware v4.40a: the reading position holds when you scroll up (chat and RF
+  Monitor), and a store node's `:sto` notice shows as "held by …" instead of a chat bubble
+  (`ack_predicate_vectors.json` v3).
 
 ### v2.0.18 (2026-09-29)
 
