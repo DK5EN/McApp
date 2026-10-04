@@ -2215,3 +2215,27 @@ adds the account tier to the settings card. Promoted directly at the operator's 
   33 → 34 checked against a v33 database holding a DM3KS-shaped `qrz_state` row.
 - **W23 here:** DK5EN is free tier; its suspension must survive the update with
   `suspend_reason` NULL (legacy) and `last_error` intact, so it is not lifted.
+
+### Addendum 11:40 CEST — v2.1.3 deployed
+
+Update runner (`POST /api/update/start {"dev": false}`): `slot-1` active, `version.html` `v2.1.3`,
+all four services active, `NRestarts` 0, schema 34 in DB and code, no test harness in the slot, no
+journal warning after the restart. `/api/qrz/status` carries `account_tier: "free"`. W23: the
+free-tier suspension is kept (`suspend_reason` NULL, `last_error` intact, until 2026-10-05 09:42).
+`slot-2` (`v2.1.2`) and `slot-0` (`v2.1.1`) remain available for Activate. The subscriber
+recovery itself can only be confirmed on DM3KS's box.
+
+## 29. 2026-10-04 11:45 CEST — pre-release check before the v2.1.4 hotfix (no dev soak)
+
+DM3KS's card on v2.1.3 read `9 / 50`: the 50/24 h ledger cap still applied to a paid
+subscription, which QRZ does not limit per day. v2.1.4 (`a76abd2`, webapp `af88e54`) applies the
+cap only on a free or unknown tier, re-asserts the tier on every login, lifts a running cap
+suspension on a subscriber, and reports `daily_cap: null` there. Promoted directly at the
+operator's request.
+
+- Box unchanged since §28's addendum: v2.1.3 on `slot-1`, all four services active, `NRestarts` 0,
+  no warning in the journal over the last hour, up 10 days.
+- Both gates green; dependency refresh moved no lock in either repo; subtrees and all five
+  hand-copied corpora identical across the three repos.
+- **W23 here:** DK5EN is free tier, so its suspension (`suspend_reason` NULL, `last_error`
+  `QRZ reports 50 lookups in 24 h`) must still be kept after the update.

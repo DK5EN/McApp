@@ -41,8 +41,10 @@ it as a second gate keeps us under the free tier's ~100/day even when a logging 
 account.
 
 The gate applies only while `SubExp` is `non-subscriber` or absent (fail closed). On a subscriber it
-suspended every login for good (DM3KS, see §2), so it is skipped there; our own ledger cap still
-applies. A suspension the old gate already stored on a subscriber is lifted at the next step.
+suspended every login for good (DM3KS, see §2), so it is skipped there, and so is our own ledger
+cap (§4) since v2.1.4. A cap or Count suspension already stored on a subscriber is lifted at the
+next step; a refusal is not. Every login rewrites `subscription`, so a reply without `SubExp`
+drops the account back to the free-tier rules.
 The reason is kept in `qrz_state.suspend_reason` (`cap`, `server_count`, `refused`, migration 34),
 because replacing the credentials clears `last_error` but not the suspension. The status carries
 `account_tier` (`subscriber` / `free`, derived from `SubExp`) for the settings card.
@@ -54,7 +56,9 @@ account locked, and nothing changes until the operator enters new credentials.
 
 All values are constants in `qrz_service.py`.
 
-- **Hard cap 50 lookups per rolling 24 h.** The lookup is recorded in `qrz_lookups` BEFORE the
+- **Hard cap 50 lookups per rolling 24 h on a free account.** A paid subscription has no daily
+  XML limit at QRZ, so the cap is off there (`daily_cap: null` in the status) and only the 30 s
+  spacing bounds the rate (at most 2880 requests a day). The lookup is recorded in `qrz_lookups` BEFORE the
   request is sent, so a crash or timeout mid-request still counts. The cap counts attempts, not
   successes.
 - **Suspend 24 h when the cap is reached.** The 50th lookup writes `suspended_until = now + 24 h`
