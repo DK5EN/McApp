@@ -2249,3 +2249,6 @@ the slot, no journal warning after the restart. `/api/qrz/status`: `account_tier
 `QRZ reports 50 lookups in 24 h`, until 2026-10-05 09:42). `slot-1` (`v2.1.3`) and `slot-2`
 (`v2.1.2`) remain available for Activate. The subscriber path (`daily_cap: null`, cap lifted) can
 only be confirmed on DM3KS's box.
+
+**Closed 2026-10-04:** the operator confirmed the subscriber path on DM3KS's box after the update
+(no daily cap, lookups running). The QRZ subscriber issue (v2.1.2-v2.1.4) is closed.
