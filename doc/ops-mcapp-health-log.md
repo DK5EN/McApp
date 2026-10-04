@@ -2215,3 +2215,12 @@ adds the account tier to the settings card. Promoted directly at the operator's 
   33 → 34 checked against a v33 database holding a DM3KS-shaped `qrz_state` row.
 - **W23 here:** DK5EN is free tier; its suspension must survive the update with
   `suspend_reason` NULL (legacy) and `last_error` intact, so it is not lifted.
+
+### Addendum 11:40 CEST — v2.1.3 deployed
+
+Update runner (`POST /api/update/start {"dev": false}`): `slot-1` active, `version.html` `v2.1.3`,
+all four services active, `NRestarts` 0, schema 34 in DB and code, no test harness in the slot, no
+journal warning after the restart. `/api/qrz/status` carries `account_tier: "free"`. W23: the
+free-tier suspension is kept (`suspend_reason` NULL, `last_error` intact, until 2026-10-05 09:42).
+`slot-2` (`v2.1.2`) and `slot-0` (`v2.1.1`) remain available for Activate. The subscriber
+recovery itself can only be confirmed on DM3KS's box.
