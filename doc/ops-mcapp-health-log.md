@@ -2190,3 +2190,14 @@ on a subscriber.
 - **W23 on this box is NOT affected by the fix:** DK5EN is a non-subscriber, so its stored
   suspension (`QRZ reports 50 lookups in 24 h`, until 2026-10-05 09:42) is kept. Check after the
   deploy that it is still in place.
+
+### Addendum 10:50 CEST — v2.1.2 deployed
+
+Deployed through the update runner (`POST /api/update/start {"dev": false}`): `slot-2` active,
+`version.html` `v2.1.2`, all four services active, `NRestarts` 0, schema 33 in DB and code, no
+test harness in the slot (production shape), `_count_suspension_obsolete` present, no warning or
+higher in the journal after the restart. `slot-0` (`v2.1.1`) remains available for Activate.
+
+**W23:** the free-account suspension is kept as intended — `qrz_state` still reads
+`QRZ reports 50 lookups in 24 h`, `subscription` `non-subscriber`, until 2026-10-05 09:42. The
+subscriber path (lift + no Count gate) can only be confirmed on DM3KS's box once they update.
