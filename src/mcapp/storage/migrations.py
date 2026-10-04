@@ -719,10 +719,70 @@ class MigrationsMixin(StorageBase):
                         " (stall tracking, empty until the first recorded stall)",
                         current_version,
                     )
+                    _set_schema_version(conn, 32)
+
+                if current_version < 33:  # noqa: PLR2004 - schema migration step
+                    # QRZ.com callsign lookup (issue #14,
+                    # doc/2026-10-04_0848-qrz-callsign-lookup-plan.md §7).
+                    # `callsign_info` caches first name/QTH by BASE callsign;
+                    # `qrz_lookups` is the ledger the 50/24 h hard cap counts,
+                    # written before each request goes out; `qrz_state` is a
+                    # single row holding the encrypted credentials and the
+                    # limiter state that must survive a restart.
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS callsign_info (
+                            callsign TEXT PRIMARY KEY,
+                            status TEXT NOT NULL,
+                            first_name TEXT,
+                            qth TEXT,
+                            country TEXT,
+                            fname TEXT,
+                            name TEXT,
+                            addr2 TEXT,
+                            state TEXT,
+                            fetched_at INTEGER NOT NULL,
+                            source TEXT NOT NULL DEFAULT 'qrz'
+                        );
+                    """)
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS qrz_lookups (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            ts_ms INTEGER NOT NULL,
+                            callsign TEXT NOT NULL,
+                            outcome TEXT NOT NULL
+                        );
+                    """)
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_qrz_lookups_ts ON qrz_lookups(ts_ms);"
+                    )
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS qrz_state (
+                            id INTEGER PRIMARY KEY CHECK (id = 1),
+                            username TEXT,
+                            password_enc TEXT,
+                            enabled INTEGER NOT NULL DEFAULT 1,
+                            suspended_until_ms INTEGER,
+                            backoff_until_ms INTEGER,
+                            backoff_level INTEGER NOT NULL DEFAULT 0,
+                            last_request_ms INTEGER,
+                            last_login_ms INTEGER,
+                            auth_failed INTEGER NOT NULL DEFAULT 0,
+                            last_error TEXT,
+                            last_error_ms INTEGER,
+                            server_count INTEGER,
+                            subscription TEXT
+                        );
+                    """)
+                    conn.execute("INSERT OR IGNORE INTO qrz_state (id) VALUES (1);")
+                    logger.info(
+                        "Migration v%d → v33: created callsign_info, qrz_lookups, qrz_state"
+                        " (QRZ.com lookup, inert until credentials are entered)",
+                        current_version,
+                    )
                     # Adding a step after this one? Bump LATEST_SCHEMA_VERSION in
                     # storage/constants.py in the same commit — the startup suite
                     # asserts every migration chain terminates there.
-                    _set_schema_version(conn, 32)
+                    _set_schema_version(conn, 33)
 
         await asyncio.to_thread(_init_db)
 

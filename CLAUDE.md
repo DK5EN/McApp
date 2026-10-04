@@ -738,6 +738,33 @@ Web Push to browser / iOS-PWA clients, sharing one wire contract with mc-chat so
 - **VAPID path resolution** is per call, not import-time: `MESHCOM_VAPID_PATH` wins, else `MCAPP_ENV=dev` writes under `$XDG_STATE_HOME`/`~/.local/state/mcapp`, else `/var/lib/mcapp`. If the chosen directory is unwritable the key falls back to the user state dir rather than going **ephemeral** — an ephemeral key rotates on every restart and silently kills every stored subscription.
 - Delivery needs outbound internet from the Pi and degrades silently without it. `/api/push/*` is covered by the existing `^/api/` proxy rules — no Caddy change.
 
+## QRZ.com Callsign Lookup (`qrz_service.py`, issue #14)
+
+First name + QTH per base callsign from the QRZ.com XML API, with the operator's own account.
+Plan, threat model and API: `doc/2026-10-04_0848-qrz-callsign-lookup-plan.md`.
+
+- **The budget has three independent guards and each is tested on its own.** The ledger
+  pre-check (`qrz_lookups`, written BEFORE the request), the 24 h suspension set at the 50th
+  lookup, and QRZ's own `Count`. Any two mask the third in a combined test, which is how the
+  first version of the suite let all three be deleted unnoticed. Keep Q3b/Q8/Q30 discriminating.
+- **The 30 s gate must hold when `step()` is called early** (wake event, restart) — a test
+  driver that obeys the returned delay proves nothing about it.
+- **The password is encrypted, not hashed — the login needs the plain text.** `secret_box.py`:
+  install key in `/var/lib/mcapp/secret.key` (0600) + the Pi's board serial via HKDF, AES-GCM
+  with `qrz.password:<USER>` as associated data. An SD card moved to another Pi reads
+  `credentials_unreadable`; the operator re-enters the password. Code running as the service
+  user can always decrypt — no TPM, by design out of scope.
+- **QRZ requests are POSTed as a form body, never a query string**: httpx logs URLs, and the
+  URL would carry the password or the session key.
+- **The credentials PUT must never reach `stall_events`.** `stall_middleware` withholds the
+  body of `/api/qrz/credentials` entirely (key redaction only runs on a body that parses as
+  JSON; a truncated one is stored raw), `redact()` masks `*password*` keys, and the webapp's
+  `stallReporter.ts` does both on the client side.
+- **A rejected login stops the service until new credentials arrive** — retrying a wrong
+  password is what locks an account. `Connection refused` means 24 h (spec), not a backoff.
+- MFA on the QRZ account does not apply to the XML API (measured 2026-10-04); a free account
+  gets `fname name addr2 state country`, and the login itself costs no lookup.
+
 ## Configuration
 
 `/etc/mcapp/config.json` (dev: `/etc/mcapp/config.dev.json`, auto-selected via `MCAPP_ENV=dev`).

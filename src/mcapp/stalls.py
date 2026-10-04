@@ -129,9 +129,10 @@ def _trim_stack_paths(text: str) -> str:
 
 
 # Redaction: exact key names (case-insensitive) plus a substring rule for the
-# many api-key spellings. "auth" and "authorization" are both listed because
-# real payloads use both ("Authorization" headers, push subscriptions'
-# "auth" secret) and neither is a substring of the other.
+# many api-key spellings and any `*password*` key (the QRZ credentials PUT).
+# "auth" and "authorization" are both listed because real payloads use both
+# ("Authorization" headers, push subscriptions' "auth" secret) and neither is
+# a substring of the other.
 _REDACT_EXACT_KEYS = frozenset(
     {"endpoint", "keys", "p256dh", "auth", "authorization", "api_key", "x-api-key"}
 )
@@ -140,7 +141,12 @@ _REDACTED = "[redacted]"
 
 def _is_sensitive_key(key: str) -> bool:
     lowered = key.lower()
-    return lowered in _REDACT_EXACT_KEYS or "api_key" in lowered or "apikey" in lowered
+    return (
+        lowered in _REDACT_EXACT_KEYS
+        or "api_key" in lowered
+        or "apikey" in lowered
+        or "password" in lowered
+    )
 
 
 def redact(obj: Any) -> Any:

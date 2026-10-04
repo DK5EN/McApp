@@ -1,6 +1,9 @@
 # McApp production health log — mcapp.local
 
-> **Status:** Current — newest section: §24 (2026-09-29 10:03 CEST, post-release sweep of
+> **Status:** Current — newest section: §26 (2026-10-04 09:36 CEST, pre-release sweep of
+> `v2.1.1-dev.2` before the v2.1.1 promotion) — green, zero findings, **~3 min soak at the operator's
+> decision**; new watch point **W23** (QRZ lookup budget). Before that: §25 (2026-10-02, no-soak
+> sign-off of v2.0.19, re-released as v2.1.0). Before that: §24 (2026-09-29 10:03 CEST, post-release sweep of
 > production `v2.0.18`, 5 min after the deploy) — green, zero findings; the `{CET}` gap open since
 > 08:00:46 is the operator's deliberate GW-off on DK5EN-98, not a W20 instance; §23's stall
 > figures and its W20 reading are corrected here.
@@ -26,7 +29,7 @@
 > cost ~1 s of wall time, so `/api/send` `http` rows remain and are expected. Newest full sweep:
 > §15 (2026-09-19 07:50) — all green, zero findings; `handler` stalls down from ~42–54/day to
 > 1 in 7 h. Last finding was **F13** (§7), upstream and resolved 2026-09-01.
-> Open watch points: **W20** (§21), **W19** (§21), **W17** (§18), **W13** (reduced, §17), **W14** (§15), **W16** (§16), **W1** (zram swap,
+> Open watch points: **W23** (§26), **W22** (§24), **W20** (§21), **W19** (§21), **W17** (§18), **W13** (reduced, §17), **W14** (§15), **W16** (§16), **W1** (zram swap,
 > trend watch only), **W12** (§12), **W2**, **W3**, **W6**, **W7**, **W9**, **W10**.
 > **W22** (§24), **W18** (§19/§21), **W15** (§15/§16/§17), **W4**, **W5**, **W8** and **W11** are resolved.
 >
@@ -2100,3 +2103,58 @@ Deployed from the Update page: `slot-1` active, `version.html` `v2.0.19`, `mcapp
 `caddy`/`lighttpd` active, `NRestarts` 0, schema 32, no test harness in the slot (production
 shape), `_apply_held_notice` present, 0 journal warnings in the first 5 min. The browser runs the
 served bundle after the reload. A full `/ai-ops` post-release sweep is still due.
+
+### Addendum 16:20 CEST — v2.1.0 replaces v2.0.19
+
+The v2.0.19 GitHub release was deleted by accident, so the same code was re-released as **v2.1.0**,
+the release that pairs with node firmware v4.40a. Deployed from the Update page: `slot-0` active,
+`version.html` `v2.1.0`, all four services active, `NRestarts` 0, no test harness in the slot,
+`_apply_held_notice` present, 0 journal warnings in the first 5 min. The webapp bundle hash is
+unchanged from v2.0.19 (same code; only `version.html` differs).
+
+GitHub now lists only two releases, **v2.1.0** and **v2.0.0**: every other release and pre-release
+is gone, while all git tags remain in both repos.
+
+## 26. 2026-10-04 09:36 CEST — pre-release sweep before promoting v2.1.1-dev.2 to v2.1.1
+
+**Promoted after a ~3 minute soak, at the operator's decision.** v2.1.1-dev.2 (QRZ.com name/QTH
+display, issue #14) went live at 09:33:34 on `slot-1`; the sweep ran at 09:36 with the service up
+140 s. The QRZ backend itself (v2.1.1-dev.1) had run for about 20 minutes before that restart.
+Full `/ai-ops` phases 1-8 ran.
+
+| Anchor                  | Value                                                                     |
+| ----------------------- | ------------------------------------------------------------------------- |
+| Active slot / webapp    | `slot-1`, `version.html` `v2.1.1-dev.2`                                   |
+| Services                | `mcapp` `mcapp-ble` `caddy` `lighttpd` active; `NRestarts` 0 / 0          |
+| Schema / epoch          | 33 = `LATEST_SCHEMA_VERSION` (migration 33 ran 09:14 on dev.1) / 5 = 5    |
+| Classifier              | `classifier_version` 5, 38 rules, 0 unclassified in the last hour         |
+| DB                      | 53 MB, WAL 2.4 MB; 22 851 messages, 421 stations; 0 `{CET}` rows          |
+| Live flow, last 1 h     | 0 msg (Sunday morning, last chat 08:30), 94 pos, 329 signal rows          |
+| `{CET}` / heartbeat age | 693 s (inside the 12 min tolerance) / 19 s                                |
+| UDP provenance          | `first_seen` (W22 post-restart state), 0 untrusted, not multiple, 0 supp. |
+| Journal warnings        | **0** in 24 h, 0 since the dev.2 restart                                  |
+| Host                    | disk 9 % (51 G free), MemAvailable 187 MB, SwapFree 436 of 462 MB, 46 °C  |
+| Secrets                 | `vapid.json` 600, `config.json` 640, `secret.key` **600** (new, QRZ)      |
+
+### Verdict
+
+Green, zero findings.
+
+### QRZ lookup, first live hour
+
+- Credentials entered by the operator through the new settings card; `secret.key` was created with
+  mode 0600, and the service reads the board serial for the key binding.
+- 34 lookups in the ledger: 30 `found`, 4 `not_found`, no transport errors, no backoff, no
+  suspension yet. QRZ's own `Count` for the account read 37 (3 lookups from the manual probes
+  earlier the same morning).
+- The SSE connect burst carries the `proxy:callsign_info` snapshot (checked with a raw
+  `/events` stream on the box).
+
+### Watch points
+
+- **W23 (new):** QRZ lookup budget. At the rate above the 50/24 h cap is reached about 10 minutes
+  after this sweep, which must suspend lookups until ~24 h after the 50th lookup and then resume on
+  its own. Check in the post-release sweep: `qrz_state.suspended_until_ms` set once, no lookup in
+  the ledger inside the suspension, `server_count` never above 50 plus the operator's own manual
+  lookups. A `last_error` other than the cap message is the finding.
+- W22 unchanged: `udp_target_kind` `first_seen` right after the restart.

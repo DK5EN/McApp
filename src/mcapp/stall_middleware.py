@@ -77,6 +77,12 @@ def _passthrough(path: str) -> bool:
     return path in _PASSTHROUGH_EXACT or path.startswith(_PASSTHROUGH_PREFIX)
 
 
+# Paths whose request body is never recorded, not even redacted: key-based
+# redaction only runs on a body that parses as JSON, and a truncated or
+# non-JSON body is stored as raw text. The request is still timed.
+_BODY_WITHHELD_EXACT = frozenset({"/api/qrz/credentials"})
+
+
 @dataclass(slots=True)
 class _RequestMeta:
     """The identifying facts about one request, fixed before the downstream
@@ -189,7 +195,8 @@ class StallMiddleware:
             return
 
         body: Any = None
-        if tap.captured_body:
+        withheld = tap.scope.get("path") in _BODY_WITHHELD_EXACT
+        if tap.captured_body and not withheld:
             content_type = tap.headers.get(b"content-type", b"").decode("latin-1")
             text = bytes(tap.captured_body).decode("utf-8", errors="replace")
             if "json" in content_type.lower():
@@ -201,8 +208,10 @@ class StallMiddleware:
                 body = text
 
         detail: dict[str, Any] = {"resp_bytes": tap.resp_bytes, "client": tap.scope.get("client")}
-        if tap.body_truncated:
+        if tap.body_truncated and not withheld:
             detail["body_truncated"] = True
+        if withheld:
+            detail["body_withheld"] = True
 
         self.recorder.record(
             kind="http",

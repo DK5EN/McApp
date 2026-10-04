@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     # TYPE_CHECKING only — wire_monitor.py imports broadcast_verdict from
     # THIS module at runtime, so a real top-level import here would cycle.
     from .node_console import NodeConsoleSession
+    from .qrz_service import QrzLookupService
     from .wire_monitor import WireMonitor
 
 SSE_CLIENT_QUEUE_SIZE = 256
@@ -194,6 +195,7 @@ try:
     from .sse_routes.monitor import build_monitor_router
     from .sse_routes.prefs import build_prefs_router
     from .sse_routes.push import build_push_router
+    from .sse_routes.qrz import build_qrz_router
     from .sse_routes.stalls import build_stalls_router
     from .sse_routes.stream import build_stream_router
     from .sse_routes.uptime import build_uptime_router
@@ -284,6 +286,9 @@ class SSEManager:
         # 503 (startup tests build a manager without one), same convention
         # as wire_monitor above.
         self.node_console: NodeConsoleSession | None = None
+        # Set by build_app (main.py); None keeps /api/qrz/* at a 503 (startup
+        # tests build a manager without one), same convention as node_console.
+        self.qrz_service: QrzLookupService | None = None
 
         # Subscribe to messages from the router
         if message_router:
@@ -517,6 +522,14 @@ class SSEManager:
                 yield self.format_sse_event(fp, "proxy:filter_prefs")
             except Exception as exc:
                 logger.warning("filter_prefs snapshot failed: %s", exc)
+            # QRZ name/QTH snapshot (issue #14): ALWAYS emitted, `{}` included.
+            # Live hits follow as one-entry deltas under the same event name
+            # (QrzLookupService on_info → broadcast_event); the client merges both.
+            try:
+                info = await storage.get_callsign_info_map()
+                yield self.format_sse_event(info, "proxy:callsign_info")
+            except Exception as exc:
+                logger.warning("callsign_info snapshot failed: %s", exc)
         else:
             logger.warning(
                 "SSE client %s: no storage handler available",
@@ -613,6 +626,7 @@ class SSEManager:
         app.include_router(build_weather_router(self))
         app.include_router(build_deploy_router(self))
         app.include_router(build_push_router(self))
+        app.include_router(build_qrz_router(self))
         app.include_router(build_linkcheck_router(self))
         app.include_router(build_monitor_router(self))
         app.include_router(build_uptime_router(self))
