@@ -81,9 +81,9 @@ timestamps within a vector (server order has no id tiebreak).
 | Wave | Repo    | Owner        | Files (exclusive)                                                                                                                                                                                                                                                                      | Status  |
 | ---- | ------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
 | 0    | MCProxy | orchestrator | this plan, the issue copy                                                                                                                                                                                                                                                              | done    |
-| 1a   | MCProxy | implementer  | `storage/ack_match_vectors.json` (new), `storage/ack_match_vectors_tests.py` (new)                                                                                                                                                                                                     | pending |
-| 1b   | webapp  | implementer  | `services/messageProcessor/ackMatch.ts`, `services/messageProcessor.ts`, `constants/index.ts`, `services/__tests__/messageProcessor.{ackGate,core}.spec.ts`, `stores/__tests__/messages.{ack,filter}.spec.ts`, `stores/__tests__/messagesHydrate.spec.ts` (only existing ack fixtures) | pending |
-| 1 G  | both    | orchestrator | register 1a in `scripts/run_startup_tests.py` `main()` (hotspot); gate both repos; advisor pass; commit per repo                                                                                                                                                                       | pending |
+| 1a   | MCProxy | implementer  | `storage/ack_match_vectors.json` (new), `storage/ack_match_vectors_tests.py` (new)                                                                                                                                                                                                     | done    |
+| 1b   | webapp  | implementer  | `services/messageProcessor/ackMatch.ts`, `services/messageProcessor.ts`, `constants/index.ts`, `services/__tests__/messageProcessor.{ackGate,core}.spec.ts`, `stores/__tests__/messages.{ack,filter}.spec.ts`, `stores/__tests__/messagesHydrate.spec.ts` (only existing ack fixtures) | done    |
+| 1 G  | both    | orchestrator | register 1a in `scripts/run_startup_tests.py` `main()` (hotspot); gate both repos; advisor pass; commit per repo                                                                                                                                                                       | done    |
 | 2    | webapp  | 1b, resumed  | copy corpus → `services/messageProcessor/__tests__/ack_match_vectors.json` + `ackMatchVectors.spec.ts` (sha256 pin, parsed-JSON drift vs `../MCProxy`, replay through `findAckMessage`)                                                                                                | pending |
 | 3    | webapp  | implementer  | finding 2: `stores/messages.ts`, `types/message.ts`, `stores/__tests__/messagesHydrate.spec.ts` (+ the `msg:status` store method wherever it lives)                                                                                                                                    | pending |
 | 3 G  | webapp  | orchestrator | gate, advisor pass, commit                                                                                                                                                                                                                                                             | pending |
@@ -129,6 +129,16 @@ and because finding 2 must not ship ahead of finding 1 (it would make false ✓�
 - Persisted through the offline cache by `_patchMessage` (whole-row re-put) — test it hydrates.
 - Regression test in `messagesHydrate.spec.ts`; the ctcping test ("REPORTED BUG (ctcping, cached
   rows)", ~333) stays green.
+
+## Wave log
+
+- **Wave 1** (2026-10-04): corpus v1 with 23 vectors (sha256 `b266e46a…`), replayed through
+  production `store_message`; four mutations of `ingest.py` each turn vectors red. webapp
+  `findAckMessage` mirrors the reference rule; four store-level regression tests fail on the old
+  matcher. Advisor (Fable): APPROVED. Declined suggestion, recorded: the server takes the leading
+  digits after `:ack` (`:ack201 ok` → 201), the webapp requires the tail to be all digits. Only a
+  human-typed text produces that shape (firmware emits exactly `%-9.9s:ack%03i`), and treating it
+  as an ack on the client would swallow a human message from view; not aligned.
 
 ## Verification
 

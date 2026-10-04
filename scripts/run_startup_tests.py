@@ -66,6 +66,7 @@ from mcapp.sse_format_tests import run_sse_format_tests
 from mcapp.sse_handler import run_startup_tests as run_sse_tests
 from mcapp.stall_http_tests import run_stall_http_tests
 from mcapp.stall_tests import run_stall_tests
+from mcapp.storage.ack_match_vectors_tests import run_ack_match_vector_tests
 from mcapp.storage.ack_status_tests import run_ack_status_tests
 from mcapp.storage.connection_lifecycle_tests import run_connection_lifecycle_tests
 from mcapp.storage.conv_dedup_tests import run_conv_dedup_tests
@@ -183,6 +184,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     store_notice_ok = await run_store_notice_tests()
     print(f"store_notice: {'PASS' if store_notice_ok else 'FAIL'}")
+
+    ack_match_vectors_ok = await run_ack_match_vector_tests()
+    print(f"ack_match_vectors: {'PASS' if ack_match_vectors_ok else 'FAIL'}")
 
     linkcheck_sse_ok = await run_linkcheck_sse_tests()
     print(f"linkcheck_sse: {'PASS' if linkcheck_sse_ok else 'FAIL'}")
@@ -303,6 +307,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and linkcheck_ingest_ok
         and ack_status_ok
         and store_notice_ok
+        and ack_match_vectors_ok
         and linkcheck_sse_ok
         and wire_monitor_ok
         and node_console_ok
