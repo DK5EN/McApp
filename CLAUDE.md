@@ -747,10 +747,14 @@ Plan, threat model and API: `doc/2026-10-04_0848-qrz-callsign-lookup-plan.md`.
   pre-check (`qrz_lookups`, written BEFORE the request), the 24 h suspension set at the 50th
   lookup, and QRZ's own `Count`. Any two mask the third in a combined test, which is how the
   first version of the suite let all three be deleted unnoticed. Keep Q3b/Q8/Q30 discriminating.
-- **QRZ's `Count` gates free accounts only.** On a subscriber it is not a 24 h tally (DM3KS:
-  `Count 77678` on login, QRZ's page: 1 XML lookup that day), so gating on it suspended every
-  login forever. `_is_free_tier` fails closed on an absent `SubExp`; the ledger cap applies to
-  everyone. Q20b-Q20i pin it.
+- **Both budget gates apply to free accounts only.** QRZ does not limit a subscriber's XML
+  lookups per day, and on a subscriber `Count` is not a 24 h tally either (DM3KS: `Count 77678`
+  on login, QRZ's page: 1 XML lookup that day) — gating on it suspended every login forever,
+  and the 50/24 h ledger cap still capped a paid account until v2.1.4. On a subscriber only the
+  30 s spacing bounds the rate; `daily_cap` is `null` in the status. `_is_free_tier` fails
+  closed on an absent or empty `SubExp`, and every login rewrites `subscription`, so a stale
+  "subscriber" can never lift the cap. A running cap or Count suspension on a subscriber is
+  lifted on the next step; a refusal never is. Q20b-Q20k pin it.
 - **Why a suspension runs lives in `qrz_state.suspend_reason` (migration 34), never in
   `last_error`.** Replacing the credentials clears `last_error` while the suspension keeps
   running; the v2.1.2 lift keyed on that text and left DM3KS stuck after a password re-entry.

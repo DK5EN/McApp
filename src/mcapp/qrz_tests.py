@@ -695,7 +695,8 @@ SUBSCRIBER = "Thu Oct 21 15:45:16 2027"
 async def _test_server_count_subscriber(env: Env, record: Record) -> None:
     """A subscriber's Count is not a 24 h tally: DM3KS's login reported 77678
     while QRZ's account page showed 1 XML lookup that day, and gating on it
-    suspended every login, forever. Our own ledger cap still holds."""
+    suspended every login, forever. QRZ does not limit a subscriber's XML
+    lookups per day, so our own ledger cap does not apply either."""
     for i in range(DAILY_CAP + 10):
         await env.add_heard(f"DL{i % 10}{chr(65 + i // 26 % 26)}{chr(65 + i % 26)}X", T0 - i)
     env.qrz.sub_exp = SUBSCRIBER
@@ -712,9 +713,56 @@ async def _test_server_count_subscriber(env: Env, record: Record) -> None:
     )
     await env.run_for(WINDOW_MS)
     stamps = [t for t, _, _ in env.qrz.lookups()]
+    status = await env.service.status()
     record(
-        "Q20c. a subscriber is still held to our own 50/24 h ledger cap",
-        len([t for t in stamps if t < T0 + WINDOW_MS]) == DAILY_CAP,
+        "Q20c. a subscriber has no daily cap: all 60 due stations looked up in 24 h",
+        len([t for t in stamps if t < T0 + WINDOW_MS]) == DAILY_CAP + 10
+        and status["state"] == "idle"
+        and status["daily_cap"] is None,
+    )
+
+
+async def _test_login_reasserts_tier(env: Env, record: Record) -> None:
+    """A stored "subscriber" from an earlier login must not lift the cap when
+    the current login no longer reports a subscription."""
+    for i in range(DAILY_CAP + 10):
+        await env.add_heard(f"DL{i % 10}{chr(65 + i // 26 % 26)}{chr(65 + i % 26)}X", T0 - i)
+    env.qrz.report_count = False
+    await env.service.set_credentials("DM3KS", PASSWORD)
+    await env.storage.update_qrz_state(subscription=SUBSCRIBER)
+    env.qrz.sub_exp = None
+    await env.run_for(WINDOW_MS)
+    status = await env.service.status()
+    record(
+        "Q20j. a login without SubExp resets the tier: the 50/24 h cap applies again",
+        len(env.qrz.lookups()) == DAILY_CAP
+        and status["state"] == "suspended"
+        and status["daily_cap"] == DAILY_CAP,
+    )
+
+
+async def _test_lift_cap_suspension(env: Env, record: Record) -> None:
+    """A ledger-cap suspension written by v2.1.3 or earlier on a subscriber is
+    lifted, by recorded reason and by the pre-v34 cap text alike."""
+    env.qrz.sub_exp = SUBSCRIBER
+    await _seed_suspension(
+        env, reason=f"daily cap of {DAILY_CAP} lookups reached", subscription=SUBSCRIBER
+    )
+    for i in range(DAILY_CAP):
+        await env.storage.record_qrz_lookup(T0 - 3_600_000 + i, f"DL{i % 10}XX")
+    await env.run_for(3 * MIN_INTERVAL_MS)
+    by_text = len(env.qrz.lookups()) == 1
+    await env.storage.update_qrz_state(
+        suspended_until_ms=T0 + SUSPEND_MS, suspend_reason="cap", last_error=None
+    )
+    await env.service.set_credentials("DM3KS", PASSWORD)
+    env.qrz.requests.clear()
+    await env.storage._mutate("DELETE FROM callsign_info", ())
+    await env.run_for(3 * MIN_INTERVAL_MS)
+    status = await env.service.status()
+    record(
+        "Q20k. a ledger-cap suspension on a subscriber is lifted and lookups resume",
+        by_text and len(env.qrz.lookups()) == 1 and status["state"] != "suspended",
     )
 
 
@@ -817,10 +865,10 @@ async def _test_suspend_records_reason(env: Env, record: Record) -> None:
 
 
 async def _test_keep_other_suspensions(env: Env, record: Record) -> None:
-    """The lift is narrow: a ledger-cap suspension on a subscriber and a Count
-    suspension on a free account both stay."""
+    """The lift is narrow: a ledger-cap or Count suspension on a free account
+    and a refusal on a subscriber all stay."""
     await _seed_suspension(
-        env, reason=f"daily cap of {DAILY_CAP} lookups reached", subscription=SUBSCRIBER
+        env, reason=f"daily cap of {DAILY_CAP} lookups reached", subscription="non-subscriber"
     )
     await env.run_for(3 * MIN_INTERVAL_MS)
     ledger_kept = not env.qrz.requests
@@ -830,29 +878,23 @@ async def _test_keep_other_suspensions(env: Env, record: Record) -> None:
     await env.run_for(3 * MIN_INTERVAL_MS)
     status = await env.service.status()
     free_kept = not env.qrz.requests and status["state"] == "suspended"
-    # Reason recorded, then the password replaced: cap and refusal stay.
-    kept = []
-    for kind in ("cap", "refused"):
-        await env.storage.update_qrz_state(
-            suspend_reason=kind, last_error=None, subscription=SUBSCRIBER
-        )
-        await env.service.set_credentials("DM3KS", PASSWORD)
-        await env.run_for(3 * MIN_INTERVAL_MS)
-        kept.append(not env.qrz.requests)
-    # Pre-v34 row, reason cleared, but the ledger is at the cap.
-    for i in range(DAILY_CAP):
-        await env.storage.record_qrz_lookup(T0 + i, f"DL{i % 10}XX")
-    await env.storage.update_qrz_state(suspend_reason=None, last_error=None)
+    # Reason recorded on a subscriber, then the password replaced: refusal stays.
+    await env.storage.update_qrz_state(
+        suspend_reason="refused", last_error=None, subscription=SUBSCRIBER
+    )
+    await env.service.set_credentials("DM3KS", PASSWORD)
     await env.run_for(3 * MIN_INTERVAL_MS)
-    # Not lifted at all — a lift would be re-suspended by the ledger gate with
-    # a fresh 24 h, so the original end time is what tells the two apart.
+    refused_kept = not env.qrz.requests
+    # Pre-v34 row on a subscriber whose text names a refusal.
+    await env.storage.update_qrz_state(suspend_reason=None, last_error="Connection refused")
+    await env.run_for(3 * MIN_INTERVAL_MS)
     state = await env.storage.get_qrz_state()
     legacy_kept = (
         not env.qrz.requests and state["suspended_until_ms"] == T0 + SUSPEND_MS - 3_600_000
     )
     record(
-        "Q20f. ledger-cap, refusal and free-tier Count suspensions are never lifted",
-        ledger_kept and free_kept and all(kept) and legacy_kept,
+        "Q20f. free-tier cap and Count suspensions and refusals are never lifted",
+        ledger_kept and free_kept and refused_kept and legacy_kept,
     )
 
 
@@ -1037,6 +1079,8 @@ async def run_qrz_tests() -> bool:
         _test_server_count,
         _test_server_count_subscriber,
         _test_server_count_unknown_tier,
+        _test_login_reasserts_tier,
+        _test_lift_cap_suspension,
         _test_lift_count_suspension,
         _test_lift_after_replaced_credentials,
         _test_lift_legacy_cleared_reason,
