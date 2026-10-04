@@ -595,6 +595,11 @@ def _cache_register_if_applicable(parsed: Any) -> None:
     if not isinstance(typ, str) or typ not in _CACHEABLE_REGISTER_TYPS:
         return
     state.register_cache[typ] = parsed
+    # Wake whoever waits for this register (set_time() waiting for the SN1
+    # push, see BLEAdapter.wait_for_register). After the store, so a waiter
+    # that wakes reads the value that tripped it.
+    if state.ble_adapter is not None:
+        state.ble_adapter.note_register(typ)
 
 
 def _note_register_cache_target(mac: str) -> None:
@@ -1286,6 +1291,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     state.ble_adapter = BLEAdapter(
         notification_callback=notification_callback,
         hello_bytes=build_hello_bytes(state.ble_pin),
+        register_lookup=lambda: state.register_cache,
     )
     state.ble_adapter.pairing_passkey = state.ble_pin
     state.ble_adapter._disconnect_callback = _on_adapter_disconnect  # noqa: SLF001 - framework wiring
@@ -1930,8 +1936,12 @@ async def set_device_time(_: bool = Depends(verify_api_key)) -> ResultResponse:
 
     try:
         success = await adapter.set_time()
+        # The branch (utcoff / settz / rule / unknown) says what was done about
+        # the node's UTC offset; see BLEAdapter.set_time.
+        branch = adapter.last_time_sync_branch
         return ResultResponse(
-            success=success, message="Time set" if success else "Failed to set time"
+            success=success,
+            message=f"Time set ({branch})" if success else f"Failed to set time ({branch})",
         )
     except Exception as e:
         logger.exception("Set time error")

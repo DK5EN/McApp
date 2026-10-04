@@ -74,6 +74,7 @@ import hashlib
 import inspect
 import json
 import logging
+import os
 import pathlib
 import sys
 import tempfile
@@ -96,7 +97,7 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from ble_service.src import ble_adapter  # noqa: E402 - needs the sys.path bootstrap above
+from ble_service.src import ble_adapter, node_tz  # noqa: E402 - needs the sys.path bootstrap above
 from ble_service.src import main as ble_main  # noqa: E402 - same
 from ble_service.src.ble_adapter import (  # noqa: E402 - same
     ADAPTER_INTERFACE,
@@ -5906,6 +5907,646 @@ async def _test_mcapp_ensure_connected_forward_route(record: Any) -> None:
     )
 
 
+# --------------------------------------------------------------------------
+# Node time zone (TZ-01 firmware): ble_service/src/node_tz.py + the branching
+# in BLEAdapter.set_time(). Plan: doc/2026-10-04_1600-node-tz-implementation-plan.md
+# (cases T1-T12 there). `--utcoff` CLEARS a TZ rule on TZ-01 firmware, so the
+# wire is what is pinned: which A0 commands go out, in which order, and that
+# 0x20 (UTC) always ends the sequence.
+# --------------------------------------------------------------------------
+
+_CET_RULE = "CET-1CEST,M3.5.0,M10.5.0/3"
+_TZ_ENV_VARS = ("MCAPP_NODE_TZ", "MCAPP_NODE_TZ_POLICY")
+_TZ_TIMING_CONSTANTS = (
+    "NODE_TZ_PROBE_TIMEOUT_S",
+    "NODE_TZ_VERIFY_TIMEOUT_S",
+    "TIME_SYNC_SETTLE_S",
+)
+
+
+def _d_frame(typ: str, **fields: Any) -> bytes:
+    """A `D{...}` register frame as the node sends it (JSON + NUL padding)."""
+    return b"D" + json.dumps({"TYP": typ, **fields}, separators=(",", ":")).encode() + b"\x00\x00"
+
+
+class _TzIface:
+    """`write_char_iface` stand-in recording every frame and letting the rig's
+    fake node react to A0 commands (a register push is just a `D{` frame fed
+    through the real `ble_main.notification_callback`)."""
+
+    def __init__(self, rig: _TzRig) -> None:
+        self._rig = rig
+
+    async def call_write_value(self, data: bytes, _options: dict[str, Any]) -> None:
+        self._rig.wire.append(bytes(data))
+        if len(data) > 1 and data[1] == ble_adapter.MsgType.TEXT_COMMAND:
+            cmd = data[2:].decode("utf-8")
+            self._rig.commands.append(cmd)
+            if self._rig.fail_a0:
+                raise RuntimeError("fake transport: A0 write fails")
+            if self._rig.on_command is not None:
+                self._rig.on_command(cmd)
+
+
+class _TzRig:
+    """A connected `BLEAdapter` wired like `lifespan()` wires it (cache lookup
+    on `ble_main.state.register_cache`, adapter on `ble_main.state`) over a
+    fake transport. Restores everything it touches on exit: shared state,
+    register cache, side-effect queues, the two TZ env vars and the timing
+    constants (shortened here so a "nothing arrives" case does not take 3 s).
+    """
+
+    def __init__(
+        self,
+        registers: dict[str, dict[str, Any]],
+        *,
+        env: dict[str, str] | None = None,
+        on_command: Callable[[str], None] | None = None,
+        probe_timeout: float = 0.3,
+        verify_timeout: float = 0.3,
+    ) -> None:
+        self.fail_a0 = False  # set True to make every A0 write raise
+        self.registers = registers
+        self.env = env or {}
+        self.on_command = on_command
+        self.probe_timeout = probe_timeout
+        self.verify_timeout = verify_timeout
+        self.wire: list[bytes] = []
+        self.commands: list[str] = []
+        self.adapter = BLEAdapter(register_lookup=lambda: ble_main.state.register_cache)
+
+    def push(self, typ: str, **fields: Any) -> None:
+        ble_main.notification_callback(_d_frame(typ, **fields))
+
+    def __enter__(self) -> _TzRig:
+        self._restore_side = _snapshot_side_effects()
+        self._state = _snapshot_state("ble_adapter")
+        self._cache = dict(ble_main.state.register_cache)
+        self._env = {k: os.environ.get(k) for k in _TZ_ENV_VARS}
+        self._consts = {k: getattr(ble_adapter, k) for k in _TZ_TIMING_CONSTANTS}
+        for key in _TZ_ENV_VARS:
+            os.environ.pop(key, None)
+        os.environ.update(self.env)
+        ble_adapter.NODE_TZ_PROBE_TIMEOUT_S = self.probe_timeout
+        ble_adapter.NODE_TZ_VERIFY_TIMEOUT_S = self.verify_timeout
+        ble_adapter.TIME_SYNC_SETTLE_S = 0.0
+        ble_main.state.register_cache.clear()
+        ble_main.state.ble_adapter = self.adapter
+        self.adapter._status.state = ConnectionState.CONNECTED
+        self.adapter.write_char_iface = cast("Any", _TzIface(self))
+        for typ, fields in self.registers.items():
+            self.push(typ, **fields)
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        for key, value in self._env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        for key, const in self._consts.items():
+            setattr(ble_adapter, key, const)
+        ble_main.state.register_cache.clear()
+        ble_main.state.register_cache.update(self._cache)
+        _restore_state(self._state)
+        self._restore_side()
+
+
+def _utcoff_command() -> str:
+    """The `--utcoff` text the pre-TZ-01 `set_time()` sent, computed the way it
+    computed it (host offset at call time, one decimal, explicit sign)."""
+    from datetime import UTC, datetime, timedelta
+
+    off = (datetime.now(UTC).astimezone().utcoffset() or timedelta()).total_seconds() / 3600
+    return f"--utcoff {off:+.1f}"
+
+
+def _is_time_sync(frame: bytes) -> bool:
+    """A 0x20 frame: `[6][0x20][4-byte LE unix time]`, UTC, close to now."""
+    return (
+        len(frame) == 6
+        and frame[0] == 6
+        and frame[1] == ble_adapter.MsgType.TIME_SYNC
+        and abs(int.from_bytes(frame[2:], "little") - int(time.time())) < 5
+    )
+
+
+def _a0(cmd: str) -> bytes:
+    return ble_adapter._frame(ble_adapter.MsgType.TEXT_COMMAND, cmd.encode("utf-8"))
+
+
+_OLD_FW_REGISTERS: dict[str, dict[str, Any]] = {
+    "SN": {"UTCOF": 2.0},
+    "SN1": {"VIA": True, "VIACALL": "OE1KFR-12", "WSPWD": "", "ASYM": False},
+}
+
+
+async def _test_node_tz_old_firmware_wire_unchanged(record: Any) -> None:
+    """T1: SN1 cached without a `TZ` key is firmware from before TZ-01. The
+    wire must be exactly what `set_time()` always sent: `--utcoff <host>`,
+    then 0x20, nothing else (no `--nodeset` probe: SN1 already answers), and
+    `_last_utc_offset` set so the DST watcher keeps running."""
+    with _TzRig(_OLD_FW_REGISTERS) as rig:
+        ok = await rig.adapter.set_time()
+        record("node TZ T1: old firmware set_time() succeeds", ok)
+        record(
+            "node TZ T1: old firmware wire is exactly --utcoff <host> then 0x20",
+            len(rig.wire) == 2
+            and rig.wire[0] == _a0(_utcoff_command())
+            and _is_time_sync(rig.wire[1]),
+        )
+        record(
+            "node TZ T1: old firmware sets _last_utc_offset (DST watcher armed)",
+            rig.adapter._last_utc_offset is not None,
+        )
+        record(
+            "node TZ T1: old firmware branch is 'utcoff'",
+            rig.adapter.last_time_sync_branch == "utcoff",
+        )
+
+
+async def _test_node_tz_old_firmware_without_sn1_probes_once(record: Any) -> None:
+    """T2: only `SN` cached, `SN1` never arrives (old firmware sends no SN1).
+    One `--nodeset` probe, timed out, then the T1 sequence."""
+    with _TzRig({"SN": {"UTCOF": 2.0}}) as rig:
+        ok = await rig.adapter.set_time()
+        record("node TZ T2: set_time() succeeds after the probe times out", ok)
+        record(
+            "node TZ T2: --nodeset is sent exactly once",
+            rig.commands.count("--nodeset") == 1,
+        )
+        record(
+            "node TZ T2: wire is --nodeset, --utcoff <host>, 0x20",
+            len(rig.wire) == 3
+            and rig.wire[0] == _a0("--nodeset")
+            and rig.wire[1] == _a0(_utcoff_command())
+            and _is_time_sync(rig.wire[2]),
+        )
+        record(
+            "node TZ T2: _last_utc_offset set (old-firmware bookkeeping)",
+            rig.adapter._last_utc_offset is not None,
+        )
+
+
+async def _test_node_tz_rule_set_sends_time_only(record: Any) -> None:
+    """T3: the node has a rule. Only 0x20 may go out -- `--utcoff` would wipe
+    the rule. A stale `_last_utc_offset` from an earlier session on this
+    adapter is cleared, and the DST loop then stays silent."""
+    registers: dict[str, dict[str, Any]] = {
+        "SN": {"UTCOF": 2.0},
+        "SN1": {"VIA": True, "TZ": _CET_RULE},
+    }
+    with _TzRig(registers) as rig:
+        # An earlier session on the same adapter object left a stale offset
+        # that differs from the host's: exactly what makes the DST loop fire.
+        rig.adapter._last_utc_offset = 99.0
+        ok = await rig.adapter.set_time()
+        record("node TZ T3: set_time() succeeds on a node with a rule", ok)
+        record(
+            "node TZ T3: only the 0x20 time frame is on the wire (no --utcoff)",
+            len(rig.wire) == 1 and _is_time_sync(rig.wire[0]),
+        )
+        record(
+            "node TZ T3: _last_utc_offset is cleared",
+            rig.adapter._last_utc_offset is None,
+        )
+        record("node TZ T3: branch is 'rule'", rig.adapter.last_time_sync_branch == "rule")
+
+        # The DST loop, ticking fast, must not send anything for this node.
+        original_interval = ble_adapter.DST_CHECK_INTERVAL_S
+        ble_adapter.DST_CHECK_INTERVAL_S = 0.01  # type: ignore[assignment]  # test: tick fast
+        try:
+            task = asyncio.create_task(rig.adapter._dst_check_loop())
+            await asyncio.sleep(0.1)
+            rig.adapter._status.state = ConnectionState.DISCONNECTED
+            await asyncio.wait_for(task, timeout=2)
+        finally:
+            ble_adapter.DST_CHECK_INTERVAL_S = original_interval
+        record(
+            "node TZ T3: the DST loop sends nothing to a node with a rule",
+            len(rig.wire) == 1,
+        )
+
+
+async def _test_node_tz_empty_gets_host_rule(record: Any) -> None:
+    """T4: TZ-01 node with no rule, policy host_if_unset: the host's rule goes
+    out as `--settz`, the SN1 push confirms it, then 0x20. No `--utcoff`."""
+    registers: dict[str, dict[str, Any]] = {"SN": {"UTCOF": 2.0}, "SN1": {"VIA": True, "TZ": ""}}
+
+    def node(cmd: str) -> None:
+        if cmd.startswith("--settz "):
+            rig.push("SN1", VIA=True, TZ=cmd[len("--settz ") :])
+
+    with _TzRig(registers, env={"MCAPP_NODE_TZ": _CET_RULE}, on_command=node) as rig:
+        ok = await rig.adapter.set_time()
+        record("node TZ T4: set_time() succeeds", ok)
+        record(
+            "node TZ T4: wire is --settz <host rule> then 0x20 (nothing else)",
+            len(rig.wire) == 2
+            and rig.wire[0] == _a0(f"--settz {_CET_RULE}")
+            and _is_time_sync(rig.wire[1]),
+        )
+        record(
+            "node TZ T4: no --utcoff, no confirming --nodeset (the SN1 push was enough)",
+            not any(c.startswith("--utcoff") or c == "--nodeset" for c in rig.commands),
+        )
+        record(
+            "node TZ T4: branch 'settz', _last_utc_offset stays None",
+            rig.adapter.last_time_sync_branch == "settz" and rig.adapter._last_utc_offset is None,
+        )
+
+
+async def _test_node_tz_settz_unverified_sends_time_only(record: Any) -> None:
+    """T5: the node pushes nothing for `--settz` and answers `--nodeset` with
+    `TZ == ""`: the push is unverified. 0x20 only, with exactly one warning --
+    NOT `--utcoff`, because the node may have taken the rule and `--utcoff`
+    would clear it (D5 as amended)."""
+    registers: dict[str, dict[str, Any]] = {"SN": {"UTCOF": 2.0}, "SN1": {"VIA": True, "TZ": ""}}
+
+    def node(cmd: str) -> None:
+        if cmd == "--nodeset":
+            rig.push("SN1", VIA=True, TZ="")
+
+    with _TzRig(registers, env={"MCAPP_NODE_TZ": _CET_RULE}, on_command=node) as rig:
+        adapter_logs, restore_a = _capture_logs(ble_adapter.logger)
+        tz_logs, restore_t = _capture_logs(node_tz.logger)
+        try:
+            ok = await rig.adapter.set_time()
+        finally:
+            restore_a()
+            restore_t()
+        warnings = [
+            r for r in adapter_logs.records + tz_logs.records if r.levelno == logging.WARNING
+        ]
+        record("node TZ T5: set_time() succeeds with an unverified rule", ok)
+        record(
+            "node TZ T5: wire is --settz, --nodeset, 0x20 (no --utcoff)",
+            len(rig.wire) == 3
+            and rig.wire[0] == _a0(f"--settz {_CET_RULE}")
+            and rig.wire[1] == _a0("--nodeset")
+            and _is_time_sync(rig.wire[2]),
+        )
+        record(
+            f"node TZ T5: exactly one warning logged (got {len(warnings)})",
+            len(warnings) == 1,
+        )
+        record(
+            "node TZ T5: branch 'settz_unverified', _last_utc_offset stays None",
+            rig.adapter.last_time_sync_branch == "settz_unverified"
+            and rig.adapter._last_utc_offset is None,
+        )
+
+
+async def _test_node_tz_policy_never_keeps_utcoff(record: Any) -> None:
+    """T6: policy `never` on a TZ-01 node with no rule: today's behaviour,
+    identical to T1 (no `--settz`)."""
+    registers: dict[str, dict[str, Any]] = {"SN": {"UTCOF": 2.0}, "SN1": {"VIA": True, "TZ": ""}}
+    env = {"MCAPP_NODE_TZ": _CET_RULE, "MCAPP_NODE_TZ_POLICY": "never"}
+    with _TzRig(registers, env=env) as rig:
+        ok = await rig.adapter.set_time()
+        record("node TZ T6: set_time() succeeds under policy never", ok)
+        record(
+            "node TZ T6: wire is --utcoff <host> then 0x20 (no --settz)",
+            len(rig.wire) == 2
+            and rig.wire[0] == _a0(_utcoff_command())
+            and _is_time_sync(rig.wire[1]),
+        )
+        record(
+            "node TZ T6: _last_utc_offset set",
+            rig.adapter._last_utc_offset is not None,
+        )
+
+
+async def _test_node_tz_cold_cache_race_never_wipes_rule(record: Any) -> None:
+    """T7 (the F2 race): the cache is still empty when `set_time()` runs (the
+    register burst is in flight) and the node's SN1, carrying a rule, lands
+    0.5 s after our `--nodeset`. `--utcoff` must never be sent."""
+
+    def node(cmd: str) -> None:
+        if cmd == "--nodeset":
+            asyncio.get_running_loop().call_later(
+                0.5, lambda: rig.push("SN1", VIA=True, TZ=_CET_RULE)
+            )
+
+    with _TzRig({}, on_command=node, probe_timeout=3.0) as rig:
+        start = time.monotonic()
+        ok = await rig.adapter.set_time()
+        elapsed = time.monotonic() - start
+        record("node TZ T7: set_time() succeeds", ok)
+        record(
+            "node TZ T7: wire is --nodeset then 0x20; --utcoff is never sent",
+            len(rig.wire) == 2
+            and rig.wire[0] == _a0("--nodeset")
+            and _is_time_sync(rig.wire[1])
+            and not any(c.startswith("--utcoff") for c in rig.commands),
+        )
+        record(
+            f"node TZ T7: the wait ended on the SN1 push, not the 3 s timeout ({elapsed:.2f}s)",
+            elapsed < 2.0,
+        )
+        record("node TZ T7: branch 'rule'", rig.adapter.last_time_sync_branch == "rule")
+
+
+async def _test_node_tz_unclassifiable_sends_time_only(record: Any) -> None:
+    """T8: empty cache, the node answers nothing: unknown. 0x20 only, no
+    `--utcoff` (UTC is always right), a warning, DST watcher left idle."""
+    with _TzRig({}) as rig:
+        logs, restore = _capture_logs(ble_adapter.logger)
+        try:
+            ok = await rig.adapter.set_time()
+        finally:
+            restore()
+        record("node TZ T8: set_time() succeeds", ok)
+        record(
+            "node TZ T8: wire is --nodeset then 0x20, no --utcoff",
+            len(rig.wire) == 2 and rig.wire[0] == _a0("--nodeset") and _is_time_sync(rig.wire[1]),
+        )
+        record(
+            "node TZ T8: warns, branch 'unknown', _last_utc_offset stays None",
+            any(r.levelno == logging.WARNING for r in logs.records)
+            and rig.adapter.last_time_sync_branch == "unknown"
+            and rig.adapter._last_utc_offset is None,
+        )
+
+
+async def _test_node_tz_stale_cache_is_not_trusted(record: Any) -> None:
+    """T13: a same-MAC reconnect keeps the previous session's SN1 (`TZ == ""`)
+    in the cache while the fresh one lands seconds after hello. After hello
+    arms the event, set_time() must not act on the stale value: it asks, the
+    node answers with its rule, and only 0x20 goes out -- no `--settz`, no
+    `--utcoff`."""
+    fresh = BLEAdapter()
+    fresh.note_register("SN1")
+    registers: dict[str, dict[str, Any]] = {"SN": {"UTCOF": 2.0}, "SN1": {"VIA": True, "TZ": ""}}
+
+    def node(cmd: str) -> None:
+        if cmd == "--nodeset":
+            rig.push("SN1", VIA=True, TZ=_CET_RULE)
+
+    with _TzRig(registers, env={"MCAPP_NODE_TZ": _CET_RULE}, on_command=node) as rig:
+        record(
+            "node TZ T13: an SN1 arrival before any arm counts as fresh",
+            await fresh.wait_for_register("SN1", 0.05),
+        )
+        rig.adapter.arm_register("SN1")  # what send_hello() does
+        ok = await rig.adapter.set_time()
+        record("node TZ T13: set_time() succeeds", ok)
+        record(
+            "node TZ T13: wire is --nodeset then 0x20 (no --settz, no --utcoff)",
+            len(rig.wire) == 2 and rig.wire[0] == _a0("--nodeset") and _is_time_sync(rig.wire[1]),
+        )
+        record("node TZ T13: branch 'rule'", rig.adapter.last_time_sync_branch == "rule")
+
+    # No fresh SN1 after hello and the probe goes unanswered: a stale "no rule"
+    # is not enough to push or to send --utcoff.
+    with _TzRig(registers, env={"MCAPP_NODE_TZ": _CET_RULE}) as rig2:
+        rig2.adapter.arm_register("SN1")
+        await rig2.adapter.set_time()
+        record(
+            "node TZ T13: stale EMPTY + unanswered probe sends 0x20 only",
+            rig2.commands == ["--nodeset"]
+            and rig2.adapter.last_time_sync_branch == "unknown"
+            and rig2.adapter._last_utc_offset is None,
+        )
+
+    # hello arms the event.
+    with _TzRig(registers) as rig3:
+        rig3.adapter.write_char_iface = cast("Any", _TzIface(rig3))
+        await rig3.adapter.send_hello()
+        record(
+            "node TZ T13: send_hello() arms SN1 (the cached one is stale from then on)",
+            not rig3.adapter._sn1_is_fresh(),
+        )
+
+
+async def _test_node_tz_late_answer_to_probe_does_not_fail_verify(record: Any) -> None:
+    """T14: `--settz` is answered first by an SN1 with `TZ == ""` (a late answer
+    to our own earlier probe) and 0.3 s later by the SN1 carrying the rule.
+    The verify wait must go on past the stale frame: branch `settz`, no
+    `--utcoff`, no extra `--nodeset`."""
+    registers: dict[str, dict[str, Any]] = {"SN": {"UTCOF": 2.0}, "SN1": {"VIA": True, "TZ": ""}}
+
+    def node(cmd: str) -> None:
+        if cmd.startswith("--settz "):
+            rule = cmd[len("--settz ") :]
+            rig.push("SN1", VIA=True, TZ="")
+            asyncio.get_running_loop().call_later(0.3, lambda: rig.push("SN1", VIA=True, TZ=rule))
+
+    with _TzRig(
+        registers, env={"MCAPP_NODE_TZ": _CET_RULE}, on_command=node, verify_timeout=1.5
+    ) as rig:
+        ok = await rig.adapter.set_time()
+        record("node TZ T14: set_time() succeeds", ok)
+        record(
+            "node TZ T14: wire is --settz then 0x20 (no --utcoff, no --nodeset)",
+            len(rig.wire) == 2
+            and rig.wire[0] == _a0(f"--settz {_CET_RULE}")
+            and _is_time_sync(rig.wire[1]),
+        )
+        record("node TZ T14: branch 'settz'", rig.adapter.last_time_sync_branch == "settz")
+
+
+async def _test_node_tz_failed_probe_write_is_unknown_not_unsupported(record: Any) -> None:
+    """T15: only `SN` is cached and the `--nodeset` write itself fails. That says
+    nothing about the firmware (the question never went out), so the node is
+    UNKNOWN -- 0x20 only -- and not UNSUPPORTED, which would send `--utcoff`."""
+    failing_rig = _TzRig({"SN": {"UTCOF": 2.0}})
+    failing_rig.fail_a0 = True
+    with failing_rig as rig:
+        logs, restore = _capture_logs(ble_adapter.logger)
+        try:
+            ok = await rig.adapter.set_time()
+        finally:
+            restore()
+        record("node TZ T15: set_time() still sends the time frame", ok)
+        record(
+            "node TZ T15: only --nodeset was attempted, no --utcoff",
+            rig.commands == ["--nodeset"] and _is_time_sync(rig.wire[-1]),
+        )
+        record(
+            "node TZ T15: branch 'unknown', with a warning",
+            rig.adapter.last_time_sync_branch == "unknown"
+            and any(r.levelno == logging.WARNING for r in logs.records),
+        )
+
+
+def _tzif_fixture(footer: bytes, version: bytes = b"2") -> bytes:
+    """Enough of a TZif file for the footer reader: magic, version, filler,
+    then `\\n<footer>\\n`."""
+    return b"TZif" + version + b"\x00" * 15 + b"\x01\x02\x03\n" + footer + b"\n"
+
+
+def _test_node_tz_host_posix_tz_reads_footer(record: Any) -> None:
+    """T9: `host_posix_tz` on fixture bytes."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        v2 = root / "v2"
+        v2.write_bytes(_tzif_fixture(_CET_RULE.encode()))
+        empty = root / "empty"
+        empty.write_bytes(_tzif_fixture(b""))
+        v1 = root / "v1"
+        v1.write_bytes(_tzif_fixture(_CET_RULE.encode(), version=b"\x00"))
+        junk = root / "junk"
+        junk.write_bytes(b"not a zone file\nCET-1\n")
+        binary_tail = root / "binary_tail"
+        binary_tail.write_bytes(b"TZif2" + b"\x00" * 15 + b"\xff\xfe\n")
+        record(
+            "node TZ T9: v2 file returns the footer rule",
+            node_tz.host_posix_tz(v2) == _CET_RULE,
+        )
+        record(
+            "node TZ T9: empty footer is None (not the last line of binary data)",
+            node_tz.host_posix_tz(empty) is None,
+        )
+        record(
+            "node TZ T9: v1 file (no footer) is None",
+            node_tz.host_posix_tz(v1) is None,
+        )
+        record(
+            "node TZ T9: a file without the TZif magic is None",
+            node_tz.host_posix_tz(junk) is None,
+        )
+        record(
+            "node TZ T9: undecodable footer is None",
+            node_tz.host_posix_tz(binary_tail) is None,
+        )
+        record(
+            "node TZ T9: missing file is None",
+            node_tz.host_posix_tz(root / "nope") is None,
+        )
+
+
+def _quoted_rule(name_len: int) -> str:
+    """`<AAAA...>-1`: a valid rule whose length is `name_len + 4`."""
+    return "<" + "A" * name_len + ">-1"
+
+
+def _test_node_tz_validate_vectors(record: Any) -> None:
+    """T10: `validate_node_tz` against the contract's examples and the
+    firmware's rejection classes."""
+    accepted = (
+        "CET-1CEST,M3.5.0,M10.5.0/3",
+        "GMT0BST,M3.5.0/1,M10.5.0",
+        "EST5EDT,M3.2.0,M11.1.0",
+        "UTC0",
+        "<+0530>-5:30",
+        "NZST-12NZDT,M9.5.0,M4.1.0/3",
+    )
+    for rule in accepted:
+        record(f"node TZ T10: accepts {rule}", node_tz.validate_node_tz(rule) is None)
+    rejected = {
+        "CET-1CEST": "format",  # DST name without rules
+        "EST5EDT,J60,J300": "only M rules",  # Jn day rules
+        "EST5EDT,60,300": "only M rules",  # plain-n day rules
+        _quoted_rule(36): "too long",  # 40 chars
+        "CET-1CEST,M3.5.0, M10.5.0/3": "format",  # a space
+        "": "format",
+        "CE-1": "format",  # name shorter than 3 letters
+        "CET-25": "format",  # offset beyond 24 h
+        "CET-1CEST,M13.5.0,M10.5.0": "format",  # month 13
+    }
+    for rule, reason in rejected.items():
+        got = node_tz.validate_node_tz(rule)
+        record(
+            f"node TZ T10: rejects {rule[:30]!r} with a '{reason}' reason (got {got!r})",
+            got is not None and reason in got,
+        )
+    rule39 = _quoted_rule(35)
+    record(
+        f"node TZ T10: a {len(rule39)}-char rule is accepted (the limit is 39)",
+        len(rule39) == 39 and node_tz.validate_node_tz(rule39) is None,
+    )
+
+
+def _test_node_tz_env_override_and_policy(record: Any) -> None:
+    """T11: `MCAPP_NODE_TZ` wins over the host file; an override the node would
+    reject is ignored with a warning and the host file is used. Policy
+    parsing falls back to the default on a typo, with a warning."""
+    saved = {k: os.environ.get(k) for k in _TZ_ENV_VARS}
+    logs, restore = _capture_logs(node_tz.logger)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            zone = pathlib.Path(tmp) / "zone"
+            zone.write_bytes(_tzif_fixture(_CET_RULE.encode()))
+            for key in _TZ_ENV_VARS:
+                os.environ.pop(key, None)
+            record(
+                "node TZ T11: no override, host file wins by default",
+                node_tz.host_node_tz(zone) == _CET_RULE,
+            )
+            os.environ["MCAPP_NODE_TZ"] = "EST5EDT,M3.2.0,M11.1.0"
+            record(
+                "node TZ T11: MCAPP_NODE_TZ beats the host file",
+                node_tz.host_node_tz(zone) == "EST5EDT,M3.2.0,M11.1.0",
+            )
+            logs.records.clear()
+            os.environ["MCAPP_NODE_TZ"] = "CET-1CEST"
+            record(
+                "node TZ T11: an invalid override is ignored, host file used",
+                node_tz.host_node_tz(zone) == _CET_RULE,
+            )
+            record(
+                "node TZ T11: an invalid override is warned about",
+                any(r.levelno == logging.WARNING for r in logs.records),
+            )
+            os.environ.pop("MCAPP_NODE_TZ")
+            bad = pathlib.Path(tmp) / "bad"
+            bad.write_bytes(_tzif_fixture(b"EST5EDT,J60,J300"))
+            record(
+                "node TZ T11: a host rule the node would reject yields None (utcoff fallback)",
+                node_tz.host_node_tz(bad) is None,
+            )
+
+            record(
+                "node TZ T11: policy defaults to host_if_unset",
+                node_tz.resolve_policy() == "host_if_unset",
+            )
+            os.environ["MCAPP_NODE_TZ_POLICY"] = "never"
+            record("node TZ T11: policy never is honoured", node_tz.resolve_policy() == "never")
+            logs.records.clear()
+            os.environ["MCAPP_NODE_TZ_POLICY"] = "allways"
+            record(
+                "node TZ T11: an invalid policy falls back to the default with a warning",
+                node_tz.resolve_policy() == "host_if_unset"
+                and any(r.levelno == logging.WARNING for r in logs.records),
+            )
+    finally:
+        restore()
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def _test_node_tz_settime_route_names_branch(record: Any) -> None:
+    """T12: `POST /api/ble/settime` reports which branch ran, so the main app's
+    log and a live check can tell them apart."""
+    original_key = ble_main.API_KEY
+    ble_main.API_KEY = ""
+    try:
+        client = TestClient(ble_main.app)
+        cases: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
+            ("utcoff", _OLD_FW_REGISTERS),
+            ("rule", {"SN": {"UTCOF": 2.0}, "SN1": {"TZ": _CET_RULE}}),
+            ("unknown", {}),
+        )
+        for branch, registers in cases:
+            with _TzRig(registers) as rig:
+                response = client.post("/api/ble/settime")
+                body = response.json()
+                record(
+                    f"node TZ T12: /api/ble/settime message names the '{branch}' branch "
+                    f"(got {body.get('message')!r})",
+                    response.status_code == 200
+                    and body.get("success") is True
+                    and body.get("message") == f"Time set ({branch})"
+                    and rig.adapter.last_time_sync_branch == branch,
+                )
+    finally:
+        ble_main.API_KEY = original_key
+
+
 async def run_ble_service_tests() -> bool:
     """Run the ble_service suite. True iff every case passed.
 
@@ -6039,6 +6680,29 @@ async def run_ble_service_tests() -> bool:
         _test_ensure_connected_route_disarms_the_pin_probe,
         _test_mcapp_ensure_connected_wire_frames,
         _test_mcapp_ensure_connected_forward_route,
+    ):
+        await case(_record)
+
+    # Node time zone (TZ-01 firmware): node_tz.py + set_time() branching.
+    for sync_case in (
+        _test_node_tz_host_posix_tz_reads_footer,
+        _test_node_tz_validate_vectors,
+        _test_node_tz_env_override_and_policy,
+        _test_node_tz_settime_route_names_branch,
+    ):
+        sync_case(_record)
+    for case in (
+        _test_node_tz_old_firmware_wire_unchanged,
+        _test_node_tz_old_firmware_without_sn1_probes_once,
+        _test_node_tz_rule_set_sends_time_only,
+        _test_node_tz_empty_gets_host_rule,
+        _test_node_tz_settz_unverified_sends_time_only,
+        _test_node_tz_policy_never_keeps_utcoff,
+        _test_node_tz_cold_cache_race_never_wipes_rule,
+        _test_node_tz_unclassifiable_sends_time_only,
+        _test_node_tz_stale_cache_is_not_trusted,
+        _test_node_tz_late_answer_to_probe_does_not_fail_verify,
+        _test_node_tz_failed_probe_write_is_unknown_not_unsupported,
     ):
         await case(_record)
 
