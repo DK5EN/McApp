@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -65,6 +65,10 @@ SESSION_ERRORS_BEFORE_BACKOFF = 2
 
 _RATE_LIMIT_HTTP = frozenset({429, 503})
 
+# Called with {BASE: {first_name, qth, country}} whenever a lookup finds data;
+# main.py fans it out as the SSE event `proxy:callsign_info`.
+InfoListener = Callable[[dict[str, dict[str, str | None]]], Awaitable[None]]
+
 
 def _aad(username: str) -> str:
     return f"qrz.password:{username}"
@@ -86,8 +90,10 @@ class QrzLookupService:
         *,
         transport: httpx.AsyncBaseTransport | None = None,
         clock: Callable[[], int] = now_ms,
+        on_info: InfoListener | None = None,
     ) -> None:
         self._storage = storage
+        self._on_info = on_info
         self._box = secret_box
         self._transport = transport
         self._clock = clock
@@ -99,6 +105,11 @@ class QrzLookupService:
         # with the old ones cannot write its verdict over the new ones.
         self._cred_gen = 0
         self._nothing_due = False
+
+    def set_info_listener(self, listener: InfoListener | None) -> None:
+        """Wire the live push after construction: the SSE manager is built
+        after this service in build_app."""
+        self._on_info = listener
 
     # ── API surface ────────────────────────────────────────────────────────
 
@@ -330,15 +341,13 @@ class QrzLookupService:
 
         if result.outcome is Outcome.FOUND:
             rec = result.record
-            await self._storage.upsert_callsign_info(
-                callsign,
-                "found",
-                now,
-                first_name=first_name(rec.get("fname")),
-                qth=qth_from_addr2(rec.get("addr2")),
-                country=rec.get("country"),
-                raw=rec,
-            )
+            info = {
+                "first_name": first_name(rec.get("fname")),
+                "qth": qth_from_addr2(rec.get("addr2")),
+                "country": rec.get("country"),
+            }
+            await self._storage.upsert_callsign_info(callsign, "found", now, raw=rec, **info)
+            await self._publish(callsign, info)
             self._session_errors = 0
             await self._storage.update_qrz_state(backoff_level=0, backoff_until_ms=None)
         elif result.outcome is Outcome.NOT_FOUND:
@@ -358,6 +367,17 @@ class QrzLookupService:
         else:
             await self._handle_failure(result, now)
         await self._check_server_count(result, now)
+
+    async def _publish(self, callsign: str, info: dict[str, str | None]) -> None:
+        # Same filter as get_callsign_info_map: an entry with neither name nor
+        # QTH is never on the wire, live or in the connect snapshot.
+        if self._on_info is None or not (info["first_name"] or info["qth"]):
+            return
+        try:
+            await self._on_info({callsign: info})
+        except Exception:
+            # A broadcast failure must never count as a lookup failure.
+            logger.warning("callsign_info broadcast failed", exc_info=True)
 
     # ── State transitions ─────────────────────────────────────────────────
 

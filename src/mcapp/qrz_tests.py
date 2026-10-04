@@ -16,17 +16,20 @@ Coverage:
      lookup whose request failed, exponential backoff with Retry-After, the
      session-loss and refusal rules, a rejected login stopping all traffic,
      QRZ's own Count, cache refresh windows, candidate selection, POST-only
-     transport, the in-flight credential-change race, and the API routes
-     never returning the password.
+     transport, the in-flight credential-change race, the API routes never
+     returning the password, the live `proxy:callsign_info` push and its
+     connect-burst snapshot.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import tempfile
 from collections.abc import Awaitable, Callable
 from itertools import pairwise
 from pathlib import Path
+from typing import Any
 
 import httpx
 from fastapi import FastAPI
@@ -52,6 +55,7 @@ from .qrz_service import (
 )
 from .secret_box import SecretBox, SecretBoxError, board_binding
 from .sqlite_storage import SQLiteStorage, create_sqlite_storage
+from .sse_handler import SSEManager
 from .sse_routes.qrz import build_qrz_router
 
 Record = Callable[[str, bool], None]
@@ -464,6 +468,85 @@ async def _test_aad_binds_username(env: Env, record: Record) -> None:
     )
 
 
+async def _test_live_push(env: Env, record: Record) -> None:
+    """Each hit is pushed once as a one-entry delta; misses push nothing; a
+    broadcast that raises never turns a hit into a lookup failure."""
+    await env.add_heard("DK5EN", T0)
+    await env.add_heard("NO1BODY", T0 - 1)
+    await env.add_heard("OE5HWN", T0 - 2)
+    pushed: list[dict[str, dict[str, str | None]]] = []
+
+    async def listener(info: dict[str, dict[str, str | None]]) -> None:
+        pushed.append(info)
+        if "OE5HWN" in info:
+            raise RuntimeError("client queue full")
+
+    env.service.set_info_listener(listener)
+    env.qrz.responder = lambda form: (
+        (200, _session_xml(), {})
+        if "username" in form
+        else (200, _session_xml(error="Not found: NO1BODY"), {})
+        if form["callsign"] == "NO1BODY"
+        else (200, _session_xml(callsign={**DK5EN, "call": form["callsign"]}), {})
+    )
+    await env.service.set_credentials("DK5EN", PASSWORD)
+    await env.run_for(10 * 60_000)
+    state = await env.storage.get_qrz_state()
+    info = await env.storage.get_callsign_info_map()
+    record(
+        "Q32. each hit pushed once as a one-entry delta, a miss pushes nothing",
+        pushed
+        == [
+            {"DK5EN": {"first_name": "Martin", "qth": "Freising", "country": "Germany"}},
+            {"OE5HWN": {"first_name": "Martin", "qth": "Freising", "country": "Germany"}},
+        ],
+    )
+    record(
+        "Q33. a failing broadcast neither loses the entry nor triggers backoff",
+        "OE5HWN" in info and state["backoff_until_ms"] is None,
+    )
+
+
+async def _test_connect_snapshot(env: Env, record: Record) -> None:
+    """Every SSE connect carries the full map as `proxy:callsign_info`,
+    `{}` included, so a client never waits for the next hit to learn names."""
+
+    class _Router:
+        def __init__(self, storage: SQLiteStorage) -> None:
+            self.storage_handler = storage
+            self.my_callsign = "DK5EN"
+            self.filter_history_row = None
+
+        def subscribe(self, _topic: str, _handler: Any) -> None:
+            return
+
+        def get_protocol(self, _name: str) -> Any:
+            return None
+
+    async def burst() -> str:
+        manager = SSEManager(host="127.0.0.1", port=0, message_router=_Router(env.storage))
+        return "".join([chunk async for chunk in manager.initial_events("c")])
+
+    empty = await burst()
+    await env.storage.upsert_callsign_info(
+        "DK5EN", "found", T0, first_name="Martin", qth="Freising", country="Germany"
+    )
+    await env.storage.upsert_callsign_info("NO1BODY", "not_found", T0)
+    full = await burst()
+
+    def payload(text: str) -> Any:
+        block = text.split("event: proxy:callsign_info", 1)[1]
+        data_line = next(ln for ln in block.splitlines() if ln.startswith("data: "))
+        return json.loads(data_line.removeprefix("data: "))
+
+    record(
+        "Q34. connect burst carries the snapshot: {} when empty, found entries only",
+        payload(empty) == {}
+        and payload(full)
+        == {"DK5EN": {"first_name": "Martin", "qth": "Freising", "country": "Germany"}},
+    )
+
+
 async def _test_ledger_counts_failed_requests(env: Env, record: Record) -> None:
     await env.add_heard("DK5EN", T0)
     await env.service.set_credentials("DK5EN", PASSWORD)
@@ -782,6 +865,8 @@ async def run_qrz_tests() -> bool:
         _test_unreadable,
         _test_routes,
         _test_run_loop_wakes,
+        _test_live_push,
+        _test_connect_snapshot,
     ):
         await _with_env(lambda env, case=case: case(env, record))  # type: ignore[misc]  # default-arg binding of the loop variable
 

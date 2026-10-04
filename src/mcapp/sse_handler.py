@@ -522,6 +522,14 @@ class SSEManager:
                 yield self.format_sse_event(fp, "proxy:filter_prefs")
             except Exception as exc:
                 logger.warning("filter_prefs snapshot failed: %s", exc)
+            # QRZ name/QTH snapshot (issue #14): ALWAYS emitted, `{}` included.
+            # Live hits follow as one-entry deltas under the same event name
+            # (QrzLookupService on_info → broadcast_event); the client merges both.
+            try:
+                info = await storage.get_callsign_info_map()
+                yield self.format_sse_event(info, "proxy:callsign_info")
+            except Exception as exc:
+                logger.warning("callsign_info snapshot failed: %s", exc)
         else:
             logger.warning(
                 "SSE client %s: no storage handler available",

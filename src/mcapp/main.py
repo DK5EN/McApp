@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import asyncio
 import contextlib
+import functools
 import json
 import math
 import os
@@ -2820,6 +2821,9 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
             wire_monitor.sse_manager = sse_manager
             sse_manager.node_console = node_console
             sse_manager.qrz_service = qrz_service
+            qrz_service.set_info_listener(
+                functools.partial(sse_manager.broadcast_event, "proxy:callsign_info")
+            )
             stall_recorder.register_gauge("sse_clients", lambda: len(sse_manager.clients))
             if hasattr(sse_manager, "set_classifier"):
                 sse_manager.set_classifier(classifier)
