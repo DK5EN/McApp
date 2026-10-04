@@ -2158,3 +2158,17 @@ Green, zero findings.
   the ledger inside the suspension, `server_count` never above 50 plus the operator's own manual
   lookups. A `last_error` other than the cap message is the finding.
 - W22 unchanged: `udp_target_kind` `first_seen` right after the restart.
+
+### Addendum 09:52 CEST — v2.1.1 deployed
+
+Deployed through the update runner (`POST /api/update/start {"dev": false}`, the same call the
+Update page's Start Update makes): `slot-0` active after ~60 s, `version.html` `v2.1.1`, all four
+services active, `NRestarts` 0, schema 33 in DB and code, no test harness in the slot (production
+shape), `_publish` present, the connect burst carries `proxy:callsign_info`, 0 journal warnings in
+the first minutes. `slot-1` (`v2.1.1-dev.2`) and `slot-2` (`v2.1.1-dev.1`) remain available for
+Activate.
+
+**W23, first reading:** the 24 h suspension fired at 09:42:33, triggered by QRZ.com's own `Count`
+reaching 50 (47 lookups by the service plus 3 manual probe lookups that morning) — the account-wide
+guard, before the service's own ledger cap of 50. `last_error` reads
+`QRZ reports 50 lookups in 24 h`; 43 names and 4 misses cached. Resume is due 2026-10-05 09:42.
