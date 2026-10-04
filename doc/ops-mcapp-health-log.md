@@ -2201,3 +2201,17 @@ higher in the journal after the restart. `slot-0` (`v2.1.1`) remains available f
 **W23:** the free-account suspension is kept as intended — `qrz_state` still reads
 `QRZ reports 50 lookups in 24 h`, `subscription` `non-subscriber`, until 2026-10-05 09:42. The
 subscriber path (lift + no Count gate) can only be confirmed on DM3KS's box once they update.
+
+## 28. 2026-10-04 11:25 CEST — pre-release check before the v2.1.3 hotfix (no dev soak)
+
+DM3KS stayed suspended on v2.1.2: the screenshot showed the stored suspension (until 05.10 09:51)
+with no `last_error`. Only `set_credentials` / `clear_credentials` clear that field, so the
+password had been re-entered, which removed the one marker the v2.1.2 lift keyed on. v2.1.3
+(`adc2b93`, webapp `5b78706`) records the reason in `qrz_state.suspend_reason` (migration 34) and
+adds the account tier to the settings card. Promoted directly at the operator's request.
+
+- Box unchanged since §27's addendum: v2.1.2 on `slot-2`, services active, `NRestarts` 0.
+- Both gates green after the dependency refresh (webapp: dev-only `data-urls` 8.0.0); migration
+  33 → 34 checked against a v33 database holding a DM3KS-shaped `qrz_state` row.
+- **W23 here:** DK5EN is free tier; its suspension must survive the update with
+  `suspend_reason` NULL (legacy) and `last_error` intact, so it is not lifted.

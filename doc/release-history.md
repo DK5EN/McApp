@@ -1,43 +1,52 @@
 # Release History
 
-## v2.1.2 (2026-10-04)
+## v2.1.3 (2026-10-04)
 
-A fix for the QRZ.com lookup introduced in v2.1.1: on an account **with a QRZ.com subscription**,
-lookups paused for 24 hours right after every login and never actually ran. Schema stays at 33 and
-`SYSTEM_EPOCH` at 5.
+Completes the QRZ.com fix of v2.1.2: an account **with a QRZ.com subscription** could stay paused
+after the update if its password had been entered again in the meantime. The settings card now
+also shows whether the account is a paid subscription or a free one. Schema goes from 33 to 34
+(one new column, added automatically at startup); `SYSTEM_EPOCH` stays at 5.
 
 ### Highlights
 
-- **QRZ.com lookups work on subscriber accounts.** v2.1.1 paused lookups whenever QRZ.com's own
-  counter for the account reached 50. On a subscriber account that counter is not a daily count:
-  one account reported 77,678 while QRZ.com's own account page showed a single lookup that day and
-  an unlimited daily limit. The proxy therefore paused at every login, with no lookup made. The
-  counter now only pauses lookups on free accounts, where it protects the free tier.
-- **The proxy's own limits are unchanged for everyone:** at most 50 lookups per 24 hours and one
-  request every 30 seconds.
-- **No action needed after the update.** A pause that v2.1.1 set on a subscriber account because
-  of that counter is lifted automatically and lookups start within a minute. A pause after 50 of
-  the proxy's own lookups stays in place, as before.
+- **Subscriber accounts recover after the update, password re-entered or not.** v2.1.2 recognised
+  the wrong pause by its error message, and entering the password again clears that message while
+  the pause kept running. The proxy now records why a pause was set, so a subscriber account starts
+  looking up names within about a minute of the update.
+- **Paid or free at a glance.** Settings → QRZ.com Lookup shows "Paid subscription (until …)" or
+  "Free account" instead of QRZ.com's raw value.
+- **Limits unchanged:** at most 50 lookups per 24 hours and one request every 30 seconds, for
+  every account. A free account still pauses when QRZ.com's own counter reaches 50; a pause after
+  50 of the proxy's own lookups, or after QRZ.com refused the login, is never lifted early.
 
 ### Backend (MCProxy)
 
-- `qrz_service`: the QRZ.com `Count` gate applies only while `SubExp` reads `non-subscriber` or is
-  missing (an unknown account type keeps the gate on). A running suspension recorded by that gate
-  on an account known to be a subscriber is cleared at the next step.
+- Migration 34: `qrz_state.suspend_reason` (`cap`, `server_count`, `refused`), written with every
+  suspension. The subscriber lift keys on it instead of on `last_error`. A suspension written by
+  v2.1.1/v2.1.2 (no reason recorded) is lifted on a subscriber when its message names QRZ.com's
+  counter, or when the message was cleared and the proxy's own lookups are under the cap.
+- `GET /api/qrz/status` gains `account_tier` (`subscriber` / `free`).
 
 ### Frontend (webapp)
 
-- Dependencies refreshed (`@lucide/vue` 1.52.0).
+- QRZ.com card: "Account" row with paid subscription and expiry date, or free account.
+- Test-only dependencies refreshed (`jsdom`'s `data-urls` 8.0.0).
 
 ### Upgrade notes
 
-- If the QRZ.com card showed "Suspended" with "QRZ reports … lookups in 24 h" on a subscriber
-  account, it switches back to active by itself after the update.
+- Nothing to do. A subscriber account that still showed "Suspended" switches to active by itself
+  within about a minute of the update.
+- Reload the app once (the "Update available" banner) to see the new Account row.
 
 ## Earlier releases, in brief
 
 One entry per release. The full notes as published are in
 [`doc/archive/release-history-full.md`](https://github.com/DK5EN/McApp/blob/development/doc/archive/release-history-full.md).
+
+### v2.1.2 (2026-10-04)
+
+- QRZ.com's own lookup counter only pauses lookups on free accounts; on a subscriber account it is
+  not a daily count and paused every login.
 
 ### v2.1.1 (2026-10-04)
 

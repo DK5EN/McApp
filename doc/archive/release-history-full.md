@@ -5,6 +5,40 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.1.2 (2026-10-04)
+
+A fix for the QRZ.com lookup introduced in v2.1.1: on an account **with a QRZ.com subscription**,
+lookups paused for 24 hours right after every login and never actually ran. Schema stays at 33 and
+`SYSTEM_EPOCH` at 5.
+
+### Highlights
+
+- **QRZ.com lookups work on subscriber accounts.** v2.1.1 paused lookups whenever QRZ.com's own
+  counter for the account reached 50. On a subscriber account that counter is not a daily count:
+  one account reported 77,678 while QRZ.com's own account page showed a single lookup that day and
+  an unlimited daily limit. The proxy therefore paused at every login, with no lookup made. The
+  counter now only pauses lookups on free accounts, where it protects the free tier.
+- **The proxy's own limits are unchanged for everyone:** at most 50 lookups per 24 hours and one
+  request every 30 seconds.
+- **No action needed after the update.** A pause that v2.1.1 set on a subscriber account because
+  of that counter is lifted automatically and lookups start within a minute. A pause after 50 of
+  the proxy's own lookups stays in place, as before.
+
+### Backend (MCProxy)
+
+- `qrz_service`: the QRZ.com `Count` gate applies only while `SubExp` reads `non-subscriber` or is
+  missing (an unknown account type keeps the gate on). A running suspension recorded by that gate
+  on an account known to be a subscriber is cleared at the next step.
+
+### Frontend (webapp)
+
+- Dependencies refreshed (`@lucide/vue` 1.52.0).
+
+### Upgrade notes
+
+- If the QRZ.com card showed "Suspended" with "QRZ reports … lookups in 24 h" on a subscriber
+  account, it switches back to active by itself after the update.
+
 ## v2.1.1 (2026-10-04)
 
 McApp now shows the first name and home town (QTH) of a station next to its callsign, looked up on
