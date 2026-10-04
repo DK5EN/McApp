@@ -268,6 +268,29 @@ transition-mode AP. Design: `doc/2026-09-18_2330-bootstrap-network-safety-plan.m
   means a network-critical package was replaced. Read rpizero's peer journal first
   (`sudo -n journalctl -D /run/journalxship`), then `/var/lib/mcapp/bootstrap.log` on the box.
 
+## Node Time Zone (`SN1.TZ`, `set_time()`)
+
+TZ-01 firmware keeps a POSIX TZ rule on the node, and `--utcoff` CLEARS it. Plan and decisions:
+`doc/2026-10-04_1600-node-tz-implementation-plan.md`; contract: `doc/2026-10-04_1500-node-tz-ble-contract.md`.
+
+- **`set_time()` classifies the node before it sends any offset** (`ble_adapter.py`, `node_tz.py`).
+  Rule set: `0x20` only. Empty rule and policy `host_if_unset` (default; `MCAPP_NODE_TZ_POLICY=never`
+  opts out): the host rule (TZif footer of `/etc/localtime`, `MCAPP_NODE_TZ` overrides) is pushed
+  once with `--settz` and confirmed through the `SN1` push. Old firmware (no `TZ` key): the
+  byte-identical `--utcoff` then `0x20`. The branch is reported in the `/api/ble/settime` message.
+- **Unknown or unverified means `0x20` only, never `--utcoff`.** UTC is always right; a wrong
+  `--utcoff` can destroy a rule. An unverified `--settz` is NOT followed by `--utcoff` either: the
+  node may have accepted it (amends plan D5).
+- **The register cache is not proof of the node's current state.** It survives a same-MAC
+  reconnect, and the node pushes `SN1` after a console-set rule only when the command came over
+  BLE. A cached non-RULE classification is trusted only once an `SN1` arrived since hello
+  (`send_hello` and the DST loop arm it); otherwise `--nodeset` probes. A verify wait accepts only
+  an `SN1` whose `TZ` equals the rule: the first `SN1` after `--settz` can be the stale answer to
+  our own probe.
+- `set_time()` runs about 4.4 s after hello on the HTTP connect route, before the node's `SN1`
+  (about 5 s), so a probe on a first connect is expected, not a bug.
+- MH `DATE`/`TIME` conversion through `SN.UTCOF` is deliberately deferred (`doc/backlog.md`).
+
 ## Link Check (`{ping}` / `{pong}`)
 
 Probes whether a station answers on **direct RF**, using the firmware's `v4.35p.07.24.2` ping
