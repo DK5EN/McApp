@@ -2239,3 +2239,13 @@ operator's request.
   hand-copied corpora identical across the three repos.
 - **W23 here:** DK5EN is free tier, so its suspension (`suspend_reason` NULL, `last_error`
   `QRZ reports 50 lookups in 24 h`) must still be kept after the update.
+
+### Addendum 12:00 CEST — v2.1.4 deployed
+
+Update runner (`POST /api/update/start {"dev": false}`): `slot-0` active, `version.html` `v2.1.4`,
+all four services active, `NRestarts` 0, schema 34 in code (no schema change), no test harness in
+the slot, no journal warning after the restart. `/api/qrz/status`: `account_tier` `free`,
+`daily_cap` 50. W23: the free-tier suspension is kept (`last_error`
+`QRZ reports 50 lookups in 24 h`, until 2026-10-05 09:42). `slot-1` (`v2.1.3`) and `slot-2`
+(`v2.1.2`) remain available for Activate. The subscriber path (`daily_cap: null`, cap lifted) can
+only be confirmed on DM3KS's box.
