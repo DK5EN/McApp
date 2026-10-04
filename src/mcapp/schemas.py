@@ -8,7 +8,14 @@ returned by FastAPI as HTTP 422.
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    SecretStr,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 _BLE_PIN_MIN = 100_000
 _BLE_PIN_MAX = 999_999
@@ -203,6 +210,22 @@ class ReadCursorRequest(BaseModel):
 
     key: str = Field(min_length=1)
     ts: int = Field(ge=0)
+
+
+class QrzCredentialsRequest(BaseModel):
+    """PUT /api/qrz/credentials — write-only; the password is never returned.
+
+    `SecretStr` keeps it out of any repr/log line the model ends up in.
+    """
+
+    username: str = Field(min_length=3, max_length=16, pattern=r"^[A-Za-z0-9/]+$")
+    password: SecretStr = Field(min_length=1, max_length=128)
+
+
+class QrzEnabledRequest(BaseModel):
+    """PUT /api/qrz/enabled"""
+
+    enabled: bool
 
 
 class HiddenDestinationsRequest(BaseModel):

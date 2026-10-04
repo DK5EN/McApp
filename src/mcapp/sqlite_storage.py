@@ -29,6 +29,7 @@ from typing import Any
 from .ble_protocol import parse_aprs_position
 from .logging_setup import get_logger
 from .storage._base import StorageBase
+from .storage.callsign_info import CallsignInfoMixin
 from .storage.classifier_api import ClassifierApiMixin
 from .storage.constants import (
     BARO_EXPONENT,
@@ -54,7 +55,13 @@ logger = get_logger(__name__)
 
 
 class SQLiteStorage(
-    MigrationsMixin, IngestMixin, QueryMixin, PrefsMixin, ClassifierApiMixin, UptimeMixin
+    MigrationsMixin,
+    IngestMixin,
+    QueryMixin,
+    PrefsMixin,
+    ClassifierApiMixin,
+    UptimeMixin,
+    CallsignInfoMixin,
 ):
     """
     SQLite-based message storage backend.

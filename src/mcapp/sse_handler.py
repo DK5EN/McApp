@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     # TYPE_CHECKING only — wire_monitor.py imports broadcast_verdict from
     # THIS module at runtime, so a real top-level import here would cycle.
     from .node_console import NodeConsoleSession
+    from .qrz_service import QrzLookupService
     from .wire_monitor import WireMonitor
 
 SSE_CLIENT_QUEUE_SIZE = 256
@@ -194,6 +195,7 @@ try:
     from .sse_routes.monitor import build_monitor_router
     from .sse_routes.prefs import build_prefs_router
     from .sse_routes.push import build_push_router
+    from .sse_routes.qrz import build_qrz_router
     from .sse_routes.stalls import build_stalls_router
     from .sse_routes.stream import build_stream_router
     from .sse_routes.uptime import build_uptime_router
@@ -284,6 +286,9 @@ class SSEManager:
         # 503 (startup tests build a manager without one), same convention
         # as wire_monitor above.
         self.node_console: NodeConsoleSession | None = None
+        # Set by build_app (main.py); None keeps /api/qrz/* at a 503 (startup
+        # tests build a manager without one), same convention as node_console.
+        self.qrz_service: QrzLookupService | None = None
 
         # Subscribe to messages from the router
         if message_router:
@@ -613,6 +618,7 @@ class SSEManager:
         app.include_router(build_weather_router(self))
         app.include_router(build_deploy_router(self))
         app.include_router(build_push_router(self))
+        app.include_router(build_qrz_router(self))
         app.include_router(build_linkcheck_router(self))
         app.include_router(build_monitor_router(self))
         app.include_router(build_uptime_router(self))

@@ -66,6 +66,8 @@ from . import __version__
 from .classifier import Classifier
 from .classifier.seed import seed_defaults
 from .classifier.types import SSEEvent
+from .qrz_service import QrzLookupService
+from .secret_box import SecretBox
 from .sqlite_storage import SQLiteStorage, create_sqlite_storage
 from .stalls import StallRecorder
 from .util import PLACEHOLDER_CALLSIGN_BASES as _PLACEHOLDER_CALLSIGN_BASES
@@ -2369,6 +2371,7 @@ class AppContext:
     ble_mode: BLEMode
     stall_recorder: StallRecorder
     node_console: NodeConsoleSession
+    qrz_service: QrzLookupService
 
 
 class _ClassifierBus:
@@ -2725,6 +2728,9 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
         password=cfg.node_console.password,
         max_session_s=cfg.node_console.max_session_s,
     )
+    # QRZ.com callsign lookup (issue #14): inert until credentials are stored
+    # through /api/qrz/credentials; the install key is only touched then.
+    qrz_service = QrzLookupService(storage_handler, SecretBox())
     message_router.set_callsign(cfg.call_sign)
     storage_handler.set_message_router(message_router)
     # One-shot, idempotent read-cursor seed (unread-cursor plan §3): must run
@@ -2813,6 +2819,7 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
             sse_manager.wire_monitor = wire_monitor
             wire_monitor.sse_manager = sse_manager
             sse_manager.node_console = node_console
+            sse_manager.qrz_service = qrz_service
             stall_recorder.register_gauge("sse_clients", lambda: len(sse_manager.clients))
             if hasattr(sse_manager, "set_classifier"):
                 sse_manager.set_classifier(classifier)
@@ -2894,6 +2901,7 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
         ble_mode=ble_mode,
         stall_recorder=stall_recorder,
         node_console=node_console,
+        qrz_service=qrz_service,
     )
 
 
@@ -3135,7 +3143,7 @@ async def _link_uptime_heartbeat(
 @dataclass
 class _BackgroundTasks:
     """Handles kept alive for the app's lifetime (main() holds the only
-    reference). Only prune/stats/sperrliste/converge/link_uptime_heartbeat are
+    reference). Only prune/stats/sperrliste/converge/link_uptime_heartbeat/qrz are
     cancelled at shutdown — the backfill tasks are one-shots left to finish or
     be reaped by process exit."""
 
@@ -3148,6 +3156,7 @@ class _BackgroundTasks:
     converge_task: asyncio.Task[None]
     link_uptime_heartbeat_task: asyncio.Task[None]
     tz_warm_task: asyncio.Task[None]
+    qrz_task: asyncio.Task[None]
 
 
 async def _warm_timezone_finder_later(delay_s: float = 30.0) -> None:
@@ -3165,8 +3174,8 @@ def _start_background_tasks(
 ) -> _BackgroundTasks:
     """Start the nightly-prune, classifier-backfill, signal-backfill,
     APRS-escape-backfill, classifier-stats-broadcast, sperrliste-refresh,
-    system-epoch converge-watchdog, and link-uptime-heartbeat background
-    tasks."""
+    system-epoch converge-watchdog, link-uptime-heartbeat and QRZ-lookup
+    background tasks."""
     prune_task = asyncio.create_task(_nightly_prune(ctx.storage_handler, cfg, stop_event))
     # Reference lives for the app's lifetime (run() awaits until shutdown)
     backfill_task = asyncio.create_task(
@@ -3199,6 +3208,8 @@ def _start_background_tasks(
         _link_uptime_heartbeat(ctx.storage_handler, stop_event)
     )
     tz_warm_task = asyncio.create_task(_warm_timezone_finder_later())
+    # QRZ.com callsign lookup loop (issue #14): idles until credentials exist.
+    qrz_task = asyncio.create_task(ctx.qrz_service.run(stop_event))
     return _BackgroundTasks(
         prune_task=prune_task,
         classifier_stats_task=classifier_stats_task,
@@ -3209,11 +3220,12 @@ def _start_background_tasks(
         converge_task=converge_task,
         link_uptime_heartbeat_task=link_uptime_heartbeat_task,
         tz_warm_task=tz_warm_task,
+        qrz_task=qrz_task,
     )
 
 
 async def _cancel_background_tasks(tasks: _BackgroundTasks) -> None:
-    """Cancel the five long-running loops; backfill tasks are one-shots, left alone.
+    """Cancel the six long-running loops; backfill tasks are one-shots, left alone.
     The timezone warm-up is cancelled too: it may still be in its start delay.
     """
     tasks.tz_warm_task.cancel()
@@ -3222,6 +3234,7 @@ async def _cancel_background_tasks(tasks: _BackgroundTasks) -> None:
     tasks.sperrliste_task.cancel()
     tasks.converge_task.cancel()
     tasks.link_uptime_heartbeat_task.cancel()
+    tasks.qrz_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await tasks.prune_task
     with contextlib.suppress(asyncio.CancelledError):
@@ -3234,6 +3247,8 @@ async def _cancel_background_tasks(tasks: _BackgroundTasks) -> None:
         await tasks.link_uptime_heartbeat_task
     with contextlib.suppress(asyncio.CancelledError):
         await tasks.tz_warm_task
+    with contextlib.suppress(asyncio.CancelledError):
+        await tasks.qrz_task
 
 
 async def _shutdown_services(ctx: AppContext) -> None:

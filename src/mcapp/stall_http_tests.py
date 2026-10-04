@@ -29,11 +29,14 @@ Cases:
      is clamped into `[1, 2000]`, `POST /api/stalls/client` accepts both a
      single object and an array and rejects a non-JSON body with 400, and a
      manager with no recorder wired answers every route with 503.
+  9. `/api/qrz/credentials` is timed but its body is withheld entirely.
+  10. `redact()` masks every `*password*` key.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import TYPE_CHECKING, Any, cast
 
 import httpx
@@ -42,6 +45,7 @@ from fastapi import FastAPI, Request
 from .commands.constants import has_console
 from .sse_routes.stalls import build_stalls_router
 from .stall_middleware import StallMiddleware
+from .stalls import redact
 
 if TYPE_CHECKING:
     from .sse_handler import SSEManager
@@ -116,6 +120,11 @@ def _build_test_app() -> FastAPI:
         raw = await request.body()
         return {"length": len(raw), "text": raw.decode("utf-8", errors="replace")}
 
+    @app.put("/api/qrz/credentials")
+    async def qrz_credentials(request: Request) -> dict[str, int]:
+        raw = await request.body()
+        return {"length": len(raw)}
+
     @app.get("/boom")
     async def boom() -> None:
         raise RuntimeError("boom")
@@ -181,6 +190,46 @@ async def _test_json_body_query_status_recorded(record: Any) -> None:
         resp.status_code == 200
         and rec.get("status") == 200
         and rec.get("detail", {}).get("resp_bytes", 0) > 0,
+    )
+
+
+async def _test_credentials_body_withheld(record: Any) -> None:
+    """9. The QRZ credentials PUT is timed but its body is never recorded —
+    neither as parsed JSON nor as the raw text a truncated body degrades to,
+    which key-based redaction would never see. Before the fix the password
+    landed in stall_events and was served back by /api/stalls."""
+    recorder = _FakeRecorder()
+    secret = "hunter2-secret"
+    async with _client_for(recorder) as client:
+        await client.put("/api/qrz/credentials", json={"username": "DK5EN", "password": secret})
+        # Far over _BODY_CAP_BYTES: the tap truncates, the JSON parse fails,
+        # and the generic path would store the raw prefix text.
+        await client.put(
+            "/api/qrz/credentials",
+            content=f'{{"password": "{secret}", "pad": "{"x" * 200}"}}',
+            headers={"content-type": "application/json"},
+        )
+    leaked = any(secret[:8] in json.dumps(r, default=str) for r in recorder.records)
+    record(
+        "9. /api/qrz/credentials is recorded without its body",
+        len(recorder.records) == 2
+        and all(r.get("body") is None for r in recorder.records)
+        and all(r.get("detail", {}).get("body_withheld") for r in recorder.records)
+        and not leaked,
+    )
+
+
+def _test_password_keys_redacted(record: Any) -> None:
+    """10. `redact()` masks any key containing "password", at any depth."""
+    out = redact({"username": "DK5EN", "password": "s1", "nested": {"qrz_Password": "s2"}})
+    record(
+        "10. redact() masks *password* keys and keeps the rest",
+        out
+        == {
+            "username": "DK5EN",
+            "password": "[redacted]",
+            "nested": {"qrz_Password": "[redacted]"},
+        },
     )
 
 
@@ -330,6 +379,8 @@ async def run_stall_http_tests() -> bool:
     await _test_no_severity_no_record(_record)
     await _test_body_tap_never_drops_downstream_bytes(_record)
     await _test_stalls_router(_record)
+    await _test_credentials_body_withheld(_record)
+    _test_password_keys_redacted(_record)
 
     passed = sum(1 for _, ok in results if ok)
     total = len(results)
