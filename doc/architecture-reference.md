@@ -196,6 +196,21 @@ message_router.register_protocol("udp", udp_handler)
 4. `MessageRouter._udp_message_handler()` applies suppression logic
 5. `UDPHandler.send_message()` sends JSON to MeshCom node
 
+## Node Admin (RM1 remote admin)
+
+Opt-in (`node_admin.enabled`, default off) remote administration of other MeshCom nodes over LoRa with HMAC-tagged
+`RM1` direct messages. Plan and rationale: `2026-10-05_1000-node-admin-ui-concept-and-plan.md`.
+
+| Piece                            | Role                                                                                                                                                      |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `remote_cmd.py`                  | Pure core: tags, firmware-exact allowlist and grammar, `{NNN`-aware reply parsing. Pinned to the firmware vectors.                                        |
+| `node_admin_service.py`          | Send path, per-target gating, auto-sync, reply correlation, state (`compute_state`). All time injected.                                                   |
+| `storage/node_admin.py`          | `NodeAdminMixin`: atomic counter allocation, log, hwm; schema v35 (`node_admin_keys/state/log`).                                                          |
+| `sse_routes/node_admin.py`       | `/api/node-admin/*` router with the Host/Origin guard; write-only key route.                                                                              |
+| `storage/ingest.py` `reply_hook` | Observe-only seam in `store_message`, before `_should_filter_message`; the service dedups, not the seam.                                                  |
+| `main.py` `send_node_admin`      | `TransmitFn` over `_handle_outbound` (same normalisation and TX capture); `_redact_rm1` masks the tag in logs, `send_failed` and failed monitor captures. |
+| `node_admin_types.py`            | `NodeAdminService` Protocol, `TransmitFn`, `ReplyHook`, error types (409 busy, 503 unavailable).                                                          |
+
 ## Protocol Details
 
 ### UDP Message Format

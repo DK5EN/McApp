@@ -337,9 +337,19 @@ Wave status log (update after every wave):
   `fd7e0272...8f7e`), A2 schema v35 + `NodeAdminMixin` (47-case suite). W2 notes: service must check `parsed.ctr == row.ctr`
   (verify_reply takes no expected ctr); `verified=0` means "bad tag", not "replied"; units are `now_ms`/`*_at` ms and
   `unix_floor_s` s; sync rows store `args` NULL.
-- W2: pending
-- W3: pending
-- W4: pending
+- W2: DONE 2026-10-05, advisor (fable) REWORK -> fixed -> gate green (exit 0, ruff, mypy --strict 139 files). Service
+  (`node_admin_service.py`, 63 cases), routes + Host/Origin guard + withheld-prefix (`node_admin_routes_tests.py`, 30), ingest seam
+  (`node_admin_hook_tests.py`, 12), integration + loopback (`node_admin_wiring_tests.py`, 77). Advisor fixes: failed rows broadcast
+  `text` without the tag (the `/events` stream is unguarded), `queued` expires after 120 s, a dropped held command broadcasts a warning,
+  Origin guard `endswith` mutation pinned. Known limits: `history()` keeps the full text of failed rows (guarded route); the lockout
+  heuristic (2 `no_reply` rows inside 5 min -> 409) can false-positive after two plain RF timeouts, and a real lockout from re-asks is not
+  detected (follow-up: track hand-offs with the firmware 3-in-90-s rule); `udp_handler` logs the datagram at DEBUG before `sendto`.
+- W3: DONE 2026-10-05, advisor (fable) REWORK -> fixed -> gate green (lint, format, typecheck, 4388 tests, build:strict). Deviations from
+  the plan: nav flag is `requiresNodeAdmin` and gates on `/api/status` `features` (default-off feature), `navItemVisible()` extracted
+  and tested; `waiting` is re-derived client-side at 120 s (`effectiveState`) because the server emits no timeout event; `useProxyAPI`
+  tolerates a 204 and exposes `ProxyAPIError.detail`; History scrolls inside its own box between the phone breakpoint and ~900 px.
+  Known limit: the card cannot check that a target differs from the attached node (backend refuses at send time).
+  Real-browser check against a mock backend: all 7 row states, inert hostile reply text, phone cards, no horizontal overflow.
 
 ### Shared resources
 

@@ -324,6 +324,40 @@ Escalation: if the node is not found by the scan at all (0 discovered) and RSSI 
 strong, the node itself is powered off, out of BLE range, or its firmware BLE stack is wedged —
 that requires physical access, which is outside what's reachable over SSH to the Pi.
 
+## Node Admin (RM1 remote admin)
+
+Remote administration of other MeshCom nodes (reboot, status, toggles, `txpower`, `setout`) from the McApp web UI,
+signed with an HMAC over LoRa. Design: `2026-10-05_1000-node-admin-ui-concept-and-plan.md`.
+
+**Enable (default off).** `config.json`: `{"node_admin": {"enabled": true}}` and restart `mcapp`. Optional
+`"allowed_origins": ["http://localhost:5173"]` for the Vite dev server. The API has no authentication, so the feature is
+LAN-only by construction: `/api/node-admin/*` refuses any `Host` that is not a LAN name (`mcapp.local`, the short
+hostname, private/loopback IPs) and any foreign `Origin`. It is therefore NOT usable through the public TLS hostname.
+`GET /api/status` lists `"node_admin"` under `features` when it is on; the webapp shows the Node Admin page and the
+Settings card only then.
+
+**Prerequisites on every managed node:** `--remotemgmt on` and a non-empty `--passwd` (check `--info`: `RM: on`).
+Without both, an `RM1` DM is ordinary acked text and the node never answers. Use a random 14-character password
+(Settings > Node admin keys > Generate): the tag lets anyone who captured ONE frame on air guess a short password
+offline. Enter the same password in McApp once; it is stored encrypted (`secret.key` + board serial) and never shown.
+
+**CALL_SIGN must carry the attached node's SSID exactly as the node stores it** (`DK5EN-14`, not `DK5EN`). The tag is
+bound to the sender's call; a bare call produces a valid-looking frame the node silently ignores. On a BLE-attached box
+McApp adopts the call from the node's `I` register; on a UDP-only box set `CALL_SIGN` yourself. The managed node must hear
+the attached node over LoRa: a command that reaches a gateway node through the internet first is shown there as plain
+text and the later RF copy is dropped, so it is never executed.
+
+**Runbook: "no reply".** The node is silent for every one of these, so check in order: RM off or no password on the
+node; wrong stored password (a wrong password never produces a reply, not even `err`); the 10 s rate limit (one accepted
+frame per 10 s, per node, from any sender); the 5 min lockout (3 counted rejects in 90 s: bad tag, replayed counter,
+blocked command); the node did not hear McApp's node over LoRa; the reply is still on air (20-45 s). `bad tag` in the
+view means a reply arrived that McApp could not verify (password changed on the node, or a spoof). Counters:
+`ctr = MAX(ctr+1, last_hwm+1, unix time)`, so another SysOp or the firmware web UI using the node does not desync McApp.
+
+**Secrets and logs.** The password is never logged, broadcast or stored in `stall_events` (the `/api/node-admin/keys`
+body is withheld by path prefix). An RM1 frame in logs, `send_failed` events and failed monitor captures has its tag
+cut (`_redact_rm1`), including the INFO/DEBUG "Processing" lines. A frame that did go out is public on air anyway.
+
 ## Update Runner (OTA Deployment)
 
 The update runner (`scripts/update-runner.py`) is a standalone Python HTTP server (stdlib only, no dependencies) that manages OTA deployments and rollbacks from the webapp UI. It runs on **port 2985** and uses a slot-based architecture with 3 independent deployment slots.

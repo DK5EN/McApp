@@ -869,10 +869,56 @@ retry k XORs msg_id bits 10-11 with k, text and `{NNN` unchanged. Plan and campa
   back). `_resolve_ack_target`'s variant fallback is defensive and limited to rows we sent.
 - `linkcheck.py` is untouched on purpose: ping/pong are never retried.
 
+## Node Admin (RM1 remote admin)
+
+Opt-in (`node_admin.enabled`, default false) HMAC-tagged `RM1` DMs that administer other nodes. Plan, wave log and the
+review that shaped it: `doc/2026-10-05_1000-node-admin-ui-concept-and-plan.md`; operator runbook: `doc/operations-reference.md`;
+firmware side: `MeshCom-Firmware-DEV-Main` (`src/remote_cmd.cpp`, `docs/adr-remote-hmac.md`, branch `fork-dev`).
+
+- **The node is slower and stricter than it looks.** One accepted frame (command OR sync) per 10 s per node, from any
+  sender; ONE high-water mark per node shared by all senders; a 2-frame queue; and a lockout (3 counted rejects in 90 s
+  lock RM1 for 5 min, silencing even a valid sync, reachable by anyone on air). Every one of these is SILENT: wrong
+  password, rate limit, lockout, RM off and "never heard over LoRa" are indistinguishable on air. The service therefore
+  enforces ONE command in flight per target, 10 s spacing and a "possible lockout" refusal itself; do not loosen them.
+- **Counter = `MAX(ctr + 1, last_hwm + 1, unix_seconds)`**, the firmware sender's own rule (`rm_runtime.cpp`), allocated
+  in ONE `db_write` transaction in `to_thread` (`allocate_node_admin_command`). `_mutate` returns a rowcount and `_query`
+  never commits, so `UPDATE ... RETURNING` through them silently rolls back and every send reuses the counter. Refusals
+  happen BEFORE allocation so they burn no value. `last_hwm` only ever rises and only after tag verification.
+- **Both tags use the COMMAND's orientation**: `dst` = managed node, `src` = the attached node's call as the node stores it
+  (SSID included, upper case). `RM1R|<managed>|<commander>|ctr|result` for the reply, with the `ok `/`err ` prefix inside
+  `result`. A bare `CALL_SIGN` on a UDP-only box makes a valid-looking frame the node silently ignores.
+- **Replies arrive with `{NNN` on the Extern-UDP path and without it on BLE.** `remote_cmd.parse_reply` strips it with the
+  strict `util.strip_ack_suffix`; a parse that assumes stripped text passes every vector and fails every real UDP reply.
+- **The reply hook sits BEFORE `_should_filter_message`, observes only, and the SERVICE dedups.** Fifth instance of the
+  "hook after an early return never fires" trap (Link Check, Gateway Uptime, MHeard). Both transport copies reach it about
+  100 ms apart in independent tasks, so exactly-once is `apply_node_admin_reply`'s conditional `UPDATE ... WHERE verified IS
+  NOT 1` returning a change, and ONLY then are hwm, the sync gate and the SSE event touched. `verified` is terminal; an
+  unverified frame never moves hwm or releases the gate; a raising hook must not lose the stored row (the seam catches).
+- **State is derived, never stored** (`compute_state`): the 120 s no-reply window is anchored at `handed_off_at`, and the
+  webapp re-derives it because the server only emits a row on a transition.
+- **Re-ask is NOT free.** The node caches ONE reply (the latest accepted command, RAM only, 10 min, cleared by reboot). Re-ask
+  is offered only on the newest row of a target within 10 min and never for `reboot`; anything else is a counted replay reject
+  (lockout) or, if the original never arrived, a first execution.
+- **Security posture.** The API has no authentication and is internet-reachable in the public-TLS modes (pre-existing, tracked
+  separately). Node Admin is therefore default-off and its router refuses any foreign `Host` and any foreign `Origin`, which
+  makes it LAN-only in every mode. A custom header would protect nothing (`allow_headers=["*"]`). The key route's body is withheld
+  from `stall_events` by PATH PREFIX (`/api/node-admin/keys`); the old exact-match set would never match a per-target path, and a
+  small JSON body is masked by `redact()` anyway, so the regression test must use a truncated or non-JSON body. A pydantic 422
+  echoes the offending `input` (the plaintext password) even with `SecretStr`: the PUT route validates by hand and never echoes.
+  A signed frame that may never have gone on air must not leak its tag (`_redact_rm1` on the INFO/DEBUG lines, `send_failed`
+  and failed monitor captures). The password is also the node's net-console/KISS password and `K = SHA-256(password)` is
+  unsalted, so ONE captured frame is an offline guessing oracle for a short password: McApp offers a random 14-character one.
+- **`remote_cmd_vectors.json` is canonical in the FIRMWARE repo** (`tools/tests/remote_cmd_vectors.json`), copied to
+  `src/mcapp/remote_cmd_vectors.json` with a sha256 pin in `remote_cmd_tests.py`. Copy and hash move in one commit. Runtime code never
+  reads it (the prod tarball ships no `*.json` test corpora). The dev tarball ships it; `main.py` must never import a `*_tests` module.
+- **Feature flag to the webapp is `/api/status` `features`** (`"node_admin"`), not the mc-chat flag: `requiresAdminBackend` means
+  "mc-chat only". The webapp uses `adminStatus.nodeAdminAvailable` and a three-state view (no router guard: the backend flag is `null`
+  at first paint). `useProxyAPI` tolerates a body-less 204 and carries the backend `detail` on `ProxyAPIError.detail`.
+
 ## Key Gotchas
 
 - **A `#TAG` destination is a hashtag channel, not a callsign — and `is_group()` stays numeric.** The MeshCom FW 4.36 RfC puts a `#OE-SOTA` token in the destination field. All three repos independently misclassified it as a personal DM, which sent it into `compute_conversation_key`'s DM branch where it was **split on its first hyphen** (`"#OE-SOTA"` → key `"#OE<>DK5EN"`), collapsing distinct tags and fragmenting one tag per sender. Fixed in `ea15511` by adding **sibling** predicates `is_hashtag()` / `dst_kind()` / `resolve_dst_target()` beside `is_group()` in `commands/parsing.py` — `is_group` was deliberately NOT widened, because it is pinned by a corpus mirrored in mc-chat and the webapp. Two invariants look like oversights and are load-bearing: classification is **case-insensitive** and **NOT length-bounded** — a tag failing either would fall straight back into the DM branch, which is the defect. The RfC's 9-char cap is send-side grammar, enforced at the API boundary, never in classification. `dst_kind` returns `"unknown"` (never `"direct"`) for a `#`-prefixed value that fails the tag charset: it addresses nobody, and is the shape most likely to arrive from a buggy or hostile sender. Contract: `commands/hashtag_dst_vectors.json` (32 vectors, sha256-pinned by `commands/hashtag_dst_tests.py`). **No prefix/subscription matching exists** (RfC US-3) — its stated rule contradicts its own worked examples, so implementing it would encode a guess. Background: `MeshCom-Hashtag-prep.md`.
-- **Five vector corpora are hand-copied to the sibling repos, and nothing syncs them for you.** `commands/group_dst_vectors.json` (v2), `storage/conversation_key_vectors.json` (v4), `blocklist_decision_vectors.json` (v2), `commands/hashtag_dst_vectors.json` (v1) and `storage/ack_match_vectors.json` (v1) are canonical **here**. The first three go to **both** mc-chat (`tests/fixtures/`) and the webapp; `blocklist_decision_vectors.json` goes to the **webapp only** (`src/services/__tests__/`) — mc-chat has its own `sperrliste.py` and never reads this corpus, so do not go looking for a copy there. `ack_match_vectors.json` is also **webapp only** (`src/services/messageProcessor/__tests__/`), sha256-pinned on both sides; mc-chat's own-messages-only matcher is deliberately not held to it. mc-chat asserts parse-equality against the paths it does carry; the webapp pins a sha256 of the conversation-key corpus and runs drift checks against both siblings. Change one and you must copy it to every repo that carries it **and** bump the webapp's `EXPECTED_SHA256`, or their suites fail the moment anyone runs them with siblings checked out. Unlike `contract/`, these are not a git subtree — there is no `subtree pull` that will do it for you.
+- **Five vector corpora are hand-copied to the sibling repos, and nothing syncs them for you.** `commands/group_dst_vectors.json` (v2), `storage/conversation_key_vectors.json` (v4), `blocklist_decision_vectors.json` (v2), `commands/hashtag_dst_vectors.json` (v1) and `storage/ack_match_vectors.json` (v1) are canonical **here**. The first three go to **both** mc-chat (`tests/fixtures/`) and the webapp; `blocklist_decision_vectors.json` goes to the **webapp only** (`src/services/__tests__/`) — mc-chat has its own `sperrliste.py` and never reads this corpus, so do not go looking for a copy there. `ack_match_vectors.json` is also **webapp only** (`src/services/messageProcessor/__tests__/`), sha256-pinned on both sides; mc-chat's own-messages-only matcher is deliberately not held to it. mc-chat asserts parse-equality against the paths it does carry; the webapp pins a sha256 of the conversation-key corpus and runs drift checks against both siblings. Change one and you must copy it to every repo that carries it **and** bump the webapp's `EXPECTED_SHA256`, or their suites fail the moment anyone runs them with siblings checked out. Unlike `contract/`, these are not a git subtree — there is no `subtree pull` that will do it for you. A sixth, `remote_cmd_vectors.json`, is canonical in the FIRMWARE repo (see Node Admin).
 - **Two different ACKs, never conflate them.** `send_success` is the firmware's 7-byte **binary** ack (`ack_type` 0x00 Node / 0x01 Gateway, `ble_protocol.py`) — "my node or a gateway took the frame" — also written by a `held` (binary 0x04 or the `:sto` notice text), which publishes `sent: true`, never `acked`. `acked` is a matched inline `:ackNNN` text frame — "the addressee answered". `_handle_ack` publishes `msg_status` `{sent, ack_kind: node|gateway}`, the inline path publishes `{acked, ack_kind: "peer"}` with the ORIGINAL message's msg_id; the webapp renders only the latter as ✓✓ Delivered. Wiring the webapp's `msg_ack` to `send_success` is exactly the 2026-08-19 bug where three unanswered `!ctcping` probes all showed as delivered. `ack_status_tests.py` pins both payloads.
 - **A BLE `D{` register frame carries at most 244 chars of JSON.** `addBLEComToOutBuffer` clamps at
   245 bytes, minus the `0x44` type byte; the firmware names it `BLE_JSON_PAYLOAD_MAX`. Over that it

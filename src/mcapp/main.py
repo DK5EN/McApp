@@ -67,6 +67,7 @@ from . import __version__
 from .classifier import Classifier
 from .classifier.seed import seed_defaults
 from .classifier.types import SSEEvent
+from .node_admin_service import NodeAdminService
 from .qrz_service import QrzLookupService
 from .secret_box import SecretBox
 from .sqlite_storage import SQLiteStorage, create_sqlite_storage
@@ -2051,7 +2052,7 @@ class MessageRouter:
         self._logger.debug(
             "%s Handler: Processing '%s' from %s to %s",
             protocol.upper(),
-            normalized_data.get("msg"),
+            _redact_rm1(normalized_data.get("msg")),
             normalized_data.get("src"),
             normalized_data.get("dst"),
         )
@@ -2087,7 +2088,12 @@ class MessageRouter:
         if failure_reason is None:
             await self._capture_tx(monitor_frame, "sent", None)
         else:
-            await self._capture_tx(monitor_frame, "failed", failure_reason)
+            # A signed Node Admin (RM1) frame that never went on air must not
+            # leave its tag in the monitor ring (/api/monitor/frames, wire:frame).
+            # A "sent" frame is public on air anyway, so only failures are cut.
+            failed_frame = dict(monitor_frame)
+            failed_frame["msg"] = _redact_rm1(failed_frame.get("msg"))
+            await self._capture_tx(failed_frame, "failed", failure_reason)
 
     async def _capture_tx(self, frame: dict[str, Any], verdict: str, reason: str | None) -> None:
         """RF Monitor TX capture (`docs/rf-monitor-plan.md`) — see
@@ -2105,7 +2111,7 @@ class MessageRouter:
             message_data.get("src_type"),
             message_data.get("src"),
             message_data.get("dst"),
-            message_data.get("msg", ""),
+            _redact_rm1(message_data.get("msg", "")),
         )
         await self._handle_outbound(routed_message, "udp", self._send_via_udp)
 
@@ -2178,7 +2184,7 @@ class MessageRouter:
                 "send_failed": True,
                 "src": normalized_data.get("src"),
                 "dst": normalized_data.get("dst"),
-                "msg": normalized_data.get("msg"),
+                "msg": _redact_rm1(normalized_data.get("msg")),
                 "reason": reason,
                 "timestamp": now_ms(),
             },
@@ -2248,6 +2254,27 @@ class MessageRouter:
             return reason
 
         return None
+
+    async def send_node_admin(self, transport: str, dst: str, msg: str) -> str | None:
+        """Transmit one Node Admin (RM1) frame; the `TransmitFn` main.py hands the service.
+
+        Runs through `_handle_outbound` so the frame gets the same normalisation
+        and the single RF-Monitor TX capture as every other outbound DM, and
+        returns the failure reason (None = handed to the transport). A frame
+        that never reaches `send` (suppressed, self-message) is reported as a
+        failure too: Node Admin must never believe it transmitted.
+        """
+        outcome: list[str | None] = ["not sent"]
+        sender = self._send_via_ble if transport == "ble" else self._send_via_udp
+
+        async def _send(normalized_data: dict[str, Any]) -> str | None:
+            reason = await sender(normalized_data)
+            outcome[0] = reason
+            return reason
+
+        data = {"dst": dst, "msg": msg, "type": "msg", "src_type": "node_admin"}
+        await self._handle_outbound({"data": data}, transport, _send)
+        return outcome[0]
 
     def _is_message_to_self(self, message_data: dict[str, Any]) -> bool:
         """Check if message is addressed to our own callsign (assumes normalized data)"""
@@ -2373,6 +2400,7 @@ class AppContext:
     stall_recorder: StallRecorder
     node_console: NodeConsoleSession
     qrz_service: QrzLookupService
+    node_admin_service: NodeAdminService | None = None
 
 
 class _ClassifierBus:
@@ -2731,7 +2759,30 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
     )
     # QRZ.com callsign lookup (issue #14): inert until credentials are stored
     # through /api/qrz/credentials; the install key is only touched then.
-    qrz_service = QrzLookupService(storage_handler, SecretBox())
+    # One install key box shared by QRZ and Node Admin (a second instance races on
+    # first key-file creation).
+    secret_box = SecretBox()
+    qrz_service = QrzLookupService(storage_handler, secret_box)
+    # Node Admin (RM1 remote admin): opt-in, default off (the API has no auth).
+    # Constructed only when `node_admin.enabled`; the rest of the wiring is lazy so
+    # the not-yet-built SSE manager and BLE client are looked up at call time.
+    node_admin_service: NodeAdminService | None = None
+    if cfg.node_admin.enabled:
+
+        async def _node_admin_broadcast(event: str, payload: dict[str, Any]) -> None:
+            if sse_manager is not None:
+                await sse_manager.broadcast_event(event, payload)
+
+        node_admin_service = NodeAdminService(
+            storage_handler,
+            secret_box,
+            message_router.send_node_admin,
+            lambda: message_router.my_callsign,
+            lambda: ble_client is not None and _ble_connected(ble_client),
+            _node_admin_broadcast,
+        )
+        storage_handler.reply_hook = node_admin_service.on_reply
+        await node_admin_service.start()
     message_router.set_callsign(cfg.call_sign)
     storage_handler.set_message_router(message_router)
     # One-shot, idempotent read-cursor seed (unread-cursor plan §3): must run
@@ -2821,6 +2872,8 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
             wire_monitor.sse_manager = sse_manager
             sse_manager.node_console = node_console
             sse_manager.qrz_service = qrz_service
+            sse_manager.node_admin_service = node_admin_service
+            sse_manager.node_admin_allowed_origins = list(cfg.node_admin.allowed_origins)
             qrz_service.set_info_listener(
                 functools.partial(sse_manager.broadcast_event, "proxy:callsign_info")
             )
@@ -2906,7 +2959,20 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
         stall_recorder=stall_recorder,
         node_console=node_console,
         qrz_service=qrz_service,
+        node_admin_service=node_admin_service,
     )
+
+
+def _redact_rm1(msg: Any) -> Any:
+    """Drop the trailing HMAC tag from an RM1 frame before it is logged or broadcast.
+
+    Node Admin frames are signed commands: the tag of a frame that may never
+    have gone on air must not leak into the journal or the `send_failed` SSE
+    event (a collected valid frame could be replayed). Anything else passes through.
+    """
+    if isinstance(msg, str) and msg.startswith("RM1 ") and " " in msg[4:]:
+        return msg.rsplit(" ", 1)[0]
+    return msg
 
 
 def _ble_connected(ble_client: Any) -> bool:
@@ -3282,6 +3348,9 @@ async def _shutdown_services(ctx: AppContext) -> None:
     # are torn down under them.
     await ctx.command_handler.stop_linkcheck()
     await ctx.command_handler.stop_ctcping()
+    # Node Admin background tasks (pending auto-sync commands, transmit tasks).
+    if ctx.node_admin_service is not None:
+        await ctx.node_admin_service.stop()
 
     # The reconciler is cancelled first: it can re-arm a fresh hydration sweep
     # in response to the one below being cancelled out from under it, so it

@@ -56,6 +56,9 @@ from mcapp.linkcheck_tests import run_linkcheck_tests
 from mcapp.main import MessageRouter
 from mcapp.meteo_tests import run_meteo_tests
 from mcapp.msg_core_tests import run_msg_core_tests
+from mcapp.node_admin_routes_tests import run_node_admin_routes_tests
+from mcapp.node_admin_service_tests import run_node_admin_service_tests
+from mcapp.node_admin_wiring_tests import run_node_admin_wiring_tests
 from mcapp.node_console_tests import run_node_console_tests
 from mcapp.push_tests import run_push_tests
 from mcapp.qrz_tests import run_qrz_tests
@@ -77,6 +80,7 @@ from mcapp.storage.linkcheck_ingest_tests import run_linkcheck_ingest_tests
 from mcapp.storage.live_classification_tests import run_live_classification_tests
 from mcapp.storage.mheard_attribution_tests import run_mheard_attribution_tests
 from mcapp.storage.migration_chain_tests import run_migration_chain_tests
+from mcapp.storage.node_admin_hook_tests import run_node_admin_hook_tests
 from mcapp.storage.node_admin_storage_tests import run_node_admin_storage_tests
 from mcapp.storage.query_tests import run_query_tests
 from mcapp.storage.read_cursor_tests import run_read_cursor_tests
@@ -220,6 +224,18 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     node_admin_storage_ok = await run_node_admin_storage_tests()
     print(f"node_admin_storage: {'PASS' if node_admin_storage_ok else 'FAIL'}")
 
+    node_admin_hook_ok = await run_node_admin_hook_tests()
+    print(f"node_admin_hook: {'PASS' if node_admin_hook_ok else 'FAIL'}")
+
+    node_admin_service_ok = await run_node_admin_service_tests()
+    print(f"node_admin_service: {'PASS' if node_admin_service_ok else 'FAIL'}")
+
+    node_admin_routes_ok = await run_node_admin_routes_tests()
+    print(f"node_admin_routes: {'PASS' if node_admin_routes_ok else 'FAIL'}")
+
+    node_admin_wiring_ok = await run_node_admin_wiring_tests()
+    print(f"node_admin_wiring: {'PASS' if node_admin_wiring_ok else 'FAIL'}")
+
     read_cursor_ok = await run_read_cursor_tests()
     print(f"read_cursor: {'PASS' if read_cursor_ok else 'FAIL'}")
 
@@ -343,6 +359,10 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and uptime_ok
         and remote_cmd_ok
         and node_admin_storage_ok
+        and node_admin_hook_ok
+        and node_admin_service_ok
+        and node_admin_routes_ok
+        and node_admin_wiring_ok
         and read_cursor_ok
         and suppression_predicate_ok
         and unread_suppression_ok

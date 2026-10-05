@@ -194,6 +194,7 @@ try:
     from .sse_routes.deploy import build_deploy_router
     from .sse_routes.linkcheck import build_linkcheck_router
     from .sse_routes.monitor import build_monitor_router
+    from .sse_routes.node_admin import build_node_admin_router
     from .sse_routes.prefs import build_prefs_router
     from .sse_routes.push import build_push_router
     from .sse_routes.qrz import build_qrz_router
@@ -294,6 +295,9 @@ class SSEManager:
         # `node_admin.enabled`; None keeps /api/node-admin/* at a 503 and the
         # webapp treats that as "feature absent".
         self.node_admin_service: NodeAdminService | None = None
+        # Extra Origin values the node-admin guard accepts (webapp cross-origin proxy
+        # mode, Vite dev server); set from `node_admin.allowed_origins`.
+        self.node_admin_allowed_origins: list[str] = []
 
         # Subscribe to messages from the router
         if message_router:
@@ -632,6 +636,7 @@ class SSEManager:
         app.include_router(build_deploy_router(self))
         app.include_router(build_push_router(self))
         app.include_router(build_qrz_router(self))
+        app.include_router(build_node_admin_router(self, lambda: self.node_admin_allowed_origins))
         app.include_router(build_linkcheck_router(self))
         app.include_router(build_monitor_router(self))
         app.include_router(build_uptime_router(self))
