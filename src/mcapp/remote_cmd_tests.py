@@ -53,7 +53,7 @@ _MODULE_PATH = Path(__file__).parent / "remote_cmd.py"
 # sha256 of the raw bytes of the vendored vectors copy. A change means the
 # firmware corpus changed: re-copy it byte-exact, re-pin this constant and the
 # copy in ONE commit, and re-check the hand-written cases below still agree.
-_EXPECTED_SHA256 = "fd7e0272d8dfcd1a64e8c3989b8d35971bd42ecdb7a3d777ad23766dd37b8f7e"
+_EXPECTED_SHA256 = "65cbfb36ac39fec42bc764e84351bc46e2783af700c3787a311cfccd8bd09418"
 
 UDP_SUFFIX = "{087"  # the firmware ack-request suffix on an Extern-UDP copy
 
@@ -84,7 +84,7 @@ def _test_corpus(record: Record) -> None:
     corpus = _load()
     commands: list[dict[str, Any]] = corpus["commands"]
     replies: list[dict[str, Any]] = corpus["replies"]
-    record("vectors count 17 commands + 4 replies", len(commands) == 17 and len(replies) == 4)
+    record("vectors count 19 commands + 4 replies", len(commands) == 19 and len(replies) == 4)
 
     for i, v in enumerate(commands):
         key = derive_key(v["passwd"])
@@ -178,6 +178,8 @@ def _test_validate_command(record: Record) -> None:
         ("gps", "on", TX_MAX_DEFAULT, "gps on"),
         ("track", "off", TX_MAX_DEFAULT, "track off"),
         ("display", "off", TX_MAX_DEFAULT, "display off"),
+        ("led", "on", TX_MAX_DEFAULT, "led on"),
+        ("led", "off", TX_MAX_DEFAULT, "led off"),
         ("gateway", "on", TX_MAX_DEFAULT, "gateway on"),
         ("mesh", "off", TX_MAX_DEFAULT, "mesh off"),
         ("setout", "a2 on", TX_MAX_DEFAULT, "setout a2 on"),
@@ -253,7 +255,7 @@ def _test_validate_command(record: Record) -> None:
         set(ALLOWLIST)
         == {
             "reboot", "status", "sendpos", "sendtrack", "sync",
-            "gps", "track", "display", "gateway", "mesh",
+            "gps", "track", "display", "led", "gateway", "mesh",
             "txpower", "setout",
         },
     )  # fmt: skip

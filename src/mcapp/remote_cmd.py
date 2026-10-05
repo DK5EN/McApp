@@ -38,6 +38,7 @@ PROTO: Final = "RM1"
 
 RM_RATE_MS: Final = 10_000  # firmware RM_RATE_MS: min spacing of accepted frames
 RM_CACHE_MS: Final = 600_000  # firmware RM_CACHE_MS: lost-reply recovery window
+RM_REASK_MIN_MS: Final = 60_000  # McApp: no re-ask sooner (measured replies take 12..32 s)
 RM_REPLY_TIMEOUT_MS: Final = 120_000  # McApp: a row with no reply is "no reply" after this
 CTR_MAX: Final = 4_294_967_295
 TX_MAX_DEFAULT: Final = 15  # lowest board maximum (Heltec V2); see plan D5
@@ -67,6 +68,7 @@ ALLOWLIST: Final[dict[str, str]] = {
     "gps": "onoff",
     "track": "onoff",
     "display": "onoff",
+    "led": "onoff",
     "gateway": "onoff",
     "mesh": "onoff",
     "txpower": "txpower",

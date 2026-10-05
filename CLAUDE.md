@@ -918,7 +918,7 @@ firmware side: `MeshCom-Firmware-DEV-Main` (`src/remote_cmd.cpp`, `docs/adr-remo
 - **State is derived, never stored** (`compute_state`): the 120 s no-reply window is anchored at `handed_off_at`, and the
   webapp re-derives it because the server only emits a row on a transition.
 - **Re-ask is NOT free.** The node caches ONE reply (the latest accepted command, RAM only, 10 min, cleared by reboot). Re-ask
-  is offered only on the newest row of a target within 10 min and never for `reboot`; anything else is a counted replay reject
+  is offered only on the newest row of a target between 60 s (`RM_REASK_MIN_MS`; measured replies take 12-32 s, and relays plus repeat ACKs make one frame look re-sent on air) and 10 min after hand-off, never for `reboot`; anything else is a counted replay reject
   (lockout) or, if the original never arrived, a first execution.
 - **Security posture.** The API has no authentication and is internet-reachable in the public-TLS modes (pre-existing, tracked
   separately). Node Admin is therefore LAN-only and its router refuses any foreign `Host` and any foreign `Origin`, which

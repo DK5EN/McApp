@@ -596,6 +596,12 @@ class NodeAdminService:
         if handed_off is None or now - int(handed_off) >= remote_cmd.RM_CACHE_MS:
             msg = "the node no longer caches this reply (10 min)"
             raise NodeAdminBusyError(msg)
+        if now - int(handed_off) < remote_cmd.RM_REASK_MIN_MS:
+            msg = (
+                "replies take 10 to 30 s, ask again only after "
+                f"{remote_cmd.RM_REASK_MIN_MS // 1000} s"
+            )
+            raise NodeAdminBusyError(msg)
         last = _last_frame_ms(rows)
         if last is not None and now - last < remote_cmd.RM_RATE_MS:
             msg = f"the node accepts one frame per {remote_cmd.RM_RATE_MS // 1000} s"
