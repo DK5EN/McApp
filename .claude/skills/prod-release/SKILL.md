@@ -450,7 +450,8 @@ ssh mcapp.local '
 
 **A production tarball carries no test harness, by design.** `build_tarball`'s second argument
 selects the shape: production ships runtime code only — no `*_tests.py`, no `tests.py`, none of
-the eleven `.json` corpora (nothing but those test modules reads them), and not
+any of the `.json` corpora under `src/mcapp/` (nothing but those test modules reads them; 13 at
+v2.1.6-dev.1, and the count grows), and not
 `run_startup_tests.py`. A dev pre-release ships all four, which is why the gate can be run on the
 box against a dev tag but not against a production one. So the count above is **0 on production
 and non-zero on dev** — if a production slot has either, the predicate regressed.

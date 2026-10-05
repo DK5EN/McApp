@@ -34,9 +34,10 @@ git add <paths> && git commit && git push origin development     # in each repo
 # 4. let the asset settle, then verify it is fetchable FROM THE PI (see the curl 56 trap)
 ssh mcapp.local 'curl -fsSL -o /tmp/t.tar.gz <asset-url> && sha256sum /tmp/t.tar.gz; rm -f /tmp/t.tar.gz'
 
-# 5. install — log on the Pi, never pipe the ssh through `tail`
-ssh mcapp.local 'curl -fsSL https://raw.githubusercontent.com/DK5EN/McApp/development/bootstrap/mcapp.sh \
-  | sudo bash -s -- --dev > /tmp/deploy.log 2>&1; echo "EXIT=$?"; tail -45 /tmp/deploy.log'
+# 5. install — scp the LOCAL bootstrap, pin the tag, log on the Pi, never pipe the ssh through `tail`
+scp bootstrap/mcapp.sh mcapp.local:/tmp/mcapp-bootstrap.sh     # then compare sha256 on both sides
+ssh mcapp.local 'sudo bash /tmp/mcapp-bootstrap.sh --dev --tag <tag> > ~/deploy-<tag>.log 2>&1; \
+  echo "EXIT=$?"; tail -45 ~/deploy-<tag>.log'
 
 # 6. verify the change is in the ACTIVE slot, not just on disk
 ```
@@ -76,7 +77,9 @@ git rebase origin/development
 
 If the rebase pulled in a **dependency** change (uv.lock, pyproject.toml), re-run the whole gate —
 `uv sync --all-packages` first. A dependency bump is a change like any other; the tree you release
-is not the tree you tested until you have re-tested it.
+is not the tree you tested until you have re-tested it. A bump that only touches `.github/workflows/`
+(e.g. a `setup-uv` pin) does not change the tree you tested: check `git diff --stat
+development...origin/development` and, when it is workflow-only, a quick `ruff` is enough.
 
 ## Step 3 — `./scripts/release.sh 1`
 
@@ -84,7 +87,9 @@ is not the tree you tested until you have re-tested it.
 (production still stops to wait for `doc/release-history.md`).
 
 The script refuses to start unless **both** repos are on `development` and **both** working trees
-are clean. It needs `git gh shasum tar sed npm jq` on PATH.
+are clean. Run nothing else that builds the webapp (`npm run build*`, a review agent's gate) while it
+runs or while you inspect `webapp/dist`: concurrent builds rewrite `dist/` under each other, and a
+server or browser pointed at it sees a blank page or HTML served for a JS file. It needs `git gh shasum tar sed npm jq` on PATH.
 
 The next tag comes from `pyproject.toml`'s version plus the highest **local** `vX.Y.Z-dev.N` tag —
 so `git fetch --tags` in both repos first, or a release cut elsewhere gets a number reused.
@@ -121,9 +126,28 @@ start diagnosing the Pi's network until `gh release view` has confirmed both ass
 ## Step 5 — Install on the Pi
 
 ```bash
-ssh mcapp.local 'curl -fsSL https://raw.githubusercontent.com/DK5EN/McApp/development/bootstrap/mcapp.sh \
-  | sudo bash -s -- --dev > /tmp/deploy.log 2>&1; echo "EXIT=$?"; tail -45 /tmp/deploy.log'
+scp bootstrap/mcapp.sh mcapp.local:/tmp/mcapp-bootstrap.sh
+shasum -a 256 bootstrap/mcapp.sh                                   # local
+ssh mcapp.local 'sha256sum /tmp/mcapp-bootstrap.sh'                # must be identical
+ssh mcapp.local 'sudo bash /tmp/mcapp-bootstrap.sh --dev --tag <tag> > ~/deploy-<tag>.log 2>&1; \
+  echo "EXIT=$?"; tail -45 ~/deploy-<tag>.log'
 ```
+
+**Do not use `curl ... | sudo bash`, and do not let the bootstrap resolve the version itself.** Two
+separate reasons, both hit in practice:
+
+- The Claude Code auto-mode classifier refuses a remote fetch piped straight into `sudo bash`.
+  Fetch-then-execute (here: copy the local checkout's script and compare hashes) is the same
+  deploy, auditable, and passes.
+- GitHub rate-limits the Pi (`429` from `raw.githubusercontent.com` and `api.github.com`). With an
+  unpinned run the fetch can fail (`EXIT=22`, nothing ran) or, worse, the version lookup fails and
+  the bootstrap **deploys the old version in place and exits 0** ("App version is left
+  unresolved" in the log). `--tag <tag>` short-circuits the API entirely and downloads from the
+  release-asset CDN, which is not rate-limited. It pins both the app version and the bootstrap
+  tree ref, so the script you copied and the libs it fetches come from the same release.
+
+Log to `~` on the Pi, not `/tmp` (tmpfs there, and an old log looks like a healthy new one). After
+the run, grep the log for the resolved tag and the active slot, then do step 6.
 
 **Never pipe the ssh command through `tail`/`head`.** `ssh ... | tail -80` reports _tail's_ exit
 code, so a failed deploy looks like a clean one — and the pipe buffers everything, so you watch a
@@ -131,7 +155,7 @@ blank screen for ten minutes. Redirect to a log **on the Pi**, echo `$?` inside 
 and tail the file afterwards.
 
 Run it with `run_in_background: true`; on a Pi Zero 2W the full run is 5–15 minutes (apt upgrade +
-`uv sync --all-packages`). To watch progress, poll `tail -1 /tmp/deploy.log` over a second ssh
+`uv sync --all-packages`). To watch progress, poll `tail -1 ~/deploy-<tag>.log` over a second ssh
 rather than trying to stream the first one.
 
 Other flags worth knowing: `--check` (dry run), `--skip` (deploy only, no system setup),
@@ -148,7 +172,7 @@ ssh mcapp.local '
   systemctl is-active mcapp mcapp-ble                    # both active
   systemctl show mcapp -p ActiveEnterTimestamp --value   # restarted just now, not days ago
   curl -s http://127.0.0.1/webapp/version.html           # the TAG; /api/status is not (see below)
-  find ~/mcapp-slots/current/src/mcapp -name "*.json" | wc -l   # 11, not 0
+  find ~/mcapp-slots/current/src/mcapp -name "*.json" | wc -l   # == the local count, not 0 (see below)
   grep -c "<a symbol from your change>" ~/mcapp-slots/current/src/mcapp/<file>.py'
 ```
 
@@ -162,9 +186,11 @@ succeeds instantly against the old code. Use `webapp/version.html`.
 
 **The `.json` count guards the packaging, and a DEV build is the shape that has them.**
 `build_tarball`'s second argument selects the shape: a dev pre-release ships the test harness —
-`*_tests.py`, `tests.py`, the eleven `.json` corpora and `run_startup_tests.py` — while a
-production tarball ships runtime code only. So 11 here is right for a dev tag and 0 is right for a
-production one; a zero on a dev slot means the predicate regressed. Until v2.0.11 it was the worst
+`*_tests.py`, `tests.py`, every `.json` corpus under `src/mcapp/` and `run_startup_tests.py` — while a
+production tarball ships runtime code only. So a dev slot must hold exactly the number of `.json`
+files your checkout has (`find src/mcapp -name '*.json' | wc -l`; it grows whenever a corpus is
+added: 13 at v2.1.6-dev.1) and a production slot 0. Compare with the local count, never with a
+number remembered from an older release; a zero on a dev slot means the predicate regressed. Until v2.0.11 it was the worst
 of both, shipping every test module while dropping all the data they read, so
 `src/mcapp/contract/` did not exist in any slot.
 
@@ -184,6 +210,27 @@ all — so an unchanged `current` symlink is not by itself evidence of failure.
 
 The health-check block in the log should show 14 `[OK]` lines, ending with `webapp version:` at the
 new tag and `active slot:` at whichever slot was used.
+
+### When the release adds a schema migration or an opt-in feature
+
+A migration runs at service start, and a default-off feature must really be off. Check both on the
+box (no `sqlite3` CLI: use a python heredoc; DB timestamps are milliseconds):
+
+```bash
+ssh mcapp.local 'python3 - <<"PYEOF"
+import sqlite3
+c = sqlite3.connect("file:/var/lib/mcapp/messages.db?mode=ro", uri=True)
+print(c.execute("select * from schema_version").fetchall())      # the new LATEST_SCHEMA_VERSION
+print([r[0] for r in c.execute("select name from sqlite_master where type=\"table\" and name like \"<prefix>%\"")])
+PYEOF
+sudo journalctl -u mcapp.service --since "<restart time>" -p warning --no-pager | tail     # no entries
+sudo journalctl -u mcapp.service --since "<restart time>" --no-pager | grep -i migration | tail -3
+curl -s http://127.0.0.1/api/status | python3 -c "import sys,json; print(json.load(sys.stdin).get(\"features\"))"'
+```
+
+An opt-in feature that is off must show an empty `features` and answer 503 (or whatever the plan
+pins) on its routes. Turning it on, and anything that transmits on air, is a separate step with its
+own go-ahead, not part of a dev release.
 
 ### Then watch live traffic — this is not optional
 
