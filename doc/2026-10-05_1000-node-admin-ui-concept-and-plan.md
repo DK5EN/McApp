@@ -328,8 +328,11 @@ verification, terse report. Backend and webapp commits are separate per wave.
 
 Wave status log (update after every wave):
 
-- W0: pending
-- W1: pending
+- W0: pending (interface stub for W2; also add `find_node_admin_log_row(target, ctr)` to the storage mixin, advisor carry-over)
+- W1: DONE 2026-10-05, advisor APPROVED (fable), full gate green; A1 `remote_cmd.py` (+178-case suite, vectors sha256
+  `fd7e0272...8f7e`), A2 schema v35 + `NodeAdminMixin` (47-case suite). W2 notes: service must check `parsed.ctr == row.ctr`
+  (verify_reply takes no expected ctr); `verified=0` means "bad tag", not "replied"; units are `now_ms`/`*_at` ms and
+  `unix_floor_s` s; sync rows store `args` NULL.
 - W2: pending
 - W3: pending
 - W4: pending
