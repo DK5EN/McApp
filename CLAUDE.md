@@ -268,6 +268,29 @@ transition-mode AP. Design: `doc/2026-09-18_2330-bootstrap-network-safety-plan.m
   means a network-critical package was replaced. Read rpizero's peer journal first
   (`sudo -n journalctl -D /run/journalxship`), then `/var/lib/mcapp/bootstrap.log` on the box.
 
+## Node Time Zone (`SN1.TZ`, `set_time()`)
+
+TZ-01 firmware keeps a POSIX TZ rule on the node, and `--utcoff` CLEARS it. Plan and decisions:
+`doc/2026-10-04_1600-node-tz-implementation-plan.md`; contract: `doc/2026-10-04_1500-node-tz-ble-contract.md`.
+
+- **`set_time()` classifies the node before it sends any offset** (`ble_adapter.py`, `node_tz.py`).
+  Rule set: `0x20` only. Empty rule and policy `host_if_unset` (default; `MCAPP_NODE_TZ_POLICY=never`
+  opts out): the host rule (TZif footer of `/etc/localtime`, `MCAPP_NODE_TZ` overrides) is pushed
+  once with `--settz` and confirmed through the `SN1` push. Old firmware (no `TZ` key): the
+  byte-identical `--utcoff` then `0x20`. The branch is reported in the `/api/ble/settime` message.
+- **Unknown or unverified means `0x20` only, never `--utcoff`.** UTC is always right; a wrong
+  `--utcoff` can destroy a rule. An unverified `--settz` is NOT followed by `--utcoff` either: the
+  node may have accepted it (amends plan D5).
+- **The register cache is not proof of the node's current state.** It survives a same-MAC
+  reconnect, and the node pushes `SN1` after a console-set rule only when the command came over
+  BLE. A cached non-RULE classification is trusted only once an `SN1` arrived since hello
+  (`send_hello` and the DST loop arm it); otherwise `--nodeset` probes. A verify wait accepts only
+  an `SN1` whose `TZ` equals the rule: the first `SN1` after `--settz` can be the stale answer to
+  our own probe.
+- `set_time()` runs about 4.4 s after hello on the HTTP connect route, before the node's `SN1`
+  (about 5 s), so a probe on a first connect is expected, not a bug.
+- MH `DATE`/`TIME` conversion through `SN.UTCOF` is deliberately deferred (`doc/backlog.md`).
+
 ## Link Check (`{ping}` / `{pong}`)
 
 Probes whether a station answers on **direct RF**, using the firmware's `v4.35p.07.24.2` ping
@@ -492,6 +515,14 @@ timestamp DESC LIMIT 1`, so any station's ack marked whichever message last used
   (`DK1TCP-77:ack622`). The frame's `src`/`dst` carry the same identities untruncated. The padded
   field holds the ORIGINAL SENDER, not the acking station — a test fixture said otherwise until
   2026-09-14.
+- **The webapp runs the same inline match client-side, and `ack_match_vectors.json` pins the
+  two together.** Its `findAckMessage` (webapp `services/messageProcessor/ackMatch.ts`) was looser
+  until 2026-10-04 (SSID stripped, ack addressee never checked), so an overheard ack between two
+  other stations marked our own DM ✓✓ and the `proxy:initial` `acks[]` replay re-set it on every
+  reconnect (`doc/2026-10-04_1842-ack-matcher-fix-plan.md`). `storage/ack_match_vectors.json` is
+  canonical here, replayed through production `store_message` by `ack_match_vectors_tests.py`, and
+  hand-copied to the webapp. Change the inline rule here and the corpus, its sha256 and the
+  webapp's copy move in the same change, or the two sides drift silently again.
 - **The extUDP `{"type":"ack"}` datagram has no `msg` key** and must be claimed in
   `_handle_non_chat_frame` before the DEBUG-only non-chat log, which is where it used to vanish.
 
@@ -584,8 +615,8 @@ AND NOT suppressed)`.
   unconditional `isTextBlocked` half of `passesBaseGuards` (`enabled: false` disables the classifier
   half, NEVER the blocklist). `count`/`last_ts` stay unfiltered on purpose — a hidden message still
   belongs to its conversation. The predicate is pinned by `suppression_vectors.json`, canonical
-  here and hand-copied to the webapp with a sha256 on both sides; it is a **fifth** corpus on top of
-  the four in Key Gotchas, and nothing syncs it for you. The aggregate and candidate queries in
+  here and hand-copied to the webapp with a sha256 on both sides; it is one more corpus on top of
+  the five in Key Gotchas, and nothing syncs it for you. The aggregate and candidate queries in
   `query.py` MUST keep sharing `_conv_dedup_subquery` / `_CONV_NEWER_EXPR` / `_CONV_NEWER_SPAM_EXPR`
   — if their predicates disagree the subtraction silently corrupts the count, and three mutations
   that break it are pinned by `unread_suppression_tests.py`.
@@ -841,7 +872,7 @@ retry k XORs msg_id bits 10-11 with k, text and `{NNN` unchanged. Plan and campa
 ## Key Gotchas
 
 - **A `#TAG` destination is a hashtag channel, not a callsign — and `is_group()` stays numeric.** The MeshCom FW 4.36 RfC puts a `#OE-SOTA` token in the destination field. All three repos independently misclassified it as a personal DM, which sent it into `compute_conversation_key`'s DM branch where it was **split on its first hyphen** (`"#OE-SOTA"` → key `"#OE<>DK5EN"`), collapsing distinct tags and fragmenting one tag per sender. Fixed in `ea15511` by adding **sibling** predicates `is_hashtag()` / `dst_kind()` / `resolve_dst_target()` beside `is_group()` in `commands/parsing.py` — `is_group` was deliberately NOT widened, because it is pinned by a corpus mirrored in mc-chat and the webapp. Two invariants look like oversights and are load-bearing: classification is **case-insensitive** and **NOT length-bounded** — a tag failing either would fall straight back into the DM branch, which is the defect. The RfC's 9-char cap is send-side grammar, enforced at the API boundary, never in classification. `dst_kind` returns `"unknown"` (never `"direct"`) for a `#`-prefixed value that fails the tag charset: it addresses nobody, and is the shape most likely to arrive from a buggy or hostile sender. Contract: `commands/hashtag_dst_vectors.json` (32 vectors, sha256-pinned by `commands/hashtag_dst_tests.py`). **No prefix/subscription matching exists** (RfC US-3) — its stated rule contradicts its own worked examples, so implementing it would encode a guess. Background: `MeshCom-Hashtag-prep.md`.
-- **Four vector corpora are hand-copied to the sibling repos, and nothing syncs them for you.** `commands/group_dst_vectors.json` (v2), `storage/conversation_key_vectors.json` (v4), `blocklist_decision_vectors.json` (v2) and `commands/hashtag_dst_vectors.json` (v1) are canonical **here**. The first three go to **both** mc-chat (`tests/fixtures/`) and the webapp; `blocklist_decision_vectors.json` goes to the **webapp only** (`src/services/__tests__/`) — mc-chat has its own `sperrliste.py` and never reads this corpus, so do not go looking for a copy there. mc-chat asserts parse-equality against the paths it does carry; the webapp pins a sha256 of the conversation-key corpus and runs drift checks against both siblings. Change one and you must copy it to every repo that carries it **and** bump the webapp's `EXPECTED_SHA256`, or their suites fail the moment anyone runs them with siblings checked out. Unlike `contract/`, these are not a git subtree — there is no `subtree pull` that will do it for you.
+- **Five vector corpora are hand-copied to the sibling repos, and nothing syncs them for you.** `commands/group_dst_vectors.json` (v2), `storage/conversation_key_vectors.json` (v4), `blocklist_decision_vectors.json` (v2), `commands/hashtag_dst_vectors.json` (v1) and `storage/ack_match_vectors.json` (v1) are canonical **here**. The first three go to **both** mc-chat (`tests/fixtures/`) and the webapp; `blocklist_decision_vectors.json` goes to the **webapp only** (`src/services/__tests__/`) — mc-chat has its own `sperrliste.py` and never reads this corpus, so do not go looking for a copy there. `ack_match_vectors.json` is also **webapp only** (`src/services/messageProcessor/__tests__/`), sha256-pinned on both sides; mc-chat's own-messages-only matcher is deliberately not held to it. mc-chat asserts parse-equality against the paths it does carry; the webapp pins a sha256 of the conversation-key corpus and runs drift checks against both siblings. Change one and you must copy it to every repo that carries it **and** bump the webapp's `EXPECTED_SHA256`, or their suites fail the moment anyone runs them with siblings checked out. Unlike `contract/`, these are not a git subtree — there is no `subtree pull` that will do it for you.
 - **Two different ACKs, never conflate them.** `send_success` is the firmware's 7-byte **binary** ack (`ack_type` 0x00 Node / 0x01 Gateway, `ble_protocol.py`) — "my node or a gateway took the frame" — also written by a `held` (binary 0x04 or the `:sto` notice text), which publishes `sent: true`, never `acked`. `acked` is a matched inline `:ackNNN` text frame — "the addressee answered". `_handle_ack` publishes `msg_status` `{sent, ack_kind: node|gateway}`, the inline path publishes `{acked, ack_kind: "peer"}` with the ORIGINAL message's msg_id; the webapp renders only the latter as ✓✓ Delivered. Wiring the webapp's `msg_ack` to `send_success` is exactly the 2026-08-19 bug where three unanswered `!ctcping` probes all showed as delivered. `ack_status_tests.py` pins both payloads.
 - **A BLE `D{` register frame carries at most 244 chars of JSON.** `addBLEComToOutBuffer` clamps at
   245 bytes, minus the `0x44` type byte; the firmware names it `BLE_JSON_PAYLOAD_MAX`. Over that it

@@ -1,6 +1,6 @@
 # McApp production health log — mcapp.local
 
-> **Status:** Current — newest section: §26 (2026-10-04 09:36 CEST, pre-release sweep of
+> **Status:** Current — newest section: §30 (2026-10-05 19:08 CEST, sweep of `v2.1.5-dev.2` node time zone, green, zero findings). Before that: §26 (2026-10-04 09:36 CEST, pre-release sweep of
 > `v2.1.1-dev.2` before the v2.1.1 promotion) — green, zero findings, **~3 min soak at the operator's
 > decision**; new watch point **W23** (QRZ lookup budget). Before that: §25 (2026-10-02, no-soak
 > sign-off of v2.0.19, re-released as v2.1.0). Before that: §24 (2026-09-29 10:03 CEST, post-release sweep of
@@ -2239,3 +2239,49 @@ operator's request.
   hand-copied corpora identical across the three repos.
 - **W23 here:** DK5EN is free tier, so its suspension (`suspend_reason` NULL, `last_error`
   `QRZ reports 50 lookups in 24 h`) must still be kept after the update.
+
+### Addendum 12:00 CEST — v2.1.4 deployed
+
+Update runner (`POST /api/update/start {"dev": false}`): `slot-0` active, `version.html` `v2.1.4`,
+all four services active, `NRestarts` 0, schema 34 in code (no schema change), no test harness in
+the slot, no journal warning after the restart. `/api/qrz/status`: `account_tier` `free`,
+`daily_cap` 50. W23: the free-tier suspension is kept (`last_error`
+`QRZ reports 50 lookups in 24 h`, until 2026-10-05 09:42). `slot-1` (`v2.1.3`) and `slot-2`
+(`v2.1.2`) remain available for Activate. The subscriber path (`daily_cap: null`, cap lifted) can
+only be confirmed on DM3KS's box.
+
+**Closed 2026-10-04:** the operator confirmed the subscriber path on DM3KS's box after the update
+(no daily cap, lookups running). The QRZ subscriber issue (v2.1.2-v2.1.4) is closed.
+
+## 30. 2026-10-05 19:08 CEST — sweep of v2.1.5-dev.2 (node time zone) before promotion
+
+`v2.1.5-dev.2` (MCProxy `a37cd9d`, webapp `68d58af`) went onto `slot-1` on 2026-10-04 21:20 CEST;
+this sweep is ~21 h 45 min into its soak. The node DK5EN-98 (`4.40 a`, build 20261004-202651) now
+runs TZ-01 firmware.
+
+**Verdict: green, zero findings.**
+
+- Services: `mcapp`, `mcapp-ble`, `caddy`, `lighttpd` active; `NRestarts` 0 on both McApp units;
+  box up 11 days. `/health` healthy. `version.html` `v2.1.5-dev.2`, `node_tz` present in the
+  active slot's `ble_adapter.py`.
+- Schema 34 = `LATEST_SCHEMA_VERSION`; system epoch 5 = `REQUIRED_SYSTEM_EPOCH`; classifier
+  version 5, 38 rules, 0 unclassified messages in the last hour, 0 `{CET}` rows in `messages`.
+- UDP provenance: `udp_target_kind` identified, `udp_multiple_sources` false,
+  `udp_untrusted_source_ips` empty, `udp_suppressed_target_changes` 0.
+- Flow (last hour): 11 msgs, 98 pos, 274 signal rows; last `{CET}` beacon 597 s ago (cadence
+  606 s), heartbeat age 29 s. `/api/uptime?range=24h`: 93.4 % uptime, 100 % coverage, longest
+  outage 22.9 min (the post-deploy restart window).
+- Host: disk 9 % of 59 G; RAM 179 MB available; swap 35 MB used of 462 MB; 45.1 C; DB 53 MB,
+  WAL 5.4 MB. `vapid.json` 0600. Caddy leaf `notBefore` Oct 5 09:42, 12 h life, healthy.
+- Journal warnings over 24 h: none in `mcapp`, none in `mcapp-ble`.
+
+**Node-TZ live check (the reason for this release).** The node reported `SN1.TZ ""`, `UTCOF 2`.
+`POST /api/ble/settime` answered `Time set (settz)`: the host rule
+`CET-1CEST,M3.5.0,M10.5.0/3` was pushed and `SN1.TZ` read back as that rule, with no `--utcoff`
+in the journal. A second `settime` answered `Time set (rule)` ("time sync without --utcoff"),
+and the rule stayed. Both branches were observed on real hardware; the old-firmware branch is
+pinned by the suite only (this node no longer exercises it).
+
+**Watch points.** W24 (new): the first `settime` after a hello probes with `--nodeset` (`set_time()`
+runs ~4.4 s after hello, before the node's `SN1`); confirm in the journal after the next
+reconnect that no `--utcoff` precedes a probe on this node. No open findings.

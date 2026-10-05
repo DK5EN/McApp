@@ -5,6 +5,42 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.1.4 (2026-10-04)
+
+QRZ.com lookups on an account **with a paid QRZ.com subscription** are no longer limited to 50 per
+day. QRZ.com sets no daily limit for subscribers, and the proxy now follows that. Free accounts
+keep every limit they had. Schema stays at 34 and `SYSTEM_EPOCH` at 5.
+
+### Highlights
+
+- **No daily cap on a paid subscription.** The proxy looked up at most 50 callsigns per 24 hours
+  on every account, which protected the free tier but also held back paid accounts. A subscriber
+  now works through all heard stations, still at most one request every 30 seconds.
+- **A paused subscriber account resumes by itself.** If the 50-lookup pause was already running
+  when the update arrives, it is lifted within about a minute.
+- **Free accounts unchanged:** at most 50 lookups per 24 hours, and a pause when QRZ.com's own
+  counter reaches 50. A pause after QRZ.com refused the login is never lifted early, on any
+  account.
+
+### Backend (MCProxy)
+
+- The 50/24 h ledger cap applies only while `SubExp` reads `non-subscriber`, is missing or is
+  empty (fail closed). Every login rewrites the stored tier, so a stale "subscriber" can never
+  lift the cap on an account that is no longer one.
+- A running cap or Count suspension on a subscriber is lifted on the next step; a refusal stays.
+- `GET /api/qrz/status` returns `daily_cap: null` on a subscriber.
+
+### Frontend (webapp)
+
+- QRZ.com card: "Lookups (24 h)" reads "N (no daily limit)" on a paid subscription instead of
+  "N / 50", and the state hint no longer mentions a daily limit there.
+
+### Upgrade notes
+
+- Nothing to do. A subscriber account that showed "Suspended" switches to active by itself within
+  about a minute of the update.
+- Reload the app once (the "Update available" banner) to see the new lookup counter.
+
 ## v2.1.3 (2026-10-04)
 
 Completes the QRZ.com fix of v2.1.2: an account **with a QRZ.com subscription** could stay paused

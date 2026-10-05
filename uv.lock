@@ -596,7 +596,7 @@ wheels = [
 
 [[package]]
 name = "mcapp"
-version = "2.1.4"
+version = "2.1.5"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
@@ -637,7 +637,7 @@ dev = [{ name = "mypy", specifier = ">=2.3.0" }]
 
 [[package]]
 name = "mcapp-ble-service"
-version = "2.1.4"
+version = "2.1.5"
 source = { editable = "ble_service" }
 dependencies = [
     { name = "dbus-next" },

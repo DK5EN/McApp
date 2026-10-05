@@ -1,45 +1,58 @@
 # Release History
 
-## v2.1.4 (2026-10-04)
+## v2.1.5 (2026-10-05)
 
-QRZ.com lookups on an account **with a paid QRZ.com subscription** are no longer limited to 50 per
-day. QRZ.com sets no daily limit for subscribers, and the proxy now follows that. Free accounts
-keep every limit they had. Schema stays at 34 and `SYSTEM_EPOCH` at 5.
+The node's time zone is no longer overwritten. Firmware with TZ support keeps a time-zone rule on
+the node, and the proxy's time sync used to clear it every time it connected. The proxy now reads
+the node's rule first and only ever sets one when the node has none. Schema stays at 34 and
+`SYSTEM_EPOCH` at 5.
 
 ### Highlights
 
-- **No daily cap on a paid subscription.** The proxy looked up at most 50 callsigns per 24 hours
-  on every account, which protected the free tier but also held back paid accounts. A subscriber
-  now works through all heard stations, still at most one request every 30 seconds.
-- **A paused subscriber account resumes by itself.** If the 50-lookup pause was already running
-  when the update arrives, it is lifted within about a minute.
-- **Free accounts unchanged:** at most 50 lookups per 24 hours, and a pause when QRZ.com's own
-  counter reaches 50. A pause after QRZ.com refused the login is never lifted early, on any
-  account.
+- **A time-zone rule on the node survives a reconnect.** If the node has a rule, the proxy sends
+  only the current UTC time and leaves the offset alone.
+- **A node without a rule gets yours, once.** On time-zone firmware with an empty rule the proxy
+  sets the rule of the host it runs on (for example `CET-1CEST,M3.5.0,M10.5.0/3`) and confirms
+  that the node took it. Set `MCAPP_NODE_TZ_POLICY=never` to opt out, or `MCAPP_NODE_TZ` to use a
+  different rule.
+- **Older firmware behaves exactly as before:** a fixed UTC offset, then the time.
+- **When the proxy cannot tell what the node is, it sends the time only.** UTC is always right;
+  a wrong fixed offset could destroy a rule.
+- **Overheard acknowledgements no longer mark your own message as delivered.** The browser now
+  matches an `:ack` text against the same addressing and one-hour window as the backend, and
+  keeps internet-only acknowledgements when the connection reconnects.
 
 ### Backend (MCProxy)
 
-- The 50/24 h ledger cap applies only while `SubExp` reads `non-subscriber`, is missing or is
-  empty (fail closed). Every login rewrites the stored tier, so a stale "subscriber" can never
-  lift the cap on an account that is no longer one.
-- A running cap or Count suspension on a subscriber is lifted on the next step; a refusal stays.
-- `GET /api/qrz/status` returns `daily_cap: null` on a subscriber.
+- `set_time()` classifies the node from its settings register (`SN1.TZ`) before sending any
+  offset, ignores a cached value until the node has answered since the last hello, and reports the
+  branch taken (`utcoff`, `settz`, `rule`, `unknown`, `settz_unverified`) in the
+  `/api/ble/settime` message.
+- The inline `:ack` matching corpus (`ack_match_vectors.json`) is replayed through production
+  ingest and shared with the webapp.
 
 ### Frontend (webapp)
 
-- QRZ.com card: "Lookups (24 h)" reads "N (no daily limit)" on a paid subscription instead of
-  "N / 50", and the state hint no longer mentions a daily limit there.
+- The node GPS card shows the node's time-zone rule, offers presets and a rule field with a
+  grammar check while the rule is empty, and a "Clear rule" button while one is set. The locate
+  button no longer sends a fixed offset to a node that follows a rule.
+- The inline `:ack` matcher mirrors the backend rule; the matching corpus runs in the test suite.
 
 ### Upgrade notes
 
-- Nothing to do. A subscriber account that showed "Suspended" switches to active by itself within
-  about a minute of the update.
-- Reload the app once (the "Update available" banner) to see the new lookup counter.
+- Nothing to do. A node on time-zone firmware with an empty rule receives your host's rule at the
+  next time sync; one that already has a rule is left alone.
+- Reload the app once (the "Update available" banner) to see the time-zone controls.
 
 ## Earlier releases, in brief
 
 One entry per release. The full notes as published are in
 [`doc/archive/release-history-full.md`](https://github.com/DK5EN/McApp/blob/development/doc/archive/release-history-full.md).
+
+### v2.1.4 (2026-10-04)
+
+- QRZ.com lookups are no longer limited to 50 per day on a paid subscription; free accounts keep
+  every limit.
 
 ### v2.1.3 (2026-10-04)
 

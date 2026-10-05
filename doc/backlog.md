@@ -80,3 +80,9 @@ prune exists because the `message_acks` key `(msg_id, kind, from_call)` carries 
 identity, so without it `INSERT OR IGNORE` swallows the newer message's ACKs (CLAUDE.md, ACK
 Attribution). Keeping both needs a schema migration that adds message identity to the key (for
 example the bound message row id), and the `?since=` read path then filtering on it.
+
+## B7 — convert MH `DATE`/`TIME` through the node's `SN.UTCOF`
+
+`timestamp_from_date_time()` still assumes the host offset (contract §4, plan D6). With the node
+now following its own TZ rule the two can differ. Different code path, deliberately deferred from
+the node-TZ campaign.

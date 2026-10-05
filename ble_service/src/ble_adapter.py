@@ -40,7 +40,7 @@ import hashlib
 import logging
 import struct
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import Enum, IntEnum
@@ -57,6 +57,8 @@ from dbus_next.constants import BusType
 from dbus_next.errors import DBusError, InterfaceNotFoundError
 from dbus_next.service import ServiceInterface, method
 from dbus_next.signature import Variant
+
+from . import node_tz
 
 if TYPE_CHECKING:
     # dbus_next.service._Method (see dbus_next/service.py) reads each D-Bus
@@ -122,6 +124,14 @@ KEEPALIVE_INTERVAL_S = 300
 DST_CHECK_INTERVAL_S = 3600
 POST_PAIR_SETTLE_S = 2
 REGISTER_QUERY_DELAY_S = 0.8
+# set_time(): pause between the node-offset command and the 0x20 timestamp so
+# the firmware has applied the offset before it converts UTC to local.
+TIME_SYNC_SETTLE_S = 0.3
+# set_time() node-TZ handling (doc/2026-10-04_1600-node-tz-implementation-plan.md
+# D3/D5): how long to wait for the SN1 push after `--nodeset` (classification
+# probe) and after `--settz` / the follow-up `--nodeset` (verification).
+NODE_TZ_PROBE_TIMEOUT_S = 3.0
+NODE_TZ_VERIFY_TIMEOUT_S = 2.0
 # The firmware drains its whole BLE RX queue into one global `textbuff_phone`
 # and acts on it once per main-loop pass (esp32_main.cpp:3058-3084,
 # nrf52_main.cpp:1642-1670): two 0xA0 (MsgType.TEXT_COMMAND) writes landing in
@@ -590,11 +600,23 @@ class BLEAdapter:
         write_uuid: str = NUS_RX_UUID,
         hello_bytes: bytes = OPEN_HELLO,
         notification_callback: Callable[[bytes], None] | None = None,
+        register_lookup: Callable[[], Mapping[str, Mapping[str, Any]]] | None = None,
     ) -> None:
         self.read_uuid = read_uuid
         self.write_uuid = write_uuid
         self.hello_bytes = hello_bytes
         self.notification_callback = notification_callback
+        # Read access to the service's register cache (main.py passes
+        # `lambda: state.register_cache`); the adapter never imports `main`.
+        # Without one nothing can be classified, so set_time() stays on its
+        # fail-safe branch (see `node_tz.classify`).
+        self._register_lookup = register_lookup
+        # One event per register TYP, tripped by `note_register` from the
+        # cache setter; see `arm_register` / `wait_for_register`.
+        self._register_events: dict[str, asyncio.Event] = {}
+        # Which set_time() branch ran last (utcoff / settz / rule / unknown),
+        # reported by POST /api/ble/settime.
+        self.last_time_sync_branch: str = ""
         # NimBLE pairing passkey returned by the BlueZ agent during pair().
         # 0 means open pairing (firmware bt_code == 0). 100000-999999 means
         # the firmware will require this exact value via RequestPasskey.
@@ -1456,6 +1478,11 @@ class BLEAdapter:
         """Send hello/wakeup command to device"""
         if not self.is_connected:
             return False
+        # Hello starts the node's register burst, SN1 included. A cache that
+        # outlives the connection (same MAC) holds the PREVIOUS session's SN1,
+        # so forget its arrival: set_time() trusts a cached TZ state other than
+        # "rule" only once a fresh SN1 has landed after this point.
+        self.arm_register("SN1")
         return await self.write(self.hello_bytes)
 
     async def send_command(self, cmd: str) -> bool:
@@ -1485,15 +1512,113 @@ class BLEAdapter:
             )
         return await self.write(_frame(MsgType.TEXT_COMMAND, cmd_bytes))
 
-    async def set_time(self) -> bool:
-        """Set current time and UTC offset on device.
+    def note_register(self, typ: str) -> None:
+        """Record that register `typ` just arrived and trip its waiters. Called
+        by the register-cache setter in main.py right after it stores a frame.
+        An arrival before anyone armed still counts: it is how `_classify_node`
+        learns the cached SN1 is from this session."""
+        self._register_events.setdefault(typ, asyncio.Event()).set()
 
-        Sends the UTC offset first (--utcoff via A0 command), then the
-        Unix timestamp (0x20 message).  This ensures the firmware always
-        uses the correct offset when converting UTC → local time, even
-        after DST transitions.
+    def arm_register(self, typ: str) -> None:
+        """Forget earlier arrivals of `typ`: the next `wait_for_register` only
+        returns for a frame that lands after this call. Arm BEFORE sending the
+        command whose answer is awaited -- the push can land while the write
+        is still being awaited."""
+        self._register_events.setdefault(typ, asyncio.Event()).clear()
+
+    async def wait_for_register(self, typ: str, timeout_s: float) -> bool:
+        """True if register `typ` arrived since `arm_register(typ)`, False on
+        timeout. The caller then reads the value from the register cache."""
+        event = self._register_events.setdefault(typ, asyncio.Event())
+        try:
+            await asyncio.wait_for(event.wait(), timeout_s)
+        except TimeoutError:
+            return False
+        return True
+
+    def _cached_registers(self) -> Mapping[str, Mapping[str, Any]]:
+        return self._register_lookup() if self._register_lookup is not None else {}
+
+    async def _send_nodeset(self) -> bool:
+        """Arm SN1, then ask the node for its settings (`--nodeset`: SN and SN1
+        are pushed back to back). True if the command was written; the caller
+        waits for the answer."""
+        self.arm_register("SN1")
+        return await self.send_command("--nodeset")
+
+    async def _wait_for_tz(self, rule: str, timeout_s: float) -> bool:
+        """True once an SN1 showing `TZ == rule` arrives within `timeout_s`.
+
+        An SN1 with another TZ does not end the wait: it may be a late answer
+        to an earlier `--nodeset` of ours, sent before the node saw `--settz`.
+        Each such frame re-arms the event and the wait goes on to the deadline.
         """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_s
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0 or not await self.wait_for_register("SN1", remaining):
+                return False
+            if self._cached_tz() == rule:
+                return True
+            self.arm_register("SN1")
 
+    async def _push_host_tz(self, rule: str) -> bool:
+        """`--settz <rule>`, confirmed through the SN1 push (decision D5).
+
+        Success is invisible over BLE except as `SN1.TZ == rule`; a rejected
+        rule changes nothing and pushes nothing. So: wait for an SN1 that shows
+        the rule, and if none does, ask once with `--nodeset` and wait again.
+        False means "not verified", not "rejected": the node may have taken it.
+        """
+        self.arm_register("SN1")
+        if not await self.send_command(f"--settz {rule}"):
+            return False
+        if await self._wait_for_tz(rule, NODE_TZ_VERIFY_TIMEOUT_S):
+            return True
+        if not await self._send_nodeset():
+            return False
+        return await self._wait_for_tz(rule, NODE_TZ_VERIFY_TIMEOUT_S)
+
+    def _cached_tz(self) -> object:
+        return self._cached_registers().get("SN1", {}).get("TZ")
+
+    def _sn1_is_fresh(self) -> bool:
+        """An SN1 arrived since the last arm (hello, probe, DST check)."""
+        event = self._register_events.get("SN1")
+        return event is not None and event.is_set()
+
+    async def _classify_node(self) -> node_tz.NodeTz:
+        """Settle what the node is BEFORE any offset command goes out (D3).
+
+        The register cache survives a reconnect to the same MAC, so a cached
+        SN1 may describe the previous session, and the fresh one lands several
+        seconds after hello (the HTTP connect route reaches set_time() at about
+        4.4 s, the burst is still arriving). Only a cached RULE is trusted
+        unconditionally: acting on it sends 0x20 only, which is safe even when
+        stale. Any other state needs an SN1 that arrived since hello; without
+        one, ask with `--nodeset` and wait for it.
+        """
+        node = node_tz.classify(self._cached_registers())
+        if node.state is node_tz.TzState.RULE or (
+            node.state is not node_tz.TzState.UNKNOWN and self._sn1_is_fresh()
+        ):
+            return node
+        logger.info("Node TZ state unknown or possibly stale, asking with --nodeset")
+        sent = await self._send_nodeset()
+        if sent:
+            await self.wait_for_register("SN1", NODE_TZ_PROBE_TIMEOUT_S)
+        # `probed` only if the question went out: a failed write says nothing
+        # about whether the node would have answered with SN1.
+        node = node_tz.classify(self._cached_registers(), probed=sent)
+        if node.state is node_tz.TzState.EMPTY and not self._sn1_is_fresh():
+            # A stale "no rule" and an unanswered probe: the node may have a
+            # rule by now, and a TZ-01 node always answers --nodeset.
+            return node_tz.NodeTz(node_tz.TzState.UNKNOWN)
+        return node
+
+    async def _send_utc_offset(self) -> None:
+        """Fixed offset for firmware without a TZ rule -- the pre-TZ-01 path."""
         # Calculate current UTC offset of the system timezone (handles DST).
         # utcoffset() is `timedelta | None` on the general `datetime` type
         # (None only for naive datetimes); `local_now` is always tz-aware
@@ -1510,7 +1635,64 @@ class BLEAdapter:
         else:
             logger.warning("Failed to send UTC offset (continuing with time sync)")
 
-        await asyncio.sleep(0.3)
+    async def set_time(self) -> bool:
+        """Set current time on device, and its UTC offset where that is safe.
+
+        Firmware with TZ-01 keeps a POSIX TZ rule and `--utcoff` CLEARS it
+        (contract doc section 5), so the node is classified first and the
+        branch taken is recorded in `last_time_sync_branch`:
+
+        - `utcoff`: firmware without TZ-01, or a TZ-01 node with no rule and
+          nothing to push. `--utcoff` via A0, then the timestamp -- the
+          behaviour from before TZ-01, byte for byte. This is what keeps the
+          DST watcher (`_last_utc_offset`) running.
+        - `rule`: the node has a rule and derives its own offset. Timestamp
+          only; the rule is never overwritten and `_last_utc_offset` is
+          cleared so the DST watcher stays idle.
+        - `settz`: TZ-01 node with no rule, policy `host_if_unset`: the host's
+          rule is pushed once (`--settz`) and confirmed through SN1.
+        - `settz_unverified`: the push could not be confirmed. Timestamp only,
+          warning, DST watcher idle. No `--utcoff`: the node may have accepted
+          the rule, and `--utcoff` would clear it.
+        - `unknown`: the node could not be classified in time. Timestamp only:
+          UTC is always right, a wrong `--utcoff` can destroy a rule, a
+          missing one cannot. The next connect retries.
+
+        The timestamp (0x20) is UTC in every branch.
+        """
+        node = await self._classify_node()
+        branch = "utcoff"
+        if node.state is node_tz.TzState.RULE:
+            branch = "rule"
+            logger.info("Node follows TZ rule %s, time sync without --utcoff", node.rule)
+        elif node.state is node_tz.TzState.UNKNOWN:
+            branch = "unknown"
+            logger.warning(
+                "Node TZ support could not be determined; sending time only, no --utcoff"
+            )
+        elif node.state is node_tz.TzState.EMPTY and node_tz.resolve_policy() == "host_if_unset":
+            rule = node_tz.host_node_tz()
+            if rule is not None:
+                if await self._push_host_tz(rule):
+                    branch = "settz"
+                    logger.info("Node had no TZ rule, set %s", rule)
+                else:
+                    branch = "settz_unverified"
+                    logger.warning(
+                        "Could not verify TZ rule %s on the node; sending time only, no --utcoff",
+                        rule,
+                    )
+
+        if branch == "utcoff":
+            await self._send_utc_offset()
+        else:
+            # The node derives (or will derive) its own offset; a stale value
+            # from an earlier session would make the DST watcher fire.
+            self._last_utc_offset = None
+        self.last_time_sync_branch = branch
+
+        if branch in ("utcoff", "settz"):
+            await asyncio.sleep(TIME_SYNC_SETTLE_S)
 
         # Send Unix timestamp
         now = int(time.time())
@@ -1768,6 +1950,9 @@ class BLEAdapter:
                         self._last_utc_offset,
                         current_offset,
                     )
+                    # A fresh SN1 decides what set_time() may send: a rule set
+                    # on the node since the last sync must not be wiped.
+                    self.arm_register("SN1")
                     await self.set_time()
         except asyncio.CancelledError:
             pass
