@@ -294,6 +294,37 @@ class NodeAdminMixin(StorageBase):
 
         return await asyncio.to_thread(_run)
 
+    async def find_node_admin_log_row(self, target: str, ctr: int) -> dict[str, Any] | None:
+        """The log row a reply to `(target, ctr)` belongs to, or None.
+
+        `ctr > 0`: the unique row for that counter (the partial unique index
+        guarantees one), whatever its state, so a late reply can still reach an
+        abandoned row after a restart. `ctr == 0` is a sync reply: all syncs
+        share ctr 0, so it is the NEWEST sync row of the target that has no
+        reply yet.
+        """
+
+        def _run() -> dict[str, Any] | None:
+            with db_read(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                if ctr > 0:
+                    cursor = conn.execute(
+                        f"SELECT {_LOG_COLUMNS} FROM node_admin_log"  # noqa: S608 - literal column list
+                        " WHERE target_call = ? AND ctr = ?",
+                        (target, ctr),
+                    )
+                else:
+                    cursor = conn.execute(
+                        f"SELECT {_LOG_COLUMNS} FROM node_admin_log"  # noqa: S608 - literal column list
+                        " WHERE target_call = ? AND ctr = 0 AND cmd = 'sync' AND reply_at IS NULL"
+                        " ORDER BY id DESC LIMIT 1",
+                        (target,),
+                    )
+                row = cursor.fetchone()
+                return dict(row) if row is not None else None
+
+        return await asyncio.to_thread(_run)
+
     async def abandon_stale_node_admin_rows(self, now_ms: int) -> int:
         """Startup sweep: mark rows a previous process left without any outcome.
 

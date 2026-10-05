@@ -328,7 +328,11 @@ verification, terse report. Backend and webapp commits are separate per wave.
 
 Wave status log (update after every wave):
 
-- W0: pending (interface stub for W2; also add `find_node_admin_log_row(target, ctr)` to the storage mixin, advisor carry-over)
+- W0: DONE 2026-10-05, full gate green, no separate advisor pass (interface pins, default-off config, one read-only
+  lookup; none changes runtime behaviour). Pins: `node_admin_types.py` (`NodeAdminService` Protocol, `TransmitFn`,
+  `ReplyHook`, `NodeAdminError` / `NodeAdminBusyError` 409 / `NodeAdminUnavailableError` 503), `NodeAdminConfig` in
+  `config_loader.py` (`node_admin.enabled` false, `allowed_origins`), `SSEManager.node_admin_service`, storage
+  `find_node_admin_log_row(target, ctr)`.
 - W1: DONE 2026-10-05, advisor APPROVED (fable), full gate green; A1 `remote_cmd.py` (+178-case suite, vectors sha256
   `fd7e0272...8f7e`), A2 schema v35 + `NodeAdminMixin` (47-case suite). W2 notes: service must check `parsed.ctr == row.ctr`
   (verify_reply takes no expected ctr); `verified=0` means "bad tag", not "replied"; units are `now_ms`/`*_at` ms and

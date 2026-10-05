@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     # RF Monitor wire contract (docs/rf-monitor-plan.md); import deferred to
     # TYPE_CHECKING only — wire_monitor.py imports broadcast_verdict from
     # THIS module at runtime, so a real top-level import here would cycle.
+    from .node_admin_types import NodeAdminService
     from .node_console import NodeConsoleSession
     from .qrz_service import QrzLookupService
     from .wire_monitor import WireMonitor
@@ -289,6 +290,10 @@ class SSEManager:
         # Set by build_app (main.py); None keeps /api/qrz/* at a 503 (startup
         # tests build a manager without one), same convention as node_console.
         self.qrz_service: QrzLookupService | None = None
+        # Node Admin (RM1 remote admin). Set by build_app (main.py) only when
+        # `node_admin.enabled`; None keeps /api/node-admin/* at a 503 and the
+        # webapp treats that as "feature absent".
+        self.node_admin_service: NodeAdminService | None = None
 
         # Subscribe to messages from the router
         if message_router:

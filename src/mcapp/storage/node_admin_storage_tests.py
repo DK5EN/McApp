@@ -437,6 +437,58 @@ async def _test_unique_index(results: list[tuple[str, bool]]) -> None:
             await storage.close()
 
 
+async def _test_find_log_row(results: list[tuple[str, bool]]) -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = Path(tmp_dir) / "node_admin_find.db"
+        storage = await create_sqlite_storage(db_path)
+        try:
+            a = await _alloc(storage, _TARGET, now=_BASE_TS)
+            other = await _alloc(storage, "DK5EN-90", floor=5, now=_BASE_TS + 1)
+            found = await storage.find_node_admin_log_row(_TARGET, a["ctr"])
+            results.append(
+                (
+                    "find: a counter resolves to its own target's row only",
+                    found is not None
+                    and found["id"] == a["id"]
+                    and await storage.find_node_admin_log_row(_TARGET, other["ctr"]) is None
+                    and await storage.find_node_admin_log_row("DK5EN-90", other["ctr"]) is not None,
+                )
+            )
+
+            # An abandoned row is still found, so a late reply can flip it.
+            await storage.abandon_stale_node_admin_rows(_BASE_TS + 10_000)
+            late = await storage.find_node_admin_log_row(_TARGET, a["ctr"])
+            results.append(
+                (
+                    "find: an abandoned row is still found (late reply after a restart)",
+                    late is not None and late["result"] == "abandoned",
+                )
+            )
+
+            # ctr 0 = newest sync row of the target without a reply.
+            s1 = await storage.insert_node_admin_sync_row(
+                _TARGET, _SRC, "ble", _BASE_TS + 20_000, "RM1 0 sync x"
+            )
+            s2 = await storage.insert_node_admin_sync_row(
+                _TARGET, _SRC, "ble", _BASE_TS + 30_000, "RM1 0 sync y"
+            )
+            newest = await storage.find_node_admin_log_row(_TARGET, 0)
+            await storage.apply_node_admin_reply(s2, "ok ctr=5", _BASE_TS + 31_000, "ok", True)
+            after = await storage.find_node_admin_log_row(_TARGET, 0)
+            results.append(
+                (
+                    "find: ctr 0 is the newest OPEN sync row, then the older one once answered",
+                    newest is not None
+                    and newest["id"] == s2
+                    and after is not None
+                    and after["id"] == s1
+                    and await storage.find_node_admin_log_row("DK5EN-90", 0) is None,
+                )
+            )
+        finally:
+            await storage.close()
+
+
 async def _test_housekeeping(results: list[tuple[str, bool]]) -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         db_path = Path(tmp_dir) / "node_admin_misc.db"
@@ -598,6 +650,7 @@ async def run_node_admin_storage_tests() -> bool:
         _test_key_lifecycle,
         _test_apply_reply,
         _test_unique_index,
+        _test_find_log_row,
         _test_housekeeping,
         _test_migration_from_v34,
     )
