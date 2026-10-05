@@ -14,19 +14,24 @@ Coverage:
   Q. `QrzLookupService`: 30 s spacing for every request, the 50/24 h hard cap
      and its 24 h suspension (also across a restart), the ledger counting a
      lookup whose request failed, exponential backoff with Retry-After, the
-     session-loss and refusal rules, a rejected login stopping all traffic,
-     QRZ's own Count, cache refresh windows, candidate selection, POST-only
-     transport, the in-flight credential-change race, the API routes never
-     returning the password, the live `proxy:callsign_info` push and its
-     connect-burst snapshot.
+     session-loss rules, a fixed 1 h back-off after a refusal or rate limit, a
+     rejected login stopping all traffic, QRZ's own Count (a login-time baseline
+     that never suspends, ignored when implausible, a stale Count suspension
+     lifted), cache refresh windows, candidate selection, POST-only transport,
+     the in-flight credential-change race, the API routes never returning the
+     password, the live `proxy:callsign_info` push and its connect-burst
+     snapshot, and the greppable login/lookup/refusal log lines.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import re
 import tempfile
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -49,10 +54,13 @@ from .qrz_service import (
     MIN_INTERVAL_MS,
     REFRESH_FOUND_MS,
     REFRESH_NOT_FOUND_MS,
+    REFUSAL_BACKOFF_MS,
+    SERVER_COUNT_PLAUSIBLE_MAX,
     SUSPEND_MS,
     WINDOW_MS,
     QrzLookupService,
 )
+from .qrz_service import logger as service_logger
 from .secret_box import SecretBox, SecretBoxError, board_binding
 from .sqlite_storage import SQLiteStorage, create_sqlite_storage
 from .sse_handler import SSEManager
@@ -69,7 +77,7 @@ _NS = ' xmlns="http://xmldata.qrz.com"'
 def _session_xml(
     *,
     key: str | None = "KEY1",
-    count: int = 1,
+    count: int | None = 1,
     error: str | None = None,
     ns: bool = True,
     callsign: dict[str, str] | None = None,
@@ -83,7 +91,8 @@ def _session_xml(
         parts.append(f"<Error>{error}</Error>")
     if key:
         parts.append(f"<Key>{key}</Key>")
-    parts.append(f"<Count>{count}</Count><SubExp>non-subscriber</SubExp>")
+    parts.append(f"<Count>{count}</Count>" if count is not None else "")
+    parts.append("<SubExp>non-subscriber</SubExp>")
     parts.append("<GMTime>Sun Oct  4 06:37:15 2026</GMTime></Session></QRZDatabase>")
     return "".join(parts)
 
@@ -148,6 +157,57 @@ class FakeQrz:
 
     def logins(self) -> list[tuple[int, dict[str, str], httpx.Request]]:
         return [r for r in self.requests if "username" in r[1]]
+
+
+class ScriptedQrz:
+    """Responder answering every login and lookup with one scripted `Count`
+    (None omits the element), so the Count rules are testable without the
+    rolling tally FakeQrz keeps. `count` may be changed between steps."""
+
+    def __init__(
+        self, count: int | None, *, sub_exp: str | None = "non-subscriber", key: str = "KEY1"
+    ) -> None:
+        self.count = count
+        self.sub_exp = sub_exp
+        self.key = key
+
+    def __call__(self, form: dict[str, str]) -> tuple[int, str, dict[str, str]]:
+        callsign = None if "username" in form else {**DK5EN, "call": form["callsign"]}
+        body = _session_xml(key=self.key, count=self.count, callsign=callsign)
+        return 200, _with_sub_exp(body, self.sub_exp), {}
+
+
+@contextmanager
+def _captured_logs() -> Iterator[list[logging.LogRecord]]:
+    """Every record the service (and httpx, which logs request URLs) emits."""
+    records: list[logging.LogRecord] = []
+
+    class _Handler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = _Handler(level=logging.DEBUG)
+    loggers = [service_logger, logging.getLogger("httpx")]
+    previous = [lg.level for lg in loggers]
+    for lg in loggers:
+        lg.addHandler(handler)
+        lg.setLevel(logging.INFO)
+    try:
+        yield records
+    finally:
+        for lg, level in zip(loggers, previous, strict=True):
+            lg.removeHandler(handler)
+            lg.setLevel(level)
+
+
+def _lines(records: list[logging.LogRecord], level: int | None = None) -> list[str]:
+    return [r.getMessage() for r in records if level is None or r.levelno == level]
+
+
+async def _seed_stations(env: Env, n: int) -> None:
+    """`n` distinct, valid, never-looked-up callsigns, newest first."""
+    for i in range(n):
+        await env.add_heard(f"DL{i % 10}{chr(65 + i // 26 % 26)}{chr(65 + i % 26)}X", T0 - i)
 
 
 class Env:
@@ -642,13 +702,14 @@ async def _test_refused(env: Env, record: Record) -> None:
     await env.add_heard("DK5EN", T0)
     env.qrz.responder = lambda form: (200, _session_xml(key=None, error="Connection refused"), {})
     await env.service.set_credentials("DK5EN", PASSWORD)
-    await env.run_for(WINDOW_MS - 60_000)
+    await env.run_for(REFUSAL_BACKOFF_MS - 60_000)
     status = await env.service.status()
     record(
-        "Q17. 'Connection refused' at login suspends 24 h after one attempt",
+        "Q17. 'Connection refused' at login backs off 1 h (not 24 h) after one attempt",
         len(env.qrz.requests) == 1
-        and status["state"] == "suspended"
-        and status["suspended_until"] == T0 + SUSPEND_MS,
+        and status["state"] == "backoff"
+        and status["backoff_until"] == T0 + REFUSAL_BACKOFF_MS
+        and status["suspended_until"] is None,
     )
 
 
@@ -675,17 +736,18 @@ async def _test_auth_failed(env: Env, record: Record) -> None:
 
 
 async def _test_server_count(env: Env, record: Record) -> None:
-    await env.add_heard("DK5EN", T0)
+    await _seed_stations(env, 20)
     env.qrz.count = DAILY_CAP + 10  # another program already used the account
     await env.service.set_credentials("DK5EN", PASSWORD)
-    await env.run_for(WINDOW_MS - 60_000)
+    await env.run_for(10 * MIN_INTERVAL_MS)
     status = await env.service.status()
     record(
-        "Q20. QRZ's own Count at the cap suspends us at login, no lookup spent",
-        not env.qrz.lookups()
-        and status["state"] == "suspended"
-        and status["server_count"] == DAILY_CAP + 10
-        and status["account_tier"] == "free",
+        "Q20. Count above our cap suspends nothing: baseline spent, 31 left after 9 lookups",
+        len(env.qrz.lookups()) == 9
+        and status["state"] != "suspended"
+        and status["server_count"] >= DAILY_CAP + 10
+        and status["account_tier"] == "free"
+        and status["server_budget_left"] == 100 - (DAILY_CAP + 10) - 9,
     )
 
 
@@ -767,15 +829,18 @@ async def _test_lift_cap_suspension(env: Env, record: Record) -> None:
 
 
 async def _test_server_count_unknown_tier(env: Env, record: Record) -> None:
-    await env.add_heard("DK5EN", T0)
+    await _seed_stations(env, 20)
     env.qrz.sub_exp = None
     env.qrz.count = DAILY_CAP + 10
     await env.service.set_credentials("DK5EN", PASSWORD)
     await env.run_for(10 * MIN_INTERVAL_MS)
     status = await env.service.status()
     record(
-        "Q20d. no SubExp at all fails closed: Count at the cap still suspends",
-        not env.qrz.lookups() and status["state"] == "suspended",
+        "Q20d. no SubExp at all fails closed: the free-tier rules (cap, baseline) still apply",
+        len(env.qrz.lookups()) == 9
+        and status["state"] != "suspended"
+        and status["daily_cap"] == DAILY_CAP
+        and status["server_budget_left"] == 100 - (DAILY_CAP + 10) - 9,
     )
 
 
@@ -852,32 +917,35 @@ async def _test_suspend_records_reason(env: Env, record: Record) -> None:
     await env.add_heard("DK5EN", T0)
     await env.service.set_credentials("DK5EN", PASSWORD)
     await env.run_for(MIN_INTERVAL_MS)
-    reasons.append((await env.storage.get_qrz_state())["suspend_reason"])
+    reasons.append((await env.storage.get_qrz_state())["suspend_reason"])  # Count: none
+    for i in range(DAILY_CAP):
+        await env.storage.record_qrz_lookup(env.clock.now - 60_000 + i, f"DL{i}XX")
+    await env.run_for(2 * MIN_INTERVAL_MS)
+    reasons.append((await env.storage.get_qrz_state())["suspend_reason"])  # ledger cap
+    await env.storage._mutate("DELETE FROM qrz_lookups")
+    await env.storage.update_qrz_state(suspended_until_ms=None, suspend_reason=None)
     env.qrz.responder = lambda form: (200, _session_xml(key=None, error="Connection refused"), {})
     await env.service.set_credentials("DK5EN", PASSWORD)
-    await env.storage.update_qrz_state(suspended_until_ms=None)
-    await env.run_for(MIN_INTERVAL_MS)
-    reasons.append((await env.storage.get_qrz_state())["suspend_reason"])
+    await env.run_for(2 * MIN_INTERVAL_MS)
+    state = await env.storage.get_qrz_state()
+    reasons.append(state["suspend_reason"])  # refusal: a back-off, not a suspension
     record(
-        "Q20i. every suspension records why: server Count, refusal",
-        reasons == ["server_count", "refused"],
+        "Q20i. only the ledger cap records a suspension reason; Count and refusal do not suspend",
+        reasons == [None, "cap", None]
+        and state["suspended_until_ms"] is None
+        and (state["backoff_until_ms"] or 0) > env.clock.now,
     )
 
 
 async def _test_keep_other_suspensions(env: Env, record: Record) -> None:
-    """The lift is narrow: a ledger-cap or Count suspension on a free account
-    and a refusal on a subscriber all stay."""
+    """The lift is narrow: a ledger-cap suspension on a free account and a
+    refusal on a subscriber stay. (A Count suspension used to be in this list;
+    it is lifted on every tier since the Count gate was retired, see Q43.)"""
     await _seed_suspension(
         env, reason=f"daily cap of {DAILY_CAP} lookups reached", subscription="non-subscriber"
     )
     await env.run_for(3 * MIN_INTERVAL_MS)
     ledger_kept = not env.qrz.requests
-    await env.storage.update_qrz_state(
-        last_error="QRZ reports 77678 lookups in 24 h", subscription="non-subscriber"
-    )
-    await env.run_for(3 * MIN_INTERVAL_MS)
-    status = await env.service.status()
-    free_kept = not env.qrz.requests and status["state"] == "suspended"
     # Reason recorded on a subscriber, then the password replaced: refusal stays.
     await env.storage.update_qrz_state(
         suspend_reason="refused", last_error=None, subscription=SUBSCRIBER
@@ -893,8 +961,457 @@ async def _test_keep_other_suspensions(env: Env, record: Record) -> None:
         not env.qrz.requests and state["suspended_until_ms"] == T0 + SUSPEND_MS - 3_600_000
     )
     record(
-        "Q20f. free-tier cap and Count suspensions and refusals are never lifted",
-        ledger_kept and free_kept and refused_kept and legacy_kept,
+        "Q20f. a free-tier cap suspension and refusal suspensions are never lifted",
+        ledger_kept and refused_kept and legacy_kept,
+    )
+
+
+# ── Q40+: QRZ's Count is a login-time observation, never a suspension ─────
+#
+# 2026-10-05 09:42: the service woke from its own 24 h cap suspension, logged
+# in, QRZ reported Count 50 against a ledger of 0/50, and the old gate
+# suspended it for another 24 h. Count is read only at login and nothing looks
+# up while suspended, so a Count that does not decay wedged it for good.
+
+
+async def _test_count_at_cap_does_not_suspend(env: Env, record: Record) -> None:
+    await _seed_stations(env, 60)
+    env.qrz.responder = ScriptedQrz(50)
+    with _captured_logs() as logs:
+        await env.service.set_credentials("DK5EN", PASSWORD)
+        await env.run_for(MIN_INTERVAL_MS)  # login only
+        at_login = await env.service.status()
+        await env.run_for(10 * MIN_INTERVAL_MS)
+    status = await env.service.status()
+    state = await env.storage.get_qrz_state()
+    record(
+        "Q40a. Count 50 on a free account: login line says budget_today=50, status pins "
+        "server_count_ignored False and server_budget_left 50",
+        at_login["server_count"] == 50
+        and at_login["server_count_ignored"] is False
+        and at_login["server_budget_left"] == 50
+        # Before any later step: the stale-suspension lift must not be what hides a gate.
+        and at_login["state"] != "suspended"
+        and at_login["suspended_until"] is None
+        and any(
+            ln
+            == "QRZ login ok sub=non-subscriber count=50 plausible=yes ledger=0/50 budget_today=50"
+            for ln in _lines(logs, logging.INFO)
+        ),
+    )
+    record(
+        "Q40b. Count 50 on a free account: no suspension, lookups proceed",
+        len(env.qrz.lookups()) == 10
+        and status["state"] != "suspended"
+        and state["suspended_until_ms"] is None
+        and state["suspend_reason"] is None
+        and status["server_budget_left"] == 50 - 10
+        and not any("suspended" in ln for ln in _lines(logs, logging.WARNING)),
+    )
+
+
+async def _test_implausible_count_ignored(env: Env, record: Record) -> None:
+    await _seed_stations(env, 60)
+    script = ScriptedQrz(77678)
+    env.qrz.responder = script
+    with _captured_logs() as logs:
+        await env.service.set_credentials("DK5EN", PASSWORD)
+        await env.run_for(MIN_INTERVAL_MS)
+        at_login = await env.service.status()
+        await env.run_for(10 * MIN_INTERVAL_MS)
+    status = await env.service.status()
+    record(
+        "Q41a. Count 77678 on a free account: ignored, no suspension, budget is the ledger's 50",
+        status["server_count"] == 77678
+        and status["server_count_ignored"] is True
+        and status["server_budget_left"] is None
+        and status["state"] != "suspended"
+        and len(env.qrz.lookups()) == 10
+        and any(
+            "count=77678 plausible=no ledger=0/50 budget_today=50" in ln
+            for ln in _lines(logs, logging.INFO)
+        )
+        and at_login["server_budget_left"] is None
+        and at_login["suspended_until"] is None
+        and not any("suspended" in ln for ln in _lines(logs, logging.WARNING)),
+    )
+    # The boundary: 99 is a tally with one lookup left, 100 is not a tally.
+    results: dict[int, tuple[object, object]] = {}
+    for count in (99, 100):
+        script.count = count
+        env.service._session_key = None  # a lost session: the next step logs in again
+        env.clock.now += MIN_INTERVAL_MS
+        await env.service.step()
+        st = await env.service.status()
+        results[count] = (st["server_count_ignored"], st["server_budget_left"])
+    record(
+        "Q41b. plausibility boundary: Count 99 is used (1 left), Count 100 is ignored",
+        SERVER_COUNT_PLAUSIBLE_MAX == 100
+        and results[99] == (False, 1)
+        and results[100] == (True, None),
+    )
+
+
+async def _test_server_budget_backoff(env: Env, record: Record) -> None:
+    await _seed_stations(env, 60)
+    script = ScriptedQrz(70)
+    env.qrz.responder = script
+    with _captured_logs() as logs:
+        await env.service.set_credentials("DK5EN", PASSWORD)
+        await env.run_for(35 * MIN_INTERVAL_MS)
+    state = await env.storage.get_qrz_state()
+    status = await env.service.status()
+    stopped_at = T0 + 31 * MIN_INTERVAL_MS
+    record(
+        "Q42a. Count 70: exactly 30 lookups, the 31st does not happen",
+        len(env.qrz.lookups()) == 30 and len(env.qrz.logins()) == 1,
+    )
+    record(
+        "Q42b. the budget stop is a 1 h back-off with the budget reason, not a 24 h suspension",
+        state["backoff_until_ms"] == stopped_at + REFUSAL_BACKOFF_MS
+        and state["suspended_until_ms"] is None
+        and state["last_error"] == "QRZ budget used up (QRZ reports 70)"
+        and status["state"] == "backoff"
+        and status["server_budget_left"] == 0
+        and env.service._session_key is None
+        and any("QRZ server budget used up" in ln for ln in _lines(logs, logging.WARNING)),
+    )
+    # After the back-off the service logs in again and Count is re-read.
+    script.count = 90
+    env.clock.now = (state["backoff_until_ms"] or 0) - 1
+    await env.service.step()
+    record(
+        "Q42c. nothing is sent before the back-off ends",
+        len(env.qrz.logins()) == 1 and len(env.qrz.lookups()) == 30,
+    )
+    env.clock.now = state["backoff_until_ms"] or env.clock.now
+    with _captured_logs() as logs2:
+        await env.run_for(14 * MIN_INTERVAL_MS)
+    record(
+        "Q42d. after 1 h it logs in again, takes the NEW Count as baseline (90 -> 10 left, "
+        "ledger 20) and stops again after exactly 10 more lookups",
+        len(env.qrz.logins()) == 2
+        and len(env.qrz.lookups()) == 40
+        and any("count=90 plausible=yes ledger=30/50 budget_today=10" in ln for ln in _lines(logs2))
+        and (await env.storage.get_qrz_state())["last_error"]
+        == "QRZ budget used up (QRZ reports 90)",
+    )
+
+
+async def _test_stale_count_suspension_lifted(env: Env, record: Record) -> None:
+    """The live box on 2026-10-05: free account, Count 50, ledger EMPTY, a
+    server_count suspension with ~11 h to run."""
+    await _seed_stations(env, 20)
+    env.qrz.responder = ScriptedQrz(50)
+    await env.service.set_credentials("DK5EN", PASSWORD)
+    await env.storage.update_qrz_state(
+        subscription="non-subscriber",
+        server_count=50,
+        suspend_reason="server_count",
+        suspended_until_ms=T0 + 11 * 3_600_000,
+        last_error="QRZ reports 50 lookups in 24 h",
+        last_error_ms=T0 - 13 * 3_600_000,
+    )
+    with _captured_logs() as logs:
+        await env.run_for(3 * MIN_INTERVAL_MS)
+    state = await env.storage.get_qrz_state()
+    first = len(env.qrz.lookups())
+    record(
+        "Q43a. the live row (free, server_count suspension, empty ledger) is lifted at the "
+        "next step and lookups resume",
+        first >= 1
+        and state["suspended_until_ms"] is None
+        and state["suspend_reason"] is None
+        and state["last_error"] is None
+        and state["last_error_ms"] is None
+        and any("stale Count suspension lifted" in ln for ln in _lines(logs, logging.INFO)),
+    )
+    # Same row as written before `suspend_reason` existed: recognised by its text.
+    await env.storage.update_qrz_state(
+        suspend_reason=None,
+        suspended_until_ms=env.clock.now + 11 * 3_600_000,
+        last_error="QRZ reports 50 lookups in 24 h",
+        last_error_ms=env.clock.now,
+    )
+    await env.run_for(3 * MIN_INTERVAL_MS)
+    state = await env.storage.get_qrz_state()
+    record(
+        "Q43b. the same suspension without suspend_reason is lifted by its error text",
+        len(env.qrz.lookups()) > first
+        and state["suspended_until_ms"] is None
+        and state["last_error"] is None,
+    )
+
+
+def _ledger_cap_case(count: int | None, label: str) -> Callable[[Env, Record], Awaitable[None]]:
+    async def case(env: Env, record: Record) -> None:
+        await _seed_stations(env, 200)
+        env.qrz.responder = ScriptedQrz(count)
+        with _captured_logs() as logs:
+            await env.service.set_credentials("DK5EN", PASSWORD)
+            await env.run_for(WINDOW_MS)
+        first_day = env.qrz.lookups()
+        state = await env.storage.get_qrz_state()
+        status = await env.service.status()
+        record(
+            f"{label}. Count {count}: the ledger cap alone still stops at 50 per 24 h and "
+            "suspends 24 h from the 50th lookup",
+            len(first_day) == DAILY_CAP
+            and status["state"] == "suspended"
+            and state["suspend_reason"] == "cap"
+            and state["suspended_until_ms"] == first_day[-1][0] + SUSPEND_MS
+            and state["backoff_until_ms"] is None
+            and any(
+                f"count={'none' if count is None else count} plausible="
+                f"{'no' if count is None else 'yes'} ledger=0/50" in ln
+                for ln in _lines(logs, logging.INFO)
+            ),
+        )
+
+    return case
+
+
+def _refusal_case(
+    error: str, label: str, *, at_login: bool
+) -> Callable[[Env, Record], Awaitable[None]]:
+    async def case(env: Env, record: Record) -> None:
+        await env.add_heard("DK5EN", T0)
+        script = ScriptedQrz(7, key="SESSIONKEY-4F9A7C")
+        refuse: tuple[int, str, dict[str, str]] = (
+            200,
+            _session_xml(key=None, count=7, error=error),
+            {},
+        )
+
+        def respond(form: dict[str, str]) -> tuple[int, str, dict[str, str]]:
+            if "username" in form and not at_login:
+                return script(form)
+            return refuse
+
+        env.qrz.responder = respond
+        with _captured_logs() as logs:
+            await env.service.set_credentials("DK5EN", PASSWORD)
+            await env.service.step()  # login (refused, or ok)
+            if not at_login:
+                env.clock.now += MIN_INTERVAL_MS
+                await env.service.step()  # the lookup, refused
+            first_at = env.clock.now
+            state = await env.storage.get_qrz_state()
+            sent = len(env.qrz.requests)
+            first_ok = (
+                state["backoff_until_ms"] == first_at + REFUSAL_BACKOFF_MS
+                and state["backoff_level"] == 0
+                and state["suspended_until_ms"] is None
+                and state["suspend_reason"] is None
+                and state["last_error"] == error
+                and env.service._session_key is None
+            )
+            env.clock.now = first_at + REFUSAL_BACKOFF_MS - 1
+            await env.service.step()
+            quiet = len(env.qrz.requests) == sent
+            env.clock.now = first_at + REFUSAL_BACKOFF_MS
+            await env.service.step()  # exactly 1 h later: through login again
+            relogin = len(env.qrz.logins()) == 2
+            if not at_login:
+                env.clock.now += MIN_INTERVAL_MS
+                await env.service.step()  # refused again
+            second_at = env.clock.now
+            state2 = await env.storage.get_qrz_state()
+        stage = "login" if at_login else "lookup"
+        warning = next((ln for ln in _lines(logs, logging.WARNING) if error in ln), "")
+        record(
+            f"{label}. {error!r} at {stage}: fixed 1 h back-off (level 0, no suspension), "
+            "session dropped, silence until it ends, then a login",
+            first_ok and quiet and relogin,
+        )
+        record(
+            f"{label}/2. the second refusal backs off exactly 1 h again (fixed, not exponential)",
+            state2["backoff_until_ms"] == second_at + REFUSAL_BACKOFF_MS
+            and state2["backoff_level"] == 0,
+        )
+        record(
+            f"{label}/3. the WARNING carries the raw error, http status, Count, ledger and tier",
+            f"error='{error}'" in warning
+            and "http=200" in warning
+            and "count=7" in warning
+            and f"ledger={0 if at_login else 1}/50" in warning
+            and "tier=free" in warning
+            and all("SESSIONKEY" not in ln and PASSWORD not in ln for ln in _lines(logs)),
+        )
+
+    return case
+
+
+async def _test_subscriber_ignores_count(env: Env, record: Record) -> None:
+    """A Count of 99 would leave a free account one lookup; a subscriber has no
+    cap and no Count gate at all, so every due station is looked up."""
+    await _seed_stations(env, 120)
+    env.qrz.responder = ScriptedQrz(99, sub_exp=SUBSCRIBER)
+    with _captured_logs() as logs:
+        await env.service.set_credentials("DM3KS", PASSWORD)
+        await env.run_for(WINDOW_MS)
+    status = await env.service.status()
+    state = await env.storage.get_qrz_state()
+    record(
+        "Q46. a subscriber with Count 99: no cap, no back-off, no budget, all 120 looked up",
+        len(env.qrz.lookups()) == 120
+        and status["server_budget_left"] is None
+        and status["daily_cap"] is None
+        and state["backoff_until_ms"] is None
+        and state["suspended_until_ms"] is None
+        and any(
+            f"sub={SUBSCRIBER} count=99 plausible=yes ledger=0/none budget_today=none" in ln
+            for ln in _lines(logs, logging.INFO)
+        ),
+    )
+
+
+async def _test_baseline_math(env: Env, record: Record) -> None:
+    await _seed_stations(env, 40)
+    script = ScriptedQrz(40)
+    env.qrz.responder = script
+    await env.service.set_credentials("DK5EN", PASSWORD)
+    await env.run_for(11 * MIN_INTERVAL_MS)  # login + 10 lookups
+    status = await env.service.status()
+    record(
+        "Q47a. baseline 40 + 10 lookups since login leaves 50",
+        len(env.qrz.lookups()) == 10 and status["server_budget_left"] == 50,
+    )
+    # A lost session: the next step logs in again and Count is re-read.
+    script.count = 80
+    env.service._session_key = None
+    with _captured_logs() as logs:
+        await env.run_for(MIN_INTERVAL_MS)
+    status = await env.service.status()
+    after_login = status["server_budget_left"]
+    await env.run_for(5 * MIN_INTERVAL_MS)
+    status = await env.service.status()
+    record(
+        "Q47b. a second login refreshes the baseline and restarts the since-login count "
+        "(80 -> 20 left, then 15 after 5 lookups; ledger 10/50 is not the server's tally)",
+        len(env.qrz.logins()) == 2
+        and after_login == 20
+        and status["server_budget_left"] == 15
+        and any("count=80 plausible=yes ledger=10/50 budget_today=20" in ln for ln in _lines(logs)),
+    )
+
+
+async def _test_session_refresh(env: Env, record: Record) -> None:
+    """The baseline is a login-time Count but the ledger rows added to it never
+    age out; a session older than 24 h logs in again instead."""
+    await _seed_stations(env, 20)
+    script = ScriptedQrz(40)
+    env.qrz.responder = script
+    await env.service.set_credentials("DK5EN", PASSWORD)
+    await env.run_for(3 * MIN_INTERVAL_MS)  # login + 2 lookups
+    first_login = T0
+    # (3) younger than 24 h: the session is kept, and the 30 s gate stays in force.
+    env.clock.now = first_login + WINDOW_MS - 1
+    await env.service.step()
+    young_ok = len(env.qrz.logins()) == 1 and len(env.qrz.lookups()) == 3
+    env.clock.now = first_login + WINDOW_MS
+    before = len(env.qrz.requests)
+    await env.service.step()  # 24 h old, but 1 ms after the last request
+    gate_ok = len(env.qrz.requests) == before
+    record(
+        "Q49a. a session younger than 24 h is not renewed, and the 30 s gate holds at 24 h",
+        young_ok and gate_ok,
+    )
+    # (1) older than 24 h: log in again; the new Count is the baseline.
+    script.count = 80
+    env.clock.now += MIN_INTERVAL_MS
+    with _captured_logs() as logs:
+        await env.service.step()
+    status = await env.service.status()
+    record(
+        "Q49b. a session older than 24 h logs in again (INFO line) and uses the new baseline "
+        "(80 -> 20 left, earlier lookups are outside the ledger window)",
+        len(env.qrz.logins()) == 2
+        and status["server_budget_left"] == 20
+        and any(
+            "QRZ session older than 24 h, logging in again to refresh the baseline" in ln
+            for ln in _lines(logs, logging.INFO)
+        ),
+    )
+
+
+async def _test_session_refresh_two_days(env: Env, record: Record) -> None:
+    """Without the refresh, baseline 0 + 100 lookups since the first login ends
+    the third day in a spurious 'budget used up' pause."""
+    await _seed_stations(env, 200)
+    env.qrz.responder = ScriptedQrz(0)
+    with _captured_logs() as logs:
+        await env.service.set_credentials("DK5EN", PASSWORD)
+        await env.run_for(3 * WINDOW_MS)
+    state = await env.storage.get_qrz_state()
+    record(
+        "Q49c. three days at the 50/day cap with Count 0 never hit 'budget used up'",
+        len(env.qrz.lookups()) > 100
+        and len(env.qrz.logins()) >= 3
+        and not any("budget used up" in ln for ln in _lines(logs, logging.WARNING))
+        and "budget used up" not in str(state["last_error"]),
+    )
+
+
+async def _test_session_refresh_subscriber(env: Env, record: Record) -> None:
+    """A subscriber has no baseline: its session is kept, as before."""
+    await _seed_stations(env, 20)
+    env.qrz.responder = ScriptedQrz(5, sub_exp=SUBSCRIBER)
+    await env.service.set_credentials("DM3KS", PASSWORD)
+    await env.run_for(2 * MIN_INTERVAL_MS)
+    env.clock.now = T0 + WINDOW_MS + 1
+    with _captured_logs() as logs:
+        await env.service.step()
+    record(
+        "Q49d. a subscriber's session is not renewed after 24 h (nothing to refresh)",
+        len(env.qrz.logins()) == 1
+        and len(env.qrz.lookups()) == 2
+        and not any("older than 24 h" in ln for ln in _lines(logs)),
+    )
+
+
+async def _test_log_lines(env: Env, record: Record) -> None:
+    key = "SESSIONKEY-4F9A7C"
+    await _seed_stations(env, 5)
+    script = ScriptedQrz(40, key=key)
+    env.qrz.responder = script
+    with _captured_logs() as logs:
+        await env.service.set_credentials("DK5EN", PASSWORD)
+        await env.run_for(2 * MIN_INTERVAL_MS)  # login + one lookup
+        callsign = env.qrz.lookups()[0][1]["callsign"]
+        env.qrz.responder = lambda form: (
+            200,
+            _session_xml(key=None, count=41, error="Connection refused"),
+            {},
+        )
+        await env.run_for(MIN_INTERVAL_MS)  # refused lookup
+    info = _lines(logs, logging.INFO)
+    warnings = _lines(logs, logging.WARNING)
+    record(
+        "Q48a. login INFO line carries sub, count, plausible, ledger and budget_today",
+        "QRZ login ok sub=non-subscriber count=40 plausible=yes ledger=0/50 budget_today=50"
+        in info,
+    )
+    record(
+        "Q48b. every lookup answers with an INFO line: call, outcome, count, ledger used/cap",
+        f"QRZ lookup {callsign} -> found count=40 ledger=1/50" in info
+        and any(re.fullmatch(r"QRZ lookup \w+ -> refused count=41 ledger=2/50", ln) for ln in info),
+    )
+    record(
+        "Q48c. the refusal WARNING carries error, http, count, ledger and tier",
+        any(
+            re.fullmatch(
+                r"QRZ refused: error='Connection refused' http=200 count=41 ledger=2/50 "
+                r"tier=free; backing off 3600 s",
+                ln,
+            )
+            for ln in warnings
+        ),
+    )
+    everything = " | ".join(_lines(logs)) + " | ".join(str(r.args) + str(r.exc_text) for r in logs)
+    record(
+        "Q48d. neither the password nor the session key appears in any captured log",
+        PASSWORD not in everything and key not in everything and len(logs) > 4,
     )
 
 
@@ -1079,6 +1596,22 @@ async def run_qrz_tests() -> bool:
         _test_server_count,
         _test_server_count_subscriber,
         _test_server_count_unknown_tier,
+        _test_count_at_cap_does_not_suspend,
+        _test_implausible_count_ignored,
+        _test_server_budget_backoff,
+        _test_stale_count_suspension_lifted,
+        _ledger_cap_case(0, "Q44a"),
+        _ledger_cap_case(None, "Q44b"),
+        _refusal_case("Connection refused", "Q45a", at_login=True),
+        _refusal_case("Connection refused", "Q45b", at_login=False),
+        _refusal_case("Daily lookup limit exceeded", "Q45c", at_login=True),
+        _refusal_case("Daily lookup limit exceeded", "Q45d", at_login=False),
+        _test_subscriber_ignores_count,
+        _test_baseline_math,
+        _test_session_refresh,
+        _test_session_refresh_two_days,
+        _test_session_refresh_subscriber,
+        _test_log_lines,
         _test_login_reasserts_tier,
         _test_lift_cap_suspension,
         _test_lift_count_suspension,

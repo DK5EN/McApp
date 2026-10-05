@@ -7,8 +7,17 @@ Budget rules (doc/2026-10-04_0848-qrz-callsign-lookup-plan.md §4):
   timeout still counts; a paid subscription has no daily limit, so only the
   request spacing below bounds it;
 - reaching the cap suspends lookups for 24 h, persisted across restarts;
+- QRZ's own `Count` never suspends anything. At each login on a free account a
+  plausible Count (0 <= Count < `SERVER_COUNT_PLAUSIBLE_MAX`) becomes an in-memory
+  baseline; the lookups recorded since that login are added to it and the sum is
+  held under QRZ's free limit. A Count that is not a plausible 24 h tally (QRZ
+  reports thousands on some accounts) is ignored. Used up, the service backs off
+  `REFUSAL_BACKOFF_MS` and re-logs in, which refreshes the baseline; so does a
+  session older than 24 h, whose baseline no longer describes QRZ's tally;
 - at most one request per `MIN_INTERVAL_MS`, logins included, persisted too;
-- exponential backoff on rate limiting and transient failures;
+- a refusal or an explicit rate limit from QRZ backs off a fixed `REFUSAL_BACKOFF_MS`
+  (not 24 h: nothing proves it lasts that long), any other transient failure backs
+  off exponentially;
 - a rejected login stops the service until new credentials arrive, because
   retrying a wrong password is what gets an account locked.
 
@@ -51,6 +60,14 @@ _DAY_MS = 24 * _HOUR_MS
 DAILY_CAP = 50
 WINDOW_MS = _DAY_MS
 SUSPEND_MS = _DAY_MS
+# QRZ's free-account limit per 24 h, and the largest Count that can still be a
+# tally of it. Free accounts have been seen reporting Count in the thousands
+# (a counter that is not a 24 h tally); such a value is ignored, not obeyed.
+SERVER_FREE_LIMIT = 100
+SERVER_COUNT_PLAUSIBLE_MAX = SERVER_FREE_LIMIT
+# Back-off after a refusal, an explicit rate limit or an exhausted server-side
+# budget. The login that follows re-reads QRZ's Count.
+REFUSAL_BACKOFF_MS = _HOUR_MS
 MIN_INTERVAL_MS = 30_000
 BACKOFF_BASE_MS = 60_000
 BACKOFF_MAX_MS = 6 * _HOUR_MS
@@ -72,7 +89,9 @@ _NON_SUBSCRIBER = "non-subscriber"
 _SERVER_COUNT_REASON = "QRZ reports"
 _CAP_REASON = f"daily cap of {DAILY_CAP} lookups reached"
 
-# `qrz_state.suspend_reason`: why the running suspension was set.
+# `qrz_state.suspend_reason`: why the running suspension was set. Only `cap` is
+# still written; `server_count` and `refused` exist on boxes updated from
+# v2.1.1-v2.1.5, and a `server_count` one is lifted at the next step.
 SUSPEND_CAP = "cap"
 SUSPEND_SERVER_COUNT = "server_count"
 SUSPEND_REFUSED = "refused"
@@ -88,7 +107,7 @@ def _aad(username: str) -> str:
 
 def _is_free_tier(sub_exp: str | None) -> bool:
     """True unless QRZ said the account is a subscriber. Fails closed: an
-    unknown `SubExp` is treated as free, so the Count gate stays on."""
+    unknown `SubExp` is treated as free, so the free-tier rules (ledger cap, baseline) stay on."""
     return not sub_exp or sub_exp.strip().lower() in {"", _NON_SUBSCRIBER}
 
 
@@ -103,6 +122,24 @@ def _account_tier(sub_exp: str | None) -> str | None:
     if sub_exp is None:
         return None
     return "free" if _is_free_tier(sub_exp) else "subscriber"
+
+
+def _fmt(value: object) -> str:
+    """Log rendering of an optional number: 'none' rather than 'None'."""
+    return "none" if value is None else str(value)
+
+
+def _count_plausible(count: int | None) -> bool:
+    return count is not None and 0 <= count < SERVER_COUNT_PLAUSIBLE_MAX
+
+
+def _is_count_suspension(state: dict[str, Any]) -> bool:
+    """A suspension set by the retired Count gate: by recorded reason, or, on a
+    row from before `suspend_reason` existed, by its error text."""
+    reason = state["suspend_reason"]
+    if reason is not None:
+        return bool(reason == SUSPEND_SERVER_COUNT)
+    return str(state["last_error"] or "").startswith(_SERVER_COUNT_REASON)
 
 
 def _retry_after_ms(response: httpx.Response) -> int:
@@ -132,10 +169,19 @@ class QrzLookupService:
         # In memory only: a restart logs in again, which costs no lookup.
         self._session_key: str | None = None
         self._session_errors = 0
+        # Also in memory, for the same reason: set by every successful login on a
+        # free account from a plausible Count, so a restart or a lost session
+        # always refreshes it. None means "no usable server-side tally".
+        self._server_baseline: int | None = None
+        # Raw Count of the last login of this process; `status()` judges
+        # plausibility on it so the flag cannot disagree with the baseline.
+        self._login_seen = False
+        self._login_count: int | None = None
         # Bumped whenever credentials change, so a request that was in flight
         # with the old ones cannot write its verdict over the new ones.
         self._cred_gen = 0
         self._nothing_due = False
+        self._last_http_status: int | None = None
 
     def set_info_listener(self, listener: InfoListener | None) -> None:
         """Wire the live push after construction: the SSE manager is built
@@ -151,7 +197,7 @@ class QrzLookupService:
             raise ValueError(msg)
         token = await asyncio.to_thread(self._box.encrypt, password, _aad(user))
         self._cred_gen += 1
-        self._session_key = None
+        self._forget_session()
         self._session_errors = 0
         await self._storage.update_qrz_state(
             username=user,
@@ -167,7 +213,7 @@ class QrzLookupService:
 
     async def clear_credentials(self) -> None:
         self._cred_gen += 1
-        self._session_key = None
+        self._forget_session()
         await self._storage.update_qrz_state(
             username=None,
             password_enc=None,
@@ -178,6 +224,12 @@ class QrzLookupService:
         )
         logger.info("QRZ credentials removed")
         self._wake.set()
+
+    def _forget_session(self) -> None:
+        self._session_key = None
+        self._server_baseline = None
+        self._login_seen = False
+        self._login_count = None
 
     async def set_enabled(self, enabled: bool) -> None:
         await self._storage.update_qrz_state(enabled=1 if enabled else 0)
@@ -194,6 +246,9 @@ class QrzLookupService:
         backoff = backoff if backoff and backoff > now else None
         readable = await self._credentials_readable(state)
         label = self._state_label(state, readable, suspended, backoff)
+        observed = self._login_count if self._login_seen else state["server_count"]
+        since_login = await self._lookups_since_login(state)
+        server_left = self._server_remaining(since_login)
         next_at = None
         if label in {"verifying", "active", "idle", "suspended", "backoff"}:
             next_at = max(
@@ -210,6 +265,8 @@ class QrzLookupService:
             "backoff_until": backoff,
             "next_request_at": next_at,
             "server_count": state["server_count"],
+            "server_count_ignored": None if observed is None else not _count_plausible(observed),
+            "server_budget_left": None if server_left is None else max(0, server_left),
             "subscription": state["subscription"],
             "account_tier": _account_tier(state["subscription"]),
             "last_login_at": state["last_login_ms"],
@@ -284,12 +341,7 @@ class QrzLookupService:
             logger.warning("QRZ password cannot be decrypted on this install; re-enter it")
             return IDLE_POLL_MS
 
-        if self._suspension_obsolete(state, now):
-            await self._storage.update_qrz_state(
-                suspended_until_ms=None, suspend_reason=None, last_error=None, last_error_ms=None
-            )
-            state["suspended_until_ms"] = None
-            logger.info("QRZ budget suspension lifted: subscriber account has no daily limit")
+        await self._lift_obsolete_suspension(state, now)
         for until in (state["suspended_until_ms"], state["backoff_until_ms"]):
             if until and int(until) > now:
                 return int(until) - now
@@ -304,6 +356,9 @@ class QrzLookupService:
             await self._suspend(now, _CAP_REASON, SUSPEND_CAP)
             return SUSPEND_MS
 
+        if self._session_key is not None and self._baseline_expired(state, now):
+            logger.info("QRZ session older than 24 h, logging in again to refresh the baseline")
+            self._session_key = None
         if self._session_key is None:
             await self._login(state["username"], password, now)
             return MIN_INTERVAL_MS
@@ -313,6 +368,8 @@ class QrzLookupService:
             self._nothing_due = True
             return IDLE_POLL_MS
         self._nothing_due = False
+        if await self._stop_if_server_budget_used(state, now, used, cap):
+            return REFUSAL_BACKOFF_MS
         await self._lookup(callsign, now, used, cap)
         return MIN_INTERVAL_MS
 
@@ -335,6 +392,7 @@ class QrzLookupService:
             hint = _retry_after_ms(response) if response.status_code in _RATE_LIMIT_HTTP else 0
             await self._backoff(self._clock(), f"HTTP {response.status_code}", hint)
             return -1
+        self._last_http_status = response.status_code
         return parse_response(response.text, is_login=is_login)
 
     async def _login(self, username: str, password: str, now: int) -> None:
@@ -356,8 +414,7 @@ class QrzLookupService:
                 backoff_until_ms=None,
                 subscription=result.sub_exp,
             )
-            logger.info("QRZ login ok (%s)", result.sub_exp or "subscription unknown")
-            await self._check_server_count(result, now)
+            await self._observe_login(result, now)
         elif result.outcome is Outcome.AUTH_FAILED:
             await self._storage.update_qrz_state(
                 auth_failed=1, last_error=result.error or "login rejected", last_error_ms=now
@@ -377,8 +434,22 @@ class QrzLookupService:
         )
         if not isinstance(result, QrzResponse):
             await self._storage.set_qrz_lookup_outcome(now, callsign, "transport_error")
+            logger.info(
+                "QRZ lookup %s -> transport_error count=none ledger=%d/%s",
+                callsign,
+                used_before + 1,
+                _fmt(cap),
+            )
             return
         await self._storage.set_qrz_lookup_outcome(now, callsign, result.outcome.value)
+        logger.info(
+            "QRZ lookup %s -> %s count=%s ledger=%d/%s",
+            callsign,
+            result.outcome.value,
+            _fmt(result.count),
+            used_before + 1,
+            _fmt(cap),
+        )
         if gen != self._cred_gen:
             return
         await self._record_session_info(result)
@@ -410,7 +481,6 @@ class QrzLookupService:
                 await self._backoff(now, result.error or "repeated session loss", 0)
         else:
             await self._handle_failure(result, now)
-        await self._check_server_count(result, now)
 
     async def _publish(self, callsign: str, info: dict[str, str | None]) -> None:
         # Same filter as get_callsign_info_map: an entry with neither name nor
@@ -426,11 +496,35 @@ class QrzLookupService:
     # ── State transitions ─────────────────────────────────────────────────
 
     async def _handle_failure(self, result: QrzResponse, now: int) -> None:
-        if result.outcome is Outcome.REFUSED:
-            self._session_key = None
-            await self._suspend(now, result.error or "Connection refused", SUSPEND_REFUSED)
+        if result.outcome in {Outcome.REFUSED, Outcome.RATE_LIMITED}:
+            await self._refusal_backoff(result, now)
         else:
             await self._backoff(now, result.error or result.outcome.value, 0)
+
+    async def _refusal_backoff(self, result: QrzResponse, now: int) -> None:
+        """QRZ said no: a fixed `REFUSAL_BACKOFF_MS`, then a fresh login. The
+        spec's "at least 24 hours" for a refusal was never observed to hold, and
+        a 24 h suspension is what wedged the service on 2026-10-05; the raw text
+        goes into the log so the real duration can be learned from the journal."""
+        self._session_key = None
+        kind = "refused" if result.outcome is Outcome.REFUSED else "rate limited"
+        reason = result.error or ("Connection refused" if kind == "refused" else "rate limited")
+        await self._storage.update_qrz_state(
+            backoff_until_ms=now + REFUSAL_BACKOFF_MS, last_error=reason, last_error_ms=now
+        )
+        state = await self._storage.get_qrz_state()
+        used = await self._storage.count_qrz_lookups_since(now - WINDOW_MS)
+        logger.warning(
+            "QRZ %s: error=%r http=%s count=%s ledger=%d/%s tier=%s; backing off %d s",
+            kind,
+            result.error,
+            _fmt(self._last_http_status),
+            _fmt(result.count),
+            used,
+            _fmt(_daily_cap(state["subscription"])),
+            _fmt(_account_tier(state["subscription"])),
+            REFUSAL_BACKOFF_MS // 1000,
+        )
 
     async def _record_session_info(self, result: QrzResponse) -> None:
         fields: dict[str, Any] = {}
@@ -441,31 +535,125 @@ class QrzLookupService:
         if fields:
             await self._storage.update_qrz_state(**fields)
 
-    async def _check_server_count(self, result: QrzResponse, now: int) -> None:
-        # QRZ's own 24 h tally includes other software using the same account;
-        # at the cap we stop too, which keeps the account under the free tier.
-        # Not on a subscriber: there is no free tier to protect, and its Count
-        # is not a 24 h tally — DM3KS's login reported 77678 while QRZ's own
-        # account page showed 1 XML lookup that day and an unlimited limit
-        # (2026-10-04). Gating on it suspended every login, forever.
-        if result.count is None or result.count < DAILY_CAP:
-            return
-        sub_exp = result.sub_exp or (await self._storage.get_qrz_state())["subscription"]
-        if _is_free_tier(sub_exp):
-            await self._suspend(
-                now, f"{_SERVER_COUNT_REASON} {result.count} lookups in 24 h", SUSPEND_SERVER_COUNT
+    async def _observe_login(self, result: QrzResponse, now: int) -> None:
+        """Take QRZ's Count at a login as the baseline of its own 24 h tally.
+
+        Only on a free account and only when it can be a tally: QRZ reports
+        thousands on some accounts (DM3KS, a subscriber; a free one too since
+        2026-10-05), and on 2026-10-05 a Count of exactly the cap met a ledger
+        showing 0/50, suspending lookups for 24 h with nothing that ever
+        refreshed it. The Count is read here and nowhere else."""
+        plausible = _count_plausible(result.count)
+        self._login_seen = True
+        self._login_count = result.count
+        self._server_baseline = (
+            result.count if plausible and _is_free_tier(result.sub_exp) else None
+        )
+        used = await self._storage.count_qrz_lookups_since(now - WINDOW_MS)
+        cap = _daily_cap(result.sub_exp)
+        remaining = [
+            left
+            for left in (
+                None if cap is None else cap - used,
+                self._server_remaining(0),
             )
+            if left is not None
+        ]
+        logger.info(
+            "QRZ login ok sub=%s count=%s plausible=%s ledger=%d/%s budget_today=%s",
+            result.sub_exp or "none",
+            _fmt(result.count),
+            "yes" if plausible else "no",
+            used,
+            _fmt(cap),
+            _fmt(max(0, min(remaining)) if remaining else None),
+        )
+
+    def _server_remaining(self, since_login: int) -> int | None:
+        """Lookups QRZ would still allow today, or None without a usable baseline."""
+        if self._server_baseline is None:
+            return None
+        return SERVER_FREE_LIMIT - (self._server_baseline + since_login)
+
+    def _baseline_expired(self, state: dict[str, Any], now: int) -> bool:
+        """The baseline describes QRZ's 24 h tally AT the login; the ledger rows
+        counted on top of it never age out, so a session living for days would
+        reach baseline + 100 on lookups QRZ itself no longer counts. Past 24 h a
+        fresh login re-reads Count (it costs no lookup and obeys the 30 s gate).
+        Only where a baseline exists: a subscriber, or an ignored Count, has
+        nothing to refresh and keeps its session exactly as before."""
+        last_login = state["last_login_ms"]
+        return (
+            self._server_baseline is not None
+            and last_login is not None
+            and now - int(last_login) >= WINDOW_MS
+        )
+
+    async def _lookups_since_login(self, state: dict[str, Any]) -> int:
+        # Ledger rows, not later responses' Count: those may cross the limit.
+        if self._server_baseline is None or state["last_login_ms"] is None:
+            return 0
+        return await self._storage.count_qrz_lookups_since(int(state["last_login_ms"]))
+
+    async def _stop_if_server_budget_used(
+        self, state: dict[str, Any], now: int, used: int, cap: int | None
+    ) -> bool:
+        """Back off, never suspend, when baseline + lookups since login reach QRZ's limit.
+
+        The session is dropped so the next attempt logs in and re-reads Count."""
+        since_login = await self._lookups_since_login(state)
+        remaining = self._server_remaining(since_login)
+        if remaining is None or remaining > 0:
+            return False
+        reported = state["server_count"]
+        self._session_key = None
+        await self._storage.update_qrz_state(
+            backoff_until_ms=now + REFUSAL_BACKOFF_MS,
+            last_error=f"QRZ budget used up (QRZ reports {_fmt(reported)})",
+            last_error_ms=now,
+        )
+        logger.warning(
+            "QRZ server budget used up: baseline=%s since_login=%d count=%s ledger=%d/%s;"
+            " backing off %d s, then a new login re-reads Count",
+            _fmt(self._server_baseline),
+            since_login,
+            _fmt(reported),
+            used,
+            _fmt(cap),
+            REFUSAL_BACKOFF_MS // 1000,
+        )
+        return True
+
+    async def _lift_obsolete_suspension(self, state: dict[str, Any], now: int) -> None:
+        if not self._suspension_obsolete(state, now):
+            return
+        count_based = _is_count_suspension(state)
+        await self._storage.update_qrz_state(
+            suspended_until_ms=None, suspend_reason=None, last_error=None, last_error_ms=None
+        )
+        state["suspended_until_ms"] = None
+        if count_based:
+            logger.info("QRZ stale Count suspension lifted: QRZ's Count no longer suspends")
+        else:
+            logger.info("QRZ budget suspension lifted: subscriber account has no daily limit")
 
     def _suspension_obsolete(self, state: dict[str, Any], now: int) -> bool:
-        """A running budget suspension — our ledger cap or the server Count —
-        on an account known to be a subscriber, which has no daily limit.
-        Written by v2.1.1-v2.1.3, which applied both to subscribers too."""
+        """A running suspension that no rule sets any more.
+
+        - set by the retired Count gate, on any account: QRZ's Count suspends
+          nothing now (v2.1.6; it wedged a free account for good on 2026-10-05);
+        - our ledger cap on a subscriber, who has no daily limit. Written by
+          v2.1.1-v2.1.3, which applied both gates to subscribers too."""
         until = state["suspended_until_ms"]
-        if not until or int(until) <= now or _is_free_tier(state["subscription"]):
+        if not until or int(until) <= now:
+            return False
+        if _is_count_suspension(state):
+            return True
+        if _is_free_tier(state["subscription"]):
             return False
         reason = state["suspend_reason"]
         if reason is not None:
-            return reason in {SUSPEND_SERVER_COUNT, SUSPEND_CAP}
+            return bool(reason == SUSPEND_CAP)
         # Written before `suspend_reason` existed (v2.1.1/v2.1.2): infer it.
         # A replaced password clears `last_error` but not the suspension —
         # DM3KS's exact state — and then only the budget gates or a refusal
@@ -474,7 +662,7 @@ class QrzLookupService:
         error = state["last_error"]
         if error is None:
             return True
-        return str(error).startswith((_SERVER_COUNT_REASON, _CAP_REASON))
+        return str(error).startswith(_CAP_REASON)
 
     async def _suspend(self, now: int, reason: str, kind: str) -> None:
         await self._storage.update_qrz_state(

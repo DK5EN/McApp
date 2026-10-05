@@ -774,18 +774,32 @@ Web Push to browser / iOS-PWA clients, sharing one wire contract with mc-chat so
 First name + QTH per base callsign from the QRZ.com XML API, with the operator's own account.
 Plan, threat model and API: `doc/2026-10-04_0848-qrz-callsign-lookup-plan.md`.
 
-- **The budget has three independent guards and each is tested on its own.** The ledger
-  pre-check (`qrz_lookups`, written BEFORE the request), the 24 h suspension set at the 50th
-  lookup, and QRZ's own `Count`. Any two mask the third in a combined test, which is how the
-  first version of the suite let all three be deleted unnoticed. Keep Q3b/Q8/Q30 discriminating.
-- **Both budget gates apply to free accounts only.** QRZ does not limit a subscriber's XML
+- **The budget has two hard guards, each tested on its own, plus an advisory server number.** The
+  ledger pre-check (`qrz_lookups`, written BEFORE the request) and the 24 h suspension set at the
+  50th lookup. Either masks the other in a combined test, which is how the first version of the
+  suite let all of them be deleted unnoticed. Keep Q3b/Q8/Q30/Q44 discriminating.
+- **QRZ's `Count` is advisory and NEVER suspends anything (changed 2026-10-05).** It used to suspend
+  for 24 h at `Count >= 50` on a free account, on the unverified assumption that it is a real 24 h
+  tally. The live box proved the opposite: 47 lookups on 04.10 09:18-09:42, our own 24 h cap expired
+  05.10 09:42:34, the login read `Count = 50` while our ledger said 0/50, and the service re-suspended
+  for another 24 h. `Count` is read only at login and nothing logs in or looks up while suspended,
+  so the ledger never moves and a `Count` that does not decay (or sits in the thousands, which free
+  accounts do report) wedged the service forever. Now: the budget is `min(50 - ledger, 100 -
+  (Count at the last login + lookups since that login))`, and a `Count >= 100` (QRZ's free limit) is
+  "not a plausible tally" and ignored (`SERVER_COUNT_PLAUSIBLE_MAX`). The baseline is in memory and
+  refreshed by every login, including a forced re-login once the session is older than 24 h; do not
+  trust the `Count` of later lookup responses for the budget (they cross 100). A used-up server budget
+  is a 1 h backoff plus a re-login, never a 24 h suspension. Any persisted `suspend_reason =
+  'server_count'` (or the legacy "QRZ reports" `last_error`) is lifted at the next step on every tier.
+  Q40-Q49 pin it, including the 99/100 boundary and the stale live-box row.
+- **The ledger cap applies to free accounts only.** QRZ does not limit a subscriber's XML
   lookups per day, and on a subscriber `Count` is not a 24 h tally either (DM3KS: `Count 77678`
   on login, QRZ's page: 1 XML lookup that day) — gating on it suspended every login forever,
-  and the 50/24 h ledger cap still capped a paid account until v2.1.4. On a subscriber only the
+  and the 50/24 h ledger cap still capped a paid account until v2.1.4. `Count` never enters a subscriber's budget (it is still stored and shown). On a subscriber only the
   30 s spacing bounds the rate; `daily_cap` is `null` in the status. `_is_free_tier` fails
   closed on an absent or empty `SubExp`, and every login rewrites `subscription`, so a stale
-  "subscriber" can never lift the cap. A running cap or Count suspension on a subscriber is
-  lifted on the next step; a refusal never is. Q20b-Q20k pin it.
+  "subscriber" can never lift the cap. A running cap suspension on a subscriber is lifted on the
+  next step; a legacy 24 h refusal suspension never is. Q20b-Q20k pin it.
 - **Why a suspension runs lives in `qrz_state.suspend_reason` (migration 34), never in
   `last_error`.** Replacing the credentials clears `last_error` while the suspension keeps
   running; the v2.1.2 lift keyed on that text and left DM3KS stuck after a password re-entry.
@@ -805,7 +819,12 @@ Plan, threat model and API: `doc/2026-10-04_0848-qrz-callsign-lookup-plan.md`.
   JSON; a truncated one is stored raw), `redact()` masks `*password*` keys, and the webapp's
   `stallReporter.ts` does both on the client side.
 - **A rejected login stops the service until new credentials arrive** — retrying a wrong
-  password is what locks an account. `Connection refused` means 24 h (spec), not a backoff.
+  password is what locks an account. A real QRZ refusal (`Connection refused`, or the
+  limit/exceeded/too many/quota wording) backs off a FIXED 1 h and retries (changed 2026-10-05
+  from the spec's 24 h; the retry is a login, which costs no lookup, and one lookup 30 s later), drops the session and logs
+  QRZ's RAW error text with `Count`, ledger and tier at WARNING. The journal is the instrument for
+  learning what QRZ really does on a free account: every login logs `QRZ login ok sub= count=
+  plausible= ledger= budget_today=` and every lookup `QRZ lookup CALL -> outcome count= ledger=`.
 - MFA on the QRZ account does not apply to the XML API (measured 2026-10-04); a free account
   gets `fname name addr2 state country`, and the login itself costs no lookup.
 
