@@ -291,9 +291,9 @@ class SSEManager:
         # Set by build_app (main.py); None keeps /api/qrz/* at a 503 (startup
         # tests build a manager without one), same convention as node_console.
         self.qrz_service: QrzLookupService | None = None
-        # Node Admin (RM1 remote admin). Set by build_app (main.py) only when
-        # `node_admin.enabled`; None keeps /api/node-admin/* at a 503 and the
-        # webapp treats that as "feature absent".
+        # Node Admin (RM1 remote admin). Always set by build_app (main.py); None
+        # (startup tests build a manager without one) keeps /api/node-admin/* at a
+        # 503, which the webapp treats as "feature absent".
         self.node_admin_service: NodeAdminService | None = None
         # Extra Origin values the node-admin guard accepts (webapp cross-origin proxy
         # mode, Vite dev server); set from `node_admin.allowed_origins`.

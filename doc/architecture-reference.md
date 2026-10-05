@@ -198,7 +198,7 @@ message_router.register_protocol("udp", udp_handler)
 
 ## Node Admin (RM1 remote admin)
 
-Opt-in (`node_admin.enabled`, default off) remote administration of other MeshCom nodes over LoRa with HMAC-tagged
+Always on (no config switch; LAN-only through a Host/Origin guard) remote administration of other MeshCom nodes over LoRa with HMAC-tagged
 `RM1` direct messages. Plan and rationale: `2026-10-05_1000-node-admin-ui-concept-and-plan.md`.
 
 | Piece                            | Role                                                                                                                                                      |

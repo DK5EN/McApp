@@ -520,3 +520,12 @@ Still open:
   non-issues.
 - The pre-existing High (unauthenticated API reachable from the internet in public-TLS mode) is real but pre-dates
   and is independent of this feature.
+
+## Addendum 2026-10-05 (evening): always on, Remote nodes tab
+
+Decision 1 (D1, `node_admin.enabled` default false) is superseded. The operator does not want any feature switched by
+editing `config.json`: the web GUI is the frontend. Node Admin is now always on. It stays inert until a remote node and
+its password are stored, and it is still LAN-only through the Host/Origin guard (the API has no authentication; the
+public-TLS exposure of the rest of the API is a separate, pre-existing item). `NodeAdminConfig` keeps only the
+developer-only `allowed_origins`; a leftover `enabled` key is ignored. The Settings page gets a "Remote nodes" tab (the
+keys card moved there), visible whenever `/api/status` lists `node_admin`.

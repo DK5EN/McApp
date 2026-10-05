@@ -1130,6 +1130,35 @@ async def case_j_misc(record: Record) -> None:
 # ── runner ─────────────────────────────────────────────────────────────────
 
 
+async def case_k_start_never_blocks(record: Record) -> None:
+    """The feature is always on, so `start()` runs on every box at boot: a failing
+    housekeeping query (locked DB, I/O error, missing table) must never propagate and
+    stop mcapp from starting."""
+
+    async def boom(*_args: object, **_kwargs: object) -> int:
+        raise RuntimeError("database is locked")
+
+    for name in ("abandon_stale_node_admin_rows", "prune_node_admin_log"):
+        async with make_env() as env:
+            cap = _Capture()
+            svc_log = logging.getLogger("mcapp.node_admin_service")
+            svc_log.addHandler(cap)
+            setattr(env.storage, name, boom)
+            try:
+                try:
+                    await env.svc.start()
+                    returned = True
+                except Exception:
+                    returned = False
+            finally:
+                svc_log.removeHandler(cap)
+            record(f"k: start() returns normally when {name} raises", returned)
+            record(
+                f"k: the failure of {name} is logged, not swallowed silently",
+                any("housekeeping failed" in line for line in cap.lines),
+            )
+
+
 async def run_node_admin_service_tests() -> bool:
     results: list[tuple[str, bool]] = []
 
@@ -1154,6 +1183,7 @@ async def run_node_admin_service_tests() -> bool:
         case_i_refusals,
         case_i_transmit,
         case_j_misc,
+        case_k_start_never_blocks,
     ]
     for case in cases:
         try:

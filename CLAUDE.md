@@ -890,7 +890,9 @@ retry k XORs msg_id bits 10-11 with k, text and `{NNN` unchanged. Plan and campa
 
 ## Node Admin (RM1 remote admin)
 
-Opt-in (`node_admin.enabled`, default false) HMAC-tagged `RM1` DMs that administer other nodes. Plan, wave log and the
+HMAC-tagged `RM1` DMs that administer other nodes. Always on, with no config switch (operator decision 2026-10-05: the
+web GUI is the frontend, nothing is configured by editing `config.json`): the Settings > Remote nodes tab stores nodes and
+their passwords, and the feature is inert until one exists. Plan, wave log and the
 review that shaped it: `doc/2026-10-05_1000-node-admin-ui-concept-and-plan.md`; operator runbook: `doc/operations-reference.md`;
 firmware side: `MeshCom-Firmware-DEV-Main` (`src/remote_cmd.cpp`, `docs/adr-remote-hmac.md`, branch `fork-dev`).
 
@@ -919,7 +921,7 @@ firmware side: `MeshCom-Firmware-DEV-Main` (`src/remote_cmd.cpp`, `docs/adr-remo
   is offered only on the newest row of a target within 10 min and never for `reboot`; anything else is a counted replay reject
   (lockout) or, if the original never arrived, a first execution.
 - **Security posture.** The API has no authentication and is internet-reachable in the public-TLS modes (pre-existing, tracked
-  separately). Node Admin is therefore default-off and its router refuses any foreign `Host` and any foreign `Origin`, which
+  separately). Node Admin is therefore LAN-only and its router refuses any foreign `Host` and any foreign `Origin`, which
   makes it LAN-only in every mode. A custom header would protect nothing (`allow_headers=["*"]`). The key route's body is withheld
   from `stall_events` by PATH PREFIX (`/api/node-admin/keys`); the old exact-match set would never match a per-target path, and a
   small JSON body is masked by `redact()` anyway, so the regression test must use a truncated or non-JSON body. A pydantic 422

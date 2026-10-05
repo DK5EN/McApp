@@ -2763,26 +2763,26 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
     # first key-file creation).
     secret_box = SecretBox()
     qrz_service = QrzLookupService(storage_handler, secret_box)
-    # Node Admin (RM1 remote admin): opt-in, default off (the API has no auth).
-    # Constructed only when `node_admin.enabled`; the rest of the wiring is lazy so
-    # the not-yet-built SSE manager and BLE client are looked up at call time.
-    node_admin_service: NodeAdminService | None = None
-    if cfg.node_admin.enabled:
 
-        async def _node_admin_broadcast(event: str, payload: dict[str, Any]) -> None:
-            if sse_manager is not None:
-                await sse_manager.broadcast_event(event, payload)
+    # Node Admin (RM1 remote admin): always on (operator decision 2026-10-05: no
+    # config switch, everything is configured in the web GUI). It is inert until a
+    # remote node and its password are stored, and its API is LAN-only through the
+    # Host/Origin guard (the API has no authentication). The wiring is lazy so the
+    # not-yet-built SSE manager and BLE client are looked up at call time.
+    async def _node_admin_broadcast(event: str, payload: dict[str, Any]) -> None:
+        if sse_manager is not None:
+            await sse_manager.broadcast_event(event, payload)
 
-        node_admin_service = NodeAdminService(
-            storage_handler,
-            secret_box,
-            message_router.send_node_admin,
-            lambda: message_router.my_callsign,
-            lambda: ble_client is not None and _ble_connected(ble_client),
-            _node_admin_broadcast,
-        )
-        storage_handler.reply_hook = node_admin_service.on_reply
-        await node_admin_service.start()
+    node_admin_service = NodeAdminService(
+        storage_handler,
+        secret_box,
+        message_router.send_node_admin,
+        lambda: message_router.my_callsign,
+        lambda: ble_client is not None and _ble_connected(ble_client),
+        _node_admin_broadcast,
+    )
+    storage_handler.reply_hook = node_admin_service.on_reply
+    await node_admin_service.start()
     message_router.set_callsign(cfg.call_sign)
     storage_handler.set_message_router(message_router)
     # One-shot, idempotent read-cursor seed (unread-cursor plan §3): must run

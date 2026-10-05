@@ -188,9 +188,19 @@ class NodeAdminService:
     # ── lifecycle ──────────────────────────────────────────────────────────
 
     async def start(self) -> None:
-        """Sweep rows a previous process left open, then cap the log."""
-        swept = await self._storage.abandon_stale_node_admin_rows(self._clock())
-        pruned = await self._storage.prune_node_admin_log()
+        """Sweep rows a previous process left open, then cap the log.
+
+        Housekeeping only, and it runs on EVERY box now that the feature is always
+        on: it must never block startup (a locked DB or an I/O error here would
+        otherwise stop mcapp from coming up). An unswept row ages to `no_reply`
+        through `compute_state` anyway, so a failure is logged and skipped.
+        """
+        try:
+            swept = await self._storage.abandon_stale_node_admin_rows(self._clock())
+            pruned = await self._storage.prune_node_admin_log()
+        except Exception:
+            logger.warning("node admin start: housekeeping failed, skipped", exc_info=True)
+            return
         if swept or pruned:
             logger.info("node admin start: %d stale rows abandoned, %d pruned", swept, pruned)
 

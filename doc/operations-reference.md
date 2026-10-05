@@ -329,16 +329,19 @@ that requires physical access, which is outside what's reachable over SSH to the
 Remote administration of other MeshCom nodes (reboot, status, toggles, `txpower`, `setout`) from the McApp web UI,
 signed with an HMAC over LoRa. Design: `2026-10-05_1000-node-admin-ui-concept-and-plan.md`.
 
-**Enable (default off).** `config.json`: `{"node_admin": {"enabled": true}}` and restart `mcapp`. Optional
-`"allowed_origins": ["http://localhost:5173"]` for the Vite dev server. The API has no authentication, so the feature is
-LAN-only by construction: `/api/node-admin/*` refuses any `Host` that is not a LAN name (`mcapp.local`, the short
-hostname, private/loopback IPs) and any foreign `Origin`. It is therefore NOT usable through the public TLS hostname.
-`GET /api/status` lists `"node_admin"` under `features` when it is on; the webapp shows the Node Admin page and the
-Settings card only then.
+**Always on, configured in the web GUI.** There is no config switch (operator decision 2026-10-05): open Settings >
+Remote nodes, add a node's callsign and its password, then use the Node Admin page. Until a node is stored the feature is
+inert; once a node's password is stored, any device on the LAN can use it through
+this API (the API has no authentication, so storing a password is the consent). The API has no authentication, so it is LAN-only by construction: `/api/node-admin/*` refuses any `Host` that is not
+a LAN name (`mcapp.local`, the short hostname, private/loopback IPs) and any foreign `Origin`. It is therefore NOT usable
+through the public TLS hostname. `GET /api/status` lists `"node_admin"` under `features`; the webapp shows the Remote nodes
+tab and the Node Admin page only when it does (an older backend shows neither). A developer-only
+`"node_admin": {"allowed_origins": ["http://localhost:5173"]}` in `config.json` extends the Origin check for the Vite dev
+server; nothing needs it in normal use, and a leftover `"enabled"` key from an earlier dev build is ignored.
 
 **Prerequisites on every managed node:** `--remotemgmt on` and a non-empty `--passwd` (check `--info`: `RM: on`).
 Without both, an `RM1` DM is ordinary acked text and the node never answers. Use a random 14-character password
-(Settings > Node admin keys > Generate): the tag lets anyone who captured ONE frame on air guess a short password
+(Settings > Remote nodes > Generate): the tag lets anyone who captured ONE frame on air guess a short password
 offline. Enter the same password in McApp once; it is stored encrypted (`secret.key` + board serial) and never shown.
 
 **CALL_SIGN must carry the attached node's SSID exactly as the node stores it** (`DK5EN-14`, not `DK5EN`). The tag is

@@ -239,7 +239,7 @@ def build_stream_router(manager: SSEManager, version: str) -> APIRouter:  # noqa
             "node_build": node_build,
             # Optional capabilities the webapp gates UI on (adminStatus store
             # reads `features`); mc-chat reports its own list. "node_admin" is
-            # present only when `node_admin.enabled` built the service.
+            # present whenever the service is wired (always, in production).
             "features": ["node_admin"] if getattr(manager, "node_admin_service", None) else [],
         }
 

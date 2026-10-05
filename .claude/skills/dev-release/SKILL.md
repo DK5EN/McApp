@@ -228,9 +228,10 @@ sudo journalctl -u mcapp.service --since "<restart time>" --no-pager | grep -i m
 curl -s http://127.0.0.1/api/status | python3 -c "import sys,json; print(json.load(sys.stdin).get(\"features\"))"'
 ```
 
-An opt-in feature that is off must show an empty `features` and answer 503 (or whatever the plan
-pins) on its routes. Turning it on, and anything that transmits on air, is a separate step with its
-own go-ahead, not part of a dev release.
+A feature that is meant to be always on must show up in `features` (Node Admin: `['node_admin']`)
+and its read route must answer 200 (`GET /api/node-admin/targets` -> `[]` before any node is
+stored). Never design a feature behind a hand-edited config flag (the operator rejects that):
+the GUI exposes it, and anything that transmits on air is a separate step with its own go-ahead.
 
 ### Then watch live traffic — this is not optional
 

@@ -766,6 +766,55 @@ async def case_w6_features(record: Record) -> None:
 # ── runner ─────────────────────────────────────────────────────────────────
 
 
+async def case_w8_always_on(record: Record) -> None:
+    """Node Admin has no config switch (operator decision 2026-10-05): the service is
+    wired unconditionally and a leftover `enabled` key in config.json changes nothing."""
+    import inspect
+    import json
+    import tempfile
+    from pathlib import Path
+
+    from . import main as main_module
+    from .config_loader import Config
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "config.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "CALL_SIGN": "DK5EN-98",
+                    "node_admin": {
+                        "enabled": False,
+                        "allowed_origins": ["http://localhost:5173", 3, None],
+                    },
+                }
+            )
+        )
+        cfg = Config.load(path)
+    record(
+        "w8: a leftover node_admin.enabled key is ignored, allowed_origins keeps only strings",
+        not hasattr(cfg.node_admin, "enabled")
+        and cfg.node_admin.allowed_origins == ["http://localhost:5173"],
+    )
+    default_cfg = Config()
+    record(
+        "w8: no node_admin key at all gives no extra origins and no switch",
+        default_cfg.node_admin.allowed_origins == []
+        and not hasattr(default_cfg.node_admin, "enabled"),
+    )
+    source = inspect.getsource(main_module.build_app)
+    record(
+        "w8: build_app wires the service and the reply hook with no config gate",
+        # Four spaces = the function body itself: nesting any of these under an
+        # `if` (of whatever shape) would indent them further and fail the check.
+        "\n    node_admin_service = NodeAdminService(" in source
+        and "\n    storage_handler.reply_hook = node_admin_service.on_reply" in source
+        and "\n    await node_admin_service.start()" in source
+        and "node_admin.enabled" not in source
+        and "if cfg.node_admin" not in source,
+    )
+
+
 async def run_node_admin_wiring_tests() -> bool:
     results: list[tuple[str, bool]] = []
 
@@ -782,6 +831,7 @@ async def run_node_admin_wiring_tests() -> bool:
         case_w5_wrong_key,
         case_w6_features,
         case_w7_monitor_and_debug,
+        case_w8_always_on,
     ]
     for case in cases:
         try:
