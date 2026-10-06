@@ -172,6 +172,10 @@ def build_node_admin_router(
     async def get_targets() -> list[dict[str, Any]]:
         return await _run(service().list_targets())
 
+    @router.get("/api/node-admin/targets/{target}/state")
+    async def get_state(target: str) -> dict[str, Any]:
+        return await _run(service().state(target))
+
     @router.post("/api/node-admin/send")
     async def post_send(body: NodeAdminSendRequest) -> dict[str, Any]:
         return await _run(service().send(body.target, body.cmd, body.args, body.transport))

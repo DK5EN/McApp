@@ -18,13 +18,16 @@ Required cases (each one fails on a named mutation, see the task log):
   d. Fake clock: 119 999 ms waiting, 120 000 ms no reply, a late reply flips
      it, the startup sweep abandons stale rows and a late reply still flips them.
   e. Auto-sync and spacing: the first send publishes only the sync; the command
-     follows a verified sync reply by >= 10 s; 90 s of silence sends it with a
+     follows a verified sync reply by >= 10 s; 90 s of silence DROPS it with a
      warning; in-flight, 10 s and lockout refusals.
   f. Re-ask: byte-identical, no counter, no new row, refusal rules.
   g. AAD and case, unreadable key.
   h. The password never appears in logs, broadcasts, frames, rows or files.
   i. Refusals burn no counter; a failed transmit keeps its row.
   j. Pure helpers, prefilter, counter floor, key validation.
+  m. W0 regressions (remote-view campaign).
+  n. W2a: post-silence cool-down, foreign-sender pause, sync gate drop, re-flashed
+     node recovery, refusals before allocation, the `/state` document.
 """
 
 from __future__ import annotations
@@ -40,7 +43,12 @@ from pathlib import Path
 from typing import Any
 
 from . import remote_cmd
-from .node_admin_service import NodeAdminService, _lockout_until_ms, compute_state
+from .node_admin_service import (
+    SYNC_DROPPED,
+    NodeAdminService,
+    _lockout_until_ms,
+    compute_state,
+)
 from .node_admin_types import NodeAdminBusyError, NodeAdminUnavailableError
 from .node_admin_types import NodeAdminService as NodeAdminServiceProtocol
 from .secret_box import SecretBox, SecretBoxError
@@ -129,6 +137,20 @@ async def raises(exc: type[BaseException], coro: Awaitable[object]) -> bool:
 def seed_ctr(db_path: Path, target: str, ctr: int) -> None:
     with db_write(db_path) as conn:
         conn.execute("UPDATE node_admin_state SET ctr = ? WHERE target_call = ?", (ctr, target))
+
+
+async def seed_row(env: Env, handed_off_at: int, cmd: str = "status") -> dict[str, Any]:
+    """A command row written straight to storage: counter allocated, hand-off stamped, no frame.
+
+    The service itself can no longer produce two silent rows less than 5 min apart (the
+    post-silence cool-down refuses the second frame), but the lockout guard stays a backstop
+    for what it cannot see; its tests seed the rows the node may have counted.
+    """
+    row = await env.storage.allocate_node_admin_command(
+        TARGET, ATTACHED, cmd, None, "udp", handed_off_at, 0, lambda c: f"RM1 {c} {cmd} seeded"
+    )
+    await env.storage.mark_node_admin_handed_off(row["id"], handed_off_at)
+    return {**row, "log_id": row["id"]}
 
 
 def reply_text(passwd: str, target: str, src_call: str, ctr: int, result: str) -> str:
@@ -245,6 +267,16 @@ class Env:
         self, cmd: str = "status", args: str = "", transport: str = "udp"
     ) -> dict[str, Any]:
         return await self.svc.send(TARGET, cmd, args, transport)
+
+    async def send_after_cooldown(self, cmd: str = "status", args: str = "") -> dict[str, Any]:
+        """Wait out the post-silence hold (300 s after the last hand-off), then send."""
+        info = (await self.state())["cooldown_until"]
+        if info is not None:
+            await self.time.advance(int(info) - self.time.now)
+        return await self.send(cmd, args)
+
+    async def state(self, target: str = TARGET) -> dict[str, Any]:
+        return await self.svc.state(target)
 
 
 @contextlib.asynccontextmanager
@@ -606,18 +638,38 @@ async def case_e_timeout_inflight(record: Record) -> None:
         await env.setup(synced=False)
         await env.send()
         await until(lambda: len(env.tx) == 1)
+        sync_id = (await env.rows())[0]["id"]
         await env.time.advance(89_999)
-        before = len(env.tx)
+        held = TARGET in env.svc._pending and len(env.tx) == 1
         await env.time.advance(1)
-        await until(lambda: len(env.tx) == 2)
-        await until(lambda: any(p.get("cmd") == "status" for _, p in env.bcasts))
-        warned = [p for _, p in env.bcasts if p.get("cmd") == "status"]
+        await until(lambda: TARGET not in env.svc._pending)
+        await until(lambda: any("warning" in p for _, p in env.bcasts))
+        warned = [p for _, p in env.bcasts if "warning" in p]
         record(
-            "e3. 90 s without a sync reply sends the command anyway, with a warning",
-            before == 1
-            and env.tx[1][2].startswith("RM1 1 status ")
-            and bool(warned)
-            and warned[0].get("warning") == "no sync reply",
+            "e3. 90 s without a sync reply DROPS the held command: no frame, no counter, "
+            "no row, 'command dropped' warning on the sync row, target not synced",
+            held
+            and len(env.tx) == 1
+            and await env.ctr() == 0
+            and len(await env.rows()) == 1
+            and len(warned) == 1
+            and warned[0]["id"] == sync_id
+            and warned[0]["warning"] == SYNC_DROPPED
+            and warned[0]["warning"].startswith("command dropped: ")
+            and TARGET not in env.svc._synced
+            and not any(p.get("cmd") == "status" for _, p in env.bcasts),
+        )
+        # A genuine sync reply that arrives after the drop (still inside the 120 s window)
+        # marks the target synced, but never revives the dropped command.
+        await env.time.advance(10_000)
+        await env.reply(0, "ok ctr=5 v=4.40a")
+        await env.svc.drain()
+        record(
+            "e3b. a late verified sync marks the target synced; the dropped command is not revived",
+            await env.state_of(sync_id) == "verified"
+            and TARGET in env.svc._synced
+            and len(env.tx) == 1
+            and await env.ctr() == 0,
         )
 
     async with make_env() as env:
@@ -632,10 +684,11 @@ async def case_e_timeout_inflight(record: Record) -> None:
         await env.time.advance(15_000)
         busy_waiting = await raises(NodeAdminBusyError, env.send())
         await env.time.advance(105_000)
-        ok = await env.send()
+        ok = await env.send_after_cooldown()
         await env.svc.drain()
         record(
-            "e4. one command in flight per target: queued and waiting refuse, no_reply frees it",
+            "e4. one command in flight per target: queued and waiting refuse, no_reply frees it "
+            "(after the cool-down)",
             queued and busy_queued and busy_waiting and ok["ctr"] == 2 and len(env.tx) == 2,
         )
 
@@ -688,8 +741,7 @@ async def case_e_spacing(record: Record) -> None:
         await env.send()
         await env.svc.drain()
         await env.time.advance(125_000)
-        second = await env.send()
-        await env.svc.drain()
+        second = await seed_row(env, env.time.now)
         await env.time.advance(125_000)
         locked = await raises(NodeAdminBusyError, env.send())
         until_ms = (await env.target_info())["possible_lockout_until_ms"]
@@ -755,7 +807,7 @@ async def case_f_reask(record: Record) -> None:
         await env.setup()
         a = await env.send()
         await env.svc.drain()
-        await env.time.advance(130_000)
+        await env.time.advance(300_000)
         b = await env.send()
         await env.svc.drain()
         await env.time.advance(11_000)
@@ -1143,8 +1195,7 @@ async def case_m_reask(record: Record) -> None:
         await env.send("status")
         await env.svc.drain()
         await env.time.advance(130_000)
-        s2 = await env.send("status")
-        await env.svc.drain()
+        s2 = await seed_row(env, env.time.now)
         await env.time.advance(130_000)
         rows = await env.svc._storage.node_admin_history(TARGET, 100)
         until = _lockout_until_ms(rows, env.time.now)
@@ -1194,7 +1245,7 @@ async def case_m_sync_binding(record: Record) -> None:
         await env.setup(synced=False)
         a = await env.svc.sync(TARGET)
         await env.svc.drain()
-        await env.time.advance(130_000)
+        await env.time.advance(300_000)
         b = await env.svc.sync(TARGET)
         await env.svc.drain()
         await env.time.advance(15_000)
@@ -1390,7 +1441,7 @@ async def case_m_txpower_held(record: Record) -> None:
         await env.setup(tx_max=30)
         s = await env.send("status")
         await env.svc.drain()
-        await env.time.advance(130_000)  # S: no_reply
+        await env.time.advance(300_000)  # S: no_reply, cool-down over
         env.svc._synced.discard(TARGET)
         ctr_before = await env.ctr()
         held = await env.send("txpower", "20")
@@ -1471,6 +1522,456 @@ async def case_m_synced_and_broadcast(record: Record) -> None:
         )
 
 
+# ── n. W2a: cool-down, foreign pause, stale mark, /state ──────────────────
+
+FOREIGN_CMD = "RM1 4242 gps on 0123456789abcdef"
+STALE_WARNING = (
+    "The node reports counter mark {hwm}, below the last known {stored}. "
+    "If it was re-flashed, enter its password again in Settings > Remote nodes."
+)
+
+
+def foreign(src: str, dst: str, msg: str = FOREIGN_CMD) -> dict[str, Any]:
+    return {"src": src, "dst": dst, "msg": msg, "type": "msg", "src_type": "udp"}
+
+
+async def counts(env: Env) -> tuple[int, int, int]:
+    """(allocated counter, log rows, frames transmitted): a refusal must leave all three alone."""
+    return await env.ctr(), len(await env.rows()), len(env.tx)
+
+
+async def busy_text(coro: Awaitable[object]) -> str | None:
+    """Text of the NodeAdminBusyError (the router maps it to 409); None when none was raised."""
+    try:
+        await coro
+    except NodeAdminBusyError as exc:
+        return str(exc)
+    except Exception:
+        return None
+    return None
+
+
+async def case_n_cooldown(record: Record) -> None:
+    async with make_env() as env:
+        await env.setup()
+        a = await env.send()
+        await env.svc.drain()
+        await env.time.advance(120_000)  # no_reply; hand-off was T0
+        before = await counts(env)
+        send_text = await busy_text(env.send())
+        sync_text = await busy_text(env.svc.sync(TARGET))
+        st = await env.state()
+        record(
+            "n1. 120 s after a silent row a send AND a sync are refused (Busy -> 409) "
+            "before any counter, row or frame",
+            send_text is not None
+            and sync_text is not None
+            and "5 minutes" in send_text
+            and "180 s" in send_text
+            and before == await counts(env)
+            and st["cooldown_until"] == T0 + 300_000
+            and st["next_allowed_at"] == T0 + 300_000,
+        )
+        await env.time.advance(179_999)
+        edge = await busy_text(env.send())
+        edge_ok = edge is not None and "1 s" in edge and before == await counts(env)
+        await env.time.advance(1)
+        again = await env.send()
+        st2 = await env.state()
+        record(
+            "n1b. refused at 299 999 ms after the hand-off, accepted at 300 000 ms",
+            edge_ok and again["ctr"] == a["ctr"] + 1 and st2["cooldown_until"] is None,
+        )
+
+
+async def case_n_cooldown_more(record: Record) -> None:
+    # an abandoned row (a restart before the reply) holds the target as well
+    async with make_env() as env:
+        await env.setup()
+        await env.send()
+        await env.svc.drain()
+        await env.time.advance(1_000)
+        await env.svc.start()
+        before = await counts(env)
+        await env.time.advance(20_000)
+        refused = await busy_text(env.send())
+        await env.time.advance(278_999)
+        edge = await busy_text(env.send())
+        await env.time.advance(1)
+        ok = await env.send()
+        record(
+            "n1c. an abandoned row holds the target until 300 s after its hand-off",
+            refused is not None
+            and edge is not None
+            and ok["ctr"] == 2
+            and before[0] == 1
+            and len(await env.rows()) == 2,
+        )
+
+    # re-ask is exempt: it replays the same ctr and the node answers from its cache
+    async with make_env() as env:
+        await env.setup()
+        a = await env.send()
+        await env.svc.drain()
+        await env.time.advance(125_000)
+        new_frame = await busy_text(env.send())
+        ctr_before = await env.ctr()
+        res = await env.svc.reask(a["log_id"])
+        await env.svc.drain()
+        record(
+            "n1d. during the cool-down a NEW frame is refused but re-ask of the same ctr goes out",
+            new_frame is not None
+            and res == {"log_id": a["log_id"]}
+            and len(env.tx) == 2
+            and env.tx[1][2] == env.tx[0][2]
+            and await env.ctr() == ctr_before,
+        )
+
+    # a late verified reply ends the silence: nothing holds the target but the 10 s spacing
+    async with make_env() as env:
+        await env.setup()
+        a = await env.send()
+        await env.svc.drain()
+        await env.time.advance(125_000)
+        await env.reply(a["ctr"])
+        await env.svc.drain()
+        early = await busy_text(env.send())
+        await env.time.advance(10_000)
+        ok = await env.send()
+        record(
+            "n1e. a late verified reply lifts the cool-down (only the 10 s spacing remains)",
+            early is not None and "one frame per 10 s" in early and ok["ctr"] == a["ctr"] + 1,
+        )
+
+
+async def case_n_foreign(record: Record) -> None:
+    cap = _Capture()
+    svc_log = logging.getLogger("mcapp.node_admin_service")
+    async with make_env() as env:
+        await env.setup()
+        svc_log.addHandler(cap)
+        svc_log.setLevel(logging.INFO)
+        try:
+            await env.svc.on_reply(foreign("DL1ABC", TARGET))  # another SysOp's command
+            await env.svc.drain()
+            st = await env.state()
+            before = await counts(env)
+            text = await busy_text(env.send())
+            sync_text = await busy_text(env.svc.sync(TARGET))
+            await env.time.advance(30_000)
+            await env.svc.on_reply(  # ... and the node's answer to that other SysOp
+                foreign(TARGET, "DL1ABC", "RM1 4242 ok gps=on 0123456789abcdef")
+            )
+            await env.svc.drain()
+        finally:
+            svc_log.removeHandler(cap)
+        st2 = await env.state()
+        record(
+            "n2. another station's RM1 command to the target pauses it 120 s: send and sync "
+            "refused (Busy -> 409) before any counter, row or frame",
+            st["foreign_until"] == T0 + 120_000
+            and st["next_allowed_at"] == T0 + 120_000
+            and text is not None
+            and "Another station is managing DK5EN-90" in text
+            and "120 s" in text
+            and sync_text is not None
+            and before == await counts(env),
+        )
+        record(
+            "n2b. the node's reply to another station extends the pause; INFO is logged once",
+            st2["foreign_until"] == T0 + 150_000
+            and len([ln for ln in cap.lines if "RM1 frame of another station" in ln]) == 1
+            and not any("0123456789abcdef" in ln for ln in cap.lines),
+        )
+        await env.time.advance(119_999)
+        edge = await busy_text(env.send())
+        await env.time.advance(1)
+        ok = await env.send()
+        record(
+            "n2c. refused until foreign_until, accepted at it",
+            edge is not None and ok["ctr"] == 1 and (await env.state())["foreign_until"] is None,
+        )
+
+
+async def case_n_foreign_own(record: Record) -> None:
+    # our own traffic and unrelated frames never pause
+    async with make_env() as env:
+        await env.setup()
+        a = await env.send()
+        await env.svc.drain()
+        for frame in (
+            foreign(ATTACHED, TARGET),  # the echo of our own command
+            foreign(TARGET, ATTACHED, "RM1 99 ok status 0123456789abcdef"),  # reply to us
+            env.frame(a["ctr"]),  # our genuine reply
+            env.frame(a["ctr"], suffix="{087"),  # its second transport copy
+            foreign("DL1ABC", "DL2XYZ"),  # two unrelated stations
+            foreign("DL1ABC", "DK5EN-91"),  # a target we hold no key for
+            foreign("DL1ABC", "20"),  # a group
+        ):
+            await env.svc.on_reply(frame)
+        await env.svc.drain()
+        env.attached = "DK5EN-15"  # the attached node changed: old rows still name our old call
+        await env.svc.on_reply(foreign(TARGET, ATTACHED, "RM1 98 ok status 0123456789abcdef"))
+        await env.svc.drain()
+        record(
+            "n2d. our own echo, replies to us (both copies), unrelated frames and a changed "
+            "attached node never start a pause",
+            (await env.state())["foreign_until"] is None,
+        )
+
+
+async def case_n_foreign_held(record: Record) -> None:
+    # held behind the auto-sync: a pause that starts while the command waits drops it
+    async with make_env() as env:
+        await env.setup(synced=False)
+        await env.send()
+        await until(lambda: len(env.tx) == 1)
+        await env.svc.on_reply(foreign("DL1ABC", TARGET))
+        await settle()  # the gate is parked on its 90 s sleep: drain() would wait for it
+        await env.time.advance(3_000)
+        await env.reply(0, "ok ctr=5 v=4.40a")
+        await until(lambda: 10_000 in env.time.pending_deltas())
+        await env.time.advance(10_000)
+        await env.svc.drain()
+        dropped = [
+            p
+            for e, p in env.bcasts
+            if e == "node_admin:reply" and str(p.get("warning", "")).startswith("command dropped")
+        ]
+        record(
+            "n2e. a command held behind the sync is refused at release during a pause: "
+            "no frame, no counter, no row, 'command dropped' broadcast",
+            len(env.tx) == 1
+            and await env.ctr() == 0
+            and len(await env.rows()) == 1
+            and len(dropped) == 1
+            and "Another station" in str(dropped[0]["warning"]),
+        )
+
+    # re-ask is a frame too: another sender's command has replaced the node's reply cache
+    async with make_env() as env:
+        await env.setup()
+        a = await env.send()
+        await env.svc.drain()
+        await env.time.advance(61_000)
+        await env.svc.on_reply(foreign("DL1ABC", TARGET))
+        await env.svc.drain()
+        refused = await busy_text(env.svc.reask(a["log_id"]))
+        sent = len(env.tx)
+        await env.time.advance(120_000)
+        res = await env.svc.reask(a["log_id"])
+        await env.svc.drain()
+        record(
+            "n2f. re-ask is refused during a foreign pause and allowed after it",
+            refused is not None
+            and sent == 1
+            and res == {"log_id": a["log_id"]}
+            and len(env.tx) == 2,
+        )
+
+
+async def case_n_sync_and_hwm(record: Record) -> None:
+    # only a verified SYNC marks a target synced in this process
+    async with make_env() as env:
+        await env.setup()
+        a = await env.send()
+        await env.svc.drain()
+        fresh = env.new_service()  # a restart: nothing is synced yet
+        env.svc = fresh
+        await env.reply(a["ctr"])
+        await env.svc.drain()
+        record(
+            "n3. a late verified reply to an old COMMAND does not mark the target synced",
+            await env.state_of(a["log_id"]) == "verified"
+            and TARGET not in fresh._synced
+            and (await env.state())["connected"] is False,
+        )
+        await env.time.advance(11_000)
+        sent = await env.svc.sync(TARGET)
+        await env.svc.drain()
+        await env.time.advance(15_000)
+        await env.reply(0, "ok ctr=5 v=4.40a")
+        await env.svc.drain()
+        record(
+            "n3b. a verified sync does",
+            await env.state_of(sent["log_id"]) == "verified"
+            and (await env.state())["connected"] is True,
+        )
+
+    # a re-flashed node answers sync with a mark below the stored one
+    async with make_env() as env:
+        await env.setup(synced=False)
+        await env.storage.raise_node_admin_hwm(TARGET, 10)
+        seed_ctr(env.storage.db_path, TARGET, 50)
+        a = await env.svc.sync(TARGET)
+        await env.svc.drain()
+        await env.time.advance(15_000)
+        await env.reply(0, "ok ctr=3 v=4.40a", bad=True)  # forged: no operator-facing claim
+        await env.svc.drain()
+        forged_warned = [p for p in env.bc_for(a["log_id"]) if "warning" in p]
+        await env.reply(0, "ok ctr=3 v=4.40a")
+        await env.svc.drain()
+        await env.reply(0, "ok ctr=3 v=4.40a", suffix="{087")  # the second transport copy
+        await env.svc.drain()
+        warned = [p for p in env.bc_for(a["log_id"]) if "warning" in p]
+        record(
+            "n4. a verified sync reply below last_hwm is ignored (row open, hwm kept) but "
+            "announced once, with the recovery hint",
+            not forged_warned
+            and len(warned) == 1
+            and warned[0]["warning"] == STALE_WARNING.format(hwm=3, stored=10)
+            and warned[0]["state"] in {"waiting", "bad_tag"}
+            and warned[0]["verified"] != 1
+            and await env.hwm() == 10
+            and TARGET not in env.svc._synced,
+        )
+        ctr_before = await env.ctr()
+        await env.svc.set_key(TARGET, PASSWD, 15)
+        record(
+            "n4b. set_key resets last_hwm to 0 and keeps the counter",
+            await env.hwm() == 0 and await env.ctr() == ctr_before,
+        )
+        await env.reply(0, "ok ctr=3 v=4.40a")
+        await env.svc.drain()
+        record(
+            "n4c. after the reset the same reply verifies and the new mark is stored",
+            await env.state_of(a["log_id"]) == "verified"
+            and await env.hwm() == 3
+            and TARGET in env.svc._synced,
+        )
+        await env.time.advance(11_000)
+        nxt = await env.send()
+        record(
+            "n4d. the next counter continues above the old one (hwm reset or not)",
+            ctr_before == 50 and nxt["ctr"] == 51,
+        )
+
+
+async def case_n_state(record: Record) -> None:
+    keys = [
+        "target",
+        "now_ms",
+        "as_of_id",
+        "connected",
+        "in_flight",
+        "next_allowed_at",
+        "cooldown_until",
+        "foreign_until",
+        "possible_lockout_until_ms",
+        "capability",
+        "has_led",
+        "fields",
+        "switches",
+        "registers",
+    ]
+    async with make_env() as env:
+        await env.setup(synced=False)
+        empty = await env.state()
+        record(
+            "n5. /state of a keyed target without rows: Appendix A keys in order, nothing known",
+            list(empty) == keys
+            and empty["target"] == TARGET
+            and empty["now_ms"] == T0
+            and empty["as_of_id"] == 0
+            and empty["connected"] is False
+            and empty["in_flight"] is None
+            and empty["next_allowed_at"] is None
+            and empty["cooldown_until"] is None
+            and empty["foreign_until"] is None
+            and empty["possible_lockout_until_ms"] is None
+            and empty["capability"] == 1
+            and empty["has_led"] is None
+            and empty["fields"] == {}
+            and set(empty["switches"]) == {"gps", "track", "display", "mesh", "gateway", "led"}
+            and {v["state"] for v in empty["switches"].values()} == {"unknown"}
+            and {k: v["state"] for k, v in empty["registers"].items()}
+            == {"sync": "never", "status": "never"},
+        )
+        lower = await env.svc.state("dk5en-90")
+        record(
+            "n5b. the target is canonicalised; an invalid or entirely unknown call is a ValueError",
+            lower["target"] == TARGET
+            and await raises(ValueError, env.svc.state("not a call"))
+            and await raises(ValueError, env.svc.state("DL9ZZZ-1")),
+        )
+
+    async with make_env() as env:
+        await env.setup()
+        a = await env.send("gps", "on")
+        await env.svc.drain()
+        busy = await env.state()
+        record(
+            "n5c. in_flight names the newest queued/waiting row; connected follows _synced; "
+            "next_allowed_at is hand-off + 10 s",
+            busy["in_flight"] == {"log_id": a["log_id"], "cmd": "gps", "args": "on"}
+            and busy["connected"] is True
+            and busy["next_allowed_at"] == T0 + 10_000
+            and busy["as_of_id"] == a["log_id"]
+            and busy["switches"]["gps"]["state"] == "pending",
+        )
+        await env.time.advance(20_000)
+        await env.reply(a["ctr"], "ok gps=on")
+        await env.svc.drain()
+        done = await env.state()
+        await env.time.advance(11_000)
+        idle = await env.state()
+        record(
+            "n5d. a verified reply ends in_flight, feeds the fold and re-anchors the 10 s "
+            "spacing on the reply; idle -> next_allowed_at null",
+            done["in_flight"] is None
+            and done["switches"]["gps"]["state"] == "on"
+            and done["switches"]["gps"]["log_id"] == a["log_id"]
+            and done["next_allowed_at"] == T0 + 30_000
+            and idle["next_allowed_at"] is None
+            and idle["now_ms"] == T0 + 31_000,
+        )
+
+    # the newest verified row per (cmd, args) survives however many rows were logged since
+    async with make_env() as env:
+        await env.setup()
+        s1 = await env.send("status")
+        await env.svc.drain()
+        await env.time.advance(20_000)
+        await env.reply(s1["ctr"], STATUS_P1515)
+        await env.svc.drain()
+        for i in range(205):
+            await env.storage.insert_node_admin_sync_row(
+                TARGET, ATTACHED, "udp", env.time.now + i, "RM1 0 sync x"
+            )
+        st = await env.state()
+        record(
+            "n5e. an old verified status beyond the newest 200 rows still feeds /state",
+            st["fields"].get("tx_power", {}).get("value") == 15
+            and st["registers"]["status"]["state"] == "ok"
+            and st["switches"]["gps"]["state"] == "on",
+        )
+
+    # lockout guard and foreign pause both feed next_allowed_at
+    async with make_env() as env:
+        await env.setup()
+        await env.send()
+        await env.svc.drain()
+        await env.time.advance(125_000)
+        await seed_row(env, env.time.now)
+        await env.time.advance(125_000)
+        st = await env.state()
+        record(
+            "n5f. possible_lockout_until_ms and cooldown_until are reported; "
+            "next_allowed_at is the latest of them",
+            st["possible_lockout_until_ms"] == T0 + 125_000 + 300_000
+            and st["cooldown_until"] == T0 + 125_000 + 300_000
+            and st["next_allowed_at"] == T0 + 125_000 + 300_000,
+        )
+        await env.svc.on_reply(foreign("DL1ABC", TARGET))
+        await env.svc.drain()
+        st2 = await env.state()
+        record(
+            "n5g. a later foreign pause moves next_allowed_at",
+            st2["foreign_until"] == env.time.now + 120_000
+            and st2["next_allowed_at"] == max(st["next_allowed_at"], st2["foreign_until"]),
+        )
+
+
 # ── runner ─────────────────────────────────────────────────────────────────
 
 
@@ -1535,6 +2036,13 @@ async def run_node_admin_service_tests() -> bool:
         case_m_txpower_bound,
         case_m_txpower_held,
         case_m_synced_and_broadcast,
+        case_n_cooldown,
+        case_n_cooldown_more,
+        case_n_foreign,
+        case_n_foreign_own,
+        case_n_foreign_held,
+        case_n_sync_and_hwm,
+        case_n_state,
     ]
     for case in cases:
         try:

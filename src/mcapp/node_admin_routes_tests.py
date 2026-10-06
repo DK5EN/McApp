@@ -20,19 +20,28 @@ Cases:
      on every route, with the service never called on a refusal.
   5. Error mapping 422/409/503 and request validation (transport, limit).
   6. PUT/DELETE return 204 with no body; arguments pass through.
+  7. `GET /api/node-admin/targets/{target}/state`: payload and argument pass-through,
+     foreign Host / Origin refused (also covered by every `_ROUTES` loop above).
+  8. The REAL service behind the router: a refusal (another station is managing the
+     target) is a 409 with a plain sentence, and leaves counter, rows and frames alone.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import tempfile
+from pathlib import Path
 from typing import Any, cast
 
 import httpx
 from fastapi import FastAPI
 
 from .commands.constants import has_console
+from .node_admin_service import NodeAdminService
 from .node_admin_types import NodeAdminBusyError, NodeAdminUnavailableError
+from .secret_box import SecretBox
+from .sqlite_storage import create_sqlite_storage
 from .sse_routes.node_admin import build_node_admin_router, host_allowed, origin_allowed
 from .stall_middleware import StallMiddleware
 from .stalls import redact
@@ -81,6 +90,10 @@ class _FakeService:
     async def history(self, target: str | None, limit: int) -> list[dict[str, Any]]:
         self._hit("history", target, limit)
         return [{"id": 1, "state": "verified"}]
+
+    async def state(self, target: str) -> dict[str, Any]:
+        self._hit("state", target)
+        return {"target": target, "now_ms": 1_791_268_400_000, "as_of_id": 0}
 
     async def on_reply(self, message: dict[str, Any]) -> None:
         self._hit("on_reply", message)
@@ -136,6 +149,7 @@ _ROUTES: list[tuple[str, str, Any]] = [
     ("POST", "/api/node-admin/reask/7", None),
     ("POST", "/api/node-admin/sync/DK5EN-90", None),
     ("GET", "/api/node-admin/history", None),
+    ("GET", "/api/node-admin/targets/DK5EN-90/state", None),
 ]
 
 
@@ -520,6 +534,118 @@ async def _test_success_shapes(record: Any) -> None:
     )
 
 
+async def _test_state_route(record: Any) -> None:
+    """7. The /state route: payload, argument pass-through, guard."""
+    svc = _FakeService()
+    async with _client(_app(svc, origins=("http://trusted.lan:5173",))) as client:
+        foreign_host = await client.get("/api/node-admin/targets/DK5EN-90/state", headers=_EVIL)
+        foreign_origin = await client.get(
+            "/api/node-admin/targets/DK5EN-90/state",
+            headers={"origin": "http://evil.example.com"},
+        )
+        refused_calls = len(svc.calls)
+        ok = await client.get("/api/node-admin/targets/dk5en-90/state")
+        listed = await client.get(
+            "/api/node-admin/targets/DK5EN-90/state", headers={"origin": "http://trusted.lan:5173"}
+        )
+        svc.raise_next = ValueError("unknown target DL9ZZZ-1")
+        unknown = await client.get("/api/node-admin/targets/DL9ZZZ-1/state")
+    record(
+        "7a. state: foreign Host -> 403, foreign Origin -> 403, the service is not reached",
+        foreign_host.status_code == 403
+        and foreign_origin.status_code == 403
+        and refused_calls == 0,
+    )
+    record(
+        "7b. state: 200 with the service payload; the target passes through as sent",
+        ok.status_code == 200
+        and ok.json() == {"target": "dk5en-90", "now_ms": 1_791_268_400_000, "as_of_id": 0}
+        and svc.calls[0] == ("state", ("dk5en-90",))
+        and listed.status_code == 200,
+    )
+    record(
+        "7c. state: an unknown or invalid call is a 422 with the service's sentence",
+        unknown.status_code == 422 and unknown.json()["detail"] == "unknown target DL9ZZZ-1",
+    )
+
+
+async def _test_real_service_refusal(record: Any) -> None:
+    """8. A refusal through the real service is a 409 and consumes nothing."""
+    sent: list[tuple[str, str, str]] = []
+
+    async def transmit(transport: str, dst: str, msg: str) -> str | None:
+        sent.append((transport, dst, msg))
+        return None
+
+    async def broadcast(_event: str, _payload: dict[str, Any]) -> None:
+        return None
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        storage = await create_sqlite_storage(tmp / "node_admin_routes_test.db")
+        box = SecretBox(key_path=tmp / "secret.key", binding=b"board:TEST")
+        svc = NodeAdminService(
+            storage, box, transmit, lambda: "DK5EN-14", lambda: False, broadcast, sleep=_no_sleep
+        )
+        try:
+            manager: Any = _ManagerStub(cast(Any, svc))
+            app = FastAPI()
+            app.include_router(build_node_admin_router(manager, lambda: ()))
+            async with _client(app) as client:
+                put = await client.put(
+                    "/api/node-admin/keys/DK5EN-90", json={"password": "abc", "tx_max": 15}
+                )
+                svc._synced.add("DK5EN-90")  # test setup: skip the Connect round
+                await svc.on_reply(
+                    {
+                        "src": "DL1ABC",
+                        "dst": "DK5EN-90",
+                        "msg": "RM1 4242 gps on 0123456789abcdef",
+                        "type": "msg",
+                    }
+                )
+                await svc.drain()
+                state = await client.get("/api/node-admin/targets/DK5EN-90/state")
+                send = await client.post(
+                    "/api/node-admin/send", json={"target": "DK5EN-90", "cmd": "status"}
+                )
+                sync = await client.post("/api/node-admin/sync/DK5EN-90")
+                unknown = await client.get("/api/node-admin/targets/DL9ZZZ-1/state")
+                invalid = await client.get("/api/node-admin/targets/not%20a%20call/state")
+            info = (await storage.list_node_admin_targets())[0]
+            rows = await storage.node_admin_history("DK5EN-90", 10)
+        finally:
+            await svc.stop()
+            await storage.close()
+    record(
+        "8a. real service: /state shows the foreign pause",
+        put.status_code == 204
+        and state.status_code == 200
+        and state.json()["connected"] is True
+        and state.json()["foreign_until"] is not None
+        and state.json()["next_allowed_at"] == state.json()["foreign_until"],
+    )
+    record(
+        "8b. real service: send and sync during the pause are 409 with a plain sentence; counter, "
+        "rows and frames are unchanged",
+        send.status_code == 409
+        and sync.status_code == 409
+        and "Another station is managing DK5EN-90" in send.json()["detail"]
+        and "Try again in" in send.json()["detail"]
+        and info["ctr"] == 0
+        and rows == []
+        and sent == [],
+    )
+    record(
+        "8c. real service: an unknown or invalid call is a 422",
+        unknown.status_code == 422 and invalid.status_code == 422,
+    )
+
+
+async def _no_sleep(_seconds: float) -> None:
+    await asyncio.sleep(3600)
+
+
 async def run_node_admin_routes_tests() -> bool:
     """Return True iff every Node Admin router case passes."""
     if has_console:
@@ -540,6 +666,8 @@ async def run_node_admin_routes_tests() -> bool:
     await _test_guard_over_http(_record)
     await _test_error_mapping(_record)
     await _test_success_shapes(_record)
+    await _test_state_route(_record)
+    await _test_real_service_refusal(_record)
 
     passed = sum(1 for _, ok in results if ok)
     if has_console or passed != len(results):

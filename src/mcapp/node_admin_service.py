@@ -15,6 +15,12 @@ this module owns the rules in between:
     UPDATE reports a change, because the BLE and the UDP copy arrive about
     100 ms apart in independent tasks. `verified` is terminal.
   * State is computed here from timestamps (`compute_state`), never stored.
+  * After a silent row (`no_reply` / `abandoned`) the target is held for
+    `COOLDOWN_AFTER_SILENCE_MS` more, so a late retransmission of the old frame
+    cannot land behind a new one; an RM1 frame of ANOTHER sender to or from a
+    keyed target pauses it for `FOREIGN_PAUSE_MS` (remote-view concept 4.2).
+  * A command for an unsynced target waits behind the automatic sync and is
+    DROPPED, never sent anyway, when that sync gets no answer (operator D2).
 
 Never logged: passwords, keys, tags. A command may appear as `RM1 <ctr> <cmd>`.
 All times are injected (`clock_ms`, `unix_s`, `sleep`) so tests drive them.
@@ -24,6 +30,7 @@ Units: `now_ms` / `*_at` are milliseconds, `unix_s` is seconds.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -32,6 +39,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from . import remote_cmd, util
 from .commands.parsing import resolve_dst_target, strip_relay_path
+from .node_admin_state import fold
 from .node_admin_types import (
     NodeAdminBusyError,
     NodeAdminError,
@@ -45,7 +53,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-SYNC_TIMEOUT_MS: Final = 90_000  # no verified sync reply by then: send the command anyway
+SYNC_TIMEOUT_MS: Final = 90_000  # no verified sync reply by then: the held command is dropped
+COOLDOWN_AFTER_SILENCE_MS: Final = 180_000  # on top of RM_REPLY_TIMEOUT_MS after a silent row
+FOREIGN_PAUSE_MS: Final = 120_000  # no frames after an RM1 frame of another sender
+STATE_ROWS_RECENT: Final = 200  # newest rows of a target read for /state
 LOCKOUT_WINDOW_MS: Final = 300_000  # firmware lockout is 5 min
 LOCKOUT_SILENT_ROWS: Final = 2  # silent outcomes inside the window that mean "likely locked out"
 UNIX_FLOOR_MIN_S: Final = 1_704_067_200  # 2024-01-01: firmware `clockUnix` plausibility bound
@@ -54,6 +65,7 @@ REPLY_PREFIX: Final = "RM1 "
 REPLY_MAX_CHARS: Final = 200
 HISTORY_SCAN: Final = 100  # rows scanned to find the newest row of a target
 HISTORY_LIMIT_MAX: Final = 1000
+SYNC_DROPPED: Final = "command dropped: no answer to the counter sync, command not sent"
 
 TRANSPORTS: Final = frozenset({"auto", "ble", "udp"})
 
@@ -141,6 +153,30 @@ def _lockout_until_ms(rows: list[dict[str, Any]], now_ms: int) -> int | None:
     return later + LOCKOUT_WINDOW_MS
 
 
+def _cooldown_until_ms(rows: list[dict[str, Any]], now_ms: int) -> int | None:
+    """End of the post-silence hold, or None.
+
+    A row that ended `no_reply` or `abandoned` may still be on air as a late retry keying
+    (up to 4 keyings, 40 s apart): the node would count a new frame behind it as a replay
+    or drop it on the rate stamp. No NEW frame until its hand-off (or `sent_at`) plus the
+    reply window plus `COOLDOWN_AFTER_SILENCE_MS`. A re-ask is not a new frame.
+    """
+    until = 0
+    for r in rows:
+        if compute_state(r, now_ms) not in {"no_reply", "abandoned"}:
+            continue
+        anchor = r.get("handed_off_at")
+        anchor = r.get("sent_at") if anchor is None else anchor
+        if anchor is None:
+            continue
+        until = max(until, int(anchor) + remote_cmd.RM_REPLY_TIMEOUT_MS + COOLDOWN_AFTER_SILENCE_MS)
+    return until if until > now_ms else None
+
+
+def _wait_s(until_ms: int, now_ms: int) -> int:
+    return max(1, -(-(until_ms - now_ms) // 1000))
+
+
 @dataclass
 class _Pending:
     """A command held back behind its target's auto-sync."""
@@ -185,6 +221,11 @@ class NodeAdminService:
         # replay strike). In memory: a row left open at restart is abandoned and cannot
         # be re-asked anyway.
         self._reasked: set[int] = set()
+        # Targets paused after an RM1 frame of another sender: target -> end (ms). In memory,
+        # a restart forgets it (the pause is a courtesy to a 2 min window, not a ledger).
+        self._foreign_until: dict[str, int] = {}
+        # Sync rows already announced as "below the last known mark" (two transport copies).
+        self._stale_sync_warned: set[int] = set()
         self._pending: dict[str, _Pending] = {}
         self._tasks: set[asyncio.Task[None]] = set()
         self.rejected_replies = 0
@@ -271,6 +312,9 @@ class NodeAdminService:
         self._keys.pop(t, None)
         # A new password invalidates the earlier sync: the next command syncs again.
         self._synced.discard(t)
+        # The node may have been re-flashed: its mark is unknown again. `ctr` stays, so
+        # the counter is monotone and the unix floor keeps it above the node's new mark.
+        await self._storage.reset_node_admin_hwm(t)
         logger.info("node admin key stored for %s", t)
 
     async def delete_key(self, target: str) -> None:
@@ -382,11 +426,38 @@ class NodeAdminService:
         if last is not None and now - last < remote_cmd.RM_RATE_MS:
             msg = f"the node accepts one frame per {remote_cmd.RM_RATE_MS // 1000} s"
             raise NodeAdminBusyError(msg)
+        self._check_hold(target, rows, now)
         until = _lockout_until_ms(rows, now)
         if until is not None:
             msg = f"node may be locked out until {until}; no frames until then"
             raise NodeAdminBusyError(msg)
         return rows
+
+    def _foreign_until_ms(self, target: str, now: int) -> int | None:
+        end = self._foreign_until.get(target)
+        return end if end is not None and end > now else None
+
+    def _check_foreign(self, target: str, now: int) -> None:
+        end = self._foreign_until_ms(target, now)
+        if end is not None:
+            msg = (
+                f"Another station is managing {target}. McApp stays silent for a while so the "
+                f"node does not count its frame as a repeat. Try again in {_wait_s(end, now)} s."
+            )
+            raise NodeAdminBusyError(msg)
+
+    def _check_hold(self, target: str, rows: list[dict[str, Any]], now: int) -> None:
+        """Refuse a NEW frame during the post-silence cool-down or a foreign-sender pause."""
+        cool = _cooldown_until_ms(rows, now)
+        if cool is not None:
+            msg = (
+                f"{target} did not answer the last frame. McApp waits "
+                f"{(remote_cmd.RM_REPLY_TIMEOUT_MS + COOLDOWN_AFTER_SILENCE_MS) // 60_000} "
+                "minutes after silence so a late repeat of it cannot collide with a new frame. "
+                f"Try again in {_wait_s(cool, now)} s."
+            )
+            raise NodeAdminBusyError(msg)
+        self._check_foreign(target, now)
 
     def _unix_floor(self) -> int:
         u = self._unix_s()
@@ -426,13 +497,15 @@ class NodeAdminService:
         tx_max: int,
         cmd: str,
         args: str,
-        warning: str | None = None,
     ) -> dict[str, Any]:
         """Allocate the counter + log row (one transaction), then hand off in the background."""
         # The single choke point of the direct and the held-behind-sync path: every
-        # refusal belongs BEFORE the allocation, which burns a counter value.
+        # refusal belongs BEFORE the allocation, which burns a counter value. The hold
+        # (cool-down, foreign pause) is re-judged here because the held path waited for
+        # the sync and skips `_check_busy`.
         await self._check_txpower(target, cmd, args)
         now = self._clock()
+        self._check_hold(target, await self._storage.node_admin_history(target, HISTORY_SCAN), now)
 
         def build_text(ctr: int) -> str:
             return remote_cmd.build_command_text(key, target, src_call, ctr, cmd, args, tx_max)
@@ -441,12 +514,10 @@ class NodeAdminService:
             target, src_call, cmd, args or None, transport, now, self._unix_floor(), build_text
         )
         logger.info("node admin %s: RM1 %d %s via %s", target, row["ctr"], cmd, transport)
-        self._spawn(self._transmit_row(target, row["id"], transport, row["text"], warning))
+        self._spawn(self._transmit_row(target, row["id"], transport, row["text"]))
         return {"log_id": row["id"], "ctr": row["ctr"], "text": row["text"]}
 
-    async def _transmit_row(
-        self, target: str, row_id: int, transport: str, text: str, warning: str | None = None
-    ) -> None:
+    async def _transmit_row(self, target: str, row_id: int, transport: str, text: str) -> None:
         """Background: transmit, stamp the hand-off (with the failure reason), broadcast."""
         try:
             try:
@@ -457,7 +528,7 @@ class NodeAdminService:
                 logger.exception("node admin transmit to %s raised", target)
                 result = "transmit failed"
             await self._storage.mark_node_admin_handed_off(row_id, self._clock(), send_error=result)
-            await self._broadcast_row(target, row_id, warning)
+            await self._broadcast_row(target, row_id)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -541,21 +612,22 @@ class NodeAdminService:
             await asyncio.gather(waiter, timer, return_exceptions=True)
 
     async def _run_gate(self, target: str, pend: _Pending) -> None:
-        warning: str | None = None
         try:
-            if await self._wait_released(pend):
-                wait_s = (pend.reply_at + remote_cmd.RM_RATE_MS - self._clock()) / 1000
-                if wait_s > 0:
-                    await self._sleep(wait_s)
-            else:
-                warning = "no sync reply"
-                self._synced.add(target)
+            if not await self._wait_released(pend):
+                # Operator D2: the node never confirmed that the counter is in step, so the
+                # held command is DROPPED (no counter, no row, no frame), as the firmware's
+                # own sender does. Only a verified sync marks a target synced.
                 logger.warning(
-                    "node admin %s: no sync reply in %d s, sending anyway",
+                    "node admin %s: no sync reply in %d s, held command dropped",
                     target,
                     SYNC_TIMEOUT_MS // 1000,
                 )
-            await self._send_pending(target, pend, warning)
+                await self._broadcast_row(target, pend.sync_log_id, SYNC_DROPPED)
+                return
+            wait_s = (pend.reply_at + remote_cmd.RM_RATE_MS - self._clock()) / 1000
+            if wait_s > 0:
+                await self._sleep(wait_s)
+            await self._send_pending(target, pend)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -570,7 +642,7 @@ class NodeAdminService:
             if self._pending.get(target) is pend:
                 del self._pending[target]
 
-    async def _send_pending(self, target: str, pend: _Pending, warning: str | None) -> None:
+    async def _send_pending(self, target: str, pend: _Pending) -> None:
         async with self._lock(target):
             key = await self._get_key(target)
             tx_max = await self._tx_max(target)
@@ -579,7 +651,7 @@ class NodeAdminService:
             # No Busy checks here: the user passed them at POST time and the
             # pending entry kept every other send out meanwhile.
             await self._allocate_and_transmit(
-                target, key, src_call, transport, tx_max, pend.cmd, pend.args, warning
+                target, key, src_call, transport, tx_max, pend.cmd, pend.args
             )
 
     # ── re-ask ─────────────────────────────────────────────────────────────
@@ -627,6 +699,9 @@ class NodeAdminService:
         if row["id"] in self._reasked:
             msg = "this row was already asked again once; the node caches only one reply"
             raise NodeAdminBusyError(msg)
+        # Exempt from the post-silence cool-down (the node answers the same ctr from its
+        # cache), but not from a foreign pause: another sender's command has replaced that cache.
+        self._check_foreign(target, now)
         until = _lockout_until_ms(rows, now)
         if until is not None:
             msg = f"node may be locked out until {until}; no frames until then"
@@ -655,6 +730,56 @@ class NodeAdminService:
         rows = await self._storage.node_admin_history(t, limit)
         return [{**r, "state": compute_state(r, now)} for r in rows]
 
+    # ── state ──────────────────────────────────────────────────────────────
+
+    async def state(self, target: str) -> dict[str, Any]:
+        """The `/state` document of `target` (concept Appendix A): the folded last known state
+        plus connection and pacing. ValueError for an invalid or entirely unknown target."""
+        t = remote_cmd.normalize_call(target)
+        if t not in {str(i["target"]) for i in await self._storage.list_node_admin_targets()}:
+            msg = f"unknown target {t}"
+            raise ValueError(msg)
+        now = self._clock()
+        rows = await self._storage.node_admin_state_rows(t, STATE_ROWS_RECENT)
+        folded = fold(rows, now, compute_state)
+        in_flight = next(
+            (r for r in rows if compute_state(r, now) in {"queued", "waiting"}), None
+        )  # rows are newest first
+        cooldown = _cooldown_until_ms(rows, now)
+        foreign = self._foreign_until_ms(t, now)
+        lockout = _lockout_until_ms(rows, now)
+        last = _last_frame_ms(rows)
+        allowed = max(
+            last + remote_cmd.RM_RATE_MS if last is not None else 0,
+            cooldown or 0,
+            foreign or 0,
+            lockout or 0,
+        )
+        return {
+            "target": t,
+            "now_ms": now,
+            "as_of_id": folded["as_of_id"],
+            "connected": t in self._synced,
+            "in_flight": (
+                {
+                    "log_id": in_flight["id"],
+                    "cmd": in_flight["cmd"],
+                    "args": in_flight["args"] or "",
+                }
+                if in_flight is not None
+                else None
+            ),
+            "next_allowed_at": allowed if allowed > now else None,
+            "cooldown_until": cooldown,
+            "foreign_until": foreign,
+            "possible_lockout_until_ms": lockout,
+            "capability": folded["capability"],
+            "has_led": folded["has_led"],
+            "fields": folded["fields"],
+            "switches": folded["switches"],
+            "registers": folded["registers"],
+        }
+
     # ── replies ────────────────────────────────────────────────────────────
 
     async def on_reply(self, message: dict[str, Any]) -> None:
@@ -679,11 +804,77 @@ class NodeAdminService:
 
     async def _handle_reply(self, message: dict[str, Any]) -> None:
         try:
+            await self._note_foreign(message)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("node admin foreign-sender check failed")
+        try:
             await self._process_reply(message)
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("node admin reply processing failed")
+
+    @staticmethod
+    def _call_of(raw: object, *, dst: bool) -> str | None:
+        if not isinstance(raw, str):
+            return None
+        try:
+            return remote_cmd.normalize_call(
+                resolve_dst_target(raw) if dst else strip_relay_path(raw)
+            )
+        except ValueError:
+            return None
+
+    async def _note_foreign(self, message: dict[str, Any]) -> None:
+        """Pause a keyed target for `FOREIGN_PAUSE_MS` when another station talks RM1 to or from it.
+
+        Observes only (it never changes what is stored or filtered). A frame is OURS when
+        its src or dst is a call this service sends from: the attached node's, or the
+        `src_call` of any logged row of that target (so our own command echo, our replies
+        and the second transport copy of a reply never pause us). Anything else that names
+        a keyed target as src or dst is another SysOp's command or reply: the node shares
+        its rate stamp, high-water mark and reply cache with every sender.
+
+        Spoofable by design: any station can extend the pause by 120 s per frame with an
+        `RM1 ...` text naming the target. That costs only McApp's own convenience (a visible
+        countdown) and equals the on-air lockout DoS that already exists. "Ours" is judged by
+        the EXACT call including SSID: on a UDP-only box with a bare `CALL_SIGN` the node's own
+        echo would pause every send, which coincides with the documented broken setup (a bare
+        call makes every RM1 frame ignored by the node anyway). Do not loosen this to base-call
+        matching: a second node of the same operator IS another sender to the target.
+        """
+        src = self._call_of(message.get("src"), dst=False)
+        dst = self._call_of(message.get("dst"), dst=True)
+        keyed = {
+            str(t["target"]) for t in await self._storage.list_node_admin_targets() if t["has_key"]
+        }
+        named = {c for c in (src, dst) if c is not None and c in keyed}
+        if not named:
+            return
+        own: set[str] = set()
+        attached = self._attached_call()
+        if attached:
+            with contextlib.suppress(ValueError):
+                own.add(remote_cmd.normalize_call(attached))
+        for target in named:
+            own.update(
+                str(r["src_call"])
+                for r in await self._storage.node_admin_history(target, HISTORY_SCAN)
+            )
+        if own & {src, dst}:
+            return
+        now = self._clock()
+        for target in sorted(named):
+            fresh = self._foreign_until_ms(target, now) is None
+            self._foreign_until[target] = now + FOREIGN_PAUSE_MS
+            if fresh:
+                logger.info(
+                    "node admin %s: RM1 frame of another station heard, no frames for %d s",
+                    target,
+                    FOREIGN_PAUSE_MS // 1000,
+                )
 
     async def _find_row(self, target: str, ctr: int, now: int, text: str) -> dict[str, Any] | None:
         if ctr != 0:
@@ -744,18 +935,6 @@ class NodeAdminService:
         row = await self._find_row(target, parsed.ctr, now, util.strip_ack_suffix(msg))
         if row is None or int(row["ctr"]) != parsed.ctr or reply_dst != row["src_call"]:
             return None  # no such row, or an overheard reply for another SysOp
-        if parsed.ctr == 0:
-            # `ctr=<hwm>` of a genuine sync reply is never below what we already verified.
-            hwm = remote_cmd.parse_sync_hwm(parsed.body) or 0
-            stored = await self._last_hwm(target)
-            if hwm < stored:
-                logger.info(
-                    "node admin %s: sync reply with ctr=%d below hwm %d ignored",
-                    target,
-                    hwm,
-                    stored,
-                )
-                return None
         return parsed, row
 
     async def _process_reply(self, message: dict[str, Any]) -> None:
@@ -786,12 +965,41 @@ class NodeAdminService:
                 )
                 await self._broadcast_row(target, row["id"])
             return
+        if verified.ctr == 0 and await self._stale_sync(target, row, verified):
+            return
         changed = await self._storage.apply_node_admin_reply(
             row["id"], text, now, verified.result, True
         )
         if changed is not True:
             return  # the other transport's copy already did this
         await self._act_on_verified(target, row, verified, now)
+
+    async def _stale_sync(
+        self, target: str, row: dict[str, Any], verified: remote_cmd.ParsedReply
+    ) -> bool:
+        """True when a tag-verified sync reply names a mark BELOW the last verified one.
+
+        `ctr=<hwm>` of a genuine sync reply is never below what we already verified, so it is
+        ignored (the row stays open, nothing is raised). A node that was re-flashed answers
+        exactly like that, forever: the operator must be told, once per sync row, and set_key
+        (a new password entry) is the way out because it resets the stored mark.
+        """
+        hwm = remote_cmd.parse_sync_hwm(verified.body) or 0
+        stored = await self._last_hwm(target)
+        if hwm >= stored:
+            return False
+        logger.info(
+            "node admin %s: sync reply with ctr=%d below hwm %d ignored", target, hwm, stored
+        )
+        if row["id"] not in self._stale_sync_warned:
+            self._stale_sync_warned.add(row["id"])
+            await self._broadcast_row(
+                target,
+                row["id"],
+                f"The node reports counter mark {hwm}, below the last known {stored}. "
+                "If it was re-flashed, enter its password again in Settings > Remote nodes.",
+            )
+        return True
 
     async def _act_on_verified(
         self, target: str, row: dict[str, Any], verified: remote_cmd.ParsedReply, now: int
@@ -804,7 +1012,10 @@ class NodeAdminService:
             )
         else:
             await self._storage.raise_node_admin_hwm(target, verified.ctr)
-        self._synced.add(target)
+        if verified.ctr == 0:
+            # Only a verified sync proves the counter is in step in THIS process; a late
+            # reply to an old command (after a restart or a key change) proves nothing.
+            self._synced.add(target)
         pend = self._pending.get(target)
         if verified.ctr == 0 and pend is not None and pend.sync_log_id == row["id"]:
             pend.reply_at = now

@@ -72,6 +72,10 @@ class NodeAdminService(Protocol):
         """Rows newest first, each with a server-computed `state` field."""
         ...
 
+    async def state(self, target: str) -> dict[str, Any]:
+        """Last known state plus connection and pacing of `target` (concept Appendix A)."""
+        ...
+
     async def on_reply(self, message: dict[str, Any]) -> None:
         """The `ReplyHook`: correlate, verify, update the row, emit `node_admin:reply`."""
         ...

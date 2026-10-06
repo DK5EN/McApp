@@ -19,6 +19,9 @@ Covers (plan doc/2026-10-05_1000-node-admin-ui-concept-and-plan.md §4, §6.1 A2
      SQLite library supports `UPDATE ... RETURNING` (>= 3.35).
   7. Smaller contracts: hand-off stamp, history order, stale-row sweep, prune,
      target listing, `tx_max` handling.
+  8. `/state` rows: the newest N rows UNION the newest verified row per (cmd, args),
+     deduplicated, one target only; prune keeps those verified rows beyond the cap;
+     `reset_node_admin_hwm` lowers the mark and keeps the counter.
 
 Ephemeral tempfile SQLite DB per scenario (never the live DB). All timestamps
 are milliseconds. Drives the REAL mixin methods.
@@ -653,6 +656,131 @@ async def _test_housekeeping(results: list[tuple[str, bool]]) -> None:
             await storage.close()
 
 
+async def _verified(storage: Any, target: str, cmd: str, ts: int) -> int:
+    """A command row answered with a tag-verified reply."""
+    row = await _alloc(storage, target, now=ts, cmd=cmd)
+    await storage.apply_node_admin_reply(row["id"], "RM1 x", ts + 1, f"ok {cmd}", True)
+    return int(row["id"])
+
+
+async def _junk(storage: Any, target: str, n: int, ts: int) -> list[int]:
+    """Unanswered sync rows (verified NULL)."""
+    return [
+        await storage.insert_node_admin_sync_row(target, _SRC, "udp", ts + i, "RM1|sync")
+        for i in range(n)
+    ]
+
+
+async def _test_state_rows(results: list[tuple[str, bool]]) -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        storage = await create_sqlite_storage(Path(tmp_dir) / "node_admin_state_rows.db")
+        try:
+            status_old = await _verified(storage, _TARGET, "status", _BASE_TS)
+            gps_a = await _verified(storage, _TARGET, "txpower", _BASE_TS + 10)
+            gps_b = await _verified(storage, _TARGET, "txpower", _BASE_TS + 20)  # same (cmd, args)
+            reboot = await _verified(storage, _TARGET, "reboot", _BASE_TS + 30)
+            unverified = await _alloc(storage, _TARGET, now=_BASE_TS + 40, cmd="status")
+            await storage.apply_node_admin_reply(
+                unverified["id"], "RM1 x", _BASE_TS + 41, "ok", False
+            )
+            sync_old = await _junk(storage, _TARGET, 1, _BASE_TS + 50)
+            await storage.apply_node_admin_reply(
+                sync_old[0], "RM1 x", _BASE_TS + 51, "ok ctr=1", True
+            )
+            sync_new = await _junk(storage, _TARGET, 1, _BASE_TS + 60)
+            await storage.apply_node_admin_reply(
+                sync_new[0], "RM1 x", _BASE_TS + 61, "ok ctr=2", True
+            )
+            junk = await _junk(storage, _TARGET, 6, _BASE_TS + 100)
+            other = await _verified(storage, "DK5EN-90", "status", _BASE_TS + 200)
+
+            rows = await storage.node_admin_state_rows(_TARGET, recent=3)
+            ids = [r["id"] for r in rows]
+            want = sorted([*junk[-3:], status_old, gps_b, reboot, sync_new[0]], reverse=True)
+            results.append(
+                (
+                    (
+                        "state rows: newest N plus the newest verified per (cmd, args) (NULL "
+                        "args group too), newest first, one target, unverified never stand in"
+                    ),
+                    ids == want
+                    and gps_a not in ids
+                    and sync_old[0] not in ids
+                    and unverified["id"] not in ids
+                    and other not in ids,
+                )
+            )
+            wide = await storage.node_admin_state_rows(_TARGET, recent=500)
+            everything = await storage.node_admin_history(_TARGET, 500)
+            results.append(
+                (
+                    "state rows: a wide window returns every row once (no duplicates)",
+                    [r["id"] for r in wide] == [r["id"] for r in everything]
+                    and len({r["id"] for r in wide}) == len(wide),
+                )
+            )
+            results.append(
+                (
+                    "state rows: an unknown target has none",
+                    await storage.node_admin_state_rows("NOBODY-1") == [],
+                )
+            )
+        finally:
+            await storage.close()
+
+
+async def _test_prune_keeps_verified(results: list[tuple[str, bool]]) -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        storage = await create_sqlite_storage(Path(tmp_dir) / "node_admin_prune_verified.db")
+        try:
+            status_1 = await _verified(storage, _TARGET, "status", _BASE_TS)
+            status_2 = await _verified(storage, _TARGET, "status", _BASE_TS + 10)
+            junk = await _junk(storage, _TARGET, 4, _BASE_TS + 100)
+            other_status = await _verified(storage, "DK5EN-90", "status", _BASE_TS + 20)
+            await _junk(storage, "DK5EN-90", 3, _BASE_TS + 200)
+            deleted = await storage.prune_node_admin_log(per_target_cap=2)
+            kept = {r["id"] for r in await storage.node_admin_history(_TARGET)}
+            kept_other = {r["id"] for r in await storage.node_admin_history("DK5EN-90")}
+            results.append(
+                (
+                    (
+                        "prune: the newest verified row per (target, cmd, args) survives the "
+                        "cap, an older one with the same key does not, per target"
+                    ),
+                    kept == {status_2, junk[2], junk[3]}
+                    and status_1 not in kept
+                    and other_status in kept_other
+                    and len(kept_other) == 3
+                    and deleted == 4,
+                )
+            )
+        finally:
+            await storage.close()
+
+
+async def _test_reset_hwm(results: list[tuple[str, bool]]) -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = Path(tmp_dir) / "node_admin_reset_hwm.db"
+        storage = await create_sqlite_storage(db_path)
+        try:
+            _seed_state(db_path, _TARGET, 7, 5)
+            _seed_state(db_path, "DK5EN-90", 9, 8)
+            await storage.reset_node_admin_hwm(_TARGET)
+            await storage.reset_node_admin_hwm("NOBODY-1")
+            results.append(
+                (
+                    "reset hwm: last_hwm 0, ctr kept, other targets untouched, no row invented",
+                    await asyncio.to_thread(_read_state, db_path, _TARGET) == (7, 0)
+                    and await asyncio.to_thread(_read_state, db_path, "DK5EN-90") == (9, 8)
+                    and await asyncio.to_thread(_read_state, db_path, "NOBODY-1") is None,
+                )
+            )
+            nxt = await _alloc(storage, _TARGET)
+            results.append(("reset hwm: the next counter continues above ctr", nxt["ctr"] == 8))
+        finally:
+            await storage.close()
+
+
 async def _test_migration_from_v34(results: list[tuple[str, bool]]) -> None:
     results.append(
         (
@@ -741,6 +869,9 @@ async def run_node_admin_storage_tests() -> bool:
         _test_find_log_row,
         _test_verified_status_rows,
         _test_housekeeping,
+        _test_state_rows,
+        _test_prune_keeps_verified,
+        _test_reset_hwm,
         _test_migration_from_v34,
     )
     for scenario in scenarios:
@@ -758,3 +889,7 @@ async def run_node_admin_storage_tests() -> bool:
     all_ok = all(ok for _, ok in results)
     print(f"    node_admin_storage: {'PASS' if all_ok else 'FAIL'}")
     return all_ok
+
+
+if __name__ == "__main__":
+    raise SystemExit(0 if asyncio.run(run_node_admin_storage_tests()) else 1)

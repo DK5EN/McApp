@@ -246,6 +246,21 @@ class NodeAdminMixin(StorageBase):
 
         return await asyncio.to_thread(_run)
 
+    async def reset_node_admin_hwm(self, target: str) -> None:
+        """`last_hwm = 0` for a node whose password was entered again (it may be re-flashed).
+
+        `ctr` is kept: the counter stays monotone, and the allocation's unix floor keeps
+        new values above whatever mark a re-flashed node starts from.
+        """
+
+        def _run() -> None:
+            with db_write(self.db_path) as conn:
+                conn.execute(
+                    "UPDATE node_admin_state SET last_hwm = 0 WHERE target_call = ?", (target,)
+                )
+
+        await asyncio.to_thread(_run)
+
     async def raise_node_admin_hwm(
         self, target: str, hwm: int, sync_at_ms: int | None = None
     ) -> None:
@@ -291,6 +306,33 @@ class NodeAdminMixin(StorageBase):
                         " WHERE target_call = ? ORDER BY id DESC LIMIT ?",
                         (target, limit),
                     )
+                return [dict(r) for r in cursor.fetchall()]
+
+        return await asyncio.to_thread(_run)
+
+    async def node_admin_state_rows(self, target: str, recent: int = 200) -> list[dict[str, Any]]:
+        """The rows the `/state` fold needs, newest first, in ONE read.
+
+        The newest `recent` rows of `target` UNION the newest tag-verified row per
+        `(cmd, args)` of it, deduplicated by id (one `WHERE ... OR` over the id set). The
+        recent window carries every pending, silent and re-asked row; the verified-per-command
+        rows keep a value the node reported long ago (an old `status`) in view however many
+        rows were logged since. Prune keeps the same rows (`prune_node_admin_log`).
+        """
+
+        def _run() -> list[dict[str, Any]]:
+            with db_read(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute(
+                    f"SELECT {_LOG_COLUMNS} FROM node_admin_log"  # noqa: S608 - literal column list
+                    " WHERE target_call = ? AND ("
+                    "  id IN (SELECT id FROM node_admin_log WHERE target_call = ?"
+                    "         ORDER BY id DESC LIMIT ?)"
+                    "  OR id IN (SELECT MAX(id) FROM node_admin_log"
+                    "            WHERE target_call = ? AND verified = 1 GROUP BY cmd, args))"
+                    " ORDER BY id DESC",
+                    (target, target, recent, target),
+                )
                 return [dict(r) for r in cursor.fetchall()]
 
         return await asyncio.to_thread(_run)
@@ -391,7 +433,11 @@ class NodeAdminMixin(StorageBase):
         return await asyncio.to_thread(_run)
 
     async def prune_node_admin_log(self, per_target_cap: int = 1000) -> int:
-        """Keep the newest `per_target_cap` rows per target. Returns rows deleted."""
+        """Keep the newest `per_target_cap` rows per target. Returns rows deleted.
+
+        The newest tag-verified row per `(target, cmd, args)` is kept beyond the cap: it is
+        the last known state of the node (`node_admin_state_rows`).
+        """
 
         def _run() -> int:
             with db_write(self.db_path) as conn:
@@ -401,7 +447,9 @@ class NodeAdminMixin(StorageBase):
                     "  SELECT id, ROW_NUMBER() OVER ("
                     "   PARTITION BY target_call ORDER BY id DESC) AS rn"
                     "  FROM node_admin_log"
-                    " ) WHERE rn > ?)",
+                    " ) WHERE rn > ?)"
+                    " AND id NOT IN (SELECT MAX(id) FROM node_admin_log"
+                    "                WHERE verified = 1 GROUP BY target_call, cmd, args)",
                     (per_target_cap,),
                 )
                 return cursor.rowcount

@@ -271,3 +271,7 @@ async def run_node_admin_hook_tests() -> bool:
     all_ok = all(ok for _, ok in results)
     print(f"    node_admin_hook: {'PASS' if all_ok else 'FAIL'}")
     return all_ok
+
+
+if __name__ == "__main__":
+    raise SystemExit(0 if asyncio.run(run_node_admin_hook_tests()) else 1)
