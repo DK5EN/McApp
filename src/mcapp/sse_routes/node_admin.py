@@ -163,9 +163,9 @@ def build_node_admin_router(
             raise
         return Response(status_code=204)
 
-    @router.delete("/api/node-admin/keys/{target}", status_code=204)
-    async def delete_key(target: str) -> Response:
-        await _run(service().delete_key(target))
+    @router.delete("/api/node-admin/targets/{target}", status_code=204)
+    async def delete_target(target: str) -> Response:
+        await _run(service().delete_target(target))
         return Response(status_code=204)
 
     @router.get("/api/node-admin/targets")

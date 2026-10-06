@@ -4,9 +4,10 @@ Three tables (plan: `doc/2026-10-05_1000-node-admin-ui-concept-and-plan.md` §4)
 
   * `node_admin_keys`  - one SecretBox token per managed node (`target_call`).
   * `node_admin_state` - the monotonic command counter `ctr`, the verified
-    high-water mark `last_hwm`, `last_sync_at`, `tx_max`. KEPT when a key is
-    deleted: a re-added key must continue the counter, because restarting at 1
-    means every command is silently replay-rejected by the node.
+    high-water mark `last_hwm`, `last_sync_at`, `tx_max`. Removed together with
+    the key and the log (`delete_node_admin_target`): a re-added key starts a fresh
+    row at the unix floor and learns the node's mark by a verified sync first.
+    Replacing a password (`set_node_admin_key`) keeps the row and its counter.
   * `node_admin_log`   - one row per command (and per sync probe, `ctr = 0`).
 
 All timestamps are MILLISECONDS. Every method here does its work through
@@ -96,11 +97,19 @@ class NodeAdminMixin(StorageBase):
 
         return await asyncio.to_thread(_run)
 
-    async def delete_node_admin_key(self, target: str) -> None:
-        """Delete the KEY only. The state row (counter, hwm) and the log are kept."""
+    async def delete_node_admin_target(self, target: str) -> None:
+        """Remove the node completely: key, state row and every log row, in ONE transaction.
+
+        The counter state is not needed afterwards: a fresh row starts at the unix floor
+        (`allocate_node_admin_command`), and no command is sent before a verified sync has
+        learned the node's own mark. The service refuses the call while the cool-down or the
+        lockout window, which are derived from the log rows, is still running.
+        """
 
         def _run() -> None:
             with db_write(self.db_path) as conn:
+                conn.execute("DELETE FROM node_admin_log WHERE target_call = ?", (target,))
+                conn.execute("DELETE FROM node_admin_state WHERE target_call = ?", (target,))
                 conn.execute("DELETE FROM node_admin_keys WHERE target_call = ?", (target,))
 
         await asyncio.to_thread(_run)
@@ -108,8 +117,8 @@ class NodeAdminMixin(StorageBase):
     async def list_node_admin_targets(self) -> list[dict[str, Any]]:
         """Every target with a key or a state row, ordered by callsign.
 
-        `has_key` is False for a target whose key was deleted but whose counter
-        state is retained.
+        `has_key` is False only for a state row without a key (a legacy row left by
+        the old key-only delete).
         """
 
         def _run() -> list[dict[str, Any]]:

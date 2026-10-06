@@ -37,11 +37,14 @@ import contextlib
 import json
 import logging
 import tempfile
+import time
 import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
+from . import node_admin_service as nas
 from . import remote_cmd
 from .node_admin_service import (
     SYNC_DROPPED,
@@ -694,7 +697,7 @@ async def case_e_timeout_inflight(record: Record) -> None:
 
 
 async def case_e_dropped(record: Record) -> None:
-    for label, drop_ble in (("BLE dropped", True), ("key deleted", False)):
+    for label, drop_ble in (("BLE dropped", True), ("key deleted behind its back", False)):
         async with make_env(ble=True) as env:
             await env.setup(synced=False)
             await env.send(transport="ble")
@@ -705,7 +708,11 @@ async def case_e_dropped(record: Record) -> None:
             if drop_ble:
                 env.ble = False
             else:
-                await env.svc.delete_key(TARGET)
+                # The service refuses a removal while a command is held (case o), so the key
+                # goes the way another process would take it; the sync row stays.
+                with db_write(env.storage.db_path) as conn:
+                    conn.execute("DELETE FROM node_admin_keys")
+                env.svc._keys.pop(TARGET, None)
             await env.time.advance(10_000)
             await until(lambda: any("warning" in p for _, p in env.bcasts))
             warned = [p for _, p in env.bcasts if "warning" in p]
@@ -898,11 +905,15 @@ async def case_g_aad_unreadable(record: Record) -> None:
             "g2. replacing the key invalidates the cached HMAC key",
             env.tx[-1][2] == remote_cmd.build_command_text(new_key, TARGET, ATTACHED, 2, "status"),
         )
-        await env.svc.delete_key(TARGET)
-        info = await env.target_info()
+        await env.time.advance(20_000)
+        await env.reply(2, passwd="other-pass")  # the answer ends the in-flight window
+        await env.svc.drain()
+        await env.svc.delete_target(TARGET)
         record(
-            "g3. delete_key keeps the counter state",
-            info["has_key"] is False and info["ctr"] == 2,
+            "g3. delete_target removes the node: no listing, no counter state, no history",
+            [t["target"] for t in await env.svc.list_targets()] == []
+            and await env.storage.get_node_admin_key(TARGET) is None
+            and await env.rows() == [],
         )
         record("g3b. send without a key is a ValueError", await raises(ValueError, env.send()))
 
@@ -1975,6 +1986,360 @@ async def case_n_state(record: Record) -> None:
 # ── runner ─────────────────────────────────────────────────────────────────
 
 
+# ── o. remove (delete_target) ──────────────────────────────────────────────
+
+OTHER = "DK5EN-91"
+
+
+def _fmt(ms: int) -> str:
+    return time.strftime("%H:%M:%S", time.localtime(ms / 1000))
+
+
+async def _intact(env: Env) -> bool:
+    """Key, listing, history and in-memory key of TARGET are all still there."""
+    return (
+        await env.storage.get_node_admin_key(TARGET) is not None
+        and any(t["target"] == TARGET for t in await env.svc.list_targets())
+        and len(await env.rows()) > 0
+    )
+
+
+async def case_o_remove(record: Record) -> None:
+    cap = _Capture()
+    svc_log = logging.getLogger("mcapp.node_admin_service")
+    # o1. a verified command: removal clears everything of that target, nothing of another
+    async with make_env(unix=1_791_000_000) as env:
+        await env.setup()
+        await env.setup(OTHER, "other-pass")
+        a = await env.send()
+        await env.svc.drain()
+        await env.time.advance(20_000)
+        await env.reply(a["ctr"])
+        await env.svc.drain()
+        other_row = await env.storage.allocate_node_admin_command(
+            OTHER, ATTACHED, "status", None, "udp", T0, 0, lambda c: f"RM1 {c} status x"
+        )
+        env.svc._foreign_until[TARGET] = env.time.now + 100_000  # a pause must not block removal
+        env.svc._reasked.add(a["log_id"])
+        env.svc._stale_sync_warned.add(a["log_id"])
+        svc_log.addHandler(cap)
+        svc_log.setLevel(logging.INFO)
+        try:
+            await env.svc.delete_target("dk5en-90")  # normalised like every other call
+        finally:
+            svc_log.removeHandler(cap)
+        listed = [t["target"] for t in await env.svc.list_targets()]
+        record(
+            "o1. delete_target removes key, state row and history of the target; "
+            "another target stays intact",
+            listed == [OTHER]
+            and await env.storage.get_node_admin_key(TARGET) is None
+            and await env.rows() == []
+            and await env.storage.get_node_admin_log_row(a["log_id"]) is None
+            and await env.storage.get_node_admin_key(OTHER) is not None
+            and len(await env.rows(OTHER)) == 1
+            and (await env.storage.get_node_admin_log_row(other_row["id"])) is not None
+            and await raises(ValueError, env.send()),
+        )
+        record(
+            "o2. every in-memory trace is gone (key cache, sync gate, foreign pause, "
+            "per-row sets) and INFO is logged",
+            TARGET not in env.svc._keys
+            and TARGET not in env.svc._synced
+            and TARGET not in env.svc._foreign_until
+            and TARGET not in env.svc._pending
+            and a["log_id"] not in env.svc._reasked
+            and a["log_id"] not in env.svc._stale_sync_warned
+            and any("node admin: removed DK5EN-90 (key, state, history)" in ln for ln in cap.lines),
+        )
+        await env.svc.delete_target(TARGET)
+        record(
+            "o2b. removing an already removed target is a no-op, an invalid call a ValueError",
+            await raises(ValueError, env.svc.delete_target("not a call")),
+        )
+
+
+async def case_o_refused(record: Record) -> None:
+    # o3. refused while in flight or held behind the sync: nothing deleted
+    async with make_env() as env:
+        await env.setup()
+        env.tx_gate = asyncio.Event()
+        await env.send()
+        await until(lambda: len(env.tx) == 1)
+        queued = await busy_text(env.svc.delete_target(TARGET))
+        env.tx_gate.set()
+        await env.svc.drain()
+        await env.time.advance(15_000)
+        waiting = await busy_text(env.svc.delete_target(TARGET))
+        record(
+            "o3. removal is refused (Busy -> 409) while a command is queued or waiting; "
+            "nothing is deleted",
+            queued is not None
+            and "still in flight" in queued
+            and waiting is not None
+            and "still in flight" in waiting
+            and await _intact(env),
+        )
+    async with make_env() as env:
+        await env.setup(synced=False)
+        await env.send()
+        await until(lambda: len(env.tx) == 1)
+        held = await busy_text(env.svc.delete_target(TARGET))
+        record(
+            "o4. removal is refused while a command is held behind the automatic sync; "
+            "pending and key stay",
+            held is not None
+            and "automatic sync" in held
+            and TARGET in env.svc._pending
+            and await _intact(env),
+        )
+
+
+async def case_o_windows(record: Record) -> None:
+    # o5. cool-down after silence: refused with the end time, allowed once it ends
+    async with make_env() as env:
+        await env.setup()
+        await env.send()
+        await env.svc.drain()
+        await env.time.advance(120_000)  # no_reply, hand-off at T0: cool-down ends T0 + 300 s
+        refused = await busy_text(env.svc.delete_target(TARGET))
+        end = _fmt(T0 + 300_000)
+        record(
+            "o5. removal is refused during the post-silence cool-down; the text names the end "
+            "time and the late-copy reason; nothing is deleted",
+            refused is not None
+            and refused
+            == f"Remove is blocked until {end}: the last command to {TARGET} got no answer "
+            "(the node may still act on a late copy)"
+            and await _intact(env),
+        )
+        await env.time.advance(179_999)
+        edge = await busy_text(env.svc.delete_target(TARGET))
+        await env.time.advance(1)
+        await env.svc.delete_target(TARGET)
+        record(
+            "o5b. still refused 1 ms before the cool-down ends, allowed at the end",
+            edge is not None and await env.storage.get_node_admin_key(TARGET) is None,
+        )
+
+    # o6. a silent abandoned row (restart) holds the removal as well
+    async with make_env() as env:
+        await env.setup()
+        await env.send()
+        await env.svc.drain()
+        await env.time.advance(1_000)
+        await env.svc.start()  # row abandoned
+        await env.time.advance(20_000)
+        refused = await busy_text(env.svc.delete_target(TARGET))
+        record(
+            "o6. an abandoned row blocks removal too",
+            refused is not None and "Remove is blocked until " in refused and await _intact(env),
+        )
+
+    # o7. possible lockout: two silent rows less than 5 min apart. The cool-down ends at the
+    # same moment, so the lockout wording is reached with the cool-down shortened.
+    async with make_env() as env:
+        await env.setup()
+        await seed_row(env, T0 - 250_000)
+        await seed_row(env, T0 - 130_000)
+        await env.time.advance(0)
+        both = await busy_text(env.svc.delete_target(TARGET))
+        with mock.patch.object(nas, "COOLDOWN_AFTER_SILENCE_MS", 0):
+            lock_only = await busy_text(env.svc.delete_target(TARGET))
+        end = _fmt(T0 - 130_000 + 300_000)
+        record(
+            "o7. removal is refused during a possible lockout, with the end time; nothing deleted",
+            both is not None
+            and lock_only is not None
+            and lock_only
+            == f"Remove is blocked until {end}: {TARGET} may be locked out after repeated "
+            "silent commands"
+            and await _intact(env),
+        )
+
+    # o8. a foreign pause alone never blocks
+    async with make_env() as env:
+        await env.setup()
+        a = await env.send()
+        await env.svc.drain()
+        await env.time.advance(20_000)
+        await env.reply(a["ctr"])
+        await env.svc.drain()
+        await env.svc.on_reply(foreign("DL1ABC", TARGET))
+        await env.svc.drain()
+        paused = (await env.state())["foreign_until"] is not None
+        await env.svc.delete_target(TARGET)
+        record(
+            "o8. a foreign-sender pause does not block removal",
+            paused and await env.storage.get_node_admin_key(TARGET) is None,
+        )
+
+
+async def case_o_readd(record: Record) -> None:
+    # o9. realistic clock: a re-added node needs a VERIFIED sync first, and the first command
+    # after it carries a counter above everything sent before the removal
+    async with make_env(unix=1_791_000_000) as env:
+        await env.setup()
+        a = await env.send()
+        await env.svc.drain()
+        await env.time.advance(20_000)
+        await env.reply(a["ctr"])
+        await env.svc.drain()
+        await env.time.advance(100_000)
+        b = await env.send()
+        await env.svc.drain()
+        await env.time.advance(20_000)
+        await env.reply(b["ctr"])
+        await env.svc.drain()
+        last_before = b["ctr"]
+        await env.svc.delete_target(TARGET)
+        await env.time.advance(60_000)
+        env.unix += (env.time.now - T0) // 1000  # the wall clock moves with the fake clock
+        await env.svc.set_key(TARGET, PASSWD, 15)
+        fresh = await env.target_info()
+        tx_before = len(env.tx)
+        c = await env.send()
+        await until(lambda: len(env.tx) == tx_before + 1)
+        gated = (
+            c.get("pending") is True
+            and TARGET in env.svc._pending
+            and TARGET not in env.svc._synced
+            and "sync" in env.tx[-1][2]
+            and len(env.tx) == tx_before + 1
+        )
+        await env.time.advance(15_000)
+        await env.reply(0, f"ok ctr={last_before} v=4.40a")
+        await settle()  # the gate now sleeps out the 10 s spacing on the fake clock
+        await env.time.advance(10_000)
+        await env.svc.drain()
+        cmd_rows = [r for r in await env.rows() if r["cmd"] == "status"]
+        record(
+            "o9. re-added after removal: a fresh row (ctr 0, hwm 0), the first command waits for a "
+            "verified sync, then goes out with a counter above every earlier one",
+            fresh["ctr"] == 0
+            and fresh["last_hwm"] == 0
+            and gated
+            and len(cmd_rows) == 1
+            and cmd_rows[0]["ctr"] > last_before
+            and len(env.tx) == tx_before + 2
+            and TARGET in env.svc._synced,
+        )
+
+    # o10. clock not set (unix 0): the verified sync's mark alone keeps the counter ahead
+    async with make_env(unix=0) as env:
+        await env.setup()
+        a = await env.send()
+        await env.svc.drain()
+        await env.time.advance(20_000)
+        await env.reply(a["ctr"])
+        await env.svc.drain()
+        await env.svc.delete_target(TARGET)
+        await env.time.advance(60_000)
+        await env.svc.set_key(TARGET, PASSWD, 15)
+        await env.send()
+        await until(lambda: len(env.tx) == 2)
+        await env.time.advance(15_000)
+        await env.reply(0, f"ok ctr={a['ctr']} v=4.40a")
+        await settle()
+        await env.time.advance(10_000)
+        await env.svc.drain()
+        cmd_rows = [r for r in await env.rows() if r["cmd"] == "status"]
+        record(
+            "o10. without a plausible clock the sync's mark still puts the new counter above the "
+            "old one",
+            len(cmd_rows) == 1 and cmd_rows[0]["ctr"] > a["ctr"],
+        )
+
+
+async def case_o_readd_nosync(record: Record) -> None:
+    # o11. a re-added node that never answers the sync gets no command at all
+    async with make_env(unix=1_791_000_000) as env:
+        await env.setup()
+        await env.svc.delete_target(TARGET)
+        await env.svc.set_key(TARGET, PASSWD, 15)
+        await env.send()
+        await until(lambda: len(env.tx) == 1)
+        await env.time.advance(90_000)
+        await until(lambda: TARGET not in env.svc._pending)
+        record(
+            "o11. re-added node without a sync answer: the held command is dropped, no command "
+            "frame is ever sent",
+            len(env.tx) == 1
+            and "sync" in env.tx[0][2]
+            and TARGET not in env.svc._synced
+            and not [r for r in await env.rows() if r["cmd"] == "status"],
+        )
+
+
+async def case_o_race_reply(record: Record) -> None:
+    # o12. A Remove that lands between the reply's storage UPDATE and its side effects must
+    # not resurrect the target (a keyless state row from `raise_node_admin_hwm`, a sync gate).
+    async with make_env(unix=1_791_000_000) as env:
+        await env.setup()
+        a = await env.send()
+        await env.svc.drain()
+        await env.time.advance(20_000)
+        real_apply = env.storage.apply_node_admin_reply
+        removals: list[asyncio.Future[None]] = []
+
+        async def apply_then_remove(*args: Any, **kw: Any) -> Any:
+            changed = await real_apply(*args, **kw)
+            if changed is True and not removals:
+                removals.append(asyncio.ensure_future(env.svc.delete_target(TARGET)))
+                await asyncio.sleep(SETTLE_S)  # old code: the removal completes in this gap
+            return changed
+
+        with mock.patch.object(env.storage, "apply_node_admin_reply", apply_then_remove):
+            await env.reply(a["ctr"])
+            await env.svc.drain()
+            await asyncio.wait_for(asyncio.gather(*removals), timeout=5)
+        record(
+            "o12. a Remove racing a verified reply leaves nothing behind: no listing, no state "
+            "row, no sync gate, no history",
+            len(removals) == 1
+            and [t["target"] for t in await env.svc.list_targets()] == []
+            and TARGET not in env.svc._synced
+            and await env.rows() == []
+            and await env.storage.get_node_admin_key(TARGET) is None,
+        )
+
+
+async def _race_remove_before_lock(record: Record, which: str) -> None:
+    async with make_env(unix=1_791_000_000) as env:
+        await env.setup()
+        real_tx_max = env.svc._tx_max
+        fired: list[bool] = []
+
+        async def tx_max_then_remove(target: str) -> int:
+            value = await real_tx_max(target)
+            if not fired:
+                fired.append(True)
+                await env.svc.delete_target(TARGET)
+            return value
+
+        call = env.send() if which == "send" else env.svc.sync(TARGET)
+        with mock.patch.object(env.svc, "_tx_max", tx_max_then_remove):
+            refused = await raises(ValueError, call)
+        await settle()  # not drain(): an unfixed run parks the auto-sync gate on the fake clock
+        record(
+            f"o13. {which}: a Remove between the key lookup and the lock is refused "
+            "(no key); no frame, no orphan sync row, no state row",
+            fired == [True]
+            and refused
+            and env.tx == []
+            and await env.rows() == []
+            and [t["target"] for t in await env.svc.list_targets()] == []
+            and TARGET not in env.svc._pending,
+        )
+
+
+async def case_o_race_send(record: Record) -> None:
+    # o13. A Remove between the unlocked key lookup and the lock of send()/sync() must refuse
+    # the call: no sync row, no frame, nothing left behind.
+    await _race_remove_before_lock(record, "send")
+    await _race_remove_before_lock(record, "sync")
+
+
 async def case_k_start_never_blocks(record: Record) -> None:
     """The feature is always on, so `start()` runs on every box at boot: a failing
     housekeeping query (locked DB, I/O error, missing table) must never propagate and
@@ -2043,6 +2408,13 @@ async def run_node_admin_service_tests() -> bool:
         case_n_foreign_held,
         case_n_sync_and_hwm,
         case_n_state,
+        case_o_remove,
+        case_o_refused,
+        case_o_windows,
+        case_o_readd,
+        case_o_readd_nosync,
+        case_o_race_reply,
+        case_o_race_send,
     ]
     for case in cases:
         try:

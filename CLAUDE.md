@@ -947,6 +947,11 @@ firmware side: `MeshCom-Firmware-DEV-Main` (`src/remote_cmd.cpp`, `docs/adr-remo
   copy of an already verified reply is dropped. A genuine lower mark (re-flashed node) is ignored with a warning;
   re-entering the password (`set_key`) resets `last_hwm`. `RESULT_MAX` is 108 (firmware draft 2, 140-char reply wire);
   at 63 a longer reply vanished and two of them tripped McApp's own lockout guard.
+- **Remove deletes the node completely** (`DELETE /api/node-admin/targets/{target}`, 2026-10-06): key, state row and
+  log in one transaction. Keeping the counter (the v1 rule) is unnecessary: the counter floor is unix seconds and no
+  command leaves before a verified sync learns the node's mark. Remove is REFUSED while a command is in flight, a
+  cool-down or a possible lockout runs: those windows are derived from the log it deletes, so removing and re-adding
+  inside one would silently drop the protection.
 - **Feature flag to the webapp is `/api/status` `features`** (`"node_admin"`), not the mc-chat flag: `requiresAdminBackend` means
   "mc-chat only". The webapp uses `adminStatus.nodeAdminAvailable` and a three-state view (no router guard: the backend flag is `null`
   at first paint). `useProxyAPI` tolerates a body-less 204 and carries the backend `detail` on `ProxyAPIError.detail`.

@@ -19,7 +19,8 @@ Cases:
      public name), Origin (foreign 403, same-origin OK, none OK, listed OK),
      on every route, with the service never called on a refusal.
   5. Error mapping 422/409/503 and request validation (transport, limit).
-  6. PUT/DELETE return 204 with no body; arguments pass through.
+  6. PUT key / DELETE target return 204 with no body; arguments pass through; DELETE
+     targets/{target} maps a refusal to 409 and the old DELETE keys/{target} is gone.
   7. `GET /api/node-admin/targets/{target}/state`: payload and argument pass-through,
      foreign Host / Origin refused (also covered by every `_ROUTES` loop above).
   8. The REAL service behind the router: a refusal (another station is managing the
@@ -72,8 +73,8 @@ class _FakeService:
     async def set_key(self, target: str, password: str, tx_max: int | None) -> None:
         self._hit("set_key", target, password, tx_max)
 
-    async def delete_key(self, target: str) -> None:
-        self._hit("delete_key", target)
+    async def delete_target(self, target: str) -> None:
+        self._hit("delete_target", target)
 
     async def send(self, target: str, cmd: str, args: str, transport: str) -> dict[str, Any]:
         self._hit("send", target, cmd, args, transport)
@@ -143,7 +144,7 @@ def _client(app: Any) -> httpx.AsyncClient:
 # (method, path, json body) for every route, with a valid body where one is needed.
 _ROUTES: list[tuple[str, str, Any]] = [
     ("PUT", "/api/node-admin/keys/DK5EN-90", {"password": "abc", "tx_max": 15}),
-    ("DELETE", "/api/node-admin/keys/DK5EN-90", None),
+    ("DELETE", "/api/node-admin/targets/DK5EN-90", None),
     ("GET", "/api/node-admin/targets", None),
     ("POST", "/api/node-admin/send", {"target": "DK5EN-90", "cmd": "setout", "args": "a2 on"}),
     ("POST", "/api/node-admin/reask/7", None),
@@ -384,7 +385,7 @@ async def _test_guard_over_http(record: Any) -> None:
             headers={"origin": "http://evil.example.com"},
         )
         evil_preflight_like = await client.delete(
-            "/api/node-admin/keys/DK5EN-90", headers={"origin": "http://evil.example.com"}
+            "/api/node-admin/targets/DK5EN-90", headers={"origin": "http://evil.example.com"}
         )
 
     record("4f. foreign Host -> 403 on every route", set(foreign_host) == {403})
@@ -486,7 +487,7 @@ async def _test_success_shapes(record: Any) -> None:
             "/api/node-admin/keys/DK5EN-90", json={"password": "pw", "tx_max": 15}
         )
         put_none = await client.put("/api/node-admin/keys/dk5en-91", json={"password": "pw2"})
-        delete = await client.delete("/api/node-admin/keys/DK5EN-90")
+        delete = await client.delete("/api/node-admin/targets/DK5EN-90")
         targets = await client.get("/api/node-admin/targets")
         send = await client.post(
             "/api/node-admin/send",
@@ -501,14 +502,14 @@ async def _test_success_shapes(record: Any) -> None:
         hist_default = await client.get("/api/node-admin/history")
 
     record(
-        "6a. PUT and DELETE keys -> 204 with an empty body",
+        "6a. PUT key and DELETE target -> 204 with an empty body",
         all(r.status_code == 204 and r.content == b"" for r in (put, put_none, delete)),
     )
     record(
-        "6b. key arguments pass through (tx_max optional)",
+        "6b. key arguments and the removed target pass through (tx_max optional)",
         svc.calls[0] == ("set_key", ("DK5EN-90", "pw", 15))
         and svc.calls[1] == ("set_key", ("dk5en-91", "pw2", None))
-        and svc.calls[2] == ("delete_key", ("DK5EN-90",)),
+        and svc.calls[2] == ("delete_target", ("DK5EN-90",)),
     )
     record(
         "6c. targets / send / reask / sync return the service payload",
@@ -531,6 +532,42 @@ async def _test_success_shapes(record: Any) -> None:
         and svc.calls[8] == ("history", ("DK5EN-90", 25))
         and svc.calls[9] == ("history", (None, 100))
         and hist_default.status_code == 200,
+    )
+
+
+async def _test_delete_target(record: Any) -> None:
+    """6f-6h. DELETE /api/node-admin/targets/{target} replaces the key-only DELETE."""
+    svc = _FakeService()
+    async with _client(_app(svc)) as client:
+        ok = await client.delete("/api/node-admin/targets/dk5en-90")
+        svc.raise_next = NodeAdminBusyError(
+            "Remove is blocked until 20:14:05: the last command to DK5EN-90 got no answer "
+            "(the node may still act on a late copy)"
+        )
+        busy = await client.delete("/api/node-admin/targets/DK5EN-90")
+        svc.raise_next = ValueError("not a callsign")
+        invalid = await client.delete("/api/node-admin/targets/not%20a%20call")
+        before = len(svc.calls)
+        old = await client.delete("/api/node-admin/keys/DK5EN-90")
+        old_calls = len(svc.calls) - before
+        guarded = await client.delete("/api/node-admin/targets/DK5EN-90", headers=_EVIL)
+    record(
+        "6f. DELETE targets/{target} -> 204, empty body, the target passes through as sent",
+        ok.status_code == 204
+        and ok.content == b""
+        and svc.calls[0] == ("delete_target", ("dk5en-90",)),
+    )
+    record(
+        "6g. a refusal is a 409 carrying the service's sentence; invalid input is a 422",
+        busy.status_code == 409
+        and busy.json()["detail"].startswith("Remove is blocked until 20:14:05: ")
+        and "late copy" in busy.json()["detail"]
+        and invalid.status_code == 422,
+    )
+    record(
+        "6h. the old DELETE keys/{target} is gone (404/405, the service is not reached); "
+        "the LAN-only guard covers the new path",
+        old.status_code in {404, 405} and old_calls == 0 and guarded.status_code == 403,
     )
 
 
@@ -666,6 +703,7 @@ async def run_node_admin_routes_tests() -> bool:
     await _test_guard_over_http(_record)
     await _test_error_mapping(_record)
     await _test_success_shapes(_record)
+    await _test_delete_target(_record)
     await _test_state_route(_record)
     await _test_real_service_refusal(_record)
 

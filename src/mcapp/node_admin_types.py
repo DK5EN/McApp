@@ -52,8 +52,12 @@ class NodeAdminService(Protocol):
         """Validate, encrypt (AAD `node_admin.password:<TARGET>`) and store. Never returned."""
         ...
 
-    async def delete_key(self, target: str) -> None:
-        """Remove the key only; counter state and history are kept."""
+    async def delete_target(self, target: str) -> None:
+        """Remove the node completely (key, counter state, history).
+
+        `NodeAdminBusyError` (409) while a command is in flight or held, or the post-silence
+        cool-down / possible-lockout window runs: that protection is derived from the log rows.
+        """
         ...
 
     async def send(self, target: str, cmd: str, args: str, transport: str) -> dict[str, Any]:

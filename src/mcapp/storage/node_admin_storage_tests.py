@@ -291,39 +291,68 @@ async def _test_key_lifecycle(results: list[tuple[str, bool]]) -> None:
                 ("key: tx_max set when given and left alone when omitted", row["tx_max"] == 20)
             )
 
+            other = "DK5EN-1"
+            await storage.set_node_admin_key(other, "v1:other", tx_max=7)
+            await _alloc(storage, other)
             await _alloc(storage, _TARGET)
             await _alloc(storage, _TARGET)
             await storage.raise_node_admin_hwm(_TARGET, 30)
-            await storage.delete_node_admin_key(_TARGET)
+            await storage.delete_node_admin_target(_TARGET)
             results.append(
-                ("key: delete removes the token", await storage.get_node_admin_key(_TARGET) is None)
+                (
+                    "target: delete removes the token",
+                    await storage.get_node_admin_key(_TARGET) is None,
+                )
+            )
+            results.append(
+                (
+                    "target: delete removes the state row",
+                    await asyncio.to_thread(_read_state, db_path, _TARGET) is None,
+                )
+            )
+            results.append(
+                (
+                    "target: delete removes every log row",
+                    await asyncio.to_thread(_count_log, db_path, _TARGET) == 0
+                    and await storage.node_admin_history(_TARGET) == [],
+                )
             )
             listed = await storage.list_node_admin_targets()
             results.append(
                 (
-                    "key: delete keeps the state row (has_key False, ctr and hwm intact)",
-                    len(listed) == 1
-                    and listed[0]["has_key"] is False
-                    and listed[0]["ctr"] == 2
-                    and listed[0]["last_hwm"] == 30,
+                    "target: delete drops it from the listing",
+                    [t["target"] for t in listed] == [other],
                 )
             )
             results.append(
                 (
-                    "key: delete keeps the log",
-                    len(await storage.node_admin_history(_TARGET)) == 2,
+                    "target: another target keeps key, state and log",
+                    await storage.get_node_admin_key(other) == "v1:other"
+                    and await asyncio.to_thread(_read_state, db_path, other) == (1, 0)
+                    and len(await storage.node_admin_history(other)) == 1
+                    and listed[0]["tx_max"] == 7,
                 )
             )
+            await storage.delete_node_admin_target(_TARGET)
+            results.append(("target: deleting an unknown target is a no-op", True))
+            # A key without a state row (never used) is removed as well.
+            await storage.set_node_admin_key("DK5EN-2", "v1:fresh")
+            await storage.delete_node_admin_target("DK5EN-2")
+            results.append(
+                (
+                    "target: delete works for a key without state or log",
+                    await storage.get_node_admin_key("DK5EN-2") is None,
+                )
+            )
+            # A re-added key starts a fresh row: the unix floor, not the old counter, leads.
             await storage.set_node_admin_key(_TARGET, "v1:new")
-            nxt = await _alloc(storage, _TARGET)
+            nxt = await _alloc(storage, _TARGET, floor=1_790_000_000)
             results.append(
                 (
-                    "key: delete then re-add does NOT restart the counter (continues past hwm)",
-                    nxt["ctr"] == 31,
+                    "target: re-add after delete starts from the unix floor, not from the old row",
+                    nxt["ctr"] == 1_790_000_000,
                 )
             )
-            state = await asyncio.to_thread(_read_state, db_path, _TARGET)
-            results.append(("key: re-add leaves the stored counter in place", state == (31, 30)))
         finally:
             await storage.close()
 

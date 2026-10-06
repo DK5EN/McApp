@@ -65,6 +65,7 @@ REPLY_PREFIX: Final = "RM1 "
 REPLY_MAX_CHARS: Final = 200
 HISTORY_SCAN: Final = 100  # rows scanned to find the newest row of a target
 HISTORY_LIMIT_MAX: Final = 1000
+HISTORY_ALL: Final = 10_000  # more than the per-target log cap (1000): every row of a target
 SYNC_DROPPED: Final = "command dropped: no answer to the counter sync, command not sent"
 
 TRANSPORTS: Final = frozenset({"auto", "ble", "udp"})
@@ -171,6 +172,11 @@ def _cooldown_until_ms(rows: list[dict[str, Any]], now_ms: int) -> int | None:
             continue
         until = max(until, int(anchor) + remote_cmd.RM_REPLY_TIMEOUT_MS + COOLDOWN_AFTER_SILENCE_MS)
     return until if until > now_ms else None
+
+
+def _clock_text(ms: int) -> str:
+    """Local wall-clock time of a ms timestamp, for a refusal the operator reads."""
+    return time.strftime("%H:%M:%S", time.localtime(ms / 1000))
 
 
 def _wait_s(until_ms: int, now_ms: int) -> int:
@@ -317,12 +323,55 @@ class NodeAdminService:
         await self._storage.reset_node_admin_hwm(t)
         logger.info("node admin key stored for %s", t)
 
-    async def delete_key(self, target: str) -> None:
+    async def delete_target(self, target: str) -> None:
+        """Remove the node completely: key, counter state and history.
+
+        Safe to forget the counter: a re-added target starts a fresh row whose first value is
+        the unix floor, and no command goes out before a VERIFIED sync has learned the node's
+        own mark (`_synced`). What a removal MUST NOT erase is the protection derived from log
+        rows (the post-silence cool-down and the lockout guard), so it is refused while a
+        command is in flight or held behind a sync, or while either window is running. A
+        foreign-sender pause is about other stations, not about our counter, and never blocks.
+        """
         t = remote_cmd.normalize_call(target)
-        self._keys.pop(t, None)
-        await self._storage.delete_node_admin_key(t)
-        self._keys.pop(t, None)
-        logger.info("node admin key removed for %s (counter state kept)", t)
+        async with self._lock(t):
+            now = self._clock()
+            if t in self._pending:
+                msg = f"Remove is blocked: a command to {t} is held behind its automatic sync"
+                raise NodeAdminBusyError(msg)
+            rows = await self._storage.node_admin_history(t, HISTORY_ALL)
+            for r in rows:
+                if compute_state(r, now) in {"queued", "waiting"}:
+                    msg = f"Remove is blocked: a command to {t} is still in flight"
+                    raise NodeAdminBusyError(msg)
+            cool = _cooldown_until_ms(rows, now)
+            lock = _lockout_until_ms(rows, now)
+            if cool is not None or lock is not None:
+                until = max(cool or 0, lock or 0)
+                if cool is not None and (lock is None or cool >= lock):
+                    why = (
+                        f"the last command to {t} got no answer "
+                        "(the node may still act on a late copy)"
+                    )
+                else:
+                    why = f"{t} may be locked out after repeated silent commands"
+                msg = f"Remove is blocked until {_clock_text(until)}: {why}"
+                raise NodeAdminBusyError(msg)
+            await self._storage.delete_node_admin_target(t)
+            self._forget(t, rows)
+        # The per-target lock is deliberately kept: a coroutine already awaiting it would
+        # otherwise hold the old object while a new caller creates a second one.
+        logger.info("node admin: removed %s (key, state, history)", t)
+
+    def _forget(self, target: str, rows: list[dict[str, Any]]) -> None:
+        """Drop every in-memory trace of a removed target (a re-add starts clean)."""
+        self._keys.pop(target, None)
+        self._synced.discard(target)
+        self._foreign_until.pop(target, None)
+        self._pending.pop(target, None)
+        ids = {int(r["id"]) for r in rows}
+        self._reasked -= ids
+        self._stale_sync_warned -= ids
 
     async def list_targets(self) -> list[dict[str, Any]]:
         now = self._clock()
@@ -480,6 +529,9 @@ class NodeAdminService:
         src_call = self._src_call(t)
         resolved = self._resolve_transport(transport)
         async with self._lock(t):
+            # Re-resolved under the lock: a Remove (or a password change) that landed after the
+            # lookup above must not let a signed frame and a log row out for a removed node.
+            key = await self._get_key(t)
             now = self._clock()
             await self._check_busy(t, now)
             if t not in self._synced:
@@ -564,6 +616,7 @@ class NodeAdminService:
         src_call = self._src_call(target)
         resolved = self._resolve_transport(transport)
         async with self._lock(target):
+            key = await self._get_key(target)  # re-resolved under the lock, see send()
             now = self._clock()
             await self._check_busy(target, now)
             row_id, text = await self._insert_sync_row(target, key, src_call, resolved, now, tx_max)
@@ -943,6 +996,20 @@ class NodeAdminService:
             return
         parsed, row = found
         target = str(row["target_call"])
+        # Under the target's lock, so a Remove cannot complete between the storage UPDATE of
+        # the reply and its side effects (hwm, sync gate), which would resurrect a state row
+        # and a sync flag for a removed node. No lock holder awaits a reply: transmits and the
+        # sync gate run as background tasks outside the lock, so this cannot deadlock.
+        async with self._lock(target):
+            await self._process_reply_locked(message, parsed, row, target)
+
+    async def _process_reply_locked(
+        self,
+        message: dict[str, Any],
+        parsed: remote_cmd.ParsedReply,
+        row: dict[str, Any],
+        target: str,
+    ) -> None:
         try:
             key = await self._get_key(target)
         except (NodeAdminUnavailableError, ValueError):

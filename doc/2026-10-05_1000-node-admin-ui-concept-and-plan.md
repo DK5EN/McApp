@@ -112,7 +112,7 @@ reports node admin enabled.
 |  shown ONCE with "set this on the node: --passwd ..." and a  |
 |  copy button. Warn (never block) under 12 chars, all digits, |
 |  or all lower case.                                          |
-|  Remove: inline "Remove key? The counter is kept."           |
+|  Remove: confirm modal, removes the node (2026-10-06)        |
 +--------------------------------------------------------------+
 ```
 
@@ -215,9 +215,11 @@ node_admin_log    (id INTEGER PK, target_call, src_call, ctr, cmd, args, text, s
   `asyncio.to_thread` (first use reads or creates the key file) and optionally cache the derived HMAC key per target,
   invalidated on PUT and DELETE.
 - `src_call` is frozen per row at hand-off. Verification uses the row's `src_call`, never the current `my_callsign`.
-- `text` is the exact frame sent (needed for a byte-identical Re-ask). The state row is KEPT when a key is removed or
-  replaced; a re-added key continues from the stored counter (T15: restarting at 1 means silent replay rejects and a
-  lockout).
+- `text` is the exact frame sent (needed for a byte-identical Re-ask). The state row is KEPT when a key is
+  replaced. **Superseded 2026-10-06 for Remove:** Remove now deletes key, state row and log together
+  (`DELETE /api/node-admin/targets/{target}`). T15 no longer applies: the counter floor is unix seconds, never 1, and
+  no command leaves before a verified sync has learned the node's mark. Remove is refused while a command is in
+  flight, a cool-down or a possible lockout runs, because both windows are derived from the log it deletes.
 - **Counter allocation is one `db_write` transaction in `to_thread`:** `INSERT OR IGNORE` the state row, then
   `UPDATE ... SET ctr = MAX(ctr + 1, last_hwm + 1, <unix floor>) ... RETURNING ctr`, `fetchone()` inside the `with`,
   then the log INSERT. Never `_mutate` (returns rowcount only) and never `_query` (read connection, never commits, rolls
@@ -310,7 +312,7 @@ with these rules (all [R]):
 
 ```
 PUT    /api/node-admin/keys/{target}   {"password": "...", "tx_max": 15}   -> 204 (write-only)
-DELETE /api/node-admin/keys/{target}                                        -> 204 (state kept)
+DELETE /api/node-admin/targets/{target}  (since 2026-10-06; was keys/{target}) -> 204, removes key + state + log; 409 in a guard window
 GET    /api/node-admin/targets          -> [{target, has_key, key_unreadable, ctr, last_hwm, last_sync_at, tx_max}]
 POST   /api/node-admin/send             {"target","cmd","args","transport":"auto|ble|udp"} -> {log_id, ctr, text}
 POST   /api/node-admin/reask/{log_id}   -> {log_id}      (409 unless newest row, <10 min, >=10 s since last)
@@ -362,7 +364,7 @@ mcapp.local): W4 only, orchestrator, serialized.
 Q1-Q3 are answered by the firmware source (§2, §7). Remaining W0 work: pin the Python interface the W2 writers code
 against, so they stay disjoint:
 
-- `NodeAdminService` Protocol (list_targets, set_key, delete_key, send, reask, sync, history, on_reply) in a small
+- `NodeAdminService` Protocol (list_targets, set_key, delete_key [delete_target since 2026-10-06], send, reask, sync, history, on_reply) in a small
   stub module, `SSEManager.node_admin_service: NodeAdminService | None = None` in `sse_handler.py`,
   `reply_hook` type, the `transmit` callable signature, the config keys.
 

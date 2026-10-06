@@ -358,6 +358,10 @@ blocked command); the node did not hear McApp's node over LoRa; the reply is sti
 view means a reply arrived that McApp could not verify (password changed on the node, or a spoof). Counters:
 `ctr = MAX(ctr+1, last_hwm+1, unix time)`, so another SysOp or the firmware web UI using the node does not desync McApp.
 
+**Removing a node.** Settings > Remote nodes > Remove deletes the node from McApp completely (password, counter,
+max TX, command history); the node itself is not changed. It is refused for up to 5 minutes after a command that got
+no answer, or while a command is in flight; the message names the time it unblocks.
+
 **The remote view (2026-10-06).** Node Admin > Remote Management mirrors the BLE sub-tab next to it: register bar (Sync, Status), Info row,
 card grid, Switches (green = on in the last verified answer, amber = uncertain), Restart, and a collapsed Advanced
 section (output pin, Re-sync counter, raw command, history). Design: `2026-10-06_1100-node-admin-remote-view-concept.md`.
