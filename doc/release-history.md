@@ -1,53 +1,75 @@
 # Release History
 
-## v2.1.5 (2026-10-05)
+## v2.1.6 (2026-10-06)
 
-The node's time zone is no longer overwritten. Firmware with TZ support keeps a time-zone rule on
-the node, and the proxy's time sync used to clear it every time it connected. The proxy now reads
-the node's rule first and only ever sets one when the node has none. Schema stays at 34 and
-`SYSTEM_EPOCH` at 5.
+McApp can now administer other MeshCom nodes over LoRa. Store a node's callsign and its
+remote-management password once, then switch GPS, tracking, display, light, mesh and gateway on or
+off, change TX power, trigger a position or track beacon, or restart the node, all from the web
+page, with the node's last answer shown as green and grey tiles. Node Admin is now also the home of
+the BLE page, and the RF Monitor moved into Settings. Schema 34 → 35 (three `node_admin_*` tables,
+migrated automatically); `SYSTEM_EPOCH` stays at 5.
 
 ### Highlights
 
-- **A time-zone rule on the node survives a reconnect.** If the node has a rule, the proxy sends
-  only the current UTC time and leaves the offset alone.
-- **A node without a rule gets yours, once.** On time-zone firmware with an empty rule the proxy
-  sets the rule of the host it runs on (for example `CET-1CEST,M3.5.0,M10.5.0/3`) and confirms
-  that the node took it. Set `MCAPP_NODE_TZ_POLICY=never` to opt out, or `MCAPP_NODE_TZ` to use a
-  different rule.
-- **Older firmware behaves exactly as before:** a fixed UTC offset, then the time.
-- **When the proxy cannot tell what the node is, it sends the time only.** UTC is always right;
-  a wrong fixed offset could destroy a rule.
-- **Overheard acknowledgements no longer mark your own message as delivered.** The browser now
-  matches an `:ack` text against the same addressing and one-hour window as the backend, and
-  keeps internet-only acknowledgements when the connection reconnects.
+- **Remote node administration (Node Admin > Remote Management).** Pick a node and press
+  **Connect**: McApp syncs the command counter, then reads the node's status. Switches show the
+  last verified answer: green is on, grey off, amber "no answer yet, may or may not have run".
+  Restart, "Send position now" / "Send track now", TX power and an Advanced section (output pin,
+  re-sync, raw command, history) are on the same page.
+- **Settings > Remote nodes** stores each node's callsign, its password (encrypted on the Pi,
+  never shown again; Generate offers a random 14-character one) and a per-node TX power limit.
+  **Remove** deletes the node from McApp completely after a confirmation.
+- **McApp protects the node from itself.** One command in flight per node, 10 s between frames,
+  no new frame for 5 minutes after a command that got no answer (the node may still act on a late
+  copy), a 2-minute pause while another station is administering the same node, and TX power never
+  above the board maximum the node reported. Each of these refusals tells you why and for how long.
+- **New navigation.** Node Admin has two sub-tabs, **BLE** (the former BLE page, the default) and
+  **Remote Management**, and is shown on every backend. The RF Monitor is now **Settings >
+  Monitor**. Old links (`/bluetooth`, `/monitor`, `/nodeadmin`) forward to the new places.
+- **QRZ.com lookups no longer get stuck for days.** The count QRZ reports at login is treated as a
+  hint, never as a reason for a 24-hour suspension.
 
 ### Backend (MCProxy)
 
-- `set_time()` classifies the node from its settings register (`SN1.TZ`) before sending any
-  offset, ignores a cached value until the node has answered since the last hello, and reports the
-  branch taken (`utcoff`, `settz`, `rule`, `unknown`, `settz_unverified`) in the
-  `/api/ble/settime` message.
-- The inline `:ack` matching corpus (`ack_match_vectors.json`) is replayed through production
-  ingest and shared with the webapp.
+- Remote admin uses the firmware's signed `RM1` direct messages (HMAC-SHA-256, monotonic counter,
+  sync handshake). Commands: `status`, `sync`, `sendpos`, `sendtrack`, `gps`, `track`, `display`,
+  `led`, `gateway`, `mesh`, `txpower`, `setout`, `reboot`. Replies up to 108 characters are
+  accepted (firmware draft 2).
+- `GET /api/node-admin/targets/{target}/state` folds the verified answers, in send order, into the
+  node's last known state; `DELETE /api/node-admin/targets/{target}` removes a node (refused while
+  a command is in flight, the post-silence cool-down or a possible lockout runs).
+- The feature is always on and inert until a node is stored; `/api/status` lists `node_admin` under
+  `features`. The routes are LAN-only: they refuse a foreign `Host` or `Origin`, so they are not
+  usable through the public TLS hostname.
+- QRZ: the daily budget is `min(50 - ledger, 100 - (Count at login + lookups since))`; a `Count`
+  of 100 or more is ignored as implausible, and a persisted server-count suspension is lifted.
+- Dependencies refreshed (both `uv.lock` files).
 
 ### Frontend (webapp)
 
-- The node GPS card shows the node's time-zone rule, offers presets and a rule field with a
-  grammar check while the rule is empty, and a "Clear rule" button while one is set. The locate
-  button no longer sends a fixed offset to a node that follows a rule.
-- The inline `:ack` matcher mirrors the backend rule; the matching corpus runs in the test suite.
+- Remote Management reuses the BLE page's register bar, card grid and toggle tiles; the BLE page
+  itself is unchanged.
+- The QRZ card shows what QRZ reports and why a suspension is running.
+- vite-plugin-pwa 2.0.0, vite 8.3.3 and a transitive refresh. TypeScript stays on 6.x.
 
 ### Upgrade notes
 
-- Nothing to do. A node on time-zone firmware with an empty rule receives your host's rule at the
-  next time sync; one that already has a rule is left alone.
-- Reload the app once (the "Update available" banner) to see the time-zone controls.
+- Schema 34 → 35 runs automatically at start. Nothing else to do.
+- To administer a node it needs remote management enabled (`--remotemgmt on`) and a password
+  (`--passwd`). That password is also the node's net-console password, and one captured frame
+  allows offline guessing, so use a long random one (Generate).
+- Reload the app once (the "Update available" banner) to get the new navigation.
 
 ## Earlier releases, in brief
 
 One entry per release. The full notes as published are in
 [`doc/archive/release-history-full.md`](https://github.com/DK5EN/McApp/blob/development/doc/archive/release-history-full.md).
+
+### v2.1.5 (2026-10-05)
+
+- A time-zone rule on the node survives reconnects; a node with an empty rule gets the host's rule
+  once (`MCAPP_NODE_TZ_POLICY=never` opts out, `MCAPP_NODE_TZ` overrides it).
+- Overheard acknowledgements no longer mark your own message as delivered.
 
 ### v2.1.4 (2026-10-04)
 

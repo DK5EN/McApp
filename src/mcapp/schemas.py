@@ -10,8 +10,10 @@ from typing import Any, Literal
 
 from pydantic import (
     BaseModel,
+    ConfigDict,
     Field,
     SecretStr,
+    StrictInt,
     ValidationInfo,
     field_validator,
     model_validator,
@@ -226,6 +228,30 @@ class QrzEnabledRequest(BaseModel):
     """PUT /api/qrz/enabled"""
 
     enabled: bool
+
+
+class NodeAdminKeyRequest(BaseModel):
+    """PUT /api/node-admin/keys/{target} — write-only; the password is never returned.
+
+    The route validates this model by hand and never as a body parameter: a
+    pydantic 422 echoes the offending `input` (the plaintext) even for
+    `SecretStr`. The tight 1..14 byte bound is the service's; this one only
+    caps the size of what is parsed.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    password: SecretStr = Field(min_length=1, max_length=128)
+    tx_max: StrictInt | None = None
+
+
+class NodeAdminSendRequest(BaseModel):
+    """POST /api/node-admin/send — grammar and allowlist are the service's call."""
+
+    target: str = Field(min_length=1, max_length=32)
+    cmd: str = Field(min_length=1, max_length=64)
+    args: str = Field(default="", max_length=256)
+    transport: Literal["auto", "ble", "udp"] = "auto"
 
 
 class HiddenDestinationsRequest(BaseModel):

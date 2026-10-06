@@ -791,10 +791,72 @@ class MigrationsMixin(StorageBase):
                     if "suspend_reason" not in cols:
                         conn.execute("ALTER TABLE qrz_state ADD COLUMN suspend_reason TEXT;")
                     logger.info("Migration v%d → v34: qrz_state.suspend_reason", current_version)
+                    _set_schema_version(conn, 34)
+
+                if current_version < 35:  # noqa: PLR2004 - schema migration step
+                    # Node Admin (RM1 HMAC remote admin): per-target encrypted
+                    # password, the monotonic command counter + verified
+                    # high-water mark, and the command/reply history. All
+                    # timestamps are milliseconds. Plan:
+                    # doc/2026-10-05_1000-node-admin-ui-concept-and-plan.md §4.
+                    # `node_admin_state` is deliberately separate from the keys
+                    # table: removing a key keeps the counter so a re-added key
+                    # continues instead of restarting at 1 (silent replay rejects).
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS node_admin_keys (
+                            target_call TEXT PRIMARY KEY,
+                            password_enc TEXT NOT NULL,
+                            created_at INTEGER,
+                            updated_at INTEGER
+                        );
+                    """)
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS node_admin_state (
+                            target_call TEXT PRIMARY KEY,
+                            ctr INTEGER NOT NULL DEFAULT 0,
+                            last_hwm INTEGER NOT NULL DEFAULT 0,
+                            last_sync_at INTEGER,
+                            tx_max INTEGER NOT NULL DEFAULT 15
+                        );
+                    """)
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS node_admin_log (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            target_call TEXT NOT NULL,
+                            src_call TEXT NOT NULL,
+                            ctr INTEGER NOT NULL,
+                            cmd TEXT NOT NULL,
+                            args TEXT,
+                            text TEXT NOT NULL,
+                            sent_at INTEGER NOT NULL,
+                            handed_off_at INTEGER,
+                            transport TEXT,
+                            send_error TEXT,
+                            reply_text TEXT,
+                            reply_at INTEGER,
+                            verified INTEGER,
+                            result TEXT
+                        );
+                    """)
+                    # Sync rows carry ctr 0 and are exempt; a real command's
+                    # (target, ctr) pair must never repeat.
+                    conn.execute(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS idx_node_admin_log_target_ctr"
+                        " ON node_admin_log(target_call, ctr) WHERE ctr > 0;"
+                    )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_node_admin_log_target_id"
+                        " ON node_admin_log(target_call, id);"
+                    )
+                    logger.info(
+                        "Migration v%d → v35: created node_admin_keys, node_admin_state,"
+                        " node_admin_log (RM1 remote admin, inert until a key is entered)",
+                        current_version,
+                    )
                     # Adding a step after this one? Bump LATEST_SCHEMA_VERSION in
                     # storage/constants.py in the same commit — the startup suite
                     # asserts every migration chain terminates there.
-                    _set_schema_version(conn, 34)
+                    _set_schema_version(conn, 35)
 
         await asyncio.to_thread(_init_db)
 

@@ -237,6 +237,10 @@ def build_stream_router(manager: SSEManager, version: str) -> APIRouter:  # noqa
             "udp_untrusted_source_ips": udp_status["untrusted_source_ips"],
             "node_fwver": node_fwver,
             "node_build": node_build,
+            # Optional capabilities the webapp gates UI on (adminStatus store
+            # reads `features`); mc-chat reports its own list. "node_admin" is
+            # present whenever the service is wired (always, in production).
+            "features": ["node_admin"] if getattr(manager, "node_admin_service", None) else [],
         }
 
     # Health check endpoint

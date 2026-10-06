@@ -324,6 +324,68 @@ Escalation: if the node is not found by the scan at all (0 discovered) and RSSI 
 strong, the node itself is powered off, out of BLE range, or its firmware BLE stack is wedged —
 that requires physical access, which is outside what's reachable over SSH to the Pi.
 
+## Node Admin (RM1 remote admin)
+
+Remote administration of other MeshCom nodes (reboot, status, toggles, `txpower`, `setout`) from the McApp web UI,
+signed with an HMAC over LoRa. Design: `2026-10-05_1000-node-admin-ui-concept-and-plan.md`.
+
+**Always on, configured in the web GUI.** There is no config switch (operator decision 2026-10-05): open Settings >
+Remote nodes, add a node's callsign and its password, then use Node Admin > Remote Management. Until a node is stored the feature is
+inert; once a node's password is stored, any device on the LAN can use it through
+this API (the API has no authentication, so storing a password is the consent). The API has no authentication, so it is LAN-only by construction: `/api/node-admin/*` refuses any `Host` that is not
+a LAN name (`mcapp.local`, the short hostname, private/loopback IPs) and any foreign `Origin`. It is therefore NOT usable
+through the public TLS hostname. `GET /api/status` lists `"node_admin"` under `features`; the webapp shows the Remote nodes
+tab and the Node Admin > Remote Management sub-tab only when it does (an older backend shows neither; the Node Admin
+entry itself is always there because it also hosts the BLE page). A developer-only
+`"node_admin": {"allowed_origins": ["http://localhost:5173"]}` in `config.json` extends the Origin check for the Vite dev
+server; nothing needs it in normal use, and a leftover `"enabled"` key from an earlier dev build is ignored.
+
+**Prerequisites on every managed node:** `--remotemgmt on` and a non-empty `--passwd` (check `--info`: `RM: on`).
+Without both, an `RM1` DM is ordinary acked text and the node never answers. Use a random 14-character password
+(Settings > Remote nodes > Generate): the tag lets anyone who captured ONE frame on air guess a short password
+offline. Enter the same password in McApp once; it is stored encrypted (`secret.key` + board serial) and never shown.
+
+**CALL_SIGN must carry the attached node's SSID exactly as the node stores it** (`DK5EN-14`, not `DK5EN`). The tag is
+bound to the sender's call; a bare call produces a valid-looking frame the node silently ignores. On a BLE-attached box
+McApp adopts the call from the node's `I` register; on a UDP-only box set `CALL_SIGN` yourself. The managed node must hear
+the attached node over LoRa: a command that reaches a gateway node through the internet first is shown there as plain
+text and the later RF copy is dropped, so it is never executed.
+
+**Runbook: "no reply".** The node is silent for every one of these, so check in order: RM off or no password on the
+node; wrong stored password (a wrong password never produces a reply, not even `err`); the 10 s rate limit (one accepted
+frame per 10 s, per node, from any sender); the 5 min lockout (3 counted rejects in 90 s: bad tag, replayed counter,
+blocked command); the node did not hear McApp's node over LoRa; the reply is still on air (20-45 s). `bad tag` in the
+view means a reply arrived that McApp could not verify (password changed on the node, or a spoof). Counters:
+`ctr = MAX(ctr+1, last_hwm+1, unix time)`, so another SysOp or the firmware web UI using the node does not desync McApp.
+
+**Removing a node.** Settings > Remote nodes > Remove deletes the node from McApp completely (password, counter,
+max TX, command history); the node itself is not changed. It is refused for up to 5 minutes after a command that got
+no answer, or while a command is in flight; the message names the time it unblocks.
+
+**The remote view (2026-10-06).** Node Admin > Remote Management mirrors the BLE sub-tab next to it: register bar (Sync, Status), Info row,
+card grid, Switches (green = on in the last verified answer, amber = uncertain), Restart, and a collapsed Advanced
+section (output pin, Re-sync counter, raw command, history). Design: `2026-10-06_1100-node-admin-remote-view-concept.md`.
+
+- **Connect first.** Selecting a node sends nothing. `Connect` sends `sync`, then `status` (about 30-70 s). Every other
+  control stays disabled until a sync was verified in the running McApp process; a restart of McApp needs a new Connect.
+  A command that reaches the backend unsynced waits behind an automatic sync and is **dropped** if that sync gets no
+  answer ("command dropped: no answer to the counter sync").
+- **Cool-down after silence.** After a `no_reply` or `abandoned` row the node gets no new frame for 5 min from that
+  frame's hand-off (the node itself resends DMs up to 4 times; a late copy would be a counted replay strike). The page
+  shows the wait; the API answers 409 with the remaining seconds.
+- **Another station managing the node.** When McApp hears an RM1 frame to or from a stored node that is not its own,
+  it sends nothing to that node for 120 s ("Another station is managing ..."). The firmware shares its rate limit, counter
+  mark and reply cache between all senders.
+- **"The node reports counter mark N, below the last known M."** The node lost its counter mark (re-flashed or erased).
+  McApp ignores such a sync reply (it could be a replayed old one). Fix: enter the node's password again in Settings >
+  Remote nodes, which resets McApp's stored mark for that node; Connect then works.
+- **`GET /api/node-admin/targets/{target}/state`** returns the parsed last known state (concept Appendix A), folded in
+  send order from verified replies only. Values carry their age; after a verified Restart they are marked stale.
+
+**Secrets and logs.** The password is never logged, broadcast or stored in `stall_events` (the `/api/node-admin/keys`
+body is withheld by path prefix). An RM1 frame in logs, `send_failed` events and failed monitor captures has its tag
+cut (`_redact_rm1`), including the INFO/DEBUG "Processing" lines. A frame that did go out is public on air anyway.
+
 ## Update Runner (OTA Deployment)
 
 The update runner (`scripts/update-runner.py`) is a standalone Python HTTP server (stdlib only, no dependencies) that manages OTA deployments and rollbacks from the webapp UI. It runs on **port 2985** and uses a slot-based architecture with 3 independent deployment slots.

@@ -81,6 +81,19 @@ def _passthrough(path: str) -> bool:
 # redaction only runs on a body that parses as JSON, and a truncated or
 # non-JSON body is stored as raw text. The request is still timed.
 _BODY_WITHHELD_EXACT = frozenset({"/api/qrz/credentials"})
+# Node admin keys carry the password in the PATH-parameterised PUT
+# `/api/node-admin/keys/{target}`, which an exact match never hits.
+_BODY_WITHHELD_PREFIX = "/api/node-admin/keys"
+
+
+def _body_withheld(path: object) -> bool:
+    if not isinstance(path, str):
+        return False
+    return (
+        path in _BODY_WITHHELD_EXACT
+        or path == _BODY_WITHHELD_PREFIX
+        or path.startswith(_BODY_WITHHELD_PREFIX + "/")
+    )
 
 
 @dataclass(slots=True)
@@ -195,7 +208,7 @@ class StallMiddleware:
             return
 
         body: Any = None
-        withheld = tap.scope.get("path") in _BODY_WITHHELD_EXACT
+        withheld = _body_withheld(tap.scope.get("path"))
         if tap.captured_body and not withheld:
             content_type = tap.headers.get(b"content-type", b"").decode("latin-1")
             text = bytes(tap.captured_body).decode("utf-8", errors="replace")

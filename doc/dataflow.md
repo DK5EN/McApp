@@ -103,11 +103,37 @@ explicit `src_type` check.
 
 ## BLE Mode Selection
 
-| Mode | BLE Client | Description |
-|------|------------|-------------|
-| `remote` | `ble_client_remote.py` | HTTP/SSE to BLE service (default for production) |
-| `disabled` | `ble_client_disabled.py` | No-op stub (for testing without BLE hardware) |
+| Mode       | BLE Client               | Description                                      |
+| ---------- | ------------------------ | ------------------------------------------------ |
+| `remote`   | `ble_client_remote.py`   | HTTP/SSE to BLE service (default for production) |
+| `disabled` | `ble_client_disabled.py` | No-op stub (for testing without BLE hardware)    |
 
 **Note:** Local mode (`ble_client_local.py`) was removed in v1.01.1. For local BLE hardware access, deploy the standalone BLE service (`ble_service/`) and use `remote` mode pointing to `http://localhost:8081`.
 
 Configured via `BLE_MODE` in config or `MCAPP_BLE_MODE` environment variable.
+
+## Node Admin: send and reply flow (RM1)
+
+```
+webapp  POST /api/node-admin/send {target, cmd, args}
+   |                                   (Host/Origin guard; 409 if a frame is in flight or < 10 s since the last)
+   v
+NodeAdminService.send
+   |  first send after a restart: sync row (ctr 0) first, command held until the verified sync reply + 10 s
+   |  allocate ctr = MAX(ctr+1, last_hwm+1, unix_time) in ONE db_write transaction, tag over
+   |  "RM1|<target>|<attached node call>|<ctr>|<cmd line>"  ->  node_admin_log row ("queued")
+   v  (background task; the HTTP call has already returned {log_id, ctr, text})
+MessageRouter.send_node_admin -> _handle_outbound -> BLE (0xA0 {dst}msg) or Extern-UDP :1799
+   |  one RF-Monitor TX capture; a failed frame's tag is redacted
+   v                                       ... LoRa ... target node: verify tag, rate gate (10 s), run, reply
+target reply "RM1 <ctr> ok|err <text> <tag>"  (+ "{NNN" on the Extern-UDP copy, not on the BLE copy)
+   v
+udp_handler / BLE notification -> store_message -> reply_hook (BEFORE the filter) -> service.on_reply
+   |  cheap prefilter, then a task: strip suffix, correlate (src, dst==row.src_call, ctr), verify tag,
+   |  apply_node_admin_reply (UPDATE ... WHERE verified IS NOT 1): act ONLY when it reports a change
+   v
+raise last_hwm, release the sync gate, SSE `node_admin:reply` (full row + computed state) -> webapp store upserts by id
+```
+
+The reply also lands in the normal DM conversation (`store_message` continues unchanged). The SSE has no replay: the
+webapp refetches `GET /api/node-admin/history` on mount, on `system:connected` and on tab-visible.

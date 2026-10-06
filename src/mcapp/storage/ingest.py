@@ -15,7 +15,7 @@ import re
 import sqlite3
 from datetime import UTC, datetime
 from statistics import mean
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .. import linkcheck
 from ..ble_protocol import normalise_ack_callsign
@@ -68,6 +68,9 @@ from .telemetry_reconcile import (
     values_for,
 )
 from .uptime import is_uplink_time_beacon
+
+if TYPE_CHECKING:
+    from ..node_admin_types import ReplyHook
 
 _MAX_FORENSIC_HOPS = 4  # log raw data for messages routed over more hops
 
@@ -347,6 +350,10 @@ def _classifier_fields(
 
 
 class IngestMixin(StorageBase):
+    # Node Admin (RM1) reply seam, assigned by main.py to `NodeAdminService.on_reply`.
+    # Observe-only; see the call site in `store_message`.
+    reply_hook: "ReplyHook | None" = None
+
     def _claim_recent_ingest(self, callsign: str, msg_id: str, timestamp: int, *, dst: str) -> bool:
         """Race-free half of the message dedup gate. Returns True when this
         (sender, msg_id) is new within DEDUP_WINDOW_MS and records it; False when
@@ -1832,6 +1839,20 @@ class IngestMixin(StorageBase):
         # (the same trap, same shape, hit twice before).
         if is_uplink_time_beacon(message):
             await self.record_link_beacon(now_ms())
+
+        # Node Admin (RM1) reply hook: same placement rule as the beacon hook
+        # above — BEFORE _should_filter_message, observe only (never changes what
+        # is filtered, stored, deduped or published). Both transport copies of a
+        # reply reach it (the UDP copy may still carry the `{NNN` suffix); the
+        # service dedups, not this seam. A raising hook must not lose the row.
+        hook = self.reply_hook
+        if hook is not None:
+            reply_text = message.get("msg")
+            if isinstance(reply_text, str) and reply_text.startswith("RM1 "):
+                try:
+                    await hook(message)
+                except Exception:
+                    logger.exception("node admin reply hook failed")
 
         # Filter conditions (matching MessageStorageHandler)
         if self._should_filter_message(message):

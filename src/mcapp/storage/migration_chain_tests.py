@@ -67,6 +67,7 @@ async def run_migration_chain_tests() -> bool:
     await _test_v30_read_cursors_table(results)
     await _test_v31_delivery_status_columns(results)
     await _test_v32_stall_events_table(results)
+    await _test_v35_node_admin_tables(results)
 
     for label, ok in results:
         print(f"    {'✅ PASS' if ok else '❌ FAIL'} | {label}")
@@ -1210,6 +1211,69 @@ async def _test_v32_stall_events_table(results: list[tuple[str, bool]]) -> None:
                 (
                     "v32 stall_events: idx_stall_events_ts and idx_stall_events_kind_ts exist",
                     {"idx_stall_events_ts", "idx_stall_events_kind_ts"} <= index_names,
+                )
+            )
+        finally:
+            await storage.close()
+
+
+async def _test_v35_node_admin_tables(results: list[tuple[str, bool]]) -> None:
+    """Seed a v34 fixture and assert the v35 step stands up the three Node Admin
+    tables (`node_admin_keys`, `node_admin_state`, `node_admin_log`) with the
+    partial unique `(target_call, ctr) WHERE ctr > 0` index — doc/2026-10-05_1000-
+    node-admin-ui-concept-and-plan.md §4. Deeper behaviour is covered by
+    `node_admin_storage_tests.py`."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = Path(tmp_dir) / "migration_chain_v35.db"
+
+        def _create_v34_db() -> None:
+            with db_write(db_path) as conn:
+                conn.executescript(CREATE_SCHEMA_SQL)
+                conn.executescript(CREATE_SCHEMA_V2_SQL)
+                conn.execute("DELETE FROM schema_version")
+                conn.execute("INSERT INTO schema_version (version) VALUES (34)")
+                conn.commit()
+
+        await asyncio.to_thread(_create_v34_db)
+
+        try:
+            storage = await create_sqlite_storage(db_path)
+        except Exception:
+            logger.exception("v35 node_admin migration raised")
+            results.append(("v35 node_admin: migrator runs v34→HEAD without error", False))
+            return
+
+        results.append(("v35 node_admin: migrator runs v34→HEAD without error", True))
+        try:
+            version = await _schema_version(storage)
+            results.append(
+                (
+                    f"v35 node_admin: final schema_version marker is {FINAL_SCHEMA_VERSION}",
+                    version == FINAL_SCHEMA_VERSION,
+                )
+            )
+            tables = await storage._query(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'node_admin_%'",
+                (),
+            )
+            results.append(
+                (
+                    "v35 node_admin: keys, state and log tables exist",
+                    {t["name"] for t in tables}
+                    == {"node_admin_keys", "node_admin_state", "node_admin_log"},
+                )
+            )
+            indexes = await storage._query(
+                "SELECT name FROM sqlite_master"
+                " WHERE type = 'index' AND tbl_name = 'node_admin_log'",
+                (),
+            )
+            index_names = {row["name"] for row in indexes}
+            results.append(
+                (
+                    "v35 node_admin: unique (target, ctr) and (target, id) indexes exist",
+                    {"idx_node_admin_log_target_ctr", "idx_node_admin_log_target_id"}
+                    <= index_names,
                 )
             )
         finally:

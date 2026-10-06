@@ -774,18 +774,32 @@ Web Push to browser / iOS-PWA clients, sharing one wire contract with mc-chat so
 First name + QTH per base callsign from the QRZ.com XML API, with the operator's own account.
 Plan, threat model and API: `doc/2026-10-04_0848-qrz-callsign-lookup-plan.md`.
 
-- **The budget has three independent guards and each is tested on its own.** The ledger
-  pre-check (`qrz_lookups`, written BEFORE the request), the 24 h suspension set at the 50th
-  lookup, and QRZ's own `Count`. Any two mask the third in a combined test, which is how the
-  first version of the suite let all three be deleted unnoticed. Keep Q3b/Q8/Q30 discriminating.
-- **Both budget gates apply to free accounts only.** QRZ does not limit a subscriber's XML
+- **The budget has two hard guards, each tested on its own, plus an advisory server number.** The
+  ledger pre-check (`qrz_lookups`, written BEFORE the request) and the 24 h suspension set at the
+  50th lookup. Either masks the other in a combined test, which is how the first version of the
+  suite let all of them be deleted unnoticed. Keep Q3b/Q8/Q30/Q44 discriminating.
+- **QRZ's `Count` is advisory and NEVER suspends anything (changed 2026-10-05).** It used to suspend
+  for 24 h at `Count >= 50` on a free account, on the unverified assumption that it is a real 24 h
+  tally. The live box proved the opposite: 47 lookups on 04.10 09:18-09:42, our own 24 h cap expired
+  05.10 09:42:34, the login read `Count = 50` while our ledger said 0/50, and the service re-suspended
+  for another 24 h. `Count` is read only at login and nothing logs in or looks up while suspended,
+  so the ledger never moves and a `Count` that does not decay (or sits in the thousands, which free
+  accounts do report) wedged the service forever. Now: the budget is `min(50 - ledger, 100 -
+  (Count at the last login + lookups since that login))`, and a `Count >= 100` (QRZ's free limit) is
+  "not a plausible tally" and ignored (`SERVER_COUNT_PLAUSIBLE_MAX`). The baseline is in memory and
+  refreshed by every login, including a forced re-login once the session is older than 24 h; do not
+  trust the `Count` of later lookup responses for the budget (they cross 100). A used-up server budget
+  is a 1 h backoff plus a re-login, never a 24 h suspension. Any persisted `suspend_reason =
+  'server_count'` (or the legacy "QRZ reports" `last_error`) is lifted at the next step on every tier.
+  Q40-Q49 pin it, including the 99/100 boundary and the stale live-box row.
+- **The ledger cap applies to free accounts only.** QRZ does not limit a subscriber's XML
   lookups per day, and on a subscriber `Count` is not a 24 h tally either (DM3KS: `Count 77678`
   on login, QRZ's page: 1 XML lookup that day) — gating on it suspended every login forever,
-  and the 50/24 h ledger cap still capped a paid account until v2.1.4. On a subscriber only the
+  and the 50/24 h ledger cap still capped a paid account until v2.1.4. `Count` never enters a subscriber's budget (it is still stored and shown). On a subscriber only the
   30 s spacing bounds the rate; `daily_cap` is `null` in the status. `_is_free_tier` fails
   closed on an absent or empty `SubExp`, and every login rewrites `subscription`, so a stale
-  "subscriber" can never lift the cap. A running cap or Count suspension on a subscriber is
-  lifted on the next step; a refusal never is. Q20b-Q20k pin it.
+  "subscriber" can never lift the cap. A running cap suspension on a subscriber is lifted on the
+  next step; a legacy 24 h refusal suspension never is. Q20b-Q20k pin it.
 - **Why a suspension runs lives in `qrz_state.suspend_reason` (migration 34), never in
   `last_error`.** Replacing the credentials clears `last_error` while the suspension keeps
   running; the v2.1.2 lift keyed on that text and left DM3KS stuck after a password re-entry.
@@ -805,7 +819,12 @@ Plan, threat model and API: `doc/2026-10-04_0848-qrz-callsign-lookup-plan.md`.
   JSON; a truncated one is stored raw), `redact()` masks `*password*` keys, and the webapp's
   `stallReporter.ts` does both on the client side.
 - **A rejected login stops the service until new credentials arrive** — retrying a wrong
-  password is what locks an account. `Connection refused` means 24 h (spec), not a backoff.
+  password is what locks an account. A real QRZ refusal (`Connection refused`, or the
+  limit/exceeded/too many/quota wording) backs off a FIXED 1 h and retries (changed 2026-10-05
+  from the spec's 24 h; the retry is a login, which costs no lookup, and one lookup 30 s later), drops the session and logs
+  QRZ's RAW error text with `Count`, ledger and tier at WARNING. The journal is the instrument for
+  learning what QRZ really does on a free account: every login logs `QRZ login ok sub= count=
+  plausible= ledger= budget_today=` and every lookup `QRZ lookup CALL -> outcome count= ledger=`.
 - MFA on the QRZ account does not apply to the XML API (measured 2026-10-04); a free account
   gets `fname name addr2 state country`, and the login itself costs no lookup.
 
@@ -869,10 +888,78 @@ retry k XORs msg_id bits 10-11 with k, text and `{NNN` unchanged. Plan and campa
   back). `_resolve_ack_target`'s variant fallback is defensive and limited to rows we sent.
 - `linkcheck.py` is untouched on purpose: ping/pong are never retried.
 
+## Node Admin (RM1 remote admin)
+
+HMAC-tagged `RM1` DMs that administer other nodes. Always on, with no config switch (operator decision 2026-10-05: the
+web GUI is the frontend, nothing is configured by editing `config.json`): the Settings > Remote nodes tab stores nodes and
+their passwords, and the feature is inert until one exists. Plan, wave log and the
+review that shaped it: `doc/2026-10-05_1000-node-admin-ui-concept-and-plan.md`; operator runbook: `doc/operations-reference.md`;
+firmware side: `MeshCom-Firmware-DEV-Main` (`src/remote_cmd.cpp`, `docs/adr-remote-hmac.md`, branch `fork-dev`).
+
+- **The node is slower and stricter than it looks.** One accepted frame (command OR sync) per 10 s per node, from any
+  sender; ONE high-water mark per node shared by all senders; a 2-frame queue; and a lockout (3 counted rejects in 90 s
+  lock RM1 for 5 min, silencing even a valid sync, reachable by anyone on air). Every one of these is SILENT: wrong
+  password, rate limit, lockout, RM off and "never heard over LoRa" are indistinguishable on air. The service therefore
+  enforces ONE command in flight per target, 10 s spacing and a "possible lockout" refusal itself; do not loosen them.
+- **Counter = `MAX(ctr + 1, last_hwm + 1, unix_seconds)`**, the firmware sender's own rule (`rm_runtime.cpp`), allocated
+  in ONE `db_write` transaction in `to_thread` (`allocate_node_admin_command`). `_mutate` returns a rowcount and `_query`
+  never commits, so `UPDATE ... RETURNING` through them silently rolls back and every send reuses the counter. Refusals
+  happen BEFORE allocation so they burn no value. `last_hwm` only ever rises and only after tag verification.
+- **Both tags use the COMMAND's orientation**: `dst` = managed node, `src` = the attached node's call as the node stores it
+  (SSID included, upper case). `RM1R|<managed>|<commander>|ctr|result` for the reply, with the `ok `/`err ` prefix inside
+  `result`. A bare `CALL_SIGN` on a UDP-only box makes a valid-looking frame the node silently ignores.
+- **Replies arrive with `{NNN` on the Extern-UDP path and without it on BLE.** `remote_cmd.parse_reply` strips it with the
+  strict `util.strip_ack_suffix`; a parse that assumes stripped text passes every vector and fails every real UDP reply.
+- **The reply hook sits BEFORE `_should_filter_message`, observes only, and the SERVICE dedups.** Fifth instance of the
+  "hook after an early return never fires" trap (Link Check, Gateway Uptime, MHeard). Both transport copies reach it about
+  100 ms apart in independent tasks, so exactly-once is `apply_node_admin_reply`'s conditional `UPDATE ... WHERE verified IS
+  NOT 1` returning a change, and ONLY then are hwm, the sync gate and the SSE event touched. `verified` is terminal; an
+  unverified frame never moves hwm or releases the gate; a raising hook must not lose the stored row (the seam catches).
+- **State is derived, never stored** (`compute_state`): the 120 s no-reply window is anchored at `handed_off_at`, and the
+  webapp re-derives it because the server only emits a row on a transition.
+- **Re-ask is NOT free.** The node caches ONE reply (the latest accepted command, RAM only, 10 min, cleared by reboot). Re-ask
+  is offered only on the newest row of a target between 60 s (`RM_REASK_MIN_MS`; measured replies take 12-32 s, and relays plus repeat ACKs make one frame look re-sent on air) and 10 min after hand-off, never for `reboot`; anything else is a counted replay reject
+  (lockout) or, if the original never arrived, a first execution.
+- **Security posture.** The API has no authentication and is internet-reachable in the public-TLS modes (pre-existing, tracked
+  separately). Node Admin is therefore LAN-only and its router refuses any foreign `Host` and any foreign `Origin`, which
+  makes it LAN-only in every mode. A custom header would protect nothing (`allow_headers=["*"]`). The key route's body is withheld
+  from `stall_events` by PATH PREFIX (`/api/node-admin/keys`); the old exact-match set would never match a per-target path, and a
+  small JSON body is masked by `redact()` anyway, so the regression test must use a truncated or non-JSON body. A pydantic 422
+  echoes the offending `input` (the plaintext password) even with `SecretStr`: the PUT route validates by hand and never echoes.
+  A signed frame that may never have gone on air must not leak its tag (`_redact_rm1` on the INFO/DEBUG lines, `send_failed`
+  and failed monitor captures). The password is also the node's net-console/KISS password and `K = SHA-256(password)` is
+  unsalted, so ONE captured frame is an offline guessing oracle for a short password: McApp offers a random 14-character one.
+- **`remote_cmd_vectors.json` is canonical in the FIRMWARE repo** (`tools/tests/remote_cmd_vectors.json`), copied to
+  `src/mcapp/remote_cmd_vectors.json` with a sha256 pin in `remote_cmd_tests.py`. Copy and hash move in one commit. Runtime code never
+  reads it (the prod tarball ships no `*.json` test corpora). The dev tarball ships it; `main.py` must never import a `*_tests` module.
+- **Remote view (2026-10-06, `doc/2026-10-06_1100-node-admin-remote-view-concept.md`): node state is FOLDED IN SEND
+  ORDER (log `id`), never by `reply_at`.** The node runs a command only above its shared high-water mark, so a late
+  verified reply to row N still describes the state right after N; ordering by arrival lets a late status overwrite a
+  newer ack (`node_admin_state.fold`, mutation-pinned). Only `verified = 1` rows are evidence; a status is an atomic
+  snapshot; `gps off` also clears Track on the node (the reply says only `gps=off`); LED is RAM-only (off after reboot).
+- **Send gates, all BEFORE counter allocation and on every path** (direct, held-behind-sync, sync): 10 s spacing, one in
+  flight, txpower <= min(key `tx_max`, board max from the newest verified status `p=`), 5 min cool-down after a silent
+  row (the node's DM retry ladder resends RM1 frames; a late copy is a counted replay strike), 120 s pause after another
+  station's RM1 frame to/from the target (`_note_foreign`). The lockout guard is a backstop, not the floor. Re-ask: once
+  per row, never while the guard or the foreign pause holds. `_synced` is set only by a VERIFIED sync; a command held
+  behind an unanswered auto-sync is dropped (operator decision D2), never sent anyway.
+- **Sync (ctr 0) replies bind only inside their 120 s window and with `ctr=<hwm> >= last_hwm`**; the second transport
+  copy of an already verified reply is dropped. A genuine lower mark (re-flashed node) is ignored with a warning;
+  re-entering the password (`set_key`) resets `last_hwm`. `RESULT_MAX` is 108 (firmware draft 2, 140-char reply wire);
+  at 63 a longer reply vanished and two of them tripped McApp's own lockout guard.
+- **Remove deletes the node completely** (`DELETE /api/node-admin/targets/{target}`, 2026-10-06): key, state row and
+  log in one transaction. Keeping the counter (the v1 rule) is unnecessary: the counter floor is unix seconds and no
+  command leaves before a verified sync learns the node's mark. Remove is REFUSED while a command is in flight, a
+  cool-down or a possible lockout runs: those windows are derived from the log it deletes, so removing and re-adding
+  inside one would silently drop the protection.
+- **Feature flag to the webapp is `/api/status` `features`** (`"node_admin"`), not the mc-chat flag: `requiresAdminBackend` means
+  "mc-chat only". The webapp uses `adminStatus.nodeAdminAvailable` and a three-state view (no router guard: the backend flag is `null`
+  at first paint). `useProxyAPI` tolerates a body-less 204 and carries the backend `detail` on `ProxyAPIError.detail`.
+
 ## Key Gotchas
 
 - **A `#TAG` destination is a hashtag channel, not a callsign — and `is_group()` stays numeric.** The MeshCom FW 4.36 RfC puts a `#OE-SOTA` token in the destination field. All three repos independently misclassified it as a personal DM, which sent it into `compute_conversation_key`'s DM branch where it was **split on its first hyphen** (`"#OE-SOTA"` → key `"#OE<>DK5EN"`), collapsing distinct tags and fragmenting one tag per sender. Fixed in `ea15511` by adding **sibling** predicates `is_hashtag()` / `dst_kind()` / `resolve_dst_target()` beside `is_group()` in `commands/parsing.py` — `is_group` was deliberately NOT widened, because it is pinned by a corpus mirrored in mc-chat and the webapp. Two invariants look like oversights and are load-bearing: classification is **case-insensitive** and **NOT length-bounded** — a tag failing either would fall straight back into the DM branch, which is the defect. The RfC's 9-char cap is send-side grammar, enforced at the API boundary, never in classification. `dst_kind` returns `"unknown"` (never `"direct"`) for a `#`-prefixed value that fails the tag charset: it addresses nobody, and is the shape most likely to arrive from a buggy or hostile sender. Contract: `commands/hashtag_dst_vectors.json` (32 vectors, sha256-pinned by `commands/hashtag_dst_tests.py`). **No prefix/subscription matching exists** (RfC US-3) — its stated rule contradicts its own worked examples, so implementing it would encode a guess. Background: `MeshCom-Hashtag-prep.md`.
-- **Five vector corpora are hand-copied to the sibling repos, and nothing syncs them for you.** `commands/group_dst_vectors.json` (v2), `storage/conversation_key_vectors.json` (v4), `blocklist_decision_vectors.json` (v2), `commands/hashtag_dst_vectors.json` (v1) and `storage/ack_match_vectors.json` (v1) are canonical **here**. The first three go to **both** mc-chat (`tests/fixtures/`) and the webapp; `blocklist_decision_vectors.json` goes to the **webapp only** (`src/services/__tests__/`) — mc-chat has its own `sperrliste.py` and never reads this corpus, so do not go looking for a copy there. `ack_match_vectors.json` is also **webapp only** (`src/services/messageProcessor/__tests__/`), sha256-pinned on both sides; mc-chat's own-messages-only matcher is deliberately not held to it. mc-chat asserts parse-equality against the paths it does carry; the webapp pins a sha256 of the conversation-key corpus and runs drift checks against both siblings. Change one and you must copy it to every repo that carries it **and** bump the webapp's `EXPECTED_SHA256`, or their suites fail the moment anyone runs them with siblings checked out. Unlike `contract/`, these are not a git subtree — there is no `subtree pull` that will do it for you.
+- **Five vector corpora are hand-copied to the sibling repos, and nothing syncs them for you.** `commands/group_dst_vectors.json` (v2), `storage/conversation_key_vectors.json` (v4), `blocklist_decision_vectors.json` (v2), `commands/hashtag_dst_vectors.json` (v1) and `storage/ack_match_vectors.json` (v1) are canonical **here**. The first three go to **both** mc-chat (`tests/fixtures/`) and the webapp; `blocklist_decision_vectors.json` goes to the **webapp only** (`src/services/__tests__/`) — mc-chat has its own `sperrliste.py` and never reads this corpus, so do not go looking for a copy there. `ack_match_vectors.json` is also **webapp only** (`src/services/messageProcessor/__tests__/`), sha256-pinned on both sides; mc-chat's own-messages-only matcher is deliberately not held to it. mc-chat asserts parse-equality against the paths it does carry; the webapp pins a sha256 of the conversation-key corpus and runs drift checks against both siblings. Change one and you must copy it to every repo that carries it **and** bump the webapp's `EXPECTED_SHA256`, or their suites fail the moment anyone runs them with siblings checked out. Unlike `contract/`, these are not a git subtree — there is no `subtree pull` that will do it for you. A sixth, `remote_cmd_vectors.json`, is canonical in the FIRMWARE repo (see Node Admin).
 - **Two different ACKs, never conflate them.** `send_success` is the firmware's 7-byte **binary** ack (`ack_type` 0x00 Node / 0x01 Gateway, `ble_protocol.py`) — "my node or a gateway took the frame" — also written by a `held` (binary 0x04 or the `:sto` notice text), which publishes `sent: true`, never `acked`. `acked` is a matched inline `:ackNNN` text frame — "the addressee answered". `_handle_ack` publishes `msg_status` `{sent, ack_kind: node|gateway}`, the inline path publishes `{acked, ack_kind: "peer"}` with the ORIGINAL message's msg_id; the webapp renders only the latter as ✓✓ Delivered. Wiring the webapp's `msg_ack` to `send_success` is exactly the 2026-08-19 bug where three unanswered `!ctcping` probes all showed as delivered. `ack_status_tests.py` pins both payloads.
 - **A BLE `D{` register frame carries at most 244 chars of JSON.** `addBLEComToOutBuffer` clamps at
   245 bytes, minus the `0x44` type byte; the firmware names it `BLE_JSON_PAYLOAD_MAX`. Over that it

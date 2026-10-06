@@ -2285,3 +2285,26 @@ pinned by the suite only (this node no longer exercises it).
 **Watch points.** W24 (new): the first `settime` after a hello probes with `--nodeset` (`set_time()`
 runs ~4.4 s after hello, before the node's `SN1`); confirm in the journal after the next
 reconnect that no `--utcoff` precedes a probe on this node. No open findings.
+
+## 31. 2026-10-06 20:45 CEST — check of v2.1.6-dev.6 (Node Admin remote view) before promotion (short soak)
+
+- Soak: `v2.1.6-dev.6` active since 20:32:36 (slot-0), about 12 min, on operator request; the
+  remote view itself ran since 18:10 as `v2.1.6-dev.5`. `NRestarts` 0 on `mcapp` and `mcapp-ble`,
+  both active; box up 12 days. `/health` healthy.
+- Journal warnings since 20:32: none in `mcapp`, none in `mcapp-ble`.
+- Schema 35 = `LATEST_SCHEMA_VERSION` in the active slot. Host: disk 9 % of 59 G, RAM 181 MB
+  available, 43.5 C.
+- CI: the `tests` workflow is `disabled_manually` (unchanged since v2.0.5); the release was gated
+  locally in both repos on the exact tree, after the dependency bumps (ruff, format, mypy, startup
+  runner exit 0; webapp typecheck, lint, format, 266 files / 4907 tests, `build:strict`).
+- `mcapp.local` stopped resolving over mDNS from the Mac during this check; the box answered on its
+  IP (192.168.68.74). Not a box fault.
+
+**Node Admin live check.** The operator removed DK5EN-1 from Settings > Remote nodes with the new
+Remove: `node_admin_keys`, `node_admin_state` and `node_admin_log` all read 0 rows afterwards.
+Earlier (18:10, dev.5) the `/state` endpoint folded DK5EN-1's stored status correctly, and the
+120 s foreign-sender pause fired on real traffic: DK5EN-92 was administering DK5EN-1 on air with
+draft-2 commands (`maxhop`, `pos`, sync reply with `rm=2`).
+
+**Watch points.** W25 (new): the bench run of the remote view against DK5EN-1 (Connect, switches,
+Restart) has not been done; it transmits on air and waits for the operator.

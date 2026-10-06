@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     # RF Monitor wire contract (docs/rf-monitor-plan.md); import deferred to
     # TYPE_CHECKING only — wire_monitor.py imports broadcast_verdict from
     # THIS module at runtime, so a real top-level import here would cycle.
+    from .node_admin_types import NodeAdminService
     from .node_console import NodeConsoleSession
     from .qrz_service import QrzLookupService
     from .wire_monitor import WireMonitor
@@ -193,6 +194,7 @@ try:
     from .sse_routes.deploy import build_deploy_router
     from .sse_routes.linkcheck import build_linkcheck_router
     from .sse_routes.monitor import build_monitor_router
+    from .sse_routes.node_admin import build_node_admin_router
     from .sse_routes.prefs import build_prefs_router
     from .sse_routes.push import build_push_router
     from .sse_routes.qrz import build_qrz_router
@@ -289,6 +291,13 @@ class SSEManager:
         # Set by build_app (main.py); None keeps /api/qrz/* at a 503 (startup
         # tests build a manager without one), same convention as node_console.
         self.qrz_service: QrzLookupService | None = None
+        # Node Admin (RM1 remote admin). Always set by build_app (main.py); None
+        # (startup tests build a manager without one) keeps /api/node-admin/* at a
+        # 503, which the webapp treats as "feature absent".
+        self.node_admin_service: NodeAdminService | None = None
+        # Extra Origin values the node-admin guard accepts (webapp cross-origin proxy
+        # mode, Vite dev server); set from `node_admin.allowed_origins`.
+        self.node_admin_allowed_origins: list[str] = []
 
         # Subscribe to messages from the router
         if message_router:
@@ -627,6 +636,7 @@ class SSEManager:
         app.include_router(build_deploy_router(self))
         app.include_router(build_push_router(self))
         app.include_router(build_qrz_router(self))
+        app.include_router(build_node_admin_router(self, lambda: self.node_admin_allowed_origins))
         app.include_router(build_linkcheck_router(self))
         app.include_router(build_monitor_router(self))
         app.include_router(build_uptime_router(self))

@@ -89,6 +89,17 @@ two must stay byte-identical. Design: `2026-09-15_1530-stall-tracking-plan.md`.
 
 **Key design principle:** MHeard beacons (RSSI/SNR, no coordinates) and position beacons (lat/lon, no signal) are completely disjoint packet types. `station_positions` merges them per callsign with independent field-group updates — signal fields never overwrite location fields and vice versa.
 
+### Node Admin tables (schema v35)
+
+| Table              | Purpose                                                                                                                                                                                                                                                                                                                       |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `node_admin_keys`  | `target_call` PK, `password_enc` (SecretBox token, AAD `node_admin.password:<TARGET>`), timestamps                                                                                                                                                                                                                            |
+| `node_admin_state` | per target: `ctr` (last allocated), `last_hwm` (only ever rises), `last_sync_at`, `tx_max` (default 15 dBm). KEPT when a key is removed, so a re-added key continues the counter.                                                                                                                                             |
+| `node_admin_log`   | one row per command or sync: `target_call`, `src_call` (frozen at hand-off), `ctr` (0 = sync), `cmd`, `args`, `text` (exact frame sent), `sent_at`, `handed_off_at`, `transport`, `send_error`, `reply_text`, `reply_at`, `verified` (1 / 0 unverified / NULL), `result`. Unique index on `(target_call, ctr) WHERE ctr > 0`. |
+
+All timestamps are milliseconds. Row state is never stored: `compute_state()` derives `queued | send_failed | waiting |
+no_reply | verified | bad_tag | abandoned` from the timestamps (120 s reply window anchored at `handed_off_at`).
+
 ### Indexes
 
 | Index                             | Columns                     | Purpose                                          |

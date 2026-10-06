@@ -5,6 +5,50 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.1.5 (2026-10-05)
+
+The node's time zone is no longer overwritten. Firmware with TZ support keeps a time-zone rule on
+the node, and the proxy's time sync used to clear it every time it connected. The proxy now reads
+the node's rule first and only ever sets one when the node has none. Schema stays at 34 and
+`SYSTEM_EPOCH` at 5.
+
+### Highlights
+
+- **A time-zone rule on the node survives a reconnect.** If the node has a rule, the proxy sends
+  only the current UTC time and leaves the offset alone.
+- **A node without a rule gets yours, once.** On time-zone firmware with an empty rule the proxy
+  sets the rule of the host it runs on (for example `CET-1CEST,M3.5.0,M10.5.0/3`) and confirms
+  that the node took it. Set `MCAPP_NODE_TZ_POLICY=never` to opt out, or `MCAPP_NODE_TZ` to use a
+  different rule.
+- **Older firmware behaves exactly as before:** a fixed UTC offset, then the time.
+- **When the proxy cannot tell what the node is, it sends the time only.** UTC is always right;
+  a wrong fixed offset could destroy a rule.
+- **Overheard acknowledgements no longer mark your own message as delivered.** The browser now
+  matches an `:ack` text against the same addressing and one-hour window as the backend, and
+  keeps internet-only acknowledgements when the connection reconnects.
+
+### Backend (MCProxy)
+
+- `set_time()` classifies the node from its settings register (`SN1.TZ`) before sending any
+  offset, ignores a cached value until the node has answered since the last hello, and reports the
+  branch taken (`utcoff`, `settz`, `rule`, `unknown`, `settz_unverified`) in the
+  `/api/ble/settime` message.
+- The inline `:ack` matching corpus (`ack_match_vectors.json`) is replayed through production
+  ingest and shared with the webapp.
+
+### Frontend (webapp)
+
+- The node GPS card shows the node's time-zone rule, offers presets and a rule field with a
+  grammar check while the rule is empty, and a "Clear rule" button while one is set. The locate
+  button no longer sends a fixed offset to a node that follows a rule.
+- The inline `:ack` matcher mirrors the backend rule; the matching corpus runs in the test suite.
+
+### Upgrade notes
+
+- Nothing to do. A node on time-zone firmware with an empty rule receives your host's rule at the
+  next time sync; one that already has a rule is left alone.
+- Reload the app once (the "Update available" banner) to see the time-zone controls.
+
 ## v2.1.4 (2026-10-04)
 
 QRZ.com lookups on an account **with a paid QRZ.com subscription** are no longer limited to 50 per

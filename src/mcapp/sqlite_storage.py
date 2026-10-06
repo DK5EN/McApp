@@ -46,6 +46,7 @@ from .storage.constants import (
 )
 from .storage.ingest import _QFE_PLAUSIBLE_HPA_RANGE, IngestMixin
 from .storage.migrations import MigrationsMixin
+from .storage.node_admin import NodeAdminMixin
 from .storage.prefs import PrefsMixin
 from .storage.query import QueryMixin
 from .storage.uptime import UptimeMixin
@@ -62,6 +63,7 @@ class SQLiteStorage(
     ClassifierApiMixin,
     UptimeMixin,
     CallsignInfoMixin,
+    NodeAdminMixin,
 ):
     """
     SQLite-based message storage backend.

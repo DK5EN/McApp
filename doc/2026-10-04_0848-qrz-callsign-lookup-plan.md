@@ -25,18 +25,18 @@ in chat and station lists is a follow-up.
 
 ## 3. QRZ protocol rules (spec 1.36, "The Session Node" / "Error Conditions")
 
-| Response                                | Meaning                                        | Our reaction                               |
-| --------------------------------------- | ---------------------------------------------- | ------------------------------------------ |
-| `<Callsign>` present                    | hit                                            | cache `found`, reset backoff               |
-| `<Error>` **with** `<Key>`              | data error (`Not found: X`)                    | cache `not_found`, session stays           |
-| `<Error>` **without** `<Key>`           | session invalid (`Session Timeout`, IP change) | drop key, re-login at the next slot        |
-| `Connection refused`                    | "login not possible for at least 24 h"         | suspend 24 h                               |
-| login: error without key, anything else | credentials wrong                              | stop (`auth_failed`) until new credentials |
-| HTTP 429/503, `limit`/`exceeded` text   | rate limited                                   | exponential backoff                        |
-| network error, other 5xx                | transient                                      | exponential backoff                        |
-| `Count` ≥ daily cap, free account       | QRZ already counts us at cap                   | suspend 24 h                               |
+| Response                                | Meaning                                        | Our reaction                                                                                            |
+| --------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `<Callsign>` present                    | hit                                            | cache `found`, reset backoff                                                                            |
+| `<Error>` **with** `<Key>`              | data error (`Not found: X`)                    | cache `not_found`, session stays                                                                        |
+| `<Error>` **without** `<Key>`           | session invalid (`Session Timeout`, IP change) | drop key, re-login at the next slot                                                                     |
+| `Connection refused`                    | "login not possible for at least 24 h"         | fixed 1 h backoff (superseded 2026-10-05, see addendum)                                                 |
+| login: error without key, anything else | credentials wrong                              | stop (`auth_failed`) until new credentials                                                              |
+| HTTP 429/503, `limit`/`exceeded` text   | rate limited                                   | HTTP 429/503: exponential backoff; limit/exceeded TEXT: fixed 1 h (superseded 2026-10-05, see addendum) |
+| network error, other 5xx                | transient                                      | exponential backoff                                                                                     |
+| `Count` ≥ daily cap, free account       | QRZ already counts us at cap                   | SUPERSEDED 2026-10-05: advisory only, never suspends (see addendum)                                     |
 
-`Count` is QRZ's own 24 h tally for the account, including lookups other software made with it. Using
+SUPERSEDED 2026-10-05 (see the addendum at the end): the second gate below was retired. `Count` is QRZ's own 24 h tally for the account, including lookups other software made with it. Using
 it as a second gate keeps us under the free tier's ~100/day even when a logging program shares the
 account.
 
@@ -65,7 +65,7 @@ All values are constants in `qrz_service.py`.
   into `qrz_state`, which survives a restart.
 - **At most one request per 30 s**, logins included. `last_request_ms` is persisted, so a restart
   loop cannot burst.
-- **Exponential backoff** on rate limiting and transient failures: 60 s × 2^n, capped at 6 h, reset
+- **Exponential backoff** on HTTP 429/503 and transient failures (a refusal or limit/exceeded TEXT is the fixed 1 h of the 2026-10-05 addendum): 60 s × 2^n, capped at 6 h, reset
   by the next successful response. A `Retry-After` header wins when it is longer.
 - **Refresh:** a `found` entry is looked up again after 90 days, a `not_found` entry after 7 days.
 - **Order:** never-looked-up callsigns first, chat partners before stations that were only heard,
@@ -184,3 +184,29 @@ subscription)` — single row.
 
 - Webapp display: first name after the callsign in chat and station lists, QTH as tooltip.
 - HamQTH as an alternative source (free account, same cache).
+
+## Addendum 2026-10-05: the server `Count` is advisory, not a stop signal
+
+Incident on mcapp.local (free account, `DK5EN`): 47 lookups ran on 04.10 between 09:18:04 and 09:42:33, the
+service suspended itself on QRZ's `Count`, our own 24 h window expired on 05.10 at 09:42:34, the login read
+`Count = 50` against a ledger of 0 and the service suspended for another 24 h. The `Count` is read only at login
+and nothing looks up while suspended, so the ledger cannot move and a `Count` that does not decay wedges the
+service permanently. Free accounts are also seen reporting thousands, which cannot be a tally under QRZ's
+100-per-day limit.
+
+Decisions (operator, 2026-10-05):
+
+- `Count` never suspends. It only lowers the day's budget to `min(50 - ledger, 100 - (Count at login + lookups
+since login))` when `0 <= Count < 100`; `Count >= 100` is ignored as not a real tally.
+- A used-up server budget backs off 1 h and re-logs in to refresh the baseline. A real refusal (`Connection
+refused`, limit/exceeded wording) also backs off a fixed 1 h (this replaces the spec's 24 h) and logs QRZ's raw
+  text. The session is re-established at least every 24 h so the baseline never goes stale.
+- Persisted `server_count` suspensions are lifted at the next step.
+- `/api/status` adds `server_count_ignored` and `server_budget_left`; the Settings card shows one "QRZ reports" row.
+- Known, accepted behaviour: after a used-up budget the re-login may read `Count = 100`, a genuine full
+  tally that the `>= 100` rule treats as noise, so lookups continue under the ledger cap and a real QRZ refusal
+  then costs one ledger row per hour. An account whose `Count` is ignored also keeps its session until it is lost
+  (there is no baseline to refresh). The card's `server_count` is the LATEST response's Count while the budget
+  fields use the login's Count, so it can read e.g. `100 (used for budget, 0 left)` right after a lookup.
+- Open question this change is meant to answer: what `Count` and a real refusal actually look like on a free
+  account. Read the journal lines `QRZ login ok ...`, `QRZ lookup ...` and the refusal WARNING.

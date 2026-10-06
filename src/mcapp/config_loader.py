@@ -216,6 +216,20 @@ class StallsConfig:
 
 
 @dataclass
+class NodeAdminConfig:
+    """Node Admin (RM1 remote admin) settings, under the optional `node_admin` key.
+
+    The feature itself is always on (no switch, 2026-10-05): the API has no
+    authentication, so `/api/node-admin/*` is LAN-only through a Host/Origin guard.
+    `allowed_origins` is a developer escape hatch that extends the Origin check for
+    the webapp's cross-origin proxy mode and the Vite dev server; nothing needs it
+    in normal use. Plan: doc/2026-10-05_1000-node-admin-ui-concept-and-plan.md §5.
+    """
+
+    allowed_origins: list[str] = field(default_factory=list)
+
+
+@dataclass
 class Config:
     """Main McApp configuration."""
 
@@ -238,6 +252,9 @@ class Config:
 
     # Stall tracking configuration
     stalls: StallsConfig = field(default_factory=StallsConfig)
+
+    # Node Admin (RM1 remote admin): always on, only developer-only settings live here
+    node_admin: NodeAdminConfig = field(default_factory=NodeAdminConfig)
 
     # Raw config for backward compatibility
     _raw: dict[str, Any] = field(default_factory=dict, repr=False)
@@ -420,6 +437,17 @@ class Config:
             )
         stalls = StallsConfig(**stalls_kwargs)
 
+        # Nested `node_admin` sub-object, same convention as `stalls`. A leftover
+        # `enabled` key from an earlier dev build is ignored; `allowed_origins`
+        # keeps only string entries.
+        node_admin_kwargs: dict[str, Any] = {}
+        node_admin_raw = data.get("node_admin")
+        if isinstance(node_admin_raw, dict):
+            origins = node_admin_raw.get("allowed_origins")
+            if isinstance(origins, list):
+                node_admin_kwargs["allowed_origins"] = [o for o in origins if isinstance(o, str)]
+        node_admin = NodeAdminConfig(**node_admin_kwargs)
+
         top_kwargs: dict[str, Any] = {}
         cls._pluck_present(
             top_kwargs, data, {"CALL_SIGN": "call_sign", "USER_INFO_TEXT": "user_info_text"}
@@ -433,6 +461,7 @@ class Config:
             location=location,
             node_console=node_console,
             stalls=stalls,
+            node_admin=node_admin,
             _raw=data,
         )
 
