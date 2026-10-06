@@ -412,8 +412,8 @@ Wave log (one line per wave, updated after each wave):
 - W0: done (advisor rework: negative `p=` current power)
 - W1a, W1b, W1c: done (advisor rework: silent `gps off` marks Track, `has_led: null` accepted)
 - W0, W1a committed (MCProxy `ea26047`, `bff0b9d`); W1b, W1c committed (webapp `f0c0190`, `89cfe6a`)
-- W2a-W2d: done, advisor rework (warning toast text, queued-row refetch, docs) in progress
-- W3: docs written; dev release + bench pending
+- W2a-W2d: committed after advisor rework (MCProxy `0994559`, `b3405ec`; webapp `79fffb7`, `0860a2f`, `a8aeef2`)
+- W3: gates, advisor and docs done; dev release + bench on DK5EN-1 await operator OK (release tags, bench transmits)
 - W4: blocked on firmware draft 2
 
 Plan:
