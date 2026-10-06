@@ -932,6 +932,21 @@ firmware side: `MeshCom-Firmware-DEV-Main` (`src/remote_cmd.cpp`, `docs/adr-remo
 - **`remote_cmd_vectors.json` is canonical in the FIRMWARE repo** (`tools/tests/remote_cmd_vectors.json`), copied to
   `src/mcapp/remote_cmd_vectors.json` with a sha256 pin in `remote_cmd_tests.py`. Copy and hash move in one commit. Runtime code never
   reads it (the prod tarball ships no `*.json` test corpora). The dev tarball ships it; `main.py` must never import a `*_tests` module.
+- **Remote view (2026-10-06, `doc/2026-10-06_1100-node-admin-remote-view-concept.md`): node state is FOLDED IN SEND
+  ORDER (log `id`), never by `reply_at`.** The node runs a command only above its shared high-water mark, so a late
+  verified reply to row N still describes the state right after N; ordering by arrival lets a late status overwrite a
+  newer ack (`node_admin_state.fold`, mutation-pinned). Only `verified = 1` rows are evidence; a status is an atomic
+  snapshot; `gps off` also clears Track on the node (the reply says only `gps=off`); LED is RAM-only (off after reboot).
+- **Send gates, all BEFORE counter allocation and on every path** (direct, held-behind-sync, sync): 10 s spacing, one in
+  flight, txpower <= min(key `tx_max`, board max from the newest verified status `p=`), 5 min cool-down after a silent
+  row (the node's DM retry ladder resends RM1 frames; a late copy is a counted replay strike), 120 s pause after another
+  station's RM1 frame to/from the target (`_note_foreign`). The lockout guard is a backstop, not the floor. Re-ask: once
+  per row, never while the guard or the foreign pause holds. `_synced` is set only by a VERIFIED sync; a command held
+  behind an unanswered auto-sync is dropped (operator decision D2), never sent anyway.
+- **Sync (ctr 0) replies bind only inside their 120 s window and with `ctr=<hwm> >= last_hwm`**; the second transport
+  copy of an already verified reply is dropped. A genuine lower mark (re-flashed node) is ignored with a warning;
+  re-entering the password (`set_key`) resets `last_hwm`. `RESULT_MAX` is 108 (firmware draft 2, 140-char reply wire);
+  at 63 a longer reply vanished and two of them tripped McApp's own lockout guard.
 - **Feature flag to the webapp is `/api/status` `features`** (`"node_admin"`), not the mc-chat flag: `requiresAdminBackend` means
   "mc-chat only". The webapp uses `adminStatus.nodeAdminAvailable` and a three-state view (no router guard: the backend flag is `null`
   at first paint). `useProxyAPI` tolerates a body-less 204 and carries the backend `detail` on `ProxyAPIError.detail`.

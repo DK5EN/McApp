@@ -357,6 +357,26 @@ blocked command); the node did not hear McApp's node over LoRa; the reply is sti
 view means a reply arrived that McApp could not verify (password changed on the node, or a spoof). Counters:
 `ctr = MAX(ctr+1, last_hwm+1, unix time)`, so another SysOp or the firmware web UI using the node does not desync McApp.
 
+**The remote view (2026-10-06).** The Node Admin page mirrors the BLE page: register bar (Sync, Status), Info row,
+card grid, Switches (green = on in the last verified answer, amber = uncertain), Restart, and a collapsed Advanced
+section (output pin, Re-sync counter, raw command, history). Design: `2026-10-06_1100-node-admin-remote-view-concept.md`.
+
+- **Connect first.** Selecting a node sends nothing. `Connect` sends `sync`, then `status` (about 30-70 s). Every other
+  control stays disabled until a sync was verified in the running McApp process; a restart of McApp needs a new Connect.
+  A command that reaches the backend unsynced waits behind an automatic sync and is **dropped** if that sync gets no
+  answer ("command dropped: no answer to the counter sync").
+- **Cool-down after silence.** After a `no_reply` or `abandoned` row the node gets no new frame for 5 min from that
+  frame's hand-off (the node itself resends DMs up to 4 times; a late copy would be a counted replay strike). The page
+  shows the wait; the API answers 409 with the remaining seconds.
+- **Another station managing the node.** When McApp hears an RM1 frame to or from a stored node that is not its own,
+  it sends nothing to that node for 120 s ("Another station is managing ..."). The firmware shares its rate limit, counter
+  mark and reply cache between all senders.
+- **"The node reports counter mark N, below the last known M."** The node lost its counter mark (re-flashed or erased).
+  McApp ignores such a sync reply (it could be a replayed old one). Fix: enter the node's password again in Settings >
+  Remote nodes, which resets McApp's stored mark for that node; Connect then works.
+- **`GET /api/node-admin/targets/{target}/state`** returns the parsed last known state (concept Appendix A), folded in
+  send order from verified replies only. Values carry their age; after a verified Restart they are marked stale.
+
 **Secrets and logs.** The password is never logged, broadcast or stored in `stall_events` (the `/api/node-admin/keys`
 body is withheld by path prefix). An RM1 frame in logs, `send_failed` events and failed monitor captures has its tag
 cut (`_redact_rm1`), including the INFO/DEBUG "Processing" lines. A frame that did go out is public on air anyway.

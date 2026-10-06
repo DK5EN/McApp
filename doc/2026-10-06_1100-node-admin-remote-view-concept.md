@@ -205,7 +205,9 @@ target.
   a late retry keying of the old frame cannot land behind a new one (§2.1 retry ladder). Re-ask is the exception (same
   ctr, the node answers it from its cache) and stays bounded as in §8.
 - **Other senders**: when McApp overhears RM1 frames to or from the target that are not its own, sequences pause for
-  120 s and the header says "Another station is managing <call>".
+  120 s and the header says "Another station is managing <call>". The pause is spoofable (any station can extend it
+  with an `RM1` text naming the target); that costs only McApp's convenience and equals the existing on-air lockout
+  DoS. "Ours" is the exact call incl. SSID.
 - The sequencer runs client-side in the `nodeAdmin` store with its own timer (not the view's clock). Closing the tab
   stops it, which is the safe direction. A second tab gets a 409 from the one-in-flight rule and stops.
 - McApp's lockout guard is a **backstop**, not a floor: it cannot see other senders' strikes or late retry keyings.
@@ -409,7 +411,9 @@ Wave log (one line per wave, updated after each wave):
 
 - W0: done (advisor rework: negative `p=` current power)
 - W1a, W1b, W1c: done (advisor rework: silent `gps off` marks Track, `has_led: null` accepted)
-- W2a-W2d, W3: pending
+- W0, W1a committed (MCProxy `ea26047`, `bff0b9d`); W1b, W1c committed (webapp `f0c0190`, `89cfe6a`)
+- W2a-W2d: done, advisor rework (warning toast text, queued-row refetch, docs) in progress
+- W3: docs written; dev release + bench pending
 - W4: blocked on firmware draft 2
 
 Plan:
