@@ -330,12 +330,13 @@ Remote administration of other MeshCom nodes (reboot, status, toggles, `txpower`
 signed with an HMAC over LoRa. Design: `2026-10-05_1000-node-admin-ui-concept-and-plan.md`.
 
 **Always on, configured in the web GUI.** There is no config switch (operator decision 2026-10-05): open Settings >
-Remote nodes, add a node's callsign and its password, then use the Node Admin page. Until a node is stored the feature is
+Remote nodes, add a node's callsign and its password, then use Node Admin > Remote Management. Until a node is stored the feature is
 inert; once a node's password is stored, any device on the LAN can use it through
 this API (the API has no authentication, so storing a password is the consent). The API has no authentication, so it is LAN-only by construction: `/api/node-admin/*` refuses any `Host` that is not
 a LAN name (`mcapp.local`, the short hostname, private/loopback IPs) and any foreign `Origin`. It is therefore NOT usable
 through the public TLS hostname. `GET /api/status` lists `"node_admin"` under `features`; the webapp shows the Remote nodes
-tab and the Node Admin page only when it does (an older backend shows neither). A developer-only
+tab and the Node Admin > Remote Management sub-tab only when it does (an older backend shows neither; the Node Admin
+entry itself is always there because it also hosts the BLE page). A developer-only
 `"node_admin": {"allowed_origins": ["http://localhost:5173"]}` in `config.json` extends the Origin check for the Vite dev
 server; nothing needs it in normal use, and a leftover `"enabled"` key from an earlier dev build is ignored.
 
@@ -357,7 +358,7 @@ blocked command); the node did not hear McApp's node over LoRa; the reply is sti
 view means a reply arrived that McApp could not verify (password changed on the node, or a spoof). Counters:
 `ctr = MAX(ctr+1, last_hwm+1, unix time)`, so another SysOp or the firmware web UI using the node does not desync McApp.
 
-**The remote view (2026-10-06).** The Node Admin page mirrors the BLE page: register bar (Sync, Status), Info row,
+**The remote view (2026-10-06).** Node Admin > Remote Management mirrors the BLE sub-tab next to it: register bar (Sync, Status), Info row,
 card grid, Switches (green = on in the last verified answer, amber = uncertain), Restart, and a collapsed Advanced
 section (output pin, Re-sync counter, raw command, history). Design: `2026-10-06_1100-node-admin-remote-view-concept.md`.
 
