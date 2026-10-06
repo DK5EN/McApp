@@ -58,6 +58,7 @@ from mcapp.meteo_tests import run_meteo_tests
 from mcapp.msg_core_tests import run_msg_core_tests
 from mcapp.node_admin_routes_tests import run_node_admin_routes_tests
 from mcapp.node_admin_service_tests import run_node_admin_service_tests
+from mcapp.node_admin_state_tests import run_node_admin_state_tests
 from mcapp.node_admin_wiring_tests import run_node_admin_wiring_tests
 from mcapp.node_console_tests import run_node_console_tests
 from mcapp.push_tests import run_push_tests
@@ -227,6 +228,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     node_admin_hook_ok = await run_node_admin_hook_tests()
     print(f"node_admin_hook: {'PASS' if node_admin_hook_ok else 'FAIL'}")
 
+    node_admin_state_ok = run_node_admin_state_tests()
+    print(f"node_admin_state: {'PASS' if node_admin_state_ok else 'FAIL'}")
+
     node_admin_service_ok = await run_node_admin_service_tests()
     print(f"node_admin_service: {'PASS' if node_admin_service_ok else 'FAIL'}")
 
@@ -360,6 +364,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and remote_cmd_ok
         and node_admin_storage_ok
         and node_admin_hook_ok
+        and node_admin_state_ok
         and node_admin_service_ok
         and node_admin_routes_ok
         and node_admin_wiring_ok

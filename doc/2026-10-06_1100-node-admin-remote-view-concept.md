@@ -189,9 +189,11 @@ target.
 - **Connect** = `sync`, then `status` once the sync row is verified and the 10 s window is open. Replies take 12-32 s,
   so about 30-70 s with a two-step progress ("1/2 counter in step", "2/2 status"). If the sync succeeds and the status
   fails, Connect counts as done (the counter is in step) and Status stays empty.
-- **Connect is a precondition** for every other command in this McApp process (backend-enforced, §8). This replaces
-  v1's hidden auto-sync before the first command. A sync that gets no answer drops the held command (as the firmware's
-  sender does) instead of sending it anyway. v1 U3/D2 are superseded; U4 (replies also in the DM conversation) stands.
+- **No command before a verified sync** in this McApp process (backend-enforced, §8). The UI keeps every send control
+  disabled until Connect succeeded. A command that still reaches the backend for an unsynced target (raw composer,
+  second tab) is held behind v1's automatic sync; if that sync gets no answer, the held command is **dropped** (operator
+  decision D2, as the firmware's sender does) instead of being sent anyway. Only a verified sync marks a target synced.
+  v1 U3/D2 are amended accordingly; U4 (replies also in the DM conversation) stands.
 - **Read all** (Phase B) = the optional registers in table order except Heard; 8 reads take about 3-6 min.
 - **Heard** (Phase B) is its own action: `mh 0`, then `mh <next>` until `-`, 7 rows per reply. 20 nodes = 3 replies;
   128 = about 22 (8-15 min, about 100 s of channel time at the default profile, 540 s at the slow one). The list is
@@ -354,8 +356,9 @@ Tests: results of 108 accepted and 109 refused, a 140-character reply wire with 
 8. `GET /api/node-admin/targets/{target}/state` behind the LAN guard: `{target, now_ms, as_of_id, connected,
 in_flight, next_allowed_at, cooldown_until, possible_lockout_until_ms, capability, has_led, fields, switches,
 registers}`.
-9. Connect precondition: any command but `sync` refused (409, sentence) for a target without a verified sync in this
-   process. The auto-sync path drops the held command on a sync timeout.
+9. Sync gate: a command for a target without a verified sync in this process stays held behind the automatic sync
+   (v1) and is dropped with a `node_admin:reply` warning when that sync gets no answer; `_synced` is set only by a
+   verified sync, never by the timeout.
 10. Cool-down 180 s after a silent row; 120 s pause after foreign RM1 frames to or from the target.
 11. Every refusal (Connect, capability, cool-down, txpower bound) happens before counter allocation, in
     `_allocate_and_transmit` so the held-behind-sync path cannot skip it.
@@ -404,8 +407,8 @@ stopping on `err unsupported`.
 
 Wave log (one line per wave, updated after each wave):
 
-- W0: in progress
-- W1a, W1b, W1c: in progress
+- W0: done (advisor rework: negative `p=` current power)
+- W1a, W1b, W1c: done (advisor rework: silent `gps off` marks Track, `has_led: null` accepted)
 - W2a-W2d, W3: pending
 - W4: blocked on firmware draft 2
 
@@ -521,6 +524,11 @@ the rest.
 ```
 
 - `fields.*`: absent key = never known. `stale` = a reboot boundary (verified `reboot`) lies after `log_id`.
+- `has_led`: `true`/`false` from the newest status (`false` also after `err unsupported` on `led`), `null` until a
+  status said so. The Light tile is hidden only on `false`.
+- `switches.*`: all six keys always present, each `{state, at, log_id, stale}`; `at`/`log_id` are `null` without
+  evidence. A silent or pending `gps off` also marks Track (`gps off` clears Track on the node).
+- `as_of_id`: `0` for a target without log rows.
 - `switches.*.state`: `on`, `off`, `uncertain` (a silent or unverified row for that switch is newer than the
   evidence), `pending` (a `queued`/`waiting` row for that switch), `unknown` (no evidence; `led` on a board without
   LED is `unknown` with `has_led: false`).
