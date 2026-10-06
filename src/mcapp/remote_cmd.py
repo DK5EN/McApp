@@ -46,8 +46,9 @@ TX_MAX_DEFAULT: Final = 15  # lowest board maximum (Heltec V2); see plan D5
 PASSWD_MAX: Final = 14  # node_passwd is char[15]
 CMD_MAX: Final = 15  # RmCmd.cmd is char[16]
 ARGS_MAX: Final = 23  # RmCmd.args is char[24]
-RESULT_MAX: Final = 63  # RM_MAX_RESULT
-REPLY_MAX: Final = 160  # rmVerifyReply refuses longer texts
+# Firmware draft 2: reply wire <= 140 chars, so result <= 108 including "ok " / "err ".
+RESULT_MAX: Final = 108
+REPLY_MAX: Final = 160  # rmVerifyReply refuses longer texts (140 + 4-char "{NNN" + margin)
 CALL_MAX: Final = 9  # meshcom_settings.node_call is char[10]
 CALL_BASE_MIN: Final = 3  # normalizeOwnCall touches only an ordinary call:
 CALL_BASE_MAX: Final = 6  # base of 3..6 characters
@@ -89,6 +90,14 @@ _TAG_RE: Final = re.compile(r"[0-9a-f]{16}")
 _CALL_RE: Final = re.compile(r"([0-9A-Z]?[A-Z]?[0-9]+[A-Z][A-Z]?[A-Z]?)(?:-([0-9]{0,2}))?")
 
 _SYNC_HWM_RE: Final = re.compile(r"ctr=([0-9]{1,10})(?![0-9])")
+_STATUS_POWER_RE: Final = re.compile(
+    r"p=(-?[0-9]{1,3})/([0-9]{1,3})"
+)  # cur may be < 0 (TX_POWER_MIN -9)
+
+# Shape of a reply before any limit is applied: "RM1 <digits> ok|err ...". A command
+# ("RM1 5 status <tag>") never matches, so rejecting a reply can be logged without
+# also logging every command echo.
+_REPLY_SHAPE_RE: Final = re.compile(r"RM1 [0-9]+ (?:ok|err)(?: |$)")
 
 # Reply text after the ack suffix is gone: "RM1 <ctr> <ok|err> <text> <tag16>".
 _REPLY_RE: Final = re.compile(
@@ -310,7 +319,7 @@ def parse_reply(text: str) -> ParsedReply | None:
     The firmware ``{NNN`` ack-request suffix is stripped first: the Extern-UDP
     copy of a reply carries it, the BLE copy does not. Mirrors ``rmIsReply`` /
     ``rmVerifyReply``: ctr without leading zeros, ``ok `` / ``err `` prefix,
-    16 lower-case hex tag after a single space, result <= 63 chars, text <= 160.
+    16 lower-case hex tag after a single space, result <= 108 chars, text <= 160.
     """
     if not isinstance(text, str):
         return None
@@ -328,6 +337,29 @@ def parse_reply(text: str) -> ParsedReply | None:
     return ParsedReply(
         ctr=ctr, status=status, result=result, body=m.group("body"), tag=m.group("tag")
     )
+
+
+def reply_rejection(text: str) -> str | None:
+    """Why ``parse_reply`` refuses ``text``, or None.
+
+    None also for a text that does not look like a reply at all (``RM1 <ctr>
+    ok|err ...``): a command or a foreign frame is not a rejected reply. The
+    reason names lengths and the failed rule, never the text itself (it carries
+    a tag).
+    """
+    t = strip_ack_suffix(text) if isinstance(text, str) else ""
+    if _REPLY_SHAPE_RE.match(t) is None or parse_reply(text) is not None:
+        return None
+    if len(t) > REPLY_MAX:
+        return f"wire length {len(t)} exceeds {REPLY_MAX}"
+    if not t.isascii() or not t.isprintable():
+        return "non-printable or non-ASCII characters"
+    m = _REPLY_RE.fullmatch(t)
+    if m is None:
+        return "format: expected 'RM1 <ctr> ok|err <text> <16 hex tag>'"
+    if int(m.group("ctr")) > CTR_MAX:
+        return f"counter above {CTR_MAX}"
+    return f"result length {len(m.group('result'))} exceeds {RESULT_MAX}"
 
 
 def verify_reply(key: bytes, dst: str, src: str, text: str) -> ParsedReply | None:
@@ -360,3 +392,18 @@ def parse_sync_hwm(body: str) -> int | None:
         return None
     hwm = int(m.group(1))
     return hwm if hwm <= CTR_MAX else None
+
+
+def status_tx_power_max(result: str) -> int | None:
+    """The board's TX power maximum from a ``status`` reply, or None.
+
+    The compact form carries ``p=<cur>/<max>`` (``max`` = the node's
+    ``TX_POWER_MAX``, the bound its ``allowed()`` applies to ``txpower``); the
+    older ``gw=/mesh=`` form has no ``p=`` token. Accepts the result with or
+    without its ``ok `` prefix; call only on the text of a verified reply.
+    """
+    for token in result.split(" "):
+        m = _STATUS_POWER_RE.fullmatch(token)
+        if m is not None:
+            return int(m.group(2))
+    return None

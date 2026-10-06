@@ -74,9 +74,13 @@ def _count_log(db_path: Path, target: str) -> int:
         )
 
 
-async def _alloc(storage: Any, target: str, floor: int = 0, now: int = _BASE_TS) -> dict[str, Any]:
+async def _alloc(
+    storage: Any, target: str, floor: int = 0, now: int = _BASE_TS, cmd: str = "txpower"
+) -> dict[str, Any]:
+    args = "15" if cmd == "txpower" else None
+    line = f"{cmd} {args}" if args else cmd
     result: dict[str, Any] = await storage.allocate_node_admin_command(
-        target, _SRC, "txpower", "15", "udp", now, floor, lambda c: f"RM1|{target}|{c}|txpower 15"
+        target, _SRC, cmd, args, "udp", now, floor, lambda c: f"RM1|{target}|{c}|{line}"
     )
     return result
 
@@ -444,20 +448,26 @@ async def _test_find_log_row(results: list[tuple[str, bool]]) -> None:
         try:
             a = await _alloc(storage, _TARGET, now=_BASE_TS)
             other = await _alloc(storage, "DK5EN-90", floor=5, now=_BASE_TS + 1)
-            found = await storage.find_node_admin_log_row(_TARGET, a["ctr"])
+            found = await storage.find_node_admin_log_row(_TARGET, a["ctr"], _BASE_TS + 5_000)
             results.append(
                 (
                     "find: a counter resolves to its own target's row only",
                     found is not None
                     and found["id"] == a["id"]
-                    and await storage.find_node_admin_log_row(_TARGET, other["ctr"]) is None
-                    and await storage.find_node_admin_log_row("DK5EN-90", other["ctr"]) is not None,
+                    and await storage.find_node_admin_log_row(
+                        _TARGET, other["ctr"], _BASE_TS + 5_000
+                    )
+                    is None
+                    and await storage.find_node_admin_log_row(
+                        "DK5EN-90", other["ctr"], _BASE_TS + 5_000
+                    )
+                    is not None,
                 )
             )
 
             # An abandoned row is still found, so a late reply can flip it.
             await storage.abandon_stale_node_admin_rows(_BASE_TS + 10_000)
-            late = await storage.find_node_admin_log_row(_TARGET, a["ctr"])
+            late = await storage.find_node_admin_log_row(_TARGET, a["ctr"], _BASE_TS + 5_000)
             results.append(
                 (
                     "find: an abandoned row is still found (late reply after a restart)",
@@ -472,9 +482,9 @@ async def _test_find_log_row(results: list[tuple[str, bool]]) -> None:
             s2 = await storage.insert_node_admin_sync_row(
                 _TARGET, _SRC, "ble", _BASE_TS + 30_000, "RM1 0 sync y"
             )
-            newest = await storage.find_node_admin_log_row(_TARGET, 0)
+            newest = await storage.find_node_admin_log_row(_TARGET, 0, _BASE_TS + 32_000)
             await storage.apply_node_admin_reply(s2, "ok ctr=5", _BASE_TS + 31_000, "ok", True)
-            after = await storage.find_node_admin_log_row(_TARGET, 0)
+            after = await storage.find_node_admin_log_row(_TARGET, 0, _BASE_TS + 32_000)
             results.append(
                 (
                     "find: ctr 0 is the newest OPEN sync row, then the older one once answered",
@@ -482,7 +492,85 @@ async def _test_find_log_row(results: list[tuple[str, bool]]) -> None:
                     and newest["id"] == s2
                     and after is not None
                     and after["id"] == s1
-                    and await storage.find_node_admin_log_row("DK5EN-90", 0) is None,
+                    and await storage.find_node_admin_log_row("DK5EN-90", 0, _BASE_TS + 32_000)
+                    is None,
+                )
+            )
+
+            # W0 fix 2: ctr 0 binds only inside the 120 s reply window of its hand-off
+            # (sent_at when it never got one); s1 (+20 s) is the last open sync row.
+            await storage.mark_node_admin_handed_off(s1, _BASE_TS + 20_500)
+            inside = await storage.find_node_admin_log_row(_TARGET, 0, _BASE_TS + 20_500 + 119_999)
+            outside = await storage.find_node_admin_log_row(_TARGET, 0, _BASE_TS + 20_500 + 120_000)
+            s3 = await storage.insert_node_admin_sync_row(
+                _TARGET, _SRC, "ble", _BASE_TS + 500_000, "RM1 0 sync z"
+            )
+            never_handed = await storage.find_node_admin_log_row(
+                _TARGET, 0, _BASE_TS + 500_000 + 119_999
+            )
+            never_handed_old = await storage.find_node_admin_log_row(
+                _TARGET, 0, _BASE_TS + 500_000 + 120_000
+            )
+            results.append(
+                (
+                    (
+                        "find: ctr 0 ignores an open sync row whose window (from hand-off, else "
+                        "sent_at) is over: 119_999 ms binds, 120_000 ms does not"
+                    ),
+                    inside is not None
+                    and inside["id"] == s1
+                    and outside is None
+                    and never_handed is not None
+                    and never_handed["id"] == s3
+                    and never_handed_old is None,
+                )
+            )
+
+            # get-by-id finds any row, whatever its age or position in the history.
+            got = await storage.get_node_admin_log_row(a["id"])
+            results.append(
+                (
+                    "get: a row by id, None for an unknown id",
+                    got is not None
+                    and got["id"] == a["id"]
+                    and got["ctr"] == a["ctr"]
+                    and await storage.get_node_admin_log_row(999_999) is None,
+                )
+            )
+        finally:
+            await storage.close()
+
+
+async def _test_verified_status_rows(results: list[tuple[str, bool]]) -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = Path(tmp_dir) / "node_admin_status_rows.db"
+        storage = await create_sqlite_storage(db_path)
+        try:
+            ok_old = await _alloc(storage, _TARGET, now=_BASE_TS, cmd="status")
+            await storage.apply_node_admin_reply(
+                ok_old["id"], "RM1 x", _BASE_TS + 1, "ok p=22/22", True
+            )
+            bad = await _alloc(storage, _TARGET, now=_BASE_TS + 10, cmd="status")
+            await storage.apply_node_admin_reply(
+                bad["id"], "RM1 x", _BASE_TS + 11, "ok p=1/1", False
+            )
+            unanswered = await _alloc(storage, _TARGET, now=_BASE_TS + 20, cmd="status")
+            other_target = await _alloc(
+                storage, "DK5EN-90", floor=5, now=_BASE_TS + 30, cmd="status"
+            )
+            await storage.apply_node_admin_reply(
+                other_target["id"], "RM1 x", _BASE_TS + 31, "ok p=9/9", True
+            )
+            ok_new = await _alloc(storage, _TARGET, now=_BASE_TS + 40, cmd="status")
+            await storage.apply_node_admin_reply(
+                ok_new["id"], "RM1 x", _BASE_TS + 41, "ok p=15/20", True
+            )
+            rows = await storage.node_admin_verified_status_rows(_TARGET)
+            results.append(
+                (
+                    "status rows: only this target's tag-verified status rows, newest first",
+                    [r["id"] for r in rows] == [ok_new["id"], ok_old["id"]]
+                    and unanswered["id"] not in [r["id"] for r in rows],
                 )
             )
         finally:
@@ -651,6 +739,7 @@ async def run_node_admin_storage_tests() -> bool:
         _test_apply_reply,
         _test_unique_index,
         _test_find_log_row,
+        _test_verified_status_rows,
         _test_housekeeping,
         _test_migration_from_v34,
     )

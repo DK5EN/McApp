@@ -29,6 +29,7 @@ from typing import Any
 from .remote_cmd import (
     ALLOWLIST,
     CTR_MAX,
+    RESULT_MAX,
     RM_CACHE_MS,
     RM_RATE_MS,
     RM_REPLY_TIMEOUT_MS,
@@ -40,8 +41,10 @@ from .remote_cmd import (
     normalize_call,
     parse_reply,
     parse_sync_hwm,
+    reply_rejection,
     rm_reply_tag,
     rm_tag,
+    status_tx_power_max,
     validate_command,
     validate_password,
     verify_reply,
@@ -427,7 +430,7 @@ def _test_parse_reply(record: Record) -> None:
         ("RM1 01 ok rebooting " + tag, "ctr with leading zero"),
         ("RM1 4294967296 ok rebooting " + tag, "ctr above CTR_MAX"),
         ("RM1 1 reboot " + tag, "a command, not a reply"),
-        ("RM1 1 ok " + "x" * 61 + " " + tag, "result over 63 chars"),
+        ("RM1 1 ok " + "x" * 106 + " " + tag, "result over 108 chars"),
         ("rm1 1 ok rebooting " + tag, "lower-case proto"),
         ("RM1  1 ok rebooting " + tag, "double space after proto"),
         ("", "empty text"),
@@ -438,8 +441,53 @@ def _test_parse_reply(record: Record) -> None:
     record("parse_reply rejects non-str input", parse_reply(None) is None)  # type: ignore[arg-type]  # deliberate wrong type
 
     record(
-        "parse_reply accepts a 63-char result",
-        parse_reply("RM1 1 ok " + "x" * 60 + " " + tag) is not None,
+        "parse_reply accepts a 108-char result (RESULT_MAX), refuses 109",
+        RESULT_MAX == 108
+        and parse_reply("RM1 1 ok " + "x" * 105 + " " + tag) is not None
+        and parse_reply("RM1 1 ok " + "x" * 106 + " " + tag) is None,
+    )
+    wire = "RM1 4294967295 ok " + "x" * 105 + " " + tag
+    parsed_wire = parse_reply(wire)
+    record(
+        "parse_reply accepts a 140-char reply wire with a 10-digit counter",
+        len(wire) == 140
+        and parsed_wire is not None
+        and parsed_wire.ctr == CTR_MAX
+        and len(parsed_wire.result) == 108,
+    )
+    record(
+        "parse_reply accepts that wire with the {NNN ack suffix (144 chars)",
+        parse_reply(wire + "{087") is not None,
+    )
+
+    shaped_long = "RM1 1 ok " + "x" * 106 + " " + tag
+    reasons = {
+        "oversize result": reply_rejection(shaped_long),
+        "wire over 160": reply_rejection("RM1 1 ok " + "x" * 160 + " " + tag),
+        "bad tag shape": reply_rejection("RM1 1 ok rebooting zz"),
+        "control char": reply_rejection("RM1 1 ok re\x01boot " + tag),
+        "ctr above max": reply_rejection("RM1 4294967296 ok x " + tag),
+    }
+    record(
+        "reply_rejection names the failed rule for a reply-shaped text",
+        (reasons["oversize result"] or "").startswith("result length 109 exceeds 108")
+        and (reasons["wire over 160"] or "").startswith("wire length")
+        and (reasons["bad tag shape"] or "").startswith("format")
+        and (reasons["control char"] or "").startswith("non-printable")
+        and (reasons["ctr above max"] or "").startswith("counter above"),
+    )
+    record(
+        "reply_rejection is None for a valid reply, a command echo and chat",
+        reply_rejection(good) is None
+        and reply_rejection("RM1 5 status " + tag) is None
+        and reply_rejection("RM1 0 sync " + tag) is None
+        and reply_rejection("hello") is None
+        and reply_rejection(None) is None,  # type: ignore[arg-type]  # deliberate wrong type
+    )
+    record(
+        "reply_rejection never repeats the text or the tag",
+        tag not in (reply_rejection(shaped_long) or "")
+        and "xxx" not in (reasons["oversize result"] or ""),
     )
 
     record(
@@ -477,6 +525,22 @@ def _test_parse_reply(record: Record) -> None:
         "verify_reply: garbage text rejects",
         verify_reply(key, v["dst"], v["src"], "RM1 nonsense") is None,
     )
+
+    status_cases: list[tuple[str, int | None]] = [
+        ("ok v=4.40a up=71582788 bat=100 heap=115 s=GTDMWL p=22/22 led=0", 22),
+        ("v=4.40a p=15/20", 20),
+        ("ok v=4.40a s=GTDMW p=-3/22", 22),  # firmware TX_POWER_MIN is -9
+        ("ok p=-99/99", 99),  # rmClampDbm range
+        ("ok v=4.40a up=125 bat=87 heap=212 gw=0 mesh=1", None),
+        ("ok p=abc/22", None),
+        ("ok xp=5/6", None),
+        ("ok p=5/6x", None),
+        ("ok p=5", None),
+        ("ok p=5/1234", None),
+        ("", None),
+    ]
+    for body, want in status_cases:
+        record(f"status_tx_power_max({body!r}) == {want!r}", status_tx_power_max(body) == want)
 
     sync_body: list[tuple[str, int | None]] = [
         ("ctr=42 v=4.40a", 42),

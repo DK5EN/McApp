@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from . import remote_cmd
-from .node_admin_service import NodeAdminService, compute_state
+from .node_admin_service import NodeAdminService, _lockout_until_ms, compute_state
 from .node_admin_types import NodeAdminBusyError, NodeAdminUnavailableError
 from .node_admin_types import NodeAdminService as NodeAdminServiceProtocol
 from .secret_box import SecretBox, SecretBoxError
@@ -838,6 +838,7 @@ async def case_g_aad_unreadable(record: Record) -> None:
         await env.svc.drain()
         await env.time.advance(11_000)
         await env.svc.set_key(TARGET, "other-pass", None)  # cache must be invalidated
+        env.svc._synced.add(TARGET)  # set_key clears it (case m4); this case tests the key cache
         await env.svc.send(TARGET, "status", "", "udp")
         await env.svc.drain()
         new_key = remote_cmd.derive_key("other-pass")
@@ -1130,6 +1131,346 @@ async def case_j_misc(record: Record) -> None:
         record("j7. conforms to the Protocol", await proto.history(None, 5) == [])
 
 
+# ── m. W0 regressions (remote-view campaign, doc/2026-10-06_1100-node-admin-remote-view-*) ─
+
+STATUS_P1515 = "ok v=4.40a up=125 bat=87 heap=212 s=GTDMWL p=15/15 led=0"
+
+
+async def case_m_reask(record: Record) -> None:
+    # V1a: the lockout guard applies to re-ask exactly as to send.
+    async with make_env() as env:
+        await env.setup()
+        await env.send("status")
+        await env.svc.drain()
+        await env.time.advance(130_000)
+        s2 = await env.send("status")
+        await env.svc.drain()
+        await env.time.advance(130_000)
+        rows = await env.svc._storage.node_admin_history(TARGET, 100)
+        until = _lockout_until_ms(rows, env.time.now)
+        send_refused = await raises(NodeAdminBusyError, env.send("status"))
+        tx_before = len(env.tx)
+        refused = await raises(NodeAdminBusyError, env.svc.reask(s2["log_id"]))
+        await env.svc.drain()
+        record(
+            "m1. re-ask is refused while the lockout guard is active (no frame sent)",
+            until is not None
+            and until > env.time.now
+            and send_refused
+            and refused
+            and len(env.tx) == tx_before,
+        )
+        await env.time.advance(until - env.time.now + 1 if until else 0)
+        allowed = await env.svc.reask(s2["log_id"])
+        await env.svc.drain()
+        record(
+            "m1b. the same re-ask goes out once the guard has expired",
+            allowed == {"log_id": s2["log_id"]} and len(env.tx) == tx_before + 1,
+        )
+
+    # V1b: one re-ask per row; the 10 min cache window is never extended by it.
+    async with make_env() as env:
+        await env.setup()
+        a = await env.send("status")
+        await env.svc.drain()
+        await env.time.advance(61_000)
+        await env.svc.reask(a["log_id"])
+        await env.svc.drain()
+        outcomes: list[bool] = []
+        for _ in range(12):  # every 61 s, 12 min past the first hand-off
+            await env.time.advance(61_000)
+            outcomes.append(await raises(NodeAdminBusyError, env.svc.reask(a["log_id"])))
+        await env.svc.drain()
+        record(
+            "m2. at most one re-ask per row: 12 further attempts every 61 s are all refused",
+            all(outcomes) and len(env.tx) == 2,
+        )
+
+
+async def case_m_sync_binding(record: Record) -> None:
+    res = "ok ctr=5 v=4.40a"
+    # V3: failed sync A, later sync B, both transport copies of B's reply.
+    async with make_env() as env:
+        await env.setup(synced=False)
+        a = await env.svc.sync(TARGET)
+        await env.svc.drain()
+        await env.time.advance(130_000)
+        b = await env.svc.sync(TARGET)
+        await env.svc.drain()
+        await env.time.advance(15_000)
+        await env.reply(0, res)  # UDP copy
+        await env.svc.drain()
+        await env.reply(0, res, suffix="{087")  # second copy ~100 ms later
+        await env.svc.drain()
+        await env.reply(0, res)
+        await env.svc.drain()
+        states = {r["id"]: r["state"] for r in await env.rows()}
+        a_row = next(r for r in await env.rows() if r["id"] == a["log_id"])
+        record(
+            "m3. two copies of sync B's reply: A stays no_reply, B verified, one broadcast for B",
+            states[a["log_id"]] == "no_reply"
+            and a_row["reply_text"] is None
+            and states[b["log_id"]] == "verified"
+            and len([p for p in env.bc_for(b["log_id"]) if p["state"] == "verified"]) == 1
+            and not [p for p in env.bc_for(a["log_id"]) if p["state"] == "verified"],
+        )
+
+    # The duplicate guard on its own: A is a sync the transport refused (still inside
+    # its window, reply_at empty), B follows at once; B's second copy must not bind A.
+    async with make_env() as env:
+        await env.setup(synced=False)
+        env.tx_result = "no route"
+        a = await env.svc.sync(TARGET)
+        await env.svc.drain()
+        env.tx_result = None
+        await env.time.advance(1_000)
+        b = await env.svc.sync(TARGET)
+        await env.svc.drain()
+        await env.time.advance(15_000)
+        await env.reply(0, res)
+        await env.svc.drain()
+        await env.reply(0, res, suffix="{087")
+        await env.svc.drain()
+        states = {r["id"]: r["state"] for r in await env.rows()}
+        record(
+            "m3b. the second copy is dropped even when an older open sync row is inside its window",
+            states[a["log_id"]] == "send_failed"
+            and states[b["log_id"]] == "verified"
+            and len([p for p in env.bc_for(b["log_id"]) if p["state"] == "verified"]) == 1
+            and not [p for p in env.bc_for(a["log_id"]) if p["state"] == "verified"],
+        )
+
+
+async def case_m_sync_window(record: Record) -> None:
+    res = "ok ctr=5 v=4.40a"
+    # A reply to a sync whose 120 s window is over binds nothing.
+    async with make_env() as env:
+        await env.setup(synced=False)
+        a = await env.svc.sync(TARGET)
+        await env.svc.drain()
+        await env.time.advance(120_000)
+        await env.reply(0, res)
+        await env.svc.drain()
+        record(
+            "m3c. a sync reply after the 120 s window verifies nothing",
+            await env.state_of(a["log_id"]) == "no_reply" and await env.hwm() == 0,
+        )
+
+    # ctr=<hwm> below the stored hwm is a stale or replayed reply.
+    async with make_env() as env:
+        await env.setup(synced=False)
+        await env.storage.raise_node_admin_hwm(TARGET, 10)
+        a = await env.svc.sync(TARGET)
+        await env.svc.drain()
+        await env.time.advance(15_000)
+        await env.reply(0, "ok ctr=9 v=4.40a")
+        await env.svc.drain()
+        stale_ignored = await env.state_of(a["log_id"]) == "waiting"
+        await env.reply(0, "ok ctr=10 v=4.40a")
+        await env.svc.drain()
+        record(
+            "m3d. sync reply with ctr below last_hwm is ignored, ctr == last_hwm verifies",
+            stale_ignored
+            and await env.state_of(a["log_id"]) == "verified"
+            and await env.hwm() == 10,
+        )
+
+
+async def case_m_result_max(record: Record) -> None:
+    async with make_env() as env:
+        await env.setup()
+        r = await env.send()
+        await env.svc.drain()
+        await env.time.advance(20_000)
+        await env.reply(r["ctr"], "ok " + "x" * 105)  # 108 characters
+        await env.svc.drain()
+        record(
+            "m4. a 108-character result verifies the row (RESULT_MAX)",
+            await env.state_of(r["log_id"]) == "verified",
+        )
+
+    async with make_env() as env:
+        await env.setup()
+        r = await env.send()
+        await env.svc.drain()
+        await env.time.advance(20_000)
+        cap = _Capture()
+        svc_log = logging.getLogger("mcapp.node_admin_service")
+        svc_log.addHandler(cap)
+        try:
+            over = env.frame(r["ctr"], "ok " + "x" * 106)  # 109 characters
+            await env.svc.on_reply(over)
+            await env.svc.on_reply(env.frame(r["ctr"], "ok " + "x" * 106, suffix="{087"))
+            await env.svc.on_reply(
+                {**over, "msg": "RM1 1 ok " + "y" * 190 + " 0123456789abcdef"}
+            )  # over the prefilter
+            await env.svc.on_reply({**over, "msg": "RM1 7 status 0123456789abcdef"})  # a command
+            await env.svc.drain()
+        finally:
+            svc_log.removeHandler(cap)
+        tag = over["msg"][-16:]
+        warned = [ln for ln in cap.lines if "dropped" in ln]
+        record(
+            "m5. an RM1 reply the parser refuses logs one WARNING with the reason, never the tag",
+            await env.state_of(r["log_id"]) == "waiting"
+            and sum("result length 109 exceeds 108" in ln for ln in warned) == 2
+            and sum("wire length" in ln for ln in warned) == 1
+            and len(warned) == 3
+            and not any(tag in ln for ln in cap.lines),
+        )
+
+
+async def case_m_txpower_bound(record: Record) -> None:
+    async def counts(env: Env) -> tuple[int, int, int]:
+        return await env.ctr(), len(await env.rows()), len(env.tx)
+
+    async with make_env() as env:
+        await env.setup(tx_max=30)
+        s = await env.send("status")
+        await env.svc.drain()
+        await env.time.advance(20_000)
+        await env.reply(s["ctr"], STATUS_P1515)
+        await env.svc.drain()
+        await env.time.advance(11_000)
+        before = await counts(env)
+        refused, sentence = False, ""
+        try:
+            await env.send("txpower", "20")
+        except ValueError as exc:
+            refused, sentence = True, str(exc)
+        except Exception:  # an unfixed service fails the record below, not the whole case
+            refused = False
+        after = await counts(env)
+        record(
+            "m6. txpower above the node's p=<cur>/<max> maximum is refused (ValueError naming "
+            "15), no counter allocated, no row, no frame",
+            refused and "15" in sentence and before == after,
+        )
+        try:
+            ok = await env.send("txpower", "15")
+            goes_out = ok["ctr"] == before[0] + 1
+        except Exception:  # an unfixed service still has the refused frame in flight
+            goes_out = False
+        await env.svc.drain()
+        record("m6b. txpower at the node's maximum still goes out", goes_out)
+
+    async with make_env() as env:
+        await env.setup(tx_max=30)
+        r = await env.send("txpower", "25")
+        await env.svc.drain()
+        record(
+            "m6c. no known node maximum: the key's tx_max alone bounds txpower (as before)",
+            r["ctr"] == 1,
+        )
+
+    # The newest verified status that CARRIES p= decides; a newer old-form status does not lift it.
+    async with make_env() as env:
+        await env.setup(tx_max=30)
+        s1 = await env.send("status")
+        await env.svc.drain()
+        await env.time.advance(20_000)
+        await env.reply(s1["ctr"], STATUS_P1515)
+        await env.svc.drain()
+        await env.time.advance(11_000)
+        s2 = await env.send("status")
+        await env.svc.drain()
+        await env.time.advance(20_000)
+        await env.reply(s2["ctr"], "ok v=4.40a up=125 bat=87 heap=212 gw=0 mesh=1")
+        await env.svc.drain()
+        await env.time.advance(11_000)
+        record(
+            "m6d. a newer verified status without p= leaves the earlier maximum in force",
+            await raises(ValueError, env.send("txpower", "16")),
+        )
+
+
+async def case_m_txpower_held(record: Record) -> None:
+    # Held behind the auto-sync: the maximum becomes known while the command waits.
+    async with make_env() as env:
+        await env.setup(tx_max=30)
+        s = await env.send("status")
+        await env.svc.drain()
+        await env.time.advance(130_000)  # S: no_reply
+        env.svc._synced.discard(TARGET)
+        ctr_before = await env.ctr()
+        held = await env.send("txpower", "20")
+        await settle()
+        accepted_pending = held.get("pending") is True
+        await env.reply(s["ctr"], STATUS_P1515)  # the late reply to S names the maximum
+        await settle()
+        await env.reply(0, "ok ctr=5 v=4.40a")
+        await until(lambda: 10_000 in env.time.pending_deltas())
+        await env.time.advance(10_000)
+        await env.svc.drain()
+        dropped = [
+            p
+            for e, p in env.bcasts
+            if e == "node_admin:reply" and str(p.get("warning", "")).startswith("command dropped")
+        ]
+        record(
+            "m7. a txpower held behind the auto-sync is refused at release: no frame, no counter, "
+            "no row, 'command dropped' broadcast",
+            accepted_pending
+            and not any(m.split(" ")[2] == "txpower" for _, _, m in env.tx)
+            and await env.ctr() == ctr_before
+            and len(await env.rows()) == 2
+            and len(dropped) == 1
+            and "15" in str(dropped[0]["warning"]),
+        )
+
+
+async def case_m_synced_and_broadcast(record: Record) -> None:
+    async with make_env() as env:
+        await env.setup()
+        had = TARGET in env.svc._synced
+        await env.svc.set_key(TARGET, "other-pass", None)
+        cleared = TARGET not in env.svc._synced
+        r = await env.send("status")
+        await settle()
+        record(
+            "m8. set_key clears the target from _synced: the next command syncs first",
+            had and cleared and r.get("pending") is True and r["ctr"] == 0,
+        )
+
+    # V5b: a late verified reply to a row beyond the newest 100 still emits its event.
+    async with make_env() as env:
+        await env.setup()
+        old = await env.send("status")
+        await env.svc.drain()
+        for i in range(105):
+            await env.storage.insert_node_admin_sync_row(
+                TARGET, ATTACHED, "udp", env.time.now + i, "RM1 0 sync x"
+            )
+        await env.time.advance(20_000)
+        await env.reply(old["ctr"])
+        await env.svc.drain()
+        verified = [p for p in env.bc_for(old["log_id"]) if p["state"] == "verified"]
+        record(
+            "m9. a verified reply to a row older than the newest 100 still broadcasts it",
+            len(verified) == 1 and await env.state_of(old["log_id"]) in {None, "verified"},
+        )
+
+    # V5c: re-ask by id works for a row beyond the newest 100 of ALL targets.
+    async with make_env() as env:
+        await env.setup()
+        old = await env.send("status")
+        await env.svc.drain()
+        for i in range(105):
+            await env.storage.insert_node_admin_sync_row(
+                "DK5EN-91", ATTACHED, "udp", env.time.now + i, "RM1 0 sync x"
+            )
+        await env.time.advance(61_000)
+        try:
+            out: dict[str, Any] | None = await env.svc.reask(old["log_id"])
+        except ValueError:
+            out = None
+        await env.svc.drain()
+        record(
+            "m10. re-ask resolves its row by id, not by the newest 100 rows of all targets",
+            out == {"log_id": old["log_id"]},
+        )
+
+
 # ── runner ─────────────────────────────────────────────────────────────────
 
 
@@ -1187,6 +1528,13 @@ async def run_node_admin_service_tests() -> bool:
         case_i_transmit,
         case_j_misc,
         case_k_start_never_blocks,
+        case_m_reask,
+        case_m_sync_binding,
+        case_m_sync_window,
+        case_m_result_max,
+        case_m_txpower_bound,
+        case_m_txpower_held,
+        case_m_synced_and_broadcast,
     ]
     for case in cases:
         try:

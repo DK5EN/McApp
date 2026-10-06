@@ -28,6 +28,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ..logging_setup import get_logger
+from ..remote_cmd import RM_REPLY_TIMEOUT_MS
 from ..util import now_ms as _now_ms
 from ._base import StorageBase
 from .constants import db_read, db_write
@@ -294,14 +295,34 @@ class NodeAdminMixin(StorageBase):
 
         return await asyncio.to_thread(_run)
 
-    async def find_node_admin_log_row(self, target: str, ctr: int) -> dict[str, Any] | None:
+    async def get_node_admin_log_row(self, log_id: int) -> dict[str, Any] | None:
+        """One log row by its id, whatever its age or state, or None."""
+
+        def _run() -> dict[str, Any] | None:
+            with db_read(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    f"SELECT {_LOG_COLUMNS} FROM node_admin_log WHERE id = ?",  # noqa: S608 - literal column list
+                    (log_id,),
+                ).fetchone()
+                return dict(row) if row is not None else None
+
+        return await asyncio.to_thread(_run)
+
+    async def find_node_admin_log_row(
+        self, target: str, ctr: int, now_ms: int
+    ) -> dict[str, Any] | None:
         """The log row a reply to `(target, ctr)` belongs to, or None.
 
         `ctr > 0`: the unique row for that counter (the partial unique index
         guarantees one), whatever its state, so a late reply can still reach an
         abandoned row after a restart. `ctr == 0` is a sync reply: all syncs
-        share ctr 0, so it is the NEWEST sync row of the target that has no
-        reply yet.
+        share ctr 0 and the reply tag carries no request freshness, so it is
+        the NEWEST sync row of the target that has no reply yet AND whose
+        hand-off (`sent_at` if it never got one) is less than
+        `RM_REPLY_TIMEOUT_MS` before `now_ms`: an older open sync row has
+        already been given up on and must not be rewritten by a late or
+        duplicate reply.
         """
 
         def _run() -> dict[str, Any] | None:
@@ -317,11 +338,34 @@ class NodeAdminMixin(StorageBase):
                     cursor = conn.execute(
                         f"SELECT {_LOG_COLUMNS} FROM node_admin_log"  # noqa: S608 - literal column list
                         " WHERE target_call = ? AND ctr = 0 AND cmd = 'sync' AND reply_at IS NULL"
+                        " AND ? - COALESCE(handed_off_at, sent_at) < ?"
                         " ORDER BY id DESC LIMIT 1",
-                        (target,),
+                        (target, now_ms, RM_REPLY_TIMEOUT_MS),
                     )
                 row = cursor.fetchone()
                 return dict(row) if row is not None else None
+
+        return await asyncio.to_thread(_run)
+
+    async def node_admin_verified_status_rows(
+        self, target: str, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """The newest tag-verified `status` rows of `target` (newest first).
+
+        Read by the txpower bound: the newest of them that carries `p=<cur>/<max>`
+        names the board's maximum, however many other rows lie in between.
+        """
+
+        def _run() -> list[dict[str, Any]]:
+            with db_read(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute(
+                    f"SELECT {_LOG_COLUMNS} FROM node_admin_log"  # noqa: S608 - literal column list
+                    " WHERE target_call = ? AND cmd = 'status' AND verified = 1"
+                    " ORDER BY id DESC LIMIT ?",
+                    (target, limit),
+                )
+                return [dict(r) for r in cursor.fetchall()]
 
         return await asyncio.to_thread(_run)
 

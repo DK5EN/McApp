@@ -52,7 +52,7 @@ UNIX_FLOOR_MIN_S: Final = 1_704_067_200  # 2024-01-01: firmware `clockUnix` plau
 TX_MAX_LIMIT: Final = 30
 REPLY_PREFIX: Final = "RM1 "
 REPLY_MAX_CHARS: Final = 200
-HISTORY_SCAN: Final = 100  # rows scanned to find the newest row / a row by id
+HISTORY_SCAN: Final = 100  # rows scanned to find the newest row of a target
 HISTORY_LIMIT_MAX: Final = 1000
 
 TRANSPORTS: Final = frozenset({"auto", "ble", "udp"})
@@ -181,6 +181,10 @@ class NodeAdminService:
         self._keys: dict[str, bytes] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._synced: set[str] = set()
+        # Rows already asked again once (the node caches ONE reply, a second re-ask is a
+        # replay strike). In memory: a row left open at restart is abandoned and cannot
+        # be re-asked anyway.
+        self._reasked: set[int] = set()
         self._pending: dict[str, _Pending] = {}
         self._tasks: set[asyncio.Task[None]] = set()
         self.rejected_replies = 0
@@ -265,6 +269,8 @@ class NodeAdminService:
         self._keys.pop(t, None)
         await self._storage.set_node_admin_key(t, token, tx_max)
         self._keys.pop(t, None)
+        # A new password invalidates the earlier sync: the next command syncs again.
+        self._synced.discard(t)
         logger.info("node admin key stored for %s", t)
 
     async def delete_key(self, target: str) -> None:
@@ -337,6 +343,31 @@ class NodeAdminService:
                 return int(item["tx_max"])
         return remote_cmd.TX_MAX_DEFAULT
 
+    async def _node_tx_max(self, target: str) -> int | None:
+        """The board maximum from the newest verified `status` reply carrying `p=`, or None."""
+        for r in await self._storage.node_admin_verified_status_rows(target):
+            board_max = remote_cmd.status_tx_power_max(str(r.get("result") or ""))
+            if board_max is not None:
+                return board_max
+        return None
+
+    async def _check_txpower(self, target: str, cmd: str, args: str) -> None:
+        """Refuse `txpower` above the node's own maximum (a counted, silent reject there).
+
+        The key's `tx_max` is only the operator's ceiling; the node bounds by its board's
+        `TX_POWER_MAX`, which its `status` reply reports as `p=<cur>/<max>`. Unknown
+        maximum: the key's `tx_max` alone, as before.
+        """
+        if cmd != "txpower" or not args.isdigit():
+            return
+        board_max = await self._node_tx_max(target)
+        if board_max is not None and int(args) > board_max:
+            msg = (
+                f"txpower {int(args)} is above this node's maximum of {board_max} "
+                "(from its last status reply)"
+            )
+            raise remote_cmd.RmError(msg)
+
     async def _check_busy(self, target: str, now: int) -> list[dict[str, Any]]:
         """Raise NodeAdminBusyError per D3; returns the scanned rows."""
         if target in self._pending:
@@ -374,6 +405,7 @@ class NodeAdminService:
         key = await self._get_key(t)
         tx_max = await self._tx_max(t)
         remote_cmd.validate_command(cmd, args, tx_max)
+        await self._check_txpower(t, cmd, args)
         src_call = self._src_call(t)
         resolved = self._resolve_transport(transport)
         async with self._lock(t):
@@ -397,6 +429,9 @@ class NodeAdminService:
         warning: str | None = None,
     ) -> dict[str, Any]:
         """Allocate the counter + log row (one transaction), then hand off in the background."""
+        # The single choke point of the direct and the held-behind-sync path: every
+        # refusal belongs BEFORE the allocation, which burns a counter value.
+        await self._check_txpower(target, cmd, args)
         now = self._clock()
 
         def build_text(ctr: int) -> str:
@@ -428,16 +463,10 @@ class NodeAdminService:
         except Exception:
             logger.exception("node admin hand-off bookkeeping for %s failed", target)
 
-    async def _row_by_id(self, target: str | None, row_id: int) -> dict[str, Any] | None:
-        for r in await self._storage.node_admin_history(target, HISTORY_SCAN):
-            if r["id"] == row_id:
-                return r
-        return None
-
     async def _broadcast_row(self, target: str, row_id: int, warning: str | None = None) -> None:
         """Emit `node_admin:reply` with the full row and its computed state."""
-        row = await self._row_by_id(target, row_id)
-        if row is None:
+        row = await self._storage.get_node_admin_log_row(row_id)
+        if row is None or row["target_call"] != target:
             return
         payload = {**row, "state": compute_state(row, self._clock())}
         if row.get("send_error"):
@@ -556,7 +585,7 @@ class NodeAdminService:
     # ── re-ask ─────────────────────────────────────────────────────────────
 
     async def reask(self, log_id: int) -> dict[str, Any]:
-        row = await self._row_by_id(None, log_id)
+        row = await self._storage.get_node_admin_log_row(log_id)
         if row is None:
             msg = f"unknown log id {log_id}"
             raise ValueError(msg)
@@ -571,7 +600,10 @@ class NodeAdminService:
                 msg = "BLE is not connected"
                 raise NodeAdminUnavailableError(msg)
             # Restart the 120 s window and the 10 s spacing NOW, so a second
-            # click cannot slip in while the transmit is still running.
+            # click cannot slip in while the transmit is still running. The row's
+            # first hand-off was just checked against the node's 10 min cache and
+            # this is its one re-ask, so the restamp cannot extend that window.
+            self._reasked.add(log_id)
             await self._storage.mark_node_admin_handed_off(log_id, now)
             logger.info("node admin %s: re-ask RM1 %s %s", target, row["ctr"], row["cmd"])
             self._spawn(self._transmit_row(target, log_id, transport, str(row["text"])))
@@ -591,6 +623,13 @@ class NodeAdminService:
             raise NodeAdminBusyError(msg)
         if row["cmd"] in {"reboot", "sync"} or int(row["ctr"]) < 1:
             msg = f"{row['cmd']} is never asked again"
+            raise NodeAdminBusyError(msg)
+        if row["id"] in self._reasked:
+            msg = "this row was already asked again once; the node caches only one reply"
+            raise NodeAdminBusyError(msg)
+        until = _lockout_until_ms(rows, now)
+        if until is not None:
+            msg = f"node may be locked out until {until}; no frames until then"
             raise NodeAdminBusyError(msg)
         handed_off = row.get("handed_off_at")
         if handed_off is None or now - int(handed_off) >= remote_cmd.RM_CACHE_MS:
@@ -622,13 +661,21 @@ class NodeAdminService:
         """ReplyHook. Cheap prefilter here; everything else runs in a task so
         the ingest path never waits on the DB or the SecretBox."""
         msg = message.get("msg")
-        if (
-            not isinstance(msg, str)
-            or not msg.startswith(REPLY_PREFIX)
-            or len(msg) > REPLY_MAX_CHARS
-        ):
+        if not isinstance(msg, str) or not msg.startswith(REPLY_PREFIX):
+            return
+        if len(msg) > REPLY_MAX_CHARS:
+            self._warn_rejected(message, msg)
             return
         self._spawn(self._handle_reply(message))
+
+    @staticmethod
+    def _warn_rejected(message: dict[str, Any], msg: str) -> None:
+        """One WARNING for a reply-shaped RM1 text the parser refuses (no tag, no text)."""
+        reason = remote_cmd.reply_rejection(msg)
+        if reason is not None:
+            logger.warning(
+                "node admin: RM1 reply from %s dropped, %s", str(message.get("src"))[:24], reason
+            )
 
     async def _handle_reply(self, message: dict[str, Any]) -> None:
         try:
@@ -638,16 +685,44 @@ class NodeAdminService:
         except Exception:
             logger.exception("node admin reply processing failed")
 
-    async def _find_row(self, target: str, ctr: int) -> dict[str, Any] | None:
-        row = await self._storage.find_node_admin_log_row(target, ctr)
-        if row is not None or ctr != 0:
+    async def _find_row(self, target: str, ctr: int, now: int, text: str) -> dict[str, Any] | None:
+        if ctr != 0:
+            return await self._storage.find_node_admin_log_row(target, ctr, now)
+        # A sync reply carries no request freshness (ctr 0, tag over the hwm text only),
+        # so it binds only to a sync row inside its own reply window.
+        sync_rows = [
+            r
+            for r in await self._storage.node_admin_history(target, HISTORY_SCAN)
+            if r["cmd"] == "sync" and int(r["ctr"]) == 0
+        ]
+        for r in sync_rows:
+            # The other transport's copy of a reply that just verified a row: identical
+            # text, a rate window apart at most. Dropped, never bound to an older row.
+            if (
+                r.get("verified") == 1
+                and r.get("reply_text") == text
+                and r.get("reply_at") is not None
+                and now - int(r["reply_at"]) < remote_cmd.RM_RATE_MS
+            ):
+                return None
+        row = await self._storage.find_node_admin_log_row(target, 0, now)
+        if row is not None:
             return row
         # A forged (bad tag) sync reply closes the open sync row; the genuine
         # one must still be able to upgrade it. Only the newest sync row.
-        for r in await self._storage.node_admin_history(target, HISTORY_SCAN):
-            if r["cmd"] == "sync" and int(r["ctr"]) == 0:
-                return r if r.get("verified") == 0 else None
+        if sync_rows and sync_rows[0].get("verified") == 0:
+            r = sync_rows[0]
+            anchor = r.get("handed_off_at")
+            anchor = r.get("sent_at") if anchor is None else anchor
+            if anchor is not None and now - int(anchor) < remote_cmd.RM_REPLY_TIMEOUT_MS:
+                return r
         return None
+
+    async def _last_hwm(self, target: str) -> int:
+        for item in await self._storage.list_node_admin_targets():
+            if item["target"] == target:
+                return int(item["last_hwm"])
+        return 0
 
     async def _correlate(
         self, message: dict[str, Any]
@@ -658,17 +733,29 @@ class NodeAdminService:
             return None
         parsed = remote_cmd.parse_reply(msg)
         if parsed is None:
+            self._warn_rejected(message, msg)
             return None
         try:
             target = remote_cmd.normalize_call(strip_relay_path(src))
             reply_dst = remote_cmd.normalize_call(resolve_dst_target(dst))
         except ValueError:
             return None
-        row = await self._find_row(target, parsed.ctr)
-        if row is None or int(row["ctr"]) != parsed.ctr:
-            return None
-        if reply_dst != row["src_call"]:
-            return None  # overheard reply for another SysOp
+        now = self._clock()
+        row = await self._find_row(target, parsed.ctr, now, util.strip_ack_suffix(msg))
+        if row is None or int(row["ctr"]) != parsed.ctr or reply_dst != row["src_call"]:
+            return None  # no such row, or an overheard reply for another SysOp
+        if parsed.ctr == 0:
+            # `ctr=<hwm>` of a genuine sync reply is never below what we already verified.
+            hwm = remote_cmd.parse_sync_hwm(parsed.body) or 0
+            stored = await self._last_hwm(target)
+            if hwm < stored:
+                logger.info(
+                    "node admin %s: sync reply with ctr=%d below hwm %d ignored",
+                    target,
+                    hwm,
+                    stored,
+                )
+                return None
         return parsed, row
 
     async def _process_reply(self, message: dict[str, Any]) -> None:
