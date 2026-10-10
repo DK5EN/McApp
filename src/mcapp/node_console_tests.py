@@ -89,6 +89,7 @@ from typing import TYPE_CHECKING, Any, cast
 import httpx
 from fastapi import FastAPI
 
+from . import command_echo
 from .commands.constants import has_console
 from .node_console import NodeConsoleSession
 from .sse_routes.monitor import build_monitor_router
@@ -365,6 +366,7 @@ async def _test_wrong_password(record: RecordFn) -> None:
 async def _test_flags_set_and_restored(record: RecordFn) -> None:
     console = _FakeConsole(loradebug="off", txcapture="on")
     await console.start()
+    command_echo.clear()
     try:
         wire_monitor = WireMonitor()
         session = _new_session(wire_monitor, console)
@@ -381,6 +383,14 @@ async def _test_flags_set_and_restored(record: RecordFn) -> None:
         record(
             "no-password: --txcapture on is NOT sent (already on)",
             "--txcapture on" not in console.commands,
+        )
+        record(
+            "no-password: the sent --loradebug on is registered as an expected echo",
+            command_echo.is_expected_command_echo("--loradebug on"),
+        )
+        record(
+            "no-password: --txcapture on (never sent) is NOT registered",
+            not command_echo.is_expected_command_echo("--txcapture on"),
         )
         record(
             "no-password: prior_flags recorded correctly",
@@ -405,6 +415,10 @@ async def _test_flags_set_and_restored(record: RecordFn) -> None:
             "--loradebug off" in console.commands and "--txcapture off" not in console.commands,
         )
         record(
+            "no-password: the restore's --loradebug off is registered as an expected echo",
+            command_echo.is_expected_command_echo("--loradebug off"),
+        )
+        record(
             "no-password: the fake's loradebug flag is CONFIRMED back off",
             console.flags["loradebug"] == "off",
         )
@@ -421,6 +435,7 @@ async def _test_flags_set_and_restored(record: RecordFn) -> None:
             session.status()["pending_restore"] == [],
         )
     finally:
+        command_echo.clear()
         await console.stop()
 
 

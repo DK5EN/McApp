@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from . import __version__
 from .ble_client import ConnectionState
 from .classifier import Classifier
+from .command_echo import is_expected_command_echo
 from .commands.parsing import SPAM_GROUP
 from .linkcheck import is_link_check_payload
 from .logging_setup import get_logger
@@ -109,11 +110,12 @@ def activate_slot_error(slot_info: dict[str, Any], slot: int) -> str | None:
 # (`storage.ingest._should_filter_message`) and push
 # (`push_delivery._is_node_local_noise`) already drop EVERY `response`-sourced
 # frame outright — command replies are not conversations either one needs to
-# persist or notify about. The live SSE broadcast has no such blanket rule
-# because the webapp's custom-command box shows the operator's own `--`
-# command replies inline as they arrive, so only this exact, closed set of
-# self-inflicted echoes is dropped here; every other `response` frame (an
-# operator-issued command's reply) must keep flowing.
+# persist or notify about. The live SSE broadcast does not drop every
+# `response` frame: only this exact, closed set of self-inflicted echoes (plus
+# the short-lived `command_echo` registry for the DBG session's flag commands)
+# is dropped here; every other `response` frame (an operator-issued command's
+# reply) is redirected to the spam group by `broadcast_verdict` (the webapp's
+# custom-command box does not read replies from the SSE stream).
 _AUTO_COMMAND_ECHOES: frozenset[str] = frozenset(
     {
         "--ackinfo on",
@@ -139,7 +141,9 @@ def is_auto_command_echo(payload: dict[str, Any]) -> bool:
     if payload.get("src") != "response":
         return False
     msg = payload.get("msg")
-    return isinstance(msg, str) and msg.strip() in _AUTO_COMMAND_ECHOES
+    if not isinstance(msg, str):
+        return False
+    return msg.strip() in _AUTO_COMMAND_ECHOES or is_expected_command_echo(msg)
 
 
 def broadcast_verdict(
@@ -156,8 +160,12 @@ def broadcast_verdict(
     Returns `(verdict, reason, data_to_broadcast)`:
       - `("dropped", "linkcheck", None)` — a `{ping}`/`{pong}` protocol frame
         (linkcheck ADR §1.2): never shown, matching storage/push.
-      - `("dropped", "command_echo", None)` — MCProxy's own connect-time
-        `--ackinfo` session-command echo (see `is_auto_command_echo`).
+      - `("dropped", "command_echo", None)` — MCProxy's own session-command echo
+        (connect-time `--ackinfo`, DBG flag commands; see
+        `is_auto_command_echo`).
+      - `("redirected", "node_reply", data)` — the node's reply to a console
+        command (`src == "response"`), quarantined to `SPAM_GROUP` exactly
+        like a blocklist redirect; only the reason token differs.
       - `("dropped", "blocklist", None)` — blocked personal/position/
         telemetry traffic.
       - `("redirected", "blocklist", data)` — blocked group/broadcast/
@@ -173,6 +181,8 @@ def broadcast_verdict(
         return "dropped", "linkcheck", None
     if is_auto_command_echo(message_data):
         return "dropped", "command_echo", None
+    if message_data.get("src") == "response":
+        return "redirected", "node_reply", {**message_data, "dst": SPAM_GROUP}
     decision = router.blocklist_decision(message_data) if router is not None else "pass"
     if decision == "drop":
         return "dropped", "blocklist", None
