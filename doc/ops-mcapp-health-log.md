@@ -1,6 +1,6 @@
 # McApp production health log — mcapp.local
 
-> **Status:** Current — newest section: §30 (2026-10-05 19:08 CEST, sweep of `v2.1.5-dev.2` node time zone, green, zero findings). Before that: §26 (2026-10-04 09:36 CEST, pre-release sweep of
+> **Status:** Current — newest section: §32 (2026-10-10 15:35 CEST, pre-release sweep of `v2.1.7-dev.1` (Internet feed removed) before the v2.1.7 promotion, green, zero findings, ~15 min soak). Before that: §31 (2026-10-06, v2.1.6-dev.6 short soak). Before that: §30 (2026-10-05 19:08 CEST, sweep of `v2.1.5-dev.2` node time zone, green, zero findings). Before that: §26 (2026-10-04 09:36 CEST, pre-release sweep of
 > `v2.1.1-dev.2` before the v2.1.1 promotion) — green, zero findings, **~3 min soak at the operator's
 > decision**; new watch point **W23** (QRZ lookup budget). Before that: §25 (2026-10-02, no-soak
 > sign-off of v2.0.19, re-released as v2.1.0). Before that: §24 (2026-09-29 10:03 CEST, post-release sweep of
@@ -2308,3 +2308,47 @@ draft-2 commands (`maxhop`, `pos`, sync reply with `rm=2`).
 
 **Watch points.** W25 (new): the bench run of the remote view against DK5EN-1 (Connect, switches,
 Restart) has not been done; it transmits on air and waits for the operator.
+
+## 32. 2026-10-10 15:35 CEST — pre-release sweep of v2.1.7-dev.1 (Internet feed removed) before the v2.1.7 promotion (short soak)
+
+| Anchor         | Value                                                                  |
+| -------------- | ---------------------------------------------------------------------- |
+| Active slot    | slot-1, `v2.1.7-dev.1` (`webapp/version.html`), since 15:17:21         |
+| Soak           | about 15 min, on operator request (`/prod-release` right after)        |
+| Schema / epoch | 35 = `LATEST_SCHEMA_VERSION`; system epoch 5 = `REQUIRED_SYSTEM_EPOCH` |
+| Host           | up 3 d 7 h (clean reboot 2026-10-07 08:21, no crash signature)         |
+
+**Verdict: green, zero findings.** The release is frontend-only (the webapp's oevsv.at Internet
+WebSocket and its button removed); the backend carries a docstring change only.
+
+- Services: `mcapp`, `mcapp-ble`, `caddy`, `lighttpd` active; `NRestarts` 0 on both McApp units.
+  Journal warnings: none in 24 h (`mcapp`, `mcapp-ble`), none since the restart.
+- `/api/status`: `udp_target_kind` identified (192.168.68.62), `udp_multiple_sources` false,
+  `udp_untrusted_source_ips` empty, `udp_suppressed_target_changes` 0; `features` `['node_admin']`.
+- Served bundle: 0 hits for `mcmap.oevsv.at` and no `Internet: …` toast string; slot-0 and slot-2
+  still contain both (positive control). `sw.js` has `SKIP_WAITING`.
+- DB 54.2 MB, WAL 3.94 MB; messages 25543, stations 426, signal_log 46320. Classifier version 5,
+  markers through v5, 38 rules, 0 unclassified in the last hour; 0 `{CET}` rows in `messages`.
+- Rates (1 h window ending 15:33): msg 51, pos 83, signal_log 247. msg is 4.6x the §1 rate (11/h),
+  which matches the daytime ramp seen over the last 24 h (37/h at 15 h, 69/h at 16 h on 2026-10-09);
+  pos and signal_log are within the §1 range.
+- Gateway uptime 24 h: 100.0 %, coverage 100.0 %; last `{CET}` 2 s old, heartbeat 27 s; no gap or
+  dark row in 24 h.
+- Host: disk 9 % of 59 G, 182 MB RAM available, ~22 MB swapped, load 0.12, 41.9 C.
+- Secrets/TLS: `vapid.json` 0600, raw base64url; `config.json` 0640; Caddy internal 12 h leaf,
+  mid-life.
+- Gate on the exact tree to be released, after the dependency bumps (httptools 0.9.0, pycparser
+  3.11, ruff 0.17.0; webapp lockfile refresh): ruff, format, mypy, startup runner exit 0
+  (`config_migration` skipped on macOS bash 3, as always); webapp lint, typecheck, format,
+  267 files / 4872 tests, `build:strict`.
+
+**Absent signals.** No restarts, no journal warnings, no UDP provenance anomaly, no unclassified
+messages, no `{CET}` rows stored, no uptime gap.
+
+**Dismissed.** Post-restart `loop_lag` critical x2 at 15:17:39-40 (import-phase stacks; W19
+startup noise). Client timeouts on `/api/monitor/frames` and `/api/weather` on 2026-10-09 evening
+(outside the soak window; weather is closed as a non-issue).
+
+**Watch points.** W17 (read_cursor http stalls): 16 in 24 h, 188 in 7 d, unchanged. W23 (QRZ
+budget): free-tier cap reached at 01:29 today, lifts 2026-10-11 01:29 by design. W25 (Node Admin
+bench): still pending, 0 node_admin rows. No new W or F.
