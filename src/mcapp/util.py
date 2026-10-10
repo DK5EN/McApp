@@ -210,9 +210,9 @@ def undouble_aprs_symbol_escapes(payload: dict[str, Any]) -> bool:
     ``udp_handler``. Everything else stays untouched on purpose — the BLE path's
     single backslash is already canonical and a second pass would corrupt it,
     single-character overlay ids (``G``, ``M``, ``0-9``, ``A-Z``) are valid APRS
-    overlays rather than corruption, the oevsv.at internet feed's ``KFR`` alias
-    never reaches this socket and is the frontend's concern, and genuine junk (a
-    space, ``U+FFFD``) must keep failing symbol resolution instead of being
+    overlays rather than corruption, the ``KFR`` alias of the retired oevsv.at
+    internet feed never reached this socket and stays the frontend's concern, and
+    genuine junk (a space, ``U+FFFD``) must keep failing symbol resolution instead of being
     silently mapped to something plausible. The repair job in
     ``storage/ingest.backfill_aprs_symbol_escapes`` is the one other caller and
     operates on stored ``raw_json``, not on live traffic.

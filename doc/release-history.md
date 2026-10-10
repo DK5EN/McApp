@@ -1,69 +1,54 @@
 # Release History
 
-## v2.1.6 (2026-10-06)
+## v2.1.7 (2026-10-10)
 
-McApp can now administer other MeshCom nodes over LoRa. Store a node's callsign and its
-remote-management password once, then switch GPS, tracking, display, light, mesh and gateway on or
-off, change TX power, trigger a position or track beacon, or restart the node, all from the web
-page, with the node's last answer shown as green and grey tiles. Node Admin is now also the home of
-the BLE page, and the RF Monitor moved into Settings. Schema 34 → 35 (three `node_admin_*` tables,
-migrated automatically); `SYSTEM_EPOCH` stays at 5.
+The "Internet" button in the status bar is gone. It opened a direct connection from the browser to
+the oevsv.at MeshCom map server, which has been switched off upstream, so pressing it only produced
+a permanent red "Internet: Connection failed" message. The function is removed without
+replacement: McApp shows exactly what your own node and the McApp backend deliver. Schema stays at
+35 and `SYSTEM_EPOCH` stays at 5.
 
 ### Highlights
 
-- **Remote node administration (Node Admin > Remote Management).** Pick a node and press
-  **Connect**: McApp syncs the command counter, then reads the node's status. Switches show the
-  last verified answer: green is on, grey off, amber "no answer yet, may or may not have run".
-  Restart, "Send position now" / "Send track now", TX power and an Advanced section (output pin,
-  re-sync, raw command, history) are on the same page.
-- **Settings > Remote nodes** stores each node's callsign, its password (encrypted on the Pi,
-  never shown again; Generate offers a random 14-character one) and a per-node TX power limit.
-  **Remove** deletes the node from McApp completely after a confirmation.
-- **McApp protects the node from itself.** One command in flight per node, 10 s between frames,
-  no new frame for 5 minutes after a command that got no answer (the node may still act on a late
-  copy), a 2-minute pause while another station is administering the same node, and TX power never
-  above the board maximum the node reported. Each of these refusals tells you why and for how long.
-- **New navigation.** Node Admin has two sub-tabs, **BLE** (the former BLE page, the default) and
-  **Remote Management**, and is shown on every backend. The RF Monitor is now **Settings >
-  Monitor**. Old links (`/bluetooth`, `/monitor`, `/nodeadmin`) forward to the new places.
-- **QRZ.com lookups no longer get stuck for days.** The count QRZ reports at login is treated as a
-  hint, never as a reason for a 24-hour suspension.
+- **No more Internet button and no more red "Internet: Connection failed" popup.** The button is
+  gone from the desktop status bar and from the mobile status sheet. A browser that had it switched
+  on simply forgets the setting.
+- **The "Sent — seen on the internet" status is gone with it.** It could only be set by the
+  removed feed. Your own messages still show "Sent", "Echo" and the acknowledgements from your node,
+  the gateway and the addressee exactly as before.
+- **Stations that only the internet feed knew about disappear from the map** at the next start of
+  the app. Everything your node or the backend reported stays.
 
 ### Backend (MCProxy)
 
-- Remote admin uses the firmware's signed `RM1` direct messages (HMAC-SHA-256, monotonic counter,
-  sync handshake). Commands: `status`, `sync`, `sendpos`, `sendtrack`, `gps`, `track`, `display`,
-  `led`, `gateway`, `mesh`, `txpower`, `setout`, `reboot`. Replies up to 108 characters are
-  accepted (firmware draft 2).
-- `GET /api/node-admin/targets/{target}/state` folds the verified answers, in send order, into the
-  node's last known state; `DELETE /api/node-admin/targets/{target}` removes a node (refused while
-  a command is in flight, the post-silence cool-down or a possible lockout runs).
-- The feature is always on and inert until a node is stored; `/api/status` lists `node_admin` under
-  `features`. The routes are LAN-only: they refuse a foreign `Host` or `Origin`, so they are not
-  usable through the public TLS hostname.
-- QRZ: the daily budget is `min(50 - ledger, 100 - (Count at login + lookups since))`; a `Count`
-  of 100 or more is ignored as implausible, and a persisted server-count suspension is lifted.
-- Dependencies refreshed (both `uv.lock` files).
+- No functional change. Dependencies refreshed (both `uv.lock` files: httptools 0.9.0, pycparser
+  3.11, ruff 0.17.0); fastapi 0.143.0 and pydantic 2.14.0 came in earlier in this cycle.
 
 ### Frontend (webapp)
 
-- Remote Management reuses the BLE page's register bar, card grid and toggle tiles; the BLE page
-  itself is unchanged.
-- The QRZ card shows what QRZ reports and why a suspension is running.
-- vite-plugin-pwa 2.0.0, vite 8.3.3 and a transitive refresh. TypeScript stays on 6.x.
+- The browser's WebSocket client for `mcmap.oevsv.at` is deleted, together with its settings key,
+  its connection toasts and the offline-banner state "Local proxy unreachable — Internet data live".
+- Messages cached in the browser are cleaned up once on load: the old "seen on the internet" flag
+  is dropped, and an acknowledgement that only the internet feed had seen is treated like any other
+  acknowledgement your browser matched itself. If McApp itself never saw that acknowledgement, the
+  ✓✓ on such an old message goes away at the next reconnect.
+- vite 8.3.4, vue-router 5.4.0, maplibre-gl 6.13.0 and a transitive refresh.
 
 ### Upgrade notes
 
-- Schema 34 → 35 runs automatically at start. Nothing else to do.
-- To administer a node it needs remote management enabled (`--remotemgmt on`) and a password
-  (`--passwd`). That password is also the node's net-console password, and one captured frame
-  allows offline guessing, so use a long random one (Generate).
-- Reload the app once (the "Update available" banner) to get the new navigation.
+- Nothing to do on the Pi. Reload the app once (the "Update available" banner) so the browser
+  drops the old bundle and the Internet button with it.
 
 ## Earlier releases, in brief
 
 One entry per release. The full notes as published are in
 [`doc/archive/release-history-full.md`](https://github.com/DK5EN/McApp/blob/development/doc/archive/release-history-full.md).
+
+### v2.1.6 (2026-10-06)
+
+- Remote node administration over LoRa (signed `RM1` messages) in Node Admin > Remote Management;
+  nodes and passwords are stored in Settings > Remote nodes. Schema 34 → 35, `SYSTEM_EPOCH` 5.
+- New navigation: Node Admin holds BLE and Remote Management; the RF Monitor moved to Settings.
 
 ### v2.1.5 (2026-10-05)
 
