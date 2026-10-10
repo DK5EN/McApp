@@ -5,6 +5,45 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.1.7 (2026-10-10)
+
+The "Internet" button in the status bar is gone. It opened a direct connection from the browser to
+the oevsv.at MeshCom map server, which has been switched off upstream, so pressing it only produced
+a permanent red "Internet: Connection failed" message. The function is removed without
+replacement: McApp shows exactly what your own node and the McApp backend deliver. Schema stays at
+35 and `SYSTEM_EPOCH` stays at 5.
+
+### Highlights
+
+- **No more Internet button and no more red "Internet: Connection failed" popup.** The button is
+  gone from the desktop status bar and from the mobile status sheet. A browser that had it switched
+  on simply forgets the setting.
+- **The "Sent — seen on the internet" status is gone with it.** It could only be set by the
+  removed feed. Your own messages still show "Sent", "Echo" and the acknowledgements from your node,
+  the gateway and the addressee exactly as before.
+- **Stations that only the internet feed knew about disappear from the map** at the next start of
+  the app. Everything your node or the backend reported stays.
+
+### Backend (MCProxy)
+
+- No functional change. Dependencies refreshed (both `uv.lock` files: httptools 0.9.0, pycparser
+  3.11, ruff 0.17.0); fastapi 0.143.0 and pydantic 2.14.0 came in earlier in this cycle.
+
+### Frontend (webapp)
+
+- The browser's WebSocket client for `mcmap.oevsv.at` is deleted, together with its settings key,
+  its connection toasts and the offline-banner state "Local proxy unreachable — Internet data live".
+- Messages cached in the browser are cleaned up once on load: the old "seen on the internet" flag
+  is dropped, and an acknowledgement that only the internet feed had seen is treated like any other
+  acknowledgement your browser matched itself. If McApp itself never saw that acknowledgement, the
+  ✓✓ on such an old message goes away at the next reconnect.
+- vite 8.3.4, vue-router 5.4.0, maplibre-gl 6.13.0 and a transitive refresh.
+
+### Upgrade notes
+
+- Nothing to do on the Pi. Reload the app once (the "Update available" banner) so the browser
+  drops the old bundle and the Internet button with it.
+
 ## v2.1.6 (2026-10-06)
 
 McApp can now administer other MeshCom nodes over LoRa. Store a node's callsign and its

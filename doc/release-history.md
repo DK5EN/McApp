@@ -1,48 +1,47 @@
 # Release History
 
-## v2.1.7 (2026-10-10)
+## v2.1.8 (2026-10-10)
 
-The "Internet" button in the status bar is gone. It opened a direct connection from the browser to
-the oevsv.at MeshCom map server, which has been switched off upstream, so pressing it only produced
-a permanent red "Internet: Connection failed" message. The function is removed without
-replacement: McApp shows exactly what your own node and the McApp backend deliver. Schema stays at
-35 and `SYSTEM_EPOCH` stays at 5.
+Small clean-ups in the web interface: the node settings are laid out more tidily, and the message
+view gets two clear (x) buttons. The backend is unchanged. Schema stays at 35 and `SYSTEM_EPOCH`
+stays at 5.
 
 ### Highlights
 
-- **No more Internet button and no more red "Internet: Connection failed" popup.** The button is
-  gone from the desktop status bar and from the mobile status sheet. A browser that had it switched
-  on simply forgets the setting.
-- **The "Sent — seen on the internet" status is gone with it.** It could only be set by the
-  removed feed. Your own messages still show "Sent", "Echo" and the acknowledgements from your node,
-  the gateway and the addressee exactly as before.
-- **Stations that only the internet feed knew about disappear from the map** at the next start of
-  the app. Everything your node or the backend reported stays.
+- **Clear (x) button in the destination box** above the message field. It empties the box in one
+  click, for example the "2" left over from the last group, and keeps the cursor in the field.
+- **Clear (x) button in the top filter field**, replacing the red garbage bin. The bin deleted
+  every stored message of the filtered conversation from the database; that function is removed
+  from the interface. The x only clears the filter text.
+- **Node settings re-ordered:** Time Zone and Via are their own cards, and the BLE PIN card now
+  sits in the grid next to Weather instead of below it.
 
 ### Backend (MCProxy)
 
-- No functional change. Dependencies refreshed (both `uv.lock` files: httptools 0.9.0, pycparser
-  3.11, ruff 0.17.0); fastapi 0.143.0 and pydantic 2.14.0 came in earlier in this cycle.
+- No functional change.
 
 ### Frontend (webapp)
 
-- The browser's WebSocket client for `mcmap.oevsv.at` is deleted, together with its settings key,
-  its connection toasts and the offline-banner state "Local proxy unreachable — Internet data live".
-- Messages cached in the browser are cleaned up once on load: the old "seen on the internet" flag
-  is dropped, and an acknowledgement that only the internet feed had seen is treated like any other
-  acknowledgement your browser matched itself. If McApp itself never saw that acknowledgement, the
-  ✓✓ on such an old message goes away at the next reconnect.
-- vite 8.3.4, vue-router 5.4.0, maplibre-gl 6.13.0 and a transitive refresh.
+- `DestinationPicker` and `ChatFilterBar` gain the clear button; `ChatFilterBar` loses its
+  `showDelete` prop and `delete` event, and `MessagesView` loses the confirm dialog behind it.
+- `NodePinCard` moved into the settings grid; the node settings tiles were reordered and the Time
+  Zone and Via cards split apart.
 
 ### Upgrade notes
 
-- Nothing to do on the Pi. Reload the app once (the "Update available" banner) so the browser
-  drops the old bundle and the Internet button with it.
+- Nothing to do on the Pi. Reload the app once (the "Update available" banner) to pick up the new
+  bundle.
+- Deleting all messages of one conversation is no longer possible from the web interface.
 
 ## Earlier releases, in brief
 
 One entry per release. The full notes as published are in
 [`doc/archive/release-history-full.md`](https://github.com/DK5EN/McApp/blob/development/doc/archive/release-history-full.md).
+
+### v2.1.7 (2026-10-10)
+
+- The status bar's "Internet" button and the "seen on the internet" status are removed; the
+  oevsv.at map feed they used was switched off upstream. Schema 35, `SYSTEM_EPOCH` 5.
 
 ### v2.1.6 (2026-10-06)
 
