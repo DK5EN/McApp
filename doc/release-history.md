@@ -1,42 +1,53 @@
 # Release History
 
-## v2.1.8 (2026-10-10)
+## v2.1.9 (2026-10-10)
 
-Small clean-ups in the web interface: the node settings are laid out more tidily, and the message
-view gets two clear (x) buttons. The backend is unchanged. Schema stays at 35 and `SYSTEM_EPOCH`
-stays at 5.
+The RF Monitor shows more of the traffic it captures, and the node settings gain operator
+toggles for the BLE board. Node Admin gets an Advanced section for a stored node. The backend
+change is limited to the monitor. Schema stays at 35 and `SYSTEM_EPOCH` stays at 5, so there is
+no operator action beyond the normal update.
 
 ### Highlights
 
-- **Clear (x) button in the destination box** above the message field. It empties the box in one
-  click, for example the "2" left over from the last group, and keeps the cursor in the field.
-- **Clear (x) button in the top filter field**, replacing the red garbage bin. The bin deleted
-  every stored message of the filtered conversation from the database; that function is removed
-  from the interface. The x only clears the filter text.
-- **Node settings re-ordered:** Time Zone and Via are their own cards, and the BLE PIN card now
-  sits in the grid next to Weather instead of below it.
+- **RF Monitor shows more kinds of traffic.** Heard-station (MH) and command (CMD) rows are now
+  shown, each row carries a source label, the page has a legend, and long sub-lines are capped.
+  Node command replies get their own verdict, and the echo of a flag command the console just
+  wrote is suppressed, so it no longer appears as a duplicate of the DBG line.
+- **Monitor reading guide.** A short HTML guide explains how to read the monitor's rows.
+- **BLE operator toggles.** The node settings gain toggles for the button, the board LED, the
+  "no PM for other" option, the GPS symbol, the BMP280/BME390 sensors, soft serial and analog
+  inputs. Battery readout commands are added, and tiles a node rejects are hidden. Boost Gain
+  asks before rebooting the node.
+- **Node Admin Advanced section.** The BLE Advanced section lets you store a node, set
+  autoupdate and choose the update channel. Each change asks for confirmation first.
 
 ### Backend (MCProxy)
 
-- No functional change.
+- The monitor gives node replies a verdict of their own and suppresses the echo of flag commands
+  sent from the DBG console. Both are covered by new monitor tests.
+- No schema or configuration change.
 
 ### Frontend (webapp)
 
-- `DestinationPicker` and `ChatFilterBar` gain the clear button; `ChatFilterBar` loses its
-  `showDelete` prop and `delete` event, and `MessagesView` loses the confirm dialog behind it.
-- `NodePinCard` moved into the settings grid; the node settings tiles were reordered and the Time
-  Zone and Via cards split apart.
+- Settings: the Appearance and McApp Raspi Proxy cards swap places.
+- Remote nodes: the redundant max TX power field is removed from the add form.
+- RF Monitor: hairline separators between payload values, and a fix to the RX counter.
 
 ### Upgrade notes
 
-- Nothing to do on the Pi. Reload the app once (the "Update available" banner) to pick up the new
-  bundle.
-- Deleting all messages of one conversation is no longer possible from the web interface.
+- Nothing to do on the Pi. Reload the app once (the "Update available" banner) to pick up the
+  new bundle.
+- The BLE toggles change settings on the node. Each one is applied only when you set it.
 
 ## Earlier releases, in brief
 
 One entry per release. The full notes as published are in
 [`doc/archive/release-history-full.md`](https://github.com/DK5EN/McApp/blob/development/doc/archive/release-history-full.md).
+
+### v2.1.8 (2026-10-10)
+
+- Clear (x) buttons in the destination box and the filter field. The bin that deleted a
+  conversation's messages is removed. Schema 35, `SYSTEM_EPOCH` 5.
 
 ### v2.1.7 (2026-10-10)
 
