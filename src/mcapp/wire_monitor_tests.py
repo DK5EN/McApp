@@ -51,6 +51,7 @@ from typing import Any, cast
 import httpx
 from fastapi import FastAPI
 
+from . import command_echo
 from .commands.constants import has_console
 from .commands.parsing import SPAM_GROUP
 from .main import MessageRouter
@@ -290,6 +291,110 @@ async def _test_verdict_parity(record: RecordFn) -> None:
     record(
         "pass: monitor verdict matches (shown, no reason), frame unchanged",
         env["verdict"] == "shown" and env["reason"] is None and env["frame"] == chat,
+    )
+
+
+async def _test_command_echo_registry_eviction(record: RecordFn) -> None:
+    # Refresh keeps the entry alive past the 64-entry eviction.
+    command_echo.clear()
+    for n in range(command_echo._MAX_ENTRIES):
+        command_echo.expect_command_echo(f"--e{n}")
+    command_echo.expect_command_echo("--e0")
+    command_echo.expect_command_echo("--extra")
+    refreshed = command_echo.is_expected_command_echo("--e0")
+    evicted = command_echo.is_expected_command_echo("--e1")
+    command_echo.clear()
+    record(
+        "registry: a refreshed entry survives eviction, the oldest other is dropped",
+        refreshed and not evicted,
+    )
+
+
+async def _test_node_reply_and_command_echo(record: RecordFn) -> None:
+    router = MessageRouter(None)
+    # "response" is in the live sperrliste (blocklist upper-cases it);
+    # node_reply must be decided BEFORE the blocklist.
+    router.register_protocol("commands", SimpleNamespace(blocked_callsigns={"RESPONSE"}))
+    sse = SSEManager("127.0.0.1", 0, message_router=router)
+    monitor = WireMonitor()
+    monitor.router = router
+    monitor.sse_manager = sse
+    router.subscribe("mesh_message", monitor.on_mesh_message)
+
+    client = SSEClient("wire-monitor-test-client-2")
+    sse.clients[client.client_id] = client
+
+    def _drain() -> list[str]:
+        items: list[str] = []
+        while not client.queue.empty():
+            raw = client.queue.get_nowait()
+            if not raw.startswith("event: wire:frame\n"):
+                items.append(raw)
+        return items
+
+    async def _publish(payload: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+        _drain()
+        await router.publish("udp", "mesh_message", payload)
+        return _drain(), monitor._ring[-1]
+
+    # Node command replies: honest reason token, same wire behaviour (spam group).
+    command_echo.clear()
+    queued, env = await _publish(
+        {"src": "response", "dst": "*", "msg": "--info", "type": "response"}
+    )
+    sse_payload = _parse_sse_event(queued[0]) if queued else {}
+    record(
+        "node_reply: broadcast once with dst rewritten to SPAM_GROUP",
+        len(queued) == 1 and sse_payload.get("dst") == SPAM_GROUP,
+    )
+    record(
+        "node_reply: monitor verdict is redirected/node_reply, frame keeps dst '*'",
+        env["verdict"] == "redirected"
+        and env["reason"] == "node_reply"
+        and env["frame"].get("dst") == "*",
+    )
+
+    reply = {"src": "response", "dst": "*", "msg": "--loradebug on", "type": "response"}
+    command_echo.expect_command_echo("--loradebug on")
+    queued, env = await _publish(dict(reply))
+    record("registered echo: not broadcast to the SSE client", queued == [])
+    record(
+        "registered echo: monitor verdict is dropped/command_echo",
+        env["verdict"] == "dropped" and env["reason"] == "command_echo",
+    )
+
+    # TTL expiry via a patched clock (no sleeping).
+    clock = [1000.0]
+    real_clock = command_echo.clock
+    command_echo.clock = lambda: clock[0]
+    try:
+        command_echo.clear()
+        command_echo.expect_command_echo("--loradebug on", ttl_s=15.0)
+        clock[0] += 14.0
+        record(
+            "registered echo: still dropped just inside the TTL",
+            (await _publish(dict(reply)))[1]["verdict"] == "dropped",
+        )
+        clock[0] += 2.0
+        queued, env = await _publish(dict(reply))
+    finally:
+        command_echo.clock = real_clock
+        command_echo.clear()
+    record(
+        "registered echo: after TTL expiry back to redirected/node_reply",
+        len(queued) == 1 and env["verdict"] == "redirected" and env["reason"] == "node_reply",
+    )
+
+    command_echo.expect_command_echo("--loradebug on")
+    try:
+        queued, env = await _publish(
+            {"src": "OE1ABC-1", "dst": "DK5EN-15", "msg": "--loradebug on", "type": "msg"}
+        )
+    finally:
+        command_echo.clear()
+    record(
+        "registered echo: a non-response src with the same text is NOT dropped",
+        len(queued) == 1 and env["verdict"] == "shown",
     )
 
 
@@ -542,6 +647,8 @@ async def run_wire_monitor_tests() -> bool:
     await _test_page_edges(_record)
     await _test_rest_layer(_record)
     await _test_verdict_parity(_record)
+    await _test_command_echo_registry_eviction(_record)
+    await _test_node_reply_and_command_echo(_record)
     await _test_mesh_message_dir_and_source_mapping(_record)
     await _test_ble_notification_gating(_record)
     await _test_ble_status_sys_frame(_record)

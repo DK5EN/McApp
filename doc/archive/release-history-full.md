@@ -5,6 +5,39 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.1.8 (2026-10-10)
+
+Small clean-ups in the web interface: the node settings are laid out more tidily, and the message
+view gets two clear (x) buttons. The backend is unchanged. Schema stays at 35 and `SYSTEM_EPOCH`
+stays at 5.
+
+### Highlights
+
+- **Clear (x) button in the destination box** above the message field. It empties the box in one
+  click, for example the "2" left over from the last group, and keeps the cursor in the field.
+- **Clear (x) button in the top filter field**, replacing the red garbage bin. The bin deleted
+  every stored message of the filtered conversation from the database; that function is removed
+  from the interface. The x only clears the filter text.
+- **Node settings re-ordered:** Time Zone and Via are their own cards, and the BLE PIN card now
+  sits in the grid next to Weather instead of below it.
+
+### Backend (MCProxy)
+
+- No functional change.
+
+### Frontend (webapp)
+
+- `DestinationPicker` and `ChatFilterBar` gain the clear button; `ChatFilterBar` loses its
+  `showDelete` prop and `delete` event, and `MessagesView` loses the confirm dialog behind it.
+- `NodePinCard` moved into the settings grid; the node settings tiles were reordered and the Time
+  Zone and Via cards split apart.
+
+### Upgrade notes
+
+- Nothing to do on the Pi. Reload the app once (the "Update available" banner) to pick up the new
+  bundle.
+- Deleting all messages of one conversation is no longer possible from the web interface.
+
 ## v2.1.7 (2026-10-10)
 
 The "Internet" button in the status bar is gone. It opened a direct connection from the browser to

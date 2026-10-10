@@ -62,6 +62,7 @@ import hmac
 import re
 from typing import TYPE_CHECKING, Any
 
+from .command_echo import expect_command_echo
 from .logging_setup import get_logger
 from .util import now_ms
 
@@ -516,6 +517,7 @@ class NodeConsoleSession:
             return buf
 
         for i, name in enumerate(to_set):
+            expect_command_echo(f"--{name} on")
             writer.write(f"--{name} on\n".encode())
             await writer.drain()
             self._flags_turned_on.add(name)
@@ -561,6 +563,7 @@ class NodeConsoleSession:
         still_on = list(to_restore)
         for attempt in range(2):
             for i, name in enumerate(still_on):
+                expect_command_echo(f"--{name} off")
                 writer.write(f"--{name} off\n".encode())
                 await writer.drain()
                 if i < len(still_on) - 1:

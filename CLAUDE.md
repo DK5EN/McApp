@@ -746,6 +746,12 @@ one, so change both together.
   delivers (link-check drop, command-echo drop, blocklist drop/redirect), and the monitor calls the
   same function, so the live stream and the monitor can never disagree. Add a new SSE filter there,
   never inline in `_broadcast_handler`.
+  A node command reply (`src == "response"`) is `("redirected", "node_reply")` and is decided BEFORE
+  the blocklist, so it no longer depends on `response` being in the sperrliste (same dst rewrite to
+  the spam group as before). Consequence: before the sperrliste has been fetched, such replies are
+  quarantined too instead of shown. The DBG session registers the text of every flag command it writes
+  in `command_echo.py` (15 s TTL, 64 entries), so the node's BLE echo of it is `dropped · command_echo`
+  instead of a duplicate of the DBG line.
 - **RX** subscribes to `mesh_message` (source `udp` only), `ble_notification` (mesh `type`s
   msg/pos/tele/ack only; register frames and the synthetic `source == "self"` echo are skipped)
   and `ble_status` (captured as SYS; `type: "sys"` is forced last). The envelope carries the
