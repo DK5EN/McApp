@@ -60,6 +60,7 @@ from mcapp.linkcheck_tests import run_linkcheck_tests
 from mcapp.main import MessageRouter
 from mcapp.meteo_tests import run_meteo_tests
 from mcapp.msg_core_tests import run_msg_core_tests
+from mcapp.node_admin_observed_tests import run_node_admin_observed_tests
 from mcapp.node_admin_routes_tests import run_node_admin_routes_tests
 from mcapp.node_admin_service_tests import run_node_admin_service_tests
 from mcapp.node_admin_state_tests import run_node_admin_state_tests
@@ -68,6 +69,7 @@ from mcapp.node_console_tests import run_node_console_tests
 from mcapp.push_tests import run_push_tests
 from mcapp.qrz_tests import run_qrz_tests
 from mcapp.remote_cmd_tests import run_remote_cmd_tests
+from mcapp.rm1_suppression_tests import run_rm1_suppression_tests
 from mcapp.send_path_tests import run_send_path_tests
 from mcapp.server_imports_tests import run_server_imports_tests
 from mcapp.sqlite_storage import run_startup_tests as run_storage_tests
@@ -249,6 +251,12 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     internet_feed_wiring_ok = await run_internet_feed_wiring_tests()
     print(f"internet_feed_wiring: {'PASS' if internet_feed_wiring_ok else 'FAIL'}")
 
+    rm1_suppression_ok = await run_rm1_suppression_tests()
+    print(f"rm1_suppression: {'PASS' if rm1_suppression_ok else 'FAIL'}")
+
+    node_admin_observed_ok = await run_node_admin_observed_tests()
+    print(f"node_admin_observed: {'PASS' if node_admin_observed_ok else 'FAIL'}")
+
     node_admin_hook_ok = await run_node_admin_hook_tests()
     print(f"node_admin_hook: {'PASS' if node_admin_hook_ok else 'FAIL'}")
 
@@ -393,6 +401,8 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and internet_feed_ok
         and internet_feed_routes_ok
         and internet_feed_wiring_ok
+        and rm1_suppression_ok
+        and node_admin_observed_ok
         and node_admin_hook_ok
         and node_admin_state_ok
         and node_admin_service_ok

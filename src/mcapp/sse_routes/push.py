@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from ..internet_feed_types import WWW_MESSAGE_TOPIC
 from ..push_delivery import PushDispatcher, load_or_create_vapid
+from ..rm1_shape import is_rm1_frame
 from ..storage.www import www_push_allowed
 from ..util import now_ms
 
@@ -132,6 +133,10 @@ def build_push_router(
             if not own_callsign:
                 return
             data = routed_message["data"]
+            # Node-local policy gate (NOT part of the push contract): our own RM1
+            # remote-admin replies are DMs addressed to us and would otherwise push.
+            if is_rm1_frame(data.get("msg")):
+                return
             # Text-ACK / {CET} suppression used to sit here as a node-local policy
             # filter; contract v4 made it eligibility clause (c), so it now lives in
             # push_delivery.is_eligible where mc-chat's corpus gates it too.

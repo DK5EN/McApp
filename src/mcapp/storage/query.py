@@ -18,6 +18,7 @@ from typing import Any, cast
 
 from ..commands.parsing import SPAM_GROUP, is_group, is_hashtag, resolve_dst_target
 from ..logging_setup import get_logger
+from ..rm1_shape import RM1_HIDDEN_GLOBS
 from ..util import now_ms
 from ._base import StorageBase
 from .constants import (
@@ -126,6 +127,10 @@ _PEER_ACK_GLOBS = ("*:ack[0-9]*",)
 # "Delivered". Same three-way split as the bare APRS ack: hidden, served to
 # nobody. Cross-repo: ack_predicate_vectors.json v3 (`is_sto`).
 _STORE_NOTICE_GLOBS = ("*:sto[0-9]*",)
+# RM1 remote-admin commands/replies (Node Admin): stored for the reply hook, but
+# machine chatter in every view. A SUPERSET glob, see rm1_shape for exactly what
+# it matches. Hidden everywhere, served to nobody; must NOT join `_PEER_ACK_GLOBS`.
+_RM1_GLOBS = RM1_HIDDEN_GLOBS
 _APRS_ACK_GLOBS = ("ack[0-9][0-9][0-9][0-9]", "ack[0-9][0-9][0-9][0-9][0-9]")
 
 
@@ -142,14 +147,16 @@ def _ack_sql(globs: tuple[str, ...], col: str = "msg", *, negate: bool = False) 
 
 # Every message/history query excludes all three shapes; the acks query serves
 # only the peer shape (see the three-way split above).
-_HIDDEN_GLOBS = _PEER_ACK_GLOBS + _APRS_ACK_GLOBS + _STORE_NOTICE_GLOBS
+_HIDDEN_GLOBS = _PEER_ACK_GLOBS + _APRS_ACK_GLOBS + _STORE_NOTICE_GLOBS + _RM1_GLOBS
 _NOT_ACK_SQL = _ack_sql(_HIDDEN_GLOBS, negate=True)
 _NOT_ACK_SQL_M = _ack_sql(_HIDDEN_GLOBS, "m.msg", negate=True)
 # The DM arm of `get_messages_page` is the one history query that has never
 # excluded the ACK shapes (the webapp's paging contract for a DM conversation
-# keeps them; not changed here), so it excludes ONLY the store notice. `msg IS
+# keeps them; not changed here), so it excludes ONLY the store notice and RM1 frames. `msg IS
 # NULL OR` because `NULL NOT GLOB x` is NULL, which would drop a NULL-msg row.
-_NOT_STORE_NOTICE_SQL = "(msg IS NULL OR " + _ack_sql(_STORE_NOTICE_GLOBS, negate=True) + ")"
+_NOT_STORE_NOTICE_SQL = (
+    "(msg IS NULL OR " + _ack_sql(_STORE_NOTICE_GLOBS + _RM1_GLOBS, negate=True) + ")"
+)
 # Same predicate for the dedup anchor's correlated subquery alias, so the
 # anchor is computed over exactly the rows `_conv_dedup_subquery` groups.
 _NOT_ACK_SQL_P = _ack_sql(_HIDDEN_GLOBS, "p.msg", negate=True)

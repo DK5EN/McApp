@@ -33,6 +33,7 @@ from .commands.parsing import SPAM_GROUP
 from .internet_feed_types import STATUS_EVENT, WWW_MESSAGE_TOPIC
 from .linkcheck import is_link_check_payload
 from .logging_setup import get_logger
+from .rm1_shape import is_rm1_frame
 from .schemas import DeleteMessagesRequest, ReadCursorRequest
 from .sqlite_storage import SQLiteStorage, create_sqlite_storage
 from .storage.constants import db_write
@@ -167,6 +168,9 @@ def broadcast_verdict(
     Returns `(verdict, reason, data_to_broadcast)`:
       - `("dropped", "linkcheck", None)` — a `{ping}`/`{pong}` protocol frame
         (linkcheck ADR §1.2): never shown, matching storage/push.
+      - `("dropped", "rm1", None)` — an RM1 remote-admin command or reply (ours or
+        another station's): automated traffic, shown decoded on Node Admin >
+        Remote Management (Observed sessions), never as a chat bubble.
       - `("dropped", "command_echo", None)` — MCProxy's own session-command echo
         (connect-time `--ackinfo`, DBG flag commands; see
         `is_auto_command_echo`).
@@ -184,10 +188,18 @@ def broadcast_verdict(
     `data_to_broadcast` is `None` for every verdict a caller must not
     broadcast/display; `_broadcast_handler` treats that as "return early".
     """
-    if is_link_check_payload(message_data.get("msg", "")):
-        return "dropped", "linkcheck", None
-    if is_auto_command_echo(message_data):
-        return "dropped", "command_echo", None
+    # Silent protocol drops, first match wins (order unchanged from when each was its own branch).
+    silent_drop = (
+        "linkcheck"
+        if is_link_check_payload(message_data.get("msg", ""))
+        else "command_echo"
+        if is_auto_command_echo(message_data)
+        else "rm1"
+        if is_rm1_frame(message_data.get("msg"))
+        else None
+    )
+    if silent_drop is not None:
+        return "dropped", silent_drop, None
     if message_data.get("src") == "response":
         return "redirected", "node_reply", {**message_data, "dst": SPAM_GROUP}
     decision = router.blocklist_decision(message_data) if router is not None else "pass"
