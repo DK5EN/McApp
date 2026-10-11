@@ -55,7 +55,7 @@ hostile), `tools/tests/remote_cmd_vectors.json` (canonical corpus).
 | ---- | ----------------------------------------------------------------------------------------------------- | ------ |
 | 1    | Bugs 1-5: A1 backend parse/allowlist/corpus, A2 counter + observed origin, B1 webapp                  | done   |
 | 2    | Command parity: C1 allowlist, C2 fold, D1 APRS/Position, D2 Radio/Sensors/Queues, D3 Heard/Charge LED | done   |
-| 3    | Dev release, deploy, live check against DK5EN-1 (transmits: ask first)                                | open   |
+| 3    | Dev release, deploy, live check against DK5EN-1 (transmits: ask first)                                | done   |
 
 ### Ownership
 
@@ -104,7 +104,26 @@ hidden` -> `{hidden: true}`, `chgled err unsupported` -> `{unsupported: true}` (
   failed verification raises `last_hwm` in the backend but carries no `origin`, so the webapp
   does not refetch the counter. Fix: refetch on a verified reply alone, or publish a
   targets-changed event from the catch-up.
-- Next: Wave 3 (dev release, deploy, live check against DK5EN-1; transmits on air: ask first).
+- Wave 3 done 2026-10-11 (operator go for on-air). v2.1.11-dev.1 released (tag parity ok in both
+  repos), deployed to mcapp.local slot-2, 14 JSON corpora in the slot, no warnings after restart.
+  Live against DK5EN-1 (4.40a) via DK5EN-98 over BLE, log ids 23-33, all `verified`: sync,
+  status (`p=2/0/22`, TX power and Board max now render), radio, sens (`err unsupported` -> "No
+  sensor on this node"), txq, pos (`nofix`), name, atxt, mbox, maxhop, mh 0 (3 rows, `next -`,
+  "Read 3 of 3 · End of the list"). Result box clears to "Done", Connect reads "Re-sync" once
+  connected, 10 s spacing and the in-flight refusal held (a second click was refused, one row
+  sent). No write commands were sent in this check.
+- Found live, open (backlog, all display only):
+  - Observed sessions mislabel extended replies: `maxhop t=4 p=2` renders `p=` as "TX power", and
+    `mh <call>` renders the detail `s=` as "Switches" (webapp `observedFormat.ts` applies status
+    token labels to every reply).
+  - Remote card grid leaves empty grey cells beside short cards (Identity, Position); the BLE
+    page's grid has none (bug 7 only partly met).
+  - BLE badge reads "BLE not connected" on a fresh page load while the backend is connected,
+    until the node's `I` register arrives (webapp `bleStore` sets `connected` only from
+    `connect BLE result` or `I`; neither is replayed on a new SSE connect). Pre-existing; the
+    backend picks the transport itself, so frames still go over BLE.
+  - The https origin served the previous bundle from its service worker until "Reload" was
+    pressed (known pattern, see memory `project_webapp_sw_stale_verify`).
 
 ## Wave 2 resume notes (recon 2026-10-11)
 
