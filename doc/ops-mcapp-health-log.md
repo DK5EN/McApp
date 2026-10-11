@@ -1,6 +1,6 @@
 # McApp production health log — mcapp.local
 
-> **Status:** Current — newest section: §33 (2026-10-11 15:05 CEST, pre-release sweep of `v2.1.10-dev.3` (meshmap internet feed, RM1 out of chat) before the v2.1.10 promotion, green, zero findings, ~13 min soak at the operator's decision; W20 recurred before the deploy). Before that: §32 (2026-10-10 15:35 CEST, pre-release sweep of `v2.1.7-dev.1` (Internet feed removed) before the v2.1.7 promotion, green, zero findings, ~15 min soak). Before that: §31 (2026-10-06, v2.1.6-dev.6 short soak). Before that: §30 (2026-10-05 19:08 CEST, sweep of `v2.1.5-dev.2` node time zone, green, zero findings). Before that: §26 (2026-10-04 09:36 CEST, pre-release sweep of
+> **Status:** Current — newest section: §34 (2026-10-11 20:41 CEST, pre-release sweep of `v2.1.11-dev.2` (Node Admin remote parity) before the v2.1.11 promotion, green, zero findings, ~9 min soak at the operator's decision). Before that: §33 (2026-10-11 15:05 CEST, pre-release sweep of `v2.1.10-dev.3` (meshmap internet feed, RM1 out of chat) before the v2.1.10 promotion, green, zero findings, ~13 min soak at the operator's decision; W20 recurred before the deploy). Before that: §32 (2026-10-10 15:35 CEST, pre-release sweep of `v2.1.7-dev.1` (Internet feed removed) before the v2.1.7 promotion, green, zero findings, ~15 min soak). Before that: §31 (2026-10-06, v2.1.6-dev.6 short soak). Before that: §30 (2026-10-05 19:08 CEST, sweep of `v2.1.5-dev.2` node time zone, green, zero findings). Before that: §26 (2026-10-04 09:36 CEST, pre-release sweep of
 > `v2.1.1-dev.2` before the v2.1.1 promotion) — green, zero findings, **~3 min soak at the operator's
 > decision**; new watch point **W23** (QRZ lookup budget). Before that: §25 (2026-10-02, no-soak
 > sign-off of v2.0.19, re-released as v2.1.0). Before that: §24 (2026-09-29 10:03 CEST, post-release sweep of
@@ -2406,3 +2406,49 @@ messages, no `{CET}` rows stored, no feed error, no gap since 13:16.
 three deploys today, each with its startup cluster. Soak was short at the operator's decision;
 the post-release sweep should look at feed reconnects and `internet:positions` serialisation
 (`loop_lag` stacks naming `internet_feed`) after a few hours of runtime. No new W or F.
+
+## 34. 2026-10-11 20:41 CEST — pre-release sweep of v2.1.11-dev.2 (Node Admin remote parity) before the v2.1.11 promotion (short soak)
+
+| Anchor         | Value                                                                                               |
+| -------------- | --------------------------------------------------------------------------------------------------- |
+| Active slot    | slot-1, `v2.1.11-dev.2` (`webapp/version.html`), since 20:32:03                                     |
+| Soak           | about 9 min for dev.2, about 1 h for the cycle (dev.1 19:40); the operator overrode the soak rule   |
+| Schema / epoch | 36 = `LATEST_SCHEMA_VERSION` (no migration in this cycle); system epoch 5 = `REQUIRED_SYSTEM_EPOCH` |
+| Host           | up 4 d 12 h, no reboot since §33                                                                    |
+
+**Verdict: green, zero findings.** The cycle changes Node Admin only (remote-view state fold for
+the extended RM1 commands, firmware 4.40a status, webapp parity cards). Node Admin is inert on
+the ingest path, so the short soak carries little exposure.
+
+- Services: `mcapp`, `mcapp-ble`, `caddy`, `lighttpd` active; `NRestarts` 0 on both McApp units.
+  Journal warnings (`mcapp`, `mcapp-ble`, `-p warning`): 0 in 24 h.
+- `/api/status`: `udp_target_kind` `first_seen` at 570 s uptime (W11 post-restart transient);
+  `udp_multiple_sources` false, `udp_untrusted_source_ips` empty, `udp_suppressed_target_changes` 0.
+- `/api/internet-feed`: enabled, `state: connected`, `registered: true`, no error (feed from
+  v2.1.10 still healthy after the restart).
+- DB 55 MB, WAL 3 MB; messages 27327 (3 `www`), stations 422, signal_log 50339. Classifier
+  version 5, 38 rules, 0 unclassified in the last hour; 0 `{CET}` rows in `messages`.
+- Rates (1 h window ending 20:41): msg 62, pos 89, signal_log 340 — Sunday evening, below §33's
+  afternoon figures (101 / 109 / 437) and within §1's range.
+- Gateway uptime 24 h: 95.9 %, coverage 100.0 %; last `{CET}` 9 s old, heartbeat 24 s. No gap
+  rows since §33's two pre-deploy W20 gaps (12:07–12:26, 12:36–13:16).
+- Stalls 1 h (non-sample): `loop_lag` 6 critical / 10 stall, `http` 2/17, `client_http` 2/26,
+  `handler` 2/3, `client_error` 0/1. Since the 20:32 restart: `loop_lag` 2/5, `http` 0/7,
+  `client_http` 1/14. The two newest criticals carry import-phase stacks (`asyncio.runners`,
+  `anyio` module import) — W19 startup noise from the two dev deploys in the window.
+- Host: disk 9 % (51 G free), 190 MB RAM available, ~43 MB swapped, load 0.29, 45.1 C.
+- Secrets: `vapid.json` 0600, `config.json` 0640.
+- Gate on the tree to be released, after the dependency bumps (pydantic 2.14.1 in both locks,
+  incl. the standalone BLE lock; webapp maplibre-gl 6.14.0): ruff, format, mypy, startup runner
+  exit 0 (`config_migration` skipped on macOS bash 3, as always); webapp typecheck, lint,
+  format, 290 files / 5450 tests. Subtrees (ignoring untracked `__pycache__`) and all six
+  hand-copied corpora equal across the repos.
+
+**Absent signals.** No restarts, no journal warnings, no UDP provenance anomaly, no unclassified
+messages, no `{CET}` rows stored, no feed error, no uptime gap since 13:16.
+
+**Dismissed.** `udp_target_kind` `first_seen` (W11). Post-restart `loop_lag` criticals (W19).
+
+**Watch points.** W19: two more deploys today (19:40, 20:32), each with its startup cluster. The
+post-release sweep should confirm Node Admin's new fold paths produce no `handler` or `loop_lag`
+stacks once remote reads are exercised. No new W or F.

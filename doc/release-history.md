@@ -1,70 +1,65 @@
 # Release History
 
-## v2.1.10 (2026-10-11)
+## v2.1.11 (2026-10-11)
 
-McApp can now join the meshmap internet feed. With it, group and broadcast messages and station
-positions from meshmap.oevsv.at reach the box over the internet, beside what the node hears on
-RF. The feed is off until you enable it in Settings > Internet. RM1 remote-admin traffic is no
-longer shown in chat and appears decoded under Remote Management instead. Schema 35 → 36;
-`SYSTEM_EPOCH` stays at 5.
+Node Admin's remote view reaches parity with the firmware's RM1 command set. A stored node can
+now be read and configured card by card: radio, sensors, position, queues, the heard list and
+the charge LED, beside the existing status, TX power, LED and identity controls. Status replies
+from firmware 4.40a are read completely. Schema stays at 36 and `SYSTEM_EPOCH` stays at 5.
 
 ### Highlights
 
-- **Internet feed (meshmap).** Settings > Internet turns it on and shows what will be sent.
-  You choose up to 10 groups (they can be imported from the node's groups) and whether to
-  receive broadcast. The box registers itself with meshmap once. A globe chip in the status bar
-  shows the feed state. Messages from the feed are marked in the chat, and the details popover
-  names their origin.
-- **Internet positions on the map.** Positions can be off, within a radius around the node
-  (10 to 2000 km), or worldwide. Stations known only from the internet are drawn as dashed,
-  muted markers with their own legend entry. They do not appear in the station list, the chat
-  positions panel, counts, hop buckets or Link check. An RF fix always takes precedence over an
-  internet one.
-- **RM1 frames out of chat.** Remote-admin commands and replies, your own and other stations',
-  no longer appear in chat, unread counts, push or history. Node Admin > Remote Management gains
-  **Observed sessions**: command/reply pairs per commander and target, decoded, and marked
-  "verified" only when every frame checks out against a key stored on this box. The RF Monitor
-  still shows the frames.
-- **Conversation delete is back** in the Messages filter bar, next to the clear (x), with a
-  confirmation. Deleting a group in Settings > Groups now asks first as well.
+- **New remote cards.** Sensors, Position, TX queue, Mailbox + Max hop, Heard list (paged read
+  with Stop, plus a lookup of one call) and Charge LED. The Radio card reads frequency, SF, CR
+  and bandwidth; the Identity card reads and writes the node name and APRS text under the
+  firmware's text rules. Every card has its own Read button, gated like every other send.
+- **TX power respects the board minimum.** The status `p=` field (current/min/max) is read in
+  full, the TX power and Board max values render, and a setting below the board minimum is
+  refused before anything is sent.
+- **LED is three-way.** Off / On / Flash; a status that cannot tell on from flash reads
+  "On or flash".
+- **Counter catch-up.** A verified reply addressed to this box that another sender triggered
+  (for example the node's own web page) raises the stored high-water mark, so the next command
+  is not rejected as a replay. Observed sessions mark such exchanges as coming from elsewhere.
 
 ### Backend (MCProxy)
 
-- New `InternetFeedService`: meshmap registration (token encrypted at rest), the SSE box feed,
-  and `GET/PUT /api/internet-feed` + `POST /api/internet-feed/forget`. The routes are LAN-only,
-  like Node Admin. `/api/status` `features` gains `internet_feed`.
-- Feed messages are stored as `src_type "www"`. A www row never feeds the uptime, ack, RM1 or
-  signal paths. When the same message also arrives over RF, the row is upgraded to the RF copy.
-  RF never goes the other way.
-- Push skips feed messages older than 15 min, and replayed feed messages are not pushed again.
-- Feed positions are held in RAM only (5000 rows, 3 h). They never reach `station_positions`,
-  and blocked callsigns are dropped. A GPS move over 5 km reconnects, at most once per 10 min.
-- RM1 frames get the `rm1` broadcast verdict and are still stored.
-  `GET /api/node-admin/observed` serves them decoded. The tag is never exposed.
-- Migration 36: `internet_feed_state` (one row, inert until the feed is enabled).
-- Dependencies refreshed (numpy 2.5.4).
+- The remote-view state fold covers radio, sens, name, atxt, pos, txq, mbox, maxhop, chgled and
+  the paged mh list plus mh lookups. A status resets only its own fields; a reboot marks the
+  others stale. `err hidden` / `err unsupported` are stored as markers, not errors.
+- The RM1 allowlist matches the firmware's `rm_commands.h`; `remote_cmd_vectors.json` re-synced
+  from the firmware repo (sha256 pinned).
+- Observed-session `origin` (`mcapp` / `other`) is set only on verified exchanges.
+- Dependencies refreshed (pydantic 2.14.1).
 
 ### Frontend (webapp)
 
-- Settings > Internet card, globe status chip, www message marker and origin in the details
-  popover.
-- Internet positions on the map: dashed markers, legend entry, "Source: Internet (meshmap)"
-  popup. Feed rows are never written to the offline cache.
-- Remote Management > Observed sessions. Cached RM1 rows are removed at startup.
-- Messages filter bar: delete conversation restored with confirmation. Settings > Groups:
-  per-group delete confirms, and the list fills the page height.
+- Remote cards laid out as a six-cell grid; a pending switch shows its reply window
+  (`0:27 of 2:00`).
+- Connect turns into Re-sync while connected; the result box no longer keeps "Sent.
+  Waiting..." after the reply arrived.
+- Observed sessions label reply fields per command.
+- The Via badge reads "Checking BLE..." until the first BLE status arrives, instead of claiming
+  "not connected" for a few seconds on every page load.
+- Dependencies refreshed (maplibre-gl 6.14.0).
 
 ### Upgrade notes
 
-- The database migrates to schema 36 on the first start. Nothing else to do on the Pi.
-- The internet feed stays off until you enable it in Settings > Internet. Enabling it registers
-  the box with meshmap.oevsv.at and needs outbound internet from the Pi.
+- No migration, no system converge. Nothing to do on the Pi.
+- The new cards need a node whose firmware supports the command; an unsupported read shows as
+  such instead of an error.
 - Reload the app once (the "Update available" banner) to pick up the new bundle.
 
 ## Earlier releases, in brief
 
 One entry per release. The full notes as published are in
 [`doc/archive/release-history-full.md`](https://github.com/DK5EN/McApp/blob/development/doc/archive/release-history-full.md).
+
+### v2.1.10 (2026-10-11)
+
+- Meshmap internet feed (off by default, Settings > Internet) with internet positions on the
+  map; RM1 frames out of chat, decoded under Remote Management. Schema 36 (migration 36
+  `internet_feed_state`), `SYSTEM_EPOCH` 5.
 
 ### v2.1.9 (2026-10-10)
 
