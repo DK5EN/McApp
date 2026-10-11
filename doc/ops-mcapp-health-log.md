@@ -1,6 +1,6 @@
 # McApp production health log — mcapp.local
 
-> **Status:** Current — newest section: §32 (2026-10-10 15:35 CEST, pre-release sweep of `v2.1.7-dev.1` (Internet feed removed) before the v2.1.7 promotion, green, zero findings, ~15 min soak). Before that: §31 (2026-10-06, v2.1.6-dev.6 short soak). Before that: §30 (2026-10-05 19:08 CEST, sweep of `v2.1.5-dev.2` node time zone, green, zero findings). Before that: §26 (2026-10-04 09:36 CEST, pre-release sweep of
+> **Status:** Current — newest section: §33 (2026-10-11 15:05 CEST, pre-release sweep of `v2.1.10-dev.3` (meshmap internet feed, RM1 out of chat) before the v2.1.10 promotion, green, zero findings, ~13 min soak at the operator's decision; W20 recurred before the deploy). Before that: §32 (2026-10-10 15:35 CEST, pre-release sweep of `v2.1.7-dev.1` (Internet feed removed) before the v2.1.7 promotion, green, zero findings, ~15 min soak). Before that: §31 (2026-10-06, v2.1.6-dev.6 short soak). Before that: §30 (2026-10-05 19:08 CEST, sweep of `v2.1.5-dev.2` node time zone, green, zero findings). Before that: §26 (2026-10-04 09:36 CEST, pre-release sweep of
 > `v2.1.1-dev.2` before the v2.1.1 promotion) — green, zero findings, **~3 min soak at the operator's
 > decision**; new watch point **W23** (QRZ lookup budget). Before that: §25 (2026-10-02, no-soak
 > sign-off of v2.0.19, re-released as v2.1.0). Before that: §24 (2026-09-29 10:03 CEST, post-release sweep of
@@ -2352,3 +2352,57 @@ startup noise). Client timeouts on `/api/monitor/frames` and `/api/weather` on 2
 **Watch points.** W17 (read_cursor http stalls): 16 in 24 h, 188 in 7 d, unchanged. W23 (QRZ
 budget): free-tier cap reached at 01:29 today, lifts 2026-10-11 01:29 by design. W25 (Node Admin
 bench): still pending, 0 node_admin rows. No new W or F.
+
+## 33. 2026-10-11 15:05 CEST — pre-release sweep of v2.1.10-dev.3 (Internet feed via meshmap, RM1 out of chat) before the v2.1.10 promotion (short soak)
+
+| Anchor         | Value                                                                                                       |
+| -------------- | ----------------------------------------------------------------------------------------------------------- |
+| Active slot    | slot-1, `v2.1.10-dev.3` (`webapp/version.html`), since 14:51:53                                             |
+| Soak           | about 13 min for dev.3, about 1 h 45 min for the cycle (dev.1 13:20); the operator overrode the soak rule   |
+| Schema / epoch | 36 = `LATEST_SCHEMA_VERSION` (migration 36 `internet_feed_state`); system epoch 5 = `REQUIRED_SYSTEM_EPOCH` |
+| Host           | up 4 d 6 h, no reboot since the §32 baseline                                                                |
+
+**Verdict: green, zero findings.** First release that carries the new meshmap internet feed
+(messages + RAM-only positions) and hides RM1 frames from chat. The feed is enabled and
+connected on this box (groups 20/232/262/26244/9, broadcast, positions radius 300 km).
+
+- Services: `mcapp`, `mcapp-ble`, `caddy`, `lighttpd` active; `NRestarts` 0 on both McApp units.
+  Journal warnings (`mcapp`, `mcapp-ble`, `-p warning`): 0 in 24 h.
+- `/api/status`: `udp_target_kind` `first_seen` at 528 s uptime (the W11 post-restart transient,
+  not a finding); `udp_multiple_sources` false, `udp_untrusted_source_ips` empty,
+  `udp_suppressed_target_changes` 0; `features` `['node_admin', 'internet_feed']`.
+- `/api/internet-feed`: `state: connected`, `registered: true`, `positions.effective: radius`, no
+  error. Active slot contains `internet:positions` (symbol check).
+- DB 55.1 MB, WAL 3.9 MB; messages 27130 (3 with `src_type` `www`), stations 428, signal_log 49598. Classifier version 5, 38 rules, 0 unclassified in the last hour; 0 `{CET}` rows in
+  `messages`.
+- Rates (1 h window ending 15:00): msg 101 (1 of them `www`), pos 109, signal_log 437. msg is 2x
+  §32's 51/h on a Sunday afternoon; the feed contributes 1/h, so the increase is RF traffic. pos
+  and signal_log are within 1.3x and 1.8x of §1.
+- Gateway uptime 24 h: 95.9 %, coverage 100.0 %; last `{CET}` 197 s old, heartbeat 18 s. Two gap
+  rows today, 12:07:44–12:26:04 and 12:36:11–13:16:32 (about 59 min), both **before** the dev.1
+  deploy at 13:20, so this is a W20 recurrence (upstream uplink), not the release.
+- Stalls 1 h (non-sample): `loop_lag` 4 critical / 12 stall, `http` 2/12, `client_http` 4/16,
+  `handler` 1/2, `pool_wait` 0/1, `client_error` 0/1. `loop_lag` per hour clusters at 13–15 h,
+  the hours of the three dev deploys (W19 startup noise: import-phase stacks, pydantic schema
+  build, and an SSL context load in `ble_client_remote._sse_loop` at 14:52:09, 779 ms, existing
+  code). No `loop_lag` stack points at `internet_feed`.
+- Host: disk 9 % (51 G free), 182 MB RAM available, ~25 MB swapped, load 0.00, 42.4 C.
+- Secrets/TLS: `vapid.json` 0600, raw JSON scalar; `config.json` 0640; Caddy internal 12 h
+  leaf (12:32:45 → 00:32:45 UTC), mid-life. `sw.js` has `SKIP_WAITING`.
+- Gate on the tree to be released, after the dependency bumps (numpy 2.5.4; webapp lockfile
+  refresh, `@asamuzakjp/css-color` 7.1.5; BLE standalone lock already current): ruff, format,
+  mypy, startup runner exit 0 (`config_migration` skipped on macOS bash 3, as always); webapp
+  typecheck, lint, format, 283 files / 5296 tests. Subtrees and all six hand-copied corpora
+  equal across the repos.
+
+**Absent signals.** No restarts, no journal warnings, no UDP provenance anomaly, no unclassified
+messages, no `{CET}` rows stored, no feed error, no gap since 13:16.
+
+**Dismissed.** `udp_target_kind` `first_seen` (W11 transient after the 14:51 restart). Post-restart
+`loop_lag` criticals (W19). `/api/weather` and `/api/read_cursor` http stalls since the restart
+(weather closed as a non-issue; read_cursor is W17).
+
+**Watch points.** W20 recurred today (59 min, before the deploy). W17 unchanged in shape. W19:
+three deploys today, each with its startup cluster. Soak was short at the operator's decision;
+the post-release sweep should look at feed reconnects and `internet:positions` serialisation
+(`loop_lag` stacks naming `internet_feed`) after a few hours of runtime. No new W or F.
