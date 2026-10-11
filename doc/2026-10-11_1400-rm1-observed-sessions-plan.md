@@ -33,11 +33,11 @@ automated, unreadable, and noisy. They belong on Node Admin > Remote Management,
 
 ## Waves
 
-| Wave | Scope                                                                                                                                                                               | State                                                    |
-| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| 1    | Backend: 1A suppression (rm1_shape, query.py, push.py) + 1B observed (remote_cmd parse_command, node_admin_observed, storage query, route, SSE)                                     | Done 2026-10-11, advisor APPROVED after one rework round |
-| 2    | Webapp: 2A hide (rm1.ts, messageProcessor, messages hydrate, foreground beep) + 2B panel (store, ObservedSessions.vue) + gate: SSE wiring, NodeAdminView mount, feed card positions | Running                                                  |
-| 3    | Release v2.1.10-dev.2, deploy, verify; live RM1 check needs the owner's go (transmits)                                                                                              | Pending                                                  |
+| Wave | Scope                                                                                                                                                                               | State                                                             |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| 1    | Backend: 1A suppression (rm1_shape, query.py, push.py) + 1B observed (remote_cmd parse_command, node_admin_observed, storage query, route, SSE)                                     | Done 2026-10-11, advisor APPROVED after one rework round          |
+| 2    | Webapp: 2A hide (rm1.ts, messageProcessor, messages hydrate, foreground beep) + 2B panel (store, ObservedSessions.vue) + gate: SSE wiring, NodeAdminView mount, feed card positions | Done 2026-10-11 (webapp), advisor APPROVED after one rework round |
+| 3    | Release v2.1.10-dev.2, deploy, verify; live RM1 check needs the owner's go (transmits)                                                                                              | Pending                                                           |
 
 ## Wave 1 as built (backend)
 
@@ -51,3 +51,15 @@ automated, unreadable, and noisy. They belong on Node Admin > Remote Management,
   to verify (advisor rework: a forged command with the predictable ctr was shown as verified).
 - Known limit: our OWN outbound commands appear only through the node's BLE echo; a UDP-only box
   sees its own replies but not its own commands (send path untouched on purpose).
+
+## Wave 2 as built (webapp)
+
+- `utils/rm1.ts` mirrors `rm1_shape` (advisor differential check: 8 320 cases, no divergence).
+  Ingest skip, hydrate skip, boot purge of exactly the skipped ids (no second IndexedDB read),
+  no foreground beep, monitor label "Remote admin (RM1), hidden".
+- `ObservedSessions.vue` on Remote Management, also under "No node keys stored"; hidden on mc-chat,
+  while undetermined/not loaded, and when node admin reports disabled. Client recomputes `active`,
+  `no_reply` and the 24 h window on a 10 s tick; upsert ignores older sessions.
+- `s=` (switch letters) is shown raw: no decoder exists yet.
+- Open, unrelated: `ReleaseNotesCard.spec.ts` V-SW3 flakes under full-suite load (1 of 7 runs;
+  10/10 alone) — async render timing, pre-existing.
