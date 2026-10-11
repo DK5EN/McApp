@@ -324,3 +324,38 @@ of origin with no extra push shortcut for feed groups, no DMs from meshmap for n
 Still open:
 
 1. **Radius after soak:** 300 km is a guess for "my region"; revisit once real map density is seen.
+
+## 9. Campaign state
+
+Resume point for the coding sessions (`/orchestrate-waves` on this doc).
+
+| Wave | Scope                                                                                  | State                                                          |
+| ---- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| 1    | Migration 36 + `InternetFeedStateMixin`; www ingest guards + www→RF `src_type` upgrade | Done 2026-10-11 (this commit)                                  |
+| 2    | `internet_feed.py` service + `sse_routes/internet_feed.py` + main/sse wiring           | **Blocked until mcmap's box feed is live on meshmap.oevsv.at** |
+| 3    | Webapp: Settings > Internet, Globe chip, bubble marker, history fallback, watchdog     | After wave 2                                                   |
+| B    | Positions (RAM cache, `internet:positions`, map styling)                               | After the dev soak                                             |
+
+Wave 1 as built (deviations from §4.1 and §4.3):
+
+- `internet_feed_state` has an extra `configured` column (0 until the first settings save; drives
+  `suggested`), and `pos_mode` defaults to `off` until wave B.
+- One predicate, `storage/www.py` `is_www_frame`. A www frame of any `type` other than `msg` is
+  dropped unstored, which covers the ack, telemetry and pos branches in one place. rssi/snr on a
+  www frame are blanked. `www_ingest_tests.py` W1-W9 pin every guard (each mutation-checked; the
+  `_ingest_signal` skip is redundant by construction and pinned by outcome only).
+- The upgrade runs at the top of `_enrich_duplicate_row`, before its all-None early return, so a
+  signal-free UDP copy also clears the www marker (W8b); the restart path through the DB backstop
+  is W8c.
+
+Carry-forward for wave 2, from the implemented mcmap contract (mcmap `4579dbc`):
+
+- The cursor is the SSE `id:` line (`timeUnix:MSGID`), resent as `since=` or `Last-Event-ID`.
+- `batch` carries `positions[]`/`removed[]` too; wave A connects with `pos=off`.
+- mcmap re-sends messages across ticks (15-minute lookback); storage dedups them, so the mapper
+  must emit `msg_id` as upper-case hex and `src` with its SSID exactly as received.
+- `via` equals `from` for direct copies; the mapper sets `via` only when it differs.
+- Register body needs `idKind` (`ble`|`pi`) and `mac`; 429/503 carry `retryAfterS`, which the
+  backoff honours. Base URL: constant `https://meshmap.oevsv.at`, `MCAPP_INTERNET_FEED_URL` env
+  override for testing only.
+- After wave 3: push `development` in MCProxy and webapp (owner decision), no release.

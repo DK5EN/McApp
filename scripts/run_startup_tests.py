@@ -78,6 +78,7 @@ from mcapp.storage.connection_lifecycle_tests import run_connection_lifecycle_te
 from mcapp.storage.conv_dedup_tests import run_conv_dedup_tests
 from mcapp.storage.conversation_key_tests import run_conversation_key_tests
 from mcapp.storage.ingest_dedup_tests import run_ingest_dedup_tests
+from mcapp.storage.internet_feed_state_tests import run_internet_feed_state_tests
 from mcapp.storage.linkcheck_ingest_tests import run_linkcheck_ingest_tests
 from mcapp.storage.live_classification_tests import run_live_classification_tests
 from mcapp.storage.mheard_attribution_tests import run_mheard_attribution_tests
@@ -92,6 +93,7 @@ from mcapp.storage.suppression_tests import run_suppression_predicate_tests
 from mcapp.storage.telemetry_reconcile_tests import run_telemetry_reconcile_tests
 from mcapp.storage.unread_suppression_tests import run_unread_suppression_tests
 from mcapp.storage.uptime_tests import run_uptime_tests
+from mcapp.storage.www_ingest_tests import run_www_ingest_tests
 from mcapp.udp_handler import run_startup_tests as run_udp_handler_tests
 from mcapp.udp_parsing_tests import run_udp_parsing_tests
 from mcapp.wire_monitor_tests import run_wire_monitor_tests
@@ -228,6 +230,12 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     node_admin_storage_ok = await run_node_admin_storage_tests()
     print(f"node_admin_storage: {'PASS' if node_admin_storage_ok else 'FAIL'}")
+
+    internet_feed_state_ok = await run_internet_feed_state_tests()
+    print(f"internet_feed_state: {'PASS' if internet_feed_state_ok else 'FAIL'}")
+
+    www_ingest_ok = await run_www_ingest_tests()
+    print(f"www_ingest: {'PASS' if www_ingest_ok else 'FAIL'}")
 
     node_admin_hook_ok = await run_node_admin_hook_tests()
     print(f"node_admin_hook: {'PASS' if node_admin_hook_ok else 'FAIL'}")
@@ -368,6 +376,8 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and uptime_ok
         and remote_cmd_ok
         and node_admin_storage_ok
+        and internet_feed_state_ok
+        and www_ingest_ok
         and node_admin_hook_ok
         and node_admin_state_ok
         and node_admin_service_ok

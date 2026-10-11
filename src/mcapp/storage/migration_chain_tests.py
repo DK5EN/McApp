@@ -68,6 +68,7 @@ async def run_migration_chain_tests() -> bool:
     await _test_v31_delivery_status_columns(results)
     await _test_v32_stall_events_table(results)
     await _test_v35_node_admin_tables(results)
+    await _test_v36_internet_feed_state(results)
 
     for label, ok in results:
         print(f"    {'✅ PASS' if ok else '❌ FAIL'} | {label}")
@@ -1274,6 +1275,63 @@ async def _test_v35_node_admin_tables(results: list[tuple[str, bool]]) -> None:
                     "v35 node_admin: unique (target, ctr) and (target, id) indexes exist",
                     {"idx_node_admin_log_target_ctr", "idx_node_admin_log_target_id"}
                     <= index_names,
+                )
+            )
+        finally:
+            await storage.close()
+
+
+async def _test_v36_internet_feed_state(results: list[tuple[str, bool]]) -> None:
+    """Seed a v35 fixture and assert the v36 step creates the single-row
+    `internet_feed_state` table with its defaults (concept doc §4.1)."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = Path(tmp_dir) / "migration_chain_v36.db"
+
+        def _create_v35_db() -> None:
+            with db_write(db_path) as conn:
+                conn.executescript(CREATE_SCHEMA_SQL)
+                conn.executescript(CREATE_SCHEMA_V2_SQL)
+                conn.execute("DELETE FROM schema_version")
+                conn.execute("INSERT INTO schema_version (version) VALUES (35)")
+                conn.commit()
+
+        await asyncio.to_thread(_create_v35_db)
+
+        try:
+            storage = await create_sqlite_storage(db_path)
+        except Exception:
+            logger.exception("v36 internet_feed_state migration raised")
+            results.append(("v36 internet_feed: migrator runs v35→HEAD without error", False))
+            return
+
+        results.append(("v36 internet_feed: migrator runs v35→HEAD without error", True))
+        try:
+            version = await _schema_version(storage)
+            results.append(
+                (
+                    f"v36 internet_feed: final schema_version marker is {FINAL_SCHEMA_VERSION}",
+                    version == FINAL_SCHEMA_VERSION,
+                )
+            )
+            rows = await storage._query("SELECT * FROM internet_feed_state", ())
+            row = rows[0] if rows else {}
+            results.append(
+                (
+                    "v36 internet_feed: exactly one row, id 1",
+                    len(rows) == 1 and row.get("id") == 1,
+                )
+            )
+            results.append(
+                (
+                    "v36 internet_feed: default values (off, unconfigured, pos off, 300 km)",
+                    row.get("enabled") == 0
+                    and row.get("configured") == 0
+                    and row.get("groups") == "[]"
+                    and row.get("broadcast") == 1
+                    and row.get("pos_mode") == "off"
+                    and row.get("radius_km") == 300
+                    and row.get("token_enc") is None
+                    and row.get("cursor") is None,
                 )
             )
         finally:
