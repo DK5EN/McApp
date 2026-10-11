@@ -17,6 +17,9 @@ as a positive control so the www case cannot pass vacuously:
   W8b www first, then a signal-free UDP copy (0/0 sentinel): still upgraded.
   W8c www first, restart (in-memory claim gone), then RF: DB backstop still upgrades.
   W9  Three www copies (re-sent ticks) stay one row.
+  W10 A www replay / a www copy of a stored RF row is flagged for the www_message
+      broadcast and push subscribers; an RF duplicate is not.
+  W11 www_push_allowed: only a new, recent www frame may be pushed.
 
 Ephemeral tempfile SQLite DB per case; drives the REAL `store_message`.
 Timestamps are milliseconds (project-wide DB convention).
@@ -28,7 +31,13 @@ from typing import Any
 
 from ..logging_setup import get_logger
 from ..sqlite_storage import create_sqlite_storage
-from .www import is_www_frame
+from .www import (
+    WWW_DUPLICATE_KEY,
+    WWW_PUSH_MAX_AGE_MS,
+    is_www_duplicate,
+    is_www_frame,
+    www_push_allowed,
+)
 
 logger = get_logger(__name__)
 
@@ -314,6 +323,44 @@ async def _w9(storage: Any, results: list[tuple[str, bool]]) -> None:
     )
 
 
+async def _w10(storage: Any, results: list[tuple[str, bool]]) -> None:
+    first = _frame("www", msg_id="C0000010")
+    await storage.store_message(first, "")
+    replay = _frame("www", msg_id="C0000010")
+    await storage.store_message(replay, "")
+    await storage.store_message(_frame("lora", msg_id="C0000011", rssi=-90, snr=4.0), "")
+    late_www = _frame("www", msg_id="C0000011", timestamp=_T0 + 20_000)
+    await storage.store_message(late_www, "")
+    rf_repeat = _frame("lora", msg_id="C0000011", rssi=-91, snr=3.0, timestamp=_T0 + 40_000)
+    await storage.store_message(rf_repeat, "")
+    results.append(
+        (
+            "W10 storage flags a www replay and a www copy of a stored RF row, nothing else",
+            WWW_DUPLICATE_KEY not in first
+            and replay.get(WWW_DUPLICATE_KEY) is True
+            and late_www.get(WWW_DUPLICATE_KEY) is True
+            and WWW_DUPLICATE_KEY not in rf_repeat
+            and is_www_duplicate(replay)
+            and not is_www_duplicate(first),
+        )
+    )
+
+
+def _push_gate(results: list[tuple[str, bool]]) -> None:
+    now = _T0 + WWW_PUSH_MAX_AGE_MS
+    fresh = _frame("www")
+    results.append(
+        (
+            "W11 www_push_allowed: fresh new frame yes; replay, stale, untimed no",
+            www_push_allowed(fresh, now)
+            and not www_push_allowed({**fresh, WWW_DUPLICATE_KEY: True}, now)
+            and not www_push_allowed(fresh, now + 1)
+            and not www_push_allowed({**fresh, "timestamp": None}, now)
+            and not www_push_allowed({**fresh, "timestamp": True}, now),
+        )
+    )
+
+
 def _predicate(results: list[tuple[str, bool]]) -> None:
     results.append(
         (
@@ -331,6 +378,7 @@ async def run_www_ingest_tests() -> bool:
     """Run the www ingest suite. Returns True iff every case passes."""
     results: list[tuple[str, bool]] = []
     _predicate(results)
+    _push_gate(results)
     for name, body in (
         ("w1", _w1),
         ("w2", _w2),
@@ -343,6 +391,7 @@ async def run_www_ingest_tests() -> bool:
         ("w8b", _w8b),
         ("w8c", _w8c),
         ("w9", _w9),
+        ("w10", _w10),
     ):
         await _case(name, results, body)
 

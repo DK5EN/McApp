@@ -52,6 +52,9 @@ from mcapp.contract_parity_tests import run_contract_parity_tests
 from mcapp.dedup_contract_tests import run_dedup_contract_tests
 from mcapp.hey_path_tests import run_hey_path_tests
 from mcapp.identity_tests import run_identity_tests
+from mcapp.internet_feed_routes_tests import run_internet_feed_routes_tests
+from mcapp.internet_feed_tests import run_internet_feed_tests
+from mcapp.internet_feed_wiring_tests import run_internet_feed_wiring_tests
 from mcapp.linkcheck_sse_tests import run_linkcheck_sse_tests
 from mcapp.linkcheck_tests import run_linkcheck_tests
 from mcapp.main import MessageRouter
@@ -237,6 +240,15 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     www_ingest_ok = await run_www_ingest_tests()
     print(f"www_ingest: {'PASS' if www_ingest_ok else 'FAIL'}")
 
+    internet_feed_ok = await run_internet_feed_tests()
+    print(f"internet_feed: {'PASS' if internet_feed_ok else 'FAIL'}")
+
+    internet_feed_routes_ok = await run_internet_feed_routes_tests()
+    print(f"internet_feed_routes: {'PASS' if internet_feed_routes_ok else 'FAIL'}")
+
+    internet_feed_wiring_ok = await run_internet_feed_wiring_tests()
+    print(f"internet_feed_wiring: {'PASS' if internet_feed_wiring_ok else 'FAIL'}")
+
     node_admin_hook_ok = await run_node_admin_hook_tests()
     print(f"node_admin_hook: {'PASS' if node_admin_hook_ok else 'FAIL'}")
 
@@ -378,6 +390,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and node_admin_storage_ok
         and internet_feed_state_ok
         and www_ingest_ok
+        and internet_feed_ok
+        and internet_feed_routes_ok
+        and internet_feed_wiring_ok
         and node_admin_hook_ok
         and node_admin_state_ok
         and node_admin_service_ok

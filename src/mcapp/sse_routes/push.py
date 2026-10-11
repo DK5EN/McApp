@@ -29,7 +29,10 @@ from typing import TYPE_CHECKING, Any
 from fastapi import APIRouter
 from pydantic import BaseModel, Field, field_validator
 
+from ..internet_feed_types import WWW_MESSAGE_TOPIC
 from ..push_delivery import PushDispatcher, load_or_create_vapid
+from ..storage.www import www_push_allowed
+from ..util import now_ms
 
 if TYPE_CHECKING:
     from ..sse_handler import SSEManager
@@ -149,6 +152,15 @@ def build_push_router(
         # silently: inbound BLE traffic arrives on "ble_notification".
         manager.message_router.subscribe("mesh_message", _on_mesh_message)
         manager.message_router.subscribe("ble_notification", _on_mesh_message)
+
+        async def _on_www_message(routed_message: dict[str, Any]) -> None:
+            """Internet feed: push like RF, but never a replay storage flagged
+            and never a backfilled message older than WWW_PUSH_MAX_AGE_MS."""
+            if www_push_allowed(routed_message["data"], now_ms()):
+                await _on_mesh_message(routed_message)
+
+        # Last of the three www_message subscribers (storage, broadcast, push).
+        manager.message_router.subscribe(WWW_MESSAGE_TOPIC, _on_www_message)
 
     @router.get("/api/push/vapid-public-key")
     async def get_vapid_public_key() -> dict[str, str]:

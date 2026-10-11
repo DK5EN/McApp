@@ -68,7 +68,7 @@ from .telemetry_reconcile import (
     values_for,
 )
 from .uptime import is_uplink_time_beacon
-from .www import is_www_frame, is_www_src_type
+from .www import WWW_DUPLICATE_KEY, is_www_frame, is_www_src_type
 
 if TYPE_CHECKING:
     from ..node_admin_types import ReplyHook
@@ -2232,6 +2232,8 @@ class IngestMixin(StorageBase):
                     )
 
             if duplicate:
+                if is_www_frame(message):
+                    message[WWW_DUPLICATE_KEY] = True
                 # Presence, not truthiness — see the identical note in
                 # `_store_position`; a genuine all-zero beacon must still reach
                 # `store_telemetry`'s own transport-aware sentinel decoding.

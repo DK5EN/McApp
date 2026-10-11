@@ -30,11 +30,13 @@ from .ble_client import ConnectionState
 from .classifier import Classifier
 from .command_echo import is_expected_command_echo
 from .commands.parsing import SPAM_GROUP
+from .internet_feed_types import STATUS_EVENT, WWW_MESSAGE_TOPIC
 from .linkcheck import is_link_check_payload
 from .logging_setup import get_logger
 from .schemas import DeleteMessagesRequest, ReadCursorRequest
 from .sqlite_storage import SQLiteStorage, create_sqlite_storage
 from .storage.constants import db_write
+from .storage.www import is_www_duplicate
 from .system_converge import (
     REQUIRED_SYSTEM_EPOCH,
     UPDATE_ARGS_FILE,
@@ -48,12 +50,17 @@ if TYPE_CHECKING:
     # RF Monitor wire contract (docs/rf-monitor-plan.md); import deferred to
     # TYPE_CHECKING only — wire_monitor.py imports broadcast_verdict from
     # THIS module at runtime, so a real top-level import here would cycle.
+    from .internet_feed_types import InternetFeedApi
     from .node_admin_types import NodeAdminService
     from .node_console import NodeConsoleSession
     from .qrz_service import QrzLookupService
     from .wire_monitor import WireMonitor
 
 SSE_CLIENT_QUEUE_SIZE = 256
+# Internet feed replay guard: meshmap's backfill reaches at most 24 h back, but
+# its reconnect lookback is 15 min; one hour matches the storage dedup window.
+WWW_SEEN_TTL_MS = 60 * 60 * 1000
+WWW_SEEN_MAX = 2000
 SLOT_COUNT = 3  # ⚠ must match scripts/update-runner.py's NUM_SLOTS
 SERVER_SHUTDOWN_TIMEOUT = 5.0
 DEFAULT_SSE_PORT = 2981
@@ -202,6 +209,7 @@ try:
     from .sse_routes.acks import build_acks_router
     from .sse_routes.classifier import build_classifier_router
     from .sse_routes.deploy import build_deploy_router
+    from .sse_routes.internet_feed import build_internet_feed_router
     from .sse_routes.linkcheck import build_linkcheck_router
     from .sse_routes.monitor import build_monitor_router
     from .sse_routes.node_admin import build_node_admin_router
@@ -308,12 +316,19 @@ class SSEManager:
         # Extra Origin values the node-admin guard accepts (webapp cross-origin proxy
         # mode, Vite dev server); set from `node_admin.allowed_origins`.
         self.node_admin_allowed_origins: list[str] = []
+        # Internet feed (meshmap). Set by build_app (main.py); None keeps
+        # /api/internet-feed at a 503 and omits the "internet_feed" feature.
+        self.internet_feed_service: InternetFeedApi | None = None
+        # (sender, msg_id) -> broadcast time of www frames (_www_broadcast_handler).
+        self._www_seen: dict[tuple[str, str], int] = {}
 
         # Subscribe to messages from the router
         if message_router:
             message_router.subscribe("mesh_message", self._broadcast_handler)
             message_router.subscribe("websocket_message", self._broadcast_handler)
             message_router.subscribe("ble_notification", self._broadcast_handler)
+            # Second of the three www_message subscribers (storage first).
+            message_router.subscribe(WWW_MESSAGE_TOPIC, self._www_broadcast_handler)
             message_router.subscribe("ble_status", self._broadcast_handler)
             message_router.subscribe("msg_status", self._status_handler)
             message_router.subscribe("linkcheck_event", self._linkcheck_handler)
@@ -555,6 +570,11 @@ class SSEManager:
                 client_id,
             )
 
+        # Internet feed state (meshmap): live transitions follow under the same
+        # event name, so a reconnecting client never shows a stale chip.
+        if self.internet_feed_service is not None:
+            yield self.format_sse_event(self.internet_feed_service.status(), STATUS_EVENT)
+
         # Send BLE status using same format the frontend expects
         ble_client = self.message_router.get_protocol("ble_client") if self.message_router else None
         if ble_client:
@@ -647,6 +667,9 @@ class SSEManager:
         app.include_router(build_push_router(self))
         app.include_router(build_qrz_router(self))
         app.include_router(build_node_admin_router(self, lambda: self.node_admin_allowed_origins))
+        app.include_router(
+            build_internet_feed_router(self, lambda: self.node_admin_allowed_origins)
+        )
         app.include_router(build_linkcheck_router(self))
         app.include_router(build_monitor_router(self))
         app.include_router(build_uptime_router(self))
@@ -858,6 +881,32 @@ class SSEManager:
         lines.append(f"data: {json_str}")
         lines.append("")  # Empty line to separate events
         return "\n".join(lines) + "\n"
+
+    async def _www_broadcast_handler(self, routed_message: dict[str, Any]) -> None:
+        """Internet feed messages: broadcast like RF unless storage flagged a replay.
+
+        meshmap re-sends its lookback window on every reconnect; storage dedups
+        it and sets the flag on the shared dict (storage subscribes first).
+        """
+        data = routed_message.get("data")
+        if is_www_duplicate(data):
+            return
+        # A frame storage never reached (blocklist, text filter) carries no flag,
+        # yet meshmap re-sends it on every reconnect backfill: remember what was
+        # already broadcast so a replay is not shown twice.
+        if isinstance(data, dict):
+            key = (str(data.get("src", "")).split(",", 1)[0].upper(), str(data.get("msg_id")))
+            now = now_ms()
+            seen = self._www_seen
+            if now - seen.get(key, -WWW_SEEN_TTL_MS - 1) <= WWW_SEEN_TTL_MS:
+                return
+            if len(seen) >= WWW_SEEN_MAX:
+                for old in [k for k, ts in seen.items() if now - ts > WWW_SEEN_TTL_MS]:
+                    del seen[old]
+                while len(seen) >= WWW_SEEN_MAX:
+                    del seen[next(iter(seen))]
+            seen[key] = now
+        await self._broadcast_handler(routed_message)
 
     async def _broadcast_handler(self, routed_message: dict[str, Any]) -> None:
         """Handle messages from the router and broadcast to SSE clients.

@@ -131,6 +131,14 @@ def _test_redact(_record: RecordFn) -> None:
         "redact: top-level msg untouched",
         flat["msg"] == "keep",
     )
+    tok = redact({"token": "feed-secret", "Token": "t2", "nested": {"token": "t3"}, "msg": "ok"})
+    _record(
+        "redact: token key masked at any depth, case-insensitively",
+        tok["token"] == "[redacted]"
+        and tok["Token"] == "[redacted]"
+        and tok["nested"]["token"] == "[redacted]"
+        and tok["msg"] == "ok",
+    )
 
 
 def _test_severity_for(_record: RecordFn) -> None:

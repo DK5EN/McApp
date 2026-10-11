@@ -21,3 +21,32 @@ def is_www_src_type(src_type: Any) -> bool:
 def is_www_frame(message: Any) -> bool:
     """True when `message` is an internet-feed frame (non-dict / non-str tolerant)."""
     return isinstance(message, dict) and is_www_src_type(message.get("src_type"))
+
+
+# Set in place by `store_message` on a www frame it recognised as a duplicate
+# (RF copy already stored, or meshmap re-sending its lookback window). The
+# router hands ONE dict to every subscriber in order and storage runs first,
+# so the broadcast and push subscribers of `www_message` read this flag and
+# skip the frame: a replay must not re-notify or re-render anything.
+WWW_DUPLICATE_KEY = "_www_duplicate"
+
+# A www message older than this is history, not news: it is stored and counted
+# as unread, but never pushed. Covers meshmap's 2 h backfill on first connect
+# and the cursor/lookback replay after a restart, when the in-memory push dedup
+# is empty.
+WWW_PUSH_MAX_AGE_MS = 15 * 60 * 1000
+
+
+def is_www_duplicate(message: Any) -> bool:
+    """True when storage flagged this www frame as already stored."""
+    return is_www_frame(message) and message.get(WWW_DUPLICATE_KEY) is True
+
+
+def www_push_allowed(message: Any, now_ms: int) -> bool:
+    """A www frame may reach push only when new to storage and recent."""
+    if is_www_duplicate(message):
+        return False
+    ts = message.get("timestamp") if isinstance(message, dict) else None
+    if isinstance(ts, bool) or not isinstance(ts, int):
+        return False
+    return now_ms - ts <= WWW_PUSH_MAX_AGE_MS

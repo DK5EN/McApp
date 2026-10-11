@@ -329,12 +329,12 @@ Still open:
 
 Resume point for the coding sessions (`/orchestrate-waves` on this doc).
 
-| Wave | Scope                                                                                  | State                                                          |
-| ---- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| 1    | Migration 36 + `InternetFeedStateMixin`; www ingest guards + www→RF `src_type` upgrade | Done 2026-10-11 (this commit)                                  |
-| 2    | `internet_feed.py` service + `sse_routes/internet_feed.py` + main/sse wiring           | **Blocked until mcmap's box feed is live on meshmap.oevsv.at** |
-| 3    | Webapp: Settings > Internet, Globe chip, bubble marker, history fallback, watchdog     | After wave 2                                                   |
-| B    | Positions (RAM cache, `internet:positions`, map styling)                               | After the dev soak                                             |
+| Wave | Scope                                                                                  | State                                                                  |
+| ---- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| 1    | Migration 36 + `InternetFeedStateMixin`; www ingest guards + www→RF `src_type` upgrade | Done 2026-10-11 (`81c028a`)                                            |
+| 2    | `internet_feed.py` service + `sse_routes/internet_feed.py` + main/sse wiring           | Done 2026-10-11 (this commit), advisor APPROVED after one rework round |
+| 3    | Webapp: Settings > Internet, Globe chip, bubble marker, history fallback, watchdog     | **Next**, fresh session from this section                              |
+| B    | Positions (RAM cache, `internet:positions`, map styling)                               | After the dev soak                                                     |
 
 Wave 1 as built (deviations from §4.1 and §4.3):
 
@@ -359,3 +359,38 @@ Carry-forward for wave 2, from the implemented mcmap contract (mcmap `4579dbc`):
   backoff honours. Base URL: constant `https://meshmap.oevsv.at`, `MCAPP_INTERNET_FEED_URL` env
   override for testing only.
 - After wave 3: push `development` in MCProxy and webapp (owner decision), no release.
+
+meshmap box feed verified live 2026-10-11 (mcmap v0.1.67): a 75 s feed held through Apache with
+the server's `MCMAP-1` probe token delivered `hello`, a 2 h backfill batch with an `id:` cursor and
+five `: ping` lines 15 s apart (no buffering). Real traffic carries `"via": "NET"`; the owner decided
+it is dropped (the mapper appends `via` only when it differs from `from` and is callsign-shaped).
+
+Wave 2 as built (deviations from §4.2-§4.4):
+
+- **Push skips www messages older than 15 min** (`storage/www.py` `WWW_PUSH_MAX_AGE_MS`). §3 says
+  push regardless of origin; that still holds for live traffic, but the 2 h first-connect backfill
+  and the reconnect lookback after a restart (in-memory push dedup empty) would otherwise notify
+  hours-old messages. They are stored and count as unread.
+- **Replays are not re-broadcast or re-pushed.** `store_message` flags a www duplicate in place
+  (`_www_duplicate`; storage is the first `www_message` subscriber); `SSEManager._www_broadcast_handler`
+  and the push subscriber skip flagged frames, and the broadcast handler keeps a 1 h
+  `(sender, msg_id)` seen-set for replays storage never reached (blocked / filtered).
+- **Token keyring, not one token.** `token_enc` holds one SecretBox JSON `{call|IDKIND|MAC: {box_id,
+token}}` (AD `internet_feed.tokens`, LRU 4), so pi↔ble switching (startup before BLE hydration,
+  every BLE disconnect) reuses each identity's own token instead of a reclaim at meshmap. Before the
+  first register the service waits up to 30 s for the BLE identity while BLE is configured.
+  An identity change is the KEY changing (`call`, `idKind`, `mac`); firmware/build refresh on the
+  next check-in and never re-register.
+- **Each publish is shielded** and drained before a reconnect: a cancel between `store_message`'s
+  in-memory claim and its INSERT would otherwise lose the message for good (its replay reads as a
+  duplicate).
+- Backoff ends early only on a settings change / forget / stop; BLE identity hints never shorten a
+  Retry-After. `superseded` / `revoked` halt until the operator saves settings or forgets.
+- Settings validation (groups `1..99999` or `#TAG`, ≤ 10 after case-insensitive dedup, radius,
+  wholesale PUT) lives in `sse_routes/internet_feed.py`; `suggested` is computed there from the BLE
+  register cache (`I.GCB0..5`, `SN.NOALL`).
+- Suites: `internet_feed_tests.py` (service, fake server, 69 cases), `internet_feed_routes_tests.py`
+  (guard, validation, suggested, body withheld), `internet_feed_wiring_tests.py` I1-I5 (subscriber
+  order, replay/backfill gating), `www_ingest_tests.py` W10/W11.
+- Not done here, needs the box: a live connect from mcapp.local (needs a dev release and the feed
+  enabled, which happens through the wave 3 GUI or a `PUT /api/internet-feed`).

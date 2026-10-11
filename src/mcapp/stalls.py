@@ -134,7 +134,7 @@ def _trim_stack_paths(text: str) -> str:
 # ("Authorization" headers, push subscriptions' "auth" secret) and neither is
 # a substring of the other.
 _REDACT_EXACT_KEYS = frozenset(
-    {"endpoint", "keys", "p256dh", "auth", "authorization", "api_key", "x-api-key"}
+    {"endpoint", "keys", "p256dh", "auth", "authorization", "api_key", "x-api-key", "token"}
 )
 _REDACTED = "[redacted]"
 
