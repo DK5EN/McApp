@@ -17,7 +17,7 @@ Mutation record (each single-line mutation must turn the named group red, then b
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 from . import node_admin_state as nas
@@ -645,6 +645,92 @@ def _test_capability(record: Record) -> None:
         )
 
 
+def _test_tx_min_and_led_flash(record: Record) -> None:
+    three = "ok v=4.40a up=75 bat=0 heap=112 s=GtdMwl p=2/0/22"
+    st = fold([status_row(1, three)], NOW)
+    record(
+        "p=2/0/22: tx_power 2, tx_power_min 0, tx_power_max 22",
+        fld(st, "tx_power") == 2 and fld(st, "tx_power_min") == 0 and fld(st, "tx_power_max") == 22,
+    )
+    info = parse_status(three)
+    record("p=2/0/22: StatusInfo.tx_min == 0", info is not None and info.tx_min == 0)
+    two = fold([status_row(1, LIVE)], NOW)
+    record(
+        "p=2/22 (two-part) still works, no tx_power_min",
+        fld(two, "tx_power") == 2
+        and fld(two, "tx_power_max") == 22
+        and "tx_power_min" not in two["fields"],
+    )
+    neg = parse_status("ok v=4.40a s=GTDMW p=-3/-9/22")
+    record(
+        "p=-3/-9/22 parses (negative min)",
+        neg is not None and (neg.tx_cur, neg.tx_min, neg.tx_max) == (-3, -9, 22),
+    )
+    bad = parse_status("ok v=4.40a s=GTDMW p=1/2/3/4")
+    record("p= with four parts is ignored", bad is not None and bad.tx_cur is None)
+
+    # LED: three states
+    led_off = "ok v=4.40a up=1 bat=1 heap=1 s=gtdmwl p=2/0/22"
+    led_up = "ok v=4.40a up=1 bat=1 heap=1 s=gtdmwL p=2/0/22"
+    st = fold([vrow(1, "led", "flash", "ok led=flash")], NOW)
+    record("led ack 'ok led=flash' sets state flash", sw(st, "led") == "flash")
+    st = fold([vrow(1, "led", "on", "ok led=on"), vrow(2, "led", "flash", "err failed")], NOW)
+    record(
+        "led flash 'err failed' leaves the earlier state (no invented opposite)",
+        sw(st, "led") == "on",
+    )
+    st = fold([vrow(1, "led", "flash", "err failed")], NOW)
+    record("led flash 'err failed' with no evidence stays unknown", sw(st, "led") == "unknown")
+    st = fold([status_row(1, led_up)], NOW)
+    record("status L alone -> on_or_flash", sw(st, "led") == "on_or_flash")
+    st = fold([status_row(1, led_off)], NOW)
+    record("status l alone -> off", sw(st, "led") == "off")
+    st = fold([vrow(1, "led", "flash", "ok led=flash"), status_row(2, led_up)], NOW)
+    record("led ack flash then status L -> flash", sw(st, "led") == "flash")
+    st = fold([vrow(1, "led", "on", "ok led=on"), status_row(2, led_up)], NOW)
+    record("led ack on then status L -> on", sw(st, "led") == "on")
+    st = fold([vrow(1, "led", "flash", "ok led=flash"), status_row(2, led_off)], NOW)
+    record("led ack flash then status l -> off", sw(st, "led") == "off")
+    st = fold(
+        [
+            vrow(1, "led", "flash", "ok led=flash"),
+            vrow(2, "reboot", "", "ok rebooting"),
+            status_row(3, led_up),
+        ],
+        NOW,
+    )
+    record(
+        "led flash, reboot, status L -> on_or_flash (ack predates the reboot)",
+        sw(st, "led") == "on_or_flash",
+    )
+    st = fold([vrow(1, "led", "flash", "ok led=flash"), vrow(2, "reboot", "", "ok rebooting")], NOW)
+    record("led flash then reboot -> off", sw(st, "led") == "off")
+
+    # A reboot McApp never saw (power cycle, watchdog, another sender): the status dates the boot.
+    t_ack = NOW - 3_000_000
+    t_status = t_ack + 600_000  # ten minutes later
+    up2 = "ok v=4.40a up=2 bat=1 heap=1 s=gtdmwL p=2/0/22"
+    up75 = "ok v=4.40a up=75 bat=1 heap=1 s=gtdmwL p=2/0/22"
+    no_up = "ok v=4.40a bat=1 heap=1 s=gtdmwL p=2/0/22"
+    ack = vrow(1, "led", "flash", "ok led=flash", t_ack)
+    st = fold([ack, status_row(2, up2, t_status)], NOW)
+    record(
+        "led flash ack, status L ten minutes later with up=2 (node booted after the ack) "
+        "-> on_or_flash",
+        sw(st, "led") == "on_or_flash",
+    )
+    st = fold([ack, status_row(2, up75, t_status)], NOW)
+    record(
+        "led flash ack, status L ten minutes later with up=75 (no boot since) -> flash",
+        sw(st, "led") == "flash",
+    )
+    st = fold([ack, status_row(2, no_up, t_status)], NOW)
+    record(
+        "led flash ack, status L without up= (ack cannot be dated against the boot) -> on_or_flash",
+        sw(st, "led") == "on_or_flash",
+    )
+
+
 def _test_injection(record: Record) -> None:
     calls: list[str] = []
 
@@ -654,6 +740,280 @@ def _test_injection(record: Record) -> None:
 
     st = fold([status_row(1)], NOW, row_state=fake)
     record("fold accepts an injected row-state function", calls == ["1"] and st["fields"] == {})
+
+
+def fold_any(rows: list[dict[str, Any]], now: int) -> dict[str, Any]:
+    """`fold` with an untyped result: the read fields hold JSON-shaped values."""
+    return cast(dict[str, Any], fold(rows, now))
+
+
+def _test_read_fields(record: Record) -> None:
+    """Extended read/write commands (wave 2): shapes from the firmware corpus boundaries."""
+    import json
+    from pathlib import Path
+
+    corpus = json.loads((Path(__file__).parent / "remote_cmd_vectors.json").read_text())
+    by_ctr = {r["ctr"]: r["result"] for r in corpus["replies"]}
+
+    def one(cmd: str, args: str, result: str) -> Any:
+        return fold_any([vrow(1, cmd, args, result)], NOW)["fields"].get(cmd)
+
+    st = fold_any([vrow(1, "radio", "", by_ctr[80])], NOW)["fields"]
+    record(
+        "radio: f/sf/cr/bw parsed, p= sets tx_power min/max like status",
+        st["radio"]["value"] == {"f": 999.999, "sf": 99, "cr": 99, "bw": 999.99}
+        and (st["tx_power"]["value"], st["tx_power_min"]["value"]) == (-99, -99)
+        and st["tx_power_max"]["value"] == -99,
+    )
+    st = fold_any([vrow(1, "radio", "", "ok f=433.175 sf=11 cr=5 bw=250 p=10/22")], NOW)["fields"]
+    record(
+        "radio: 2-part p= sets cur/max and no minimum",
+        st["radio"]["value"] == {"f": 433.175, "sf": 11, "cr": 5, "bw": 250.0}
+        and st["tx_power"]["value"] == 10
+        and st["tx_power_max"]["value"] == 22
+        and "tx_power_min" not in st,
+    )
+    sens = one("sens", "", by_ctr[81])
+    record(
+        "sens: boundary values; '-' is None; err unsupported marks the field",
+        sens["value"] == {"t": -99.9, "h": 100.0, "p": 1099.9, "t2": -99.9}
+        and one("sens", "", "ok t=21.4 h=45 p=1013.2 t2=-")["value"]["t2"] is None
+        and one("sens", "", "err unsupported")["value"] == {"unsupported": True},
+    )
+    record(
+        "name / atxt: free text verbatim after the key, spaces kept, '-' is empty",
+        one("name", "", by_ctr[85])["value"] == "N" * 19
+        and one("atxt", "", "ok a=MeshCom Garten  x")["value"] == "MeshCom Garten  x"
+        and one("name", "Martin", "ok n=Martin")["value"] == "Martin"
+        and one("atxt", "none", "ok a=-")["value"] == "",
+    )
+    record(
+        "pos: lat lon alt src (read and write ack share the shape)",
+        one("pos", "", by_ctr[87])["value"]
+        == {"lat": -89.99999, "lon": -179.99999, "alt": 40000, "src": "nofix"}
+        and one("pos", "48.4 11.7 492", "ok 48.40000 11.70000 492 set")["value"]["src"] == "set",
+    )
+    record(
+        "txq: counters stay verbatim strings",
+        one("txq", "", by_ctr[82])["value"]
+        == {
+            "q_used": 65535,
+            "q_cap": 65535,
+            "bp": "qrt",
+            "tx": "4294M",
+            "rt": "4294M",
+            "dr": "4294M",
+            "u": 100,
+        },
+    )
+    mbox = one("mbox", "", by_ctr[83])
+    record(
+        "mbox: boundary values; err unsupported marks the field",
+        mbox["value"]
+        == {
+            "m": "heard",
+            "u_used": 65535,
+            "u_slots": 65535,
+            "b": 999999,
+            "a_used": 65535,
+            "a_ceiling": 65535,
+            "st": "4294M",
+            "dl": "4294M",
+            "ak": "4294M",
+            "dr": "4294M",
+            "bl": "4294M",
+            "nt": "4294M",
+        }
+        and one("mbox", "", "err unsupported")["value"] == {"unsupported": True},
+    )
+    record(
+        "maxhop and chgled",
+        one("maxhop", "", by_ctr[84])["value"] == {"t": 99, "p": 99}
+        and one("chgled", "auto", by_ctr[98])["value"] == "auto"
+        and one("chgled", "off", "ok chgled=off")["value"] == "off"
+        and one("chgled", "bogus", "ok chgled=bogus") is None,
+    )
+
+    # mh pages
+    r1 = vrow(1, "mh", "0", "ok 5 2 AA1AA 3 BB2BB 4")
+    r2 = vrow(2, "mh", "2", "ok 5 4 CC3CC 5 DD4DD 6")
+    r3 = vrow(3, "mh", "4", "ok 5 - EE5EE 7")
+    mh = fold_any([r1, r2, r3], NOW)["fields"]["mh"]
+    record(
+        "mh pages: a page at the previous next appends, start unchanged, next - ends",
+        mh["value"]
+        == {
+            "total": 5,
+            "next": None,
+            "start": 0,
+            "rows": [
+                {"call": c, "min": m}
+                for c, m in (("AA1AA", 3), ("BB2BB", 4), ("CC3CC", 5), ("DD4DD", 6), ("EE5EE", 7))
+            ],
+        }
+        and mh["log_id"] == 3,
+    )
+    again = fold_any([r1, r2, vrow(3, "mh", "0", "ok 5 2 ZZ9ZZ 1")], NOW)["fields"]["mh"]["value"]
+    skip = fold_any([r1, vrow(2, "mh", "4", "ok 5 - EE5EE 7")], NOW)["fields"]["mh"]["value"]
+    record(
+        "mh pages: any other row restarts (start = row arg, rows = that page); 0 - is empty",
+        again["start"] == 0
+        and again["rows"] == [{"call": "ZZ9ZZ", "min": 1}]
+        and again["next"] == 2
+        and skip["start"] == 4
+        and len(skip["rows"]) == 1
+        and one("mh", "0", "ok 0 -")["value"] == {"total": 0, "next": None, "start": 0, "rows": []},
+    )
+    reboot_between = fold_any([r1, vrow(2, "reboot", "", "ok rebooting"), r2], NOW)["fields"]["mh"]
+    record(
+        "mh pages: a page after a reboot restarts instead of extending a stale list",
+        reboot_between["value"]["start"] == 2 and len(reboot_between["value"]["rows"]) == 2,
+    )
+
+    # mh <call>
+    direct = vrow(1, "mh", "dk5en-98", by_ctr[89])
+    routed = vrow(2, "mh", "DL2JA-2", by_ctr[90])
+    unknown = vrow(3, "mh", "XX0XX", "err unknown")
+    mc = fold_any([direct, routed, unknown], NOW)["fields"]["mh_call"]
+    d = mc["value"].get("DK5EN-98", {})
+    rt = mc["value"].get("DL2JA-2", {})
+    record(
+        "mh <call>: direct numbers, routed rc/v, unknown; merged by upper-case call",
+        d.get("kind") == "direct"
+        and d["la"] == -90.0
+        and d["di"] == 9999.9
+        and d["t"] == 65535
+        and rt["kind"] == "routed"
+        and rt["rc_snr"] == -99.9
+        and rt["rc_call"] == "DK5EN-001"
+        and len(rt["v"]) == 5
+        and rt["m"] == 1
+        and mc["value"]["XX0XX"] == {"kind": "unknown"}
+        and mc["log_id"] == 3,
+    )
+    dash = fold_any([vrow(1, "mh", "DL2JA-2", "ok r h=3 k=2 g=0 m=- rc=- t=3 v=-")], NOW)["fields"][
+        "mh_call"
+    ]["value"]["DL2JA-2"]
+    record(
+        "mh <call>: '-' maps to None / empty via list",
+        dash["m"] is None
+        and dash["rc_snr"] is None
+        and dash["rc_call"] is None
+        and dash["v"] == [],
+    )
+
+    # malformed / err replies are not evidence
+    bad = [
+        ("radio", "", "ok f=abc sf=11 cr=5 bw=250 p=1/2"),
+        ("sens", "", "ok t=1 h=2"),
+        ("pos", "", "ok 48.4 11.7 492 bogus"),
+        ("pos", "48.4 11.7 492", "ok 48.4 11.7 492 bogus"),
+        ("txq", "", "ok q=3/20 bp=zzz tx=1 rt=1 dr=1 u=1"),
+        ("mbox", "", "ok m=heard u=1/2"),
+        ("maxhop", "", "ok t=4"),
+        ("name", "", "ok x=Martin"),
+        ("name", "Martin", "ok x=Martin"),
+        ("mh", "0", "ok 5 2 AA1AA"),
+        ("name", "", "err text"),
+        ("pos", "", "err gps"),
+        ("radio", "", "err range"),
+        ("chgled", "auto", "err range"),
+    ]
+    clean = all(fold_any([vrow(1, c, a, r)], NOW)["fields"].get(c) is None for c, a, r in bad)
+    keep = fold_any([vrow(1, "name", "", "ok n=Old"), vrow(2, "name", "X", "ok garbage")], NOW)
+    record(
+        "malformed or err replies never raise and never change a field",
+        clean
+        and keep["fields"]["name"]["value"] == "Old"
+        and keep["fields"]["name"]["log_id"] == 1,
+    )
+    # not-verified rows are not evidence
+    unver = fold_any([srow(1, "name", "", "bad_tag")], NOW)["fields"]
+    record("an unverified read row is not evidence", "name" not in unver)
+
+
+def _test_read_markers(record: Record) -> None:
+    """`?` calls and the `err hidden` / `err unsupported` markers (advisor rework of wave 2)."""
+
+    def one(cmd: str, args: str, result: str) -> Any:
+        return fold_any([vrow(1, cmd, args, result)], NOW)["fields"].get(cmd)
+
+    # `?` calls (firmware rm_format.h: a non-call byte or a >9-char call is emitted as `?`)
+    q = one("mh", "0", "ok 3 - AA1AA 3 ? 0 BB2BB 4")
+    record(
+        "mh page with a `?` row (churned out / over-long call) folds as 3 rows incl. call '?'",
+        q is not None
+        and [r["call"] for r in q["value"]["rows"]] == ["AA1AA", "?", "BB2BB"]
+        and q["value"]["rows"][1]["min"] == 0
+        and one("mh", "0", "ok 1 - A?B 1")["value"]["rows"] == [{"call": "A?B", "min": 1}]
+        and one("mh", "0", "ok 1 - TOOLONGCALL 1") is None,
+    )
+    qr_row = "ok r h=3 k=2 g=0 m=1 rc=17.8@? t=3 v=?,DK5EN-1"
+    qr = fold_any([vrow(1, "mh", "DL2JA-2", qr_row)], NOW)["fields"].get("mh_call")
+    qv = one("mh", "DL2JA-2", "ok r h=3 k=2 g=0 m=1 rc=-9@ABCDEFGHIJ t=3 v=-")
+    record(
+        "mh <call> routed: rc call `?` and a `?` via hop parse; an over-long rc call is rejected",
+        qr is not None
+        and qr["value"]["DL2JA-2"]
+        == {
+            "kind": "routed",
+            "h": 3,
+            "k": 2,
+            "g": 0,
+            "m": 1,
+            "t": 3,
+            "rc_snr": 17.8,
+            "rc_call": "?",
+            "v": ["?", "DK5EN-1"],
+        }
+        and qv is None,
+    )
+
+    # err hidden / err unsupported replace the field; a later ack replaces them again
+    hid = fold_any(
+        [vrow(1, "pos", "", "err hidden"), vrow(2, "chgled", "on", "err unsupported")], NOW
+    )["fields"]
+    again_pos = fold_any(
+        [vrow(1, "pos", "", "err hidden"), vrow(2, "pos", "", "ok 48.40000 11.70000 492 set")], NOW
+    )["fields"]["pos"]["value"]
+    record(
+        "pos `err hidden` -> {hidden: True}; chgled `err unsupported` -> {unsupported: True}; "
+        "a later successful pos replaces the marker",
+        hid["pos"]["value"] == {"hidden": True}
+        and hid["chgled"]["value"] == {"unsupported": True}
+        and again_pos["src"] == "set"
+        and one("pos", "", "err hidden")["log_id"] == 1,
+    )
+
+
+def _test_status_keeps_reads(record: Record) -> None:
+    """Regression: `_status` used to wipe the whole fields map (`self.fields = {}`)."""
+    rows = [
+        vrow(1, "radio", "", "ok f=433.175 sf=11 cr=5 bw=250 p=10/22"),
+        vrow(2, "name", "", "ok n=Martin"),
+        status_row(3),
+    ]
+    fields = fold_any(rows, NOW)["fields"]
+    record(
+        "a status after a radio / name read keeps those fields",
+        fields.get("radio", {}).get("value", {}).get("sf") == 11
+        and fields.get("name", {}).get("value") == "Martin"
+        and fields["tx_power"]["log_id"] == 3,
+    )
+    only_status = fold_any(
+        [vrow(1, "radio", "", "ok f=433.175 sf=11 cr=5 bw=250 p=10/3/22"), status_row(2, FW_OLD)],
+        NOW,
+    )
+    record(
+        "a status resets status-owned fields (tx_power_min from the radio read does not outlive "
+        "a status without one)",
+        "tx_power_min" not in only_status["fields"] and "radio" in only_status["fields"],
+    )
+    after = fold_any([*rows, vrow(4, "reboot", "", "ok rebooting")], NOW)["fields"]
+    record(
+        "a reboot marks the read fields stale",
+        after["radio"]["stale"] and after["name"]["stale"] and after["firmware"]["stale"],
+    )
 
 
 def run_node_admin_state_tests() -> bool:
@@ -674,7 +1034,11 @@ def run_node_admin_state_tests() -> bool:
         _test_switch_states,
         _test_registers,
         _test_capability,
+        _test_tx_min_and_led_flash,
         _test_injection,
+        _test_read_fields,
+        _test_read_markers,
+        _test_status_keeps_reads,
     ):
         try:
             group(record)

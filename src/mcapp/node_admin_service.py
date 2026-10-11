@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING, Any, Final
 from . import remote_cmd, util
 from .commands.parsing import resolve_dst_target, strip_relay_path
 from .node_admin_observed import build_sessions, pair_rows
-from .node_admin_state import fold
+from .node_admin_state import fold, parse_status
 from .node_admin_types import (
     NodeAdminBusyError,
     NodeAdminError,
@@ -66,6 +66,8 @@ REPLY_PREFIX: Final = "RM1 "
 REPLY_MAX_CHARS: Final = 200
 OBSERVED_LIVE_WINDOW_MS: Final = 24 * 3_600_000  # rows a live session update is built from
 HISTORY_SCAN: Final = 100  # rows scanned to find the newest row of a target
+# rows scanned for the observed `origin` tag: covers a 24 h observed window of a busy bench session
+ORIGIN_SCAN: Final = 2000
 HISTORY_LIMIT_MAX: Final = 1000
 HISTORY_ALL: Final = 10_000  # more than the per-target log cap (1000): every row of a target
 SYNC_DROPPED: Final = "command dropped: no answer to the counter sync, command not sent"
@@ -438,27 +440,41 @@ class NodeAdminService:
                 return int(item["tx_max"])
         return remote_cmd.TX_MAX_DEFAULT
 
-    async def _node_tx_max(self, target: str) -> int | None:
-        """The board maximum from the newest verified `status` reply carrying `p=`, or None."""
+    async def _node_tx_range(self, target: str) -> tuple[int | None, int | None]:
+        """``(minimum, maximum)`` TX power from the newest verified `status` carrying `p=`.
+
+        Both come from the same row: ``p=<cur>/<min>/<max>`` on current firmware (the minimum
+        is None on the older ``p=<cur>/<max>``). ``(None, None)`` when no status carried `p=`.
+        """
         for r in await self._storage.node_admin_verified_status_rows(target):
-            board_max = remote_cmd.status_tx_power_max(str(r.get("result") or ""))
+            result = str(r.get("result") or "")
+            info = parse_status(result)
+            board_max = info.tx_max if info is not None else None
+            if board_max is None:
+                board_max = remote_cmd.status_tx_power_max(result)
             if board_max is not None:
-                return board_max
-        return None
+                return (info.tx_min if info is not None else None), board_max
+        return None, None
 
     async def _check_txpower(self, target: str, cmd: str, args: str) -> None:
-        """Refuse `txpower` above the node's own maximum (a counted, silent reject there).
+        """Refuse `txpower` outside the node's own range (a counted, silent reject there).
 
-        The key's `tx_max` is only the operator's ceiling; the node bounds by its board's
-        `TX_POWER_MAX`, which its `status` reply reports as `p=<cur>/<max>`. Unknown
-        maximum: the key's `tx_max` alone, as before.
+        The key's `tx_max` is only the operator's ceiling; the node's `allowed()` bounds by its
+        board's ``TX_POWER_MAX`` and also requires ``v >= minTxPower``, which its `status`
+        reply reports as `p=<cur>/<min>/<max>`. Unknown range: the key's `tx_max` alone.
         """
         if cmd != "txpower" or not args.isdigit():
             return
-        board_max = await self._node_tx_max(target)
+        board_min, board_max = await self._node_tx_range(target)
         if board_max is not None and int(args) > board_max:
             msg = (
                 f"txpower {int(args)} is above this node's maximum of {board_max} "
+                "(from its last status reply)"
+            )
+            raise remote_cmd.RmError(msg)
+        if board_min is not None and int(args) < board_min:
+            msg = (
+                f"txpower {int(args)} is below this node's minimum of {board_min} "
                 "(from its last status reply)"
             )
             raise remote_cmd.RmError(msg)
@@ -846,8 +862,17 @@ class NodeAdminService:
         if len(msg) > REPLY_MAX_CHARS:
             self._warn_rejected(message, msg)
             return
-        self._spawn(self._handle_reply(message))
-        self._spawn(self._publish_observed(message))
+        self._spawn(self._handle_then_publish(message))
+
+    async def _handle_then_publish(self, message: dict[str, Any]) -> None:
+        """Handle the reply, THEN publish its observed session.
+
+        Sequential on purpose: the webapp refetches targets when an observed exchange of
+        another sender under our call arrives, so the counter catch-up in `_handle_reply`
+        must be stored before that event goes out. `_handle_reply` never raises.
+        """
+        await self._handle_reply(message)
+        await self._publish_observed(message)
 
     async def _own_calls(self) -> set[str]:
         """Calls this McApp sends from: the attached node's and every logged `src_call`
@@ -864,6 +889,16 @@ class NodeAdminService:
             )
         return own
 
+    async def _mcapp_ctrs(self) -> dict[str, set[int]]:
+        """Per target, the counters McApp's own log holds (the origin of an observed exchange)."""
+        out: dict[str, set[int]] = {}
+        for t in await self._storage.list_node_admin_targets():
+            target = str(t["target"])
+            out[target] = {
+                int(r["ctr"]) for r in await self._storage.node_admin_history(target, ORIGIN_SCAN)
+            }
+        return out
+
     async def _observed_keys(self) -> dict[str, bytes]:
         keys: dict[str, bytes] = {}
         for t in await self._storage.list_node_admin_targets():
@@ -879,7 +914,8 @@ class NodeAdminService:
         rows = await self._storage.get_rm1_rows(now - hours * 3_600_000)
         keys = await self._observed_keys()
         own = await self._own_calls()
-        return await asyncio.to_thread(build_sessions, rows, now, keys, own)
+        mcapp_ctrs = await self._mcapp_ctrs()
+        return await asyncio.to_thread(build_sessions, rows, now, keys, own, mcapp_ctrs)
 
     async def _publish_observed(self, message: dict[str, Any]) -> None:
         """Broadcast `node_admin:observed` with the updated session of this frame.
@@ -910,9 +946,12 @@ class NodeAdminService:
             rows = await self._storage.get_rm1_rows(now - OBSERVED_LIVE_WINDOW_MS)
             keys = await self._observed_keys()
             own = await self._own_calls()
+            mcapp_ctrs = await self._mcapp_ctrs()
             # The event describes this pair only: build nothing else, and off the loop.
             pair_only = pair_rows([*rows, frame], pair)
-            sessions = await asyncio.to_thread(build_sessions, pair_only, now, keys, own)
+            sessions = await asyncio.to_thread(
+                build_sessions, pair_only, now, keys, own, mcapp_ctrs
+            )
             for session in sessions:
                 if (session["commander"], session["target"]) == pair:
                     await self._broadcast("node_admin:observed", session)
@@ -1069,6 +1108,7 @@ class NodeAdminService:
     async def _process_reply(self, message: dict[str, Any]) -> None:
         found = await self._correlate(message)
         if found is None:
+            await self._catch_up_hwm(message)
             return
         parsed, row = found
         target = str(row["target_call"])
@@ -1078,6 +1118,50 @@ class NodeAdminService:
         # sync gate run as background tasks outside the lock, so this cannot deadlock.
         async with self._lock(target):
             await self._process_reply_locked(message, parsed, row, target)
+
+    async def _catch_up_hwm(self, message: dict[str, Any]) -> None:
+        """Raise the stored mark for a reply that another sender caused under OUR call.
+
+        The attached node's own web page signs RM1 commands with the same call and password as
+        McApp, and the target keeps ONE high-water mark for every sender. Its replies are
+        addressed to our call but match no log row, so `_correlate` drops them and the mark
+        would lag. Only a reply that verifies under the target's key with orientation
+        (target, our call) counts; nothing else changes (no row, no sync gate, no `last_sync_at`).
+        ctr 0 (sync) is skipped: its mark is in the text and binds only to a sync row.
+        """
+        msg, src, dst = message.get("msg"), message.get("src"), message.get("dst")
+        if not isinstance(msg, str) or not isinstance(src, str) or not isinstance(dst, str):
+            return
+        parsed = remote_cmd.parse_reply(msg)
+        target = self._call_of(src, dst=False)
+        reply_dst = self._call_of(dst, dst=True)
+        if parsed is None or parsed.ctr <= 0 or target is None or reply_dst is None:
+            return
+        keyed = any(
+            t["target"] == target and t["has_key"]
+            for t in await self._storage.list_node_admin_targets()
+        )
+        if not keyed or reply_dst not in await self._own_calls():
+            return
+        async with self._lock(target):
+            await self._catch_up_locked(target, reply_dst, parsed.ctr, msg)
+
+    async def _catch_up_locked(self, target: str, own_call: str, ctr: int, msg: str) -> None:
+        if await self._storage.find_node_admin_log_row(target, ctr, self._clock()):
+            return  # a McApp row exists: the regular path owns it
+        try:
+            key = await self._get_key(target)
+        except (NodeAdminUnavailableError, ValueError):
+            return
+        verified = remote_cmd.verify_reply(key, target, own_call, msg)
+        if verified is None or verified.ctr <= await self._last_hwm(target):
+            return
+        await self._storage.raise_node_admin_hwm(target, verified.ctr)
+        logger.info(
+            "node admin %s: reply from another sender under our call, hwm raised to %d",
+            target,
+            verified.ctr,
+        )
 
     async def _process_reply_locked(
         self,

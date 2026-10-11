@@ -1201,6 +1201,7 @@ async def case_j_misc(record: Record) -> None:
 # ── m. W0 regressions (remote-view campaign, doc/2026-10-06_1100-node-admin-remote-view-*) ─
 
 STATUS_P1515 = "ok v=4.40a up=125 bat=87 heap=212 s=GTDMWL p=15/15 led=0"
+STATUS_P_RANGE = "ok v=4.40a up=125 bat=87 heap=212 s=GTDMWL p=15/2/22 led=0"
 
 
 async def case_m_reask(record: Record) -> None:
@@ -1448,6 +1449,43 @@ async def case_m_txpower_bound(record: Record) -> None:
             "m6d. a newer verified status without p= leaves the earlier maximum in force",
             await raises(ValueError, env.send("txpower", "16")),
         )
+
+
+async def case_m_txpower_min(record: Record) -> None:
+    # Firmware argsMatch also requires v >= minTxPower; status carries p=<cur>/<min>/<max>.
+    async with make_env() as env:
+        await env.setup(tx_max=30)
+        s = await env.send("status")
+        await env.svc.drain()
+        await env.time.advance(20_000)
+        await env.reply(s["ctr"], STATUS_P_RANGE)
+        await env.svc.drain()
+        await env.time.advance(11_000)
+        before = (await env.ctr(), len(await env.rows()), len(env.tx))
+        refused, sentence = False, ""
+        try:
+            await env.send("txpower", "1")
+        except ValueError as exc:
+            refused, sentence = True, str(exc)
+        except Exception:
+            refused = False
+        after = (await env.ctr(), len(await env.rows()), len(env.tx))
+        record(
+            "m6e. txpower below the node's p=<cur>/<min>/<max> minimum is refused (ValueError "
+            "naming 2), no counter allocated, no row, no frame",
+            refused and "minimum of 2" in sentence and before == after,
+        )
+        record(
+            "m6f. txpower above the 3-part maximum is refused too (22, key tx_max 30)",
+            await raises(ValueError, env.send("txpower", "23")),
+        )
+        try:
+            ok = await env.send("txpower", "2")
+            goes_out = ok["ctr"] == before[0] + 1
+        except Exception:
+            goes_out = False
+        await env.svc.drain()
+        record("m6g. txpower at the node's minimum still goes out", goes_out)
 
 
 async def case_m_txpower_held(record: Record) -> None:
@@ -2373,6 +2411,87 @@ async def case_k_start_never_blocks(record: Record) -> None:
             )
 
 
+async def case_p_foreign_same_call(record: Record) -> None:
+    # another sender signing with OUR call (the node's web page) advances the node's mark
+    async with make_env() as env:
+        await env.setup()
+        cap = _Capture()
+        lg = logging.getLogger("mcapp.node_admin_service")
+        lg.addHandler(cap)
+        lg.setLevel(logging.DEBUG)
+        try:
+            await env.reply(5000)
+            await env.svc.drain()
+            raised = await env.hwm()
+            await env.reply(4000)
+            await env.svc.drain()
+            kept = await env.hwm()
+            await env.reply(9000, bad=True)
+            await env.reply(9001, passwd="wrong")
+            await env.reply(9002, src_call="DL1ABC")  # tag for another orientation
+            await env.reply(0, "ok hwm=9500")  # sync reply without a row: skipped
+            await env.svc.drain()
+            untouched = await env.hwm()
+        finally:
+            lg.removeHandler(cap)
+        info = await env.target_info()
+        record(
+            "p1. verified reply to our call without a row raises the mark; lower ctr keeps it; "
+            "unverified, wrong key, wrong orientation and ctr 0 change nothing",
+            raised == 5000
+            and kept == 5000
+            and untouched == 5000
+            and info["last_sync_at"] is None
+            and sum("hwm raised to 5000" in ln for ln in cap.lines) == 1,
+        )
+    async with make_env() as env:
+        await env.setup()
+        a = await env.send()
+        await env.svc.drain()
+        await env.reply(a["ctr"])
+        await env.svc.drain()
+        record(
+            "p2. a reply that matches a McApp row keeps today's behavior (row verified)",
+            await env.state_of(a["log_id"]) == "verified" and await env.hwm() == a["ctr"],
+        )
+    async with make_env() as env:
+        await env.setup()
+        await env.reply(7000, dst="DL9XYZ")  # not addressed to one of our calls
+        await env.svc.drain()
+        record(
+            "p3. a reply addressed to another station never raises the mark", await env.hwm() == 0
+        )
+
+
+async def case_p4_observed_after_raise(record: Record) -> None:
+    # the observed event of a catch-up reply must follow the stored raise (webapp refetch)
+    async with make_env() as env:
+        await env.setup()
+        seen: list[int] = []
+        inner = env.svc._broadcast  # test seam: observe the order of side effects
+
+        async def probe(event: str, payload: dict[str, Any]) -> None:
+            if event == "node_admin:observed":
+                seen.append(await env.hwm())
+            await inner(event, payload)
+
+        env.svc._broadcast = probe  # test seam, see above
+        slow_raise = env.storage.raise_node_admin_hwm
+
+        async def raise_late(target: str, hwm: int, sync_at_ms: int | None = None) -> None:
+            await asyncio.sleep(0.3)  # a slow SD-card write: the two tasks must not race past it
+            await slow_raise(target, hwm, sync_at_ms)
+
+        env.storage.raise_node_admin_hwm = raise_late  # type: ignore[method-assign]  # test seam
+        await env.reply(5000)
+        await env.svc.drain()
+        record(
+            "p4. the observed event of a catch-up reply goes out after the mark was raised "
+            "(the webapp refetches targets on it)",
+            seen == [5000],
+        )
+
+
 async def run_node_admin_service_tests() -> bool:
     results: list[tuple[str, bool]] = []
 
@@ -2403,6 +2522,7 @@ async def run_node_admin_service_tests() -> bool:
         case_m_sync_window,
         case_m_result_max,
         case_m_txpower_bound,
+        case_m_txpower_min,
         case_m_txpower_held,
         case_m_synced_and_broadcast,
         case_n_cooldown,
@@ -2419,6 +2539,8 @@ async def run_node_admin_service_tests() -> bool:
         case_o_readd_nosync,
         case_o_race_reply,
         case_o_race_send,
+        case_p_foreign_same_call,
+        case_p4_observed_after_raise,
     ]
     for case in cases:
         try:

@@ -95,7 +95,9 @@ def _verified(ex: _Exchange) -> bool:
     return (ex.command is None or ex.command_ok) and (ex.reply is None or ex.reply_ok)
 
 
-def _exchange_dict(ex: _Exchange, now_ms: int, *, keyed: bool) -> dict[str, Any]:
+def _exchange_dict(
+    ex: _Exchange, now_ms: int, *, keyed: bool, origin: str | None = None
+) -> dict[str, Any]:
     reply: dict[str, Any] | None = None
     if ex.reply is not None:
         latency = (
@@ -123,8 +125,14 @@ def _exchange_dict(ex: _Exchange, now_ms: int, *, keyed: bool) -> dict[str, Any]
             ex.reply is None and ex.command_ms is not None and now_ms - ex.command_ms > NO_REPLY_MS
         ),
     }
-    if keyed and _verified(ex):
+    verified = keyed and _verified(ex)
+    if verified:
         out["verified"] = True
+    # Both origins are claims about who signed the exchange ("McApp's own ctr" / "a different
+    # sender signed with our call"). An unverified frame may be a forgery that merely reuses a ctr
+    # in McApp's log, or an unkeyed copy, so it proves nothing: no ``origin`` unless verified.
+    if origin is not None and verified:
+        out["origin"] = origin
     return out
 
 
@@ -149,6 +157,17 @@ def _decode(
         return None
     commander, target = (src, dst) if cmd is not None else (dst, src)
     return cmd, rep, text, commander, target, ts
+
+
+def _origin(ctr: int, ours: Collection[int] | None) -> str | None:
+    """``mcapp`` / ``other`` for an exchange of an own session, None when it proves nothing.
+
+    ctr 0 is the sync: McApp's log always holds one, so another sender's sync would read
+    ``mcapp``. It carries no origin at all.
+    """
+    if ours is None or ctr == 0:
+        return None
+    return "mcapp" if ctr in ours else "other"
 
 
 def _slot(slots: list[_Exchange], ctr: int, *, is_command: bool, ok: bool) -> _Exchange:
@@ -194,12 +213,19 @@ def build_sessions(
     now_ms: int,
     keys: Mapping[str, bytes],
     own_calls: Collection[str] = (),
+    mcapp_ctrs: Mapping[str, Collection[int]] | None = None,
 ) -> list[dict[str, Any]]:
     """Sessions newest first, each with its exchanges newest first.
 
     ``rows``: stored message rows (``src``, ``dst``, ``msg``, ``timestamp`` ms).
     ``keys``: target call -> derived key, only targets this box stores.
     ``own_calls``: calls that make a session "this McApp" (commander or target).
+    ``mcapp_ctrs``: target call -> counters in McApp's own log. Exchanges of a session whose
+    commander is one of ``own_calls`` get ``origin`` ``"mcapp"`` (ctr in that set) or
+    ``"other"`` (another sender signing with our call), on VERIFIED exchanges only: an unverified
+    one may be a forgery reusing a ctr of McApp's log and carries no ``origin``; other sessions
+    carry no ``origin``, and
+    neither do ctr-0 (sync) exchanges: McApp's log always holds ctr 0, so it proves nothing.
     """
     own = {c for c in (_norm(o) for o in own_calls) if c}
     norm_keys = {n: k for t, k in keys.items() if (n := _norm(t))}
@@ -238,8 +264,19 @@ def build_sessions(
     sessions: list[dict[str, Any]] = []
     for (commander, target), by_ctr in book.items():
         keyed = target in norm_keys
+        ours: Collection[int] | None = None
+        if commander in own:
+            by_target = {n: c for t, c in (mcapp_ctrs or {}).items() if (n := _norm(t))}
+            ours = by_target.get(target, ())
         exchanges = [
-            _exchange_dict(ex, now_ms, keyed=keyed) for slots in by_ctr.values() for ex in slots
+            _exchange_dict(
+                ex,
+                now_ms,
+                keyed=keyed,
+                origin=_origin(ex.ctr, ours),
+            )
+            for slots in by_ctr.values()
+            for ex in slots
         ]
         exchanges.sort(
             key=lambda e: (e["sent_ms"] or 0, e["command_ms"] or e["reply"]["reply_ms"] or 0),
