@@ -39,6 +39,7 @@ from mcapp.aprs_symbol_tests import run_aprs_symbol_tests
 from mcapp.ble_hydration_tests import run_ble_hydration_tests
 from mcapp.ble_protocol_tests import run_ble_protocol_tests
 from mcapp.blocklist_history_tests import run_blocklist_history_tests
+from mcapp.box_feed_contract_tests import run_box_feed_contract_tests
 from mcapp.classifier.tests import run_all_tests as run_classifier_tests
 from mcapp.commands.dedup_tests import run_dedup_tests
 from mcapp.commands.handler import create_command_handler
@@ -51,11 +52,16 @@ from mcapp.contract_parity_tests import run_contract_parity_tests
 from mcapp.dedup_contract_tests import run_dedup_contract_tests
 from mcapp.hey_path_tests import run_hey_path_tests
 from mcapp.identity_tests import run_identity_tests
+from mcapp.internet_feed_routes_tests import run_internet_feed_routes_tests
+from mcapp.internet_feed_tests import run_internet_feed_tests
+from mcapp.internet_feed_wiring_tests import run_internet_feed_wiring_tests
+from mcapp.internet_positions_tests import run_internet_positions_tests
 from mcapp.linkcheck_sse_tests import run_linkcheck_sse_tests
 from mcapp.linkcheck_tests import run_linkcheck_tests
 from mcapp.main import MessageRouter
 from mcapp.meteo_tests import run_meteo_tests
 from mcapp.msg_core_tests import run_msg_core_tests
+from mcapp.node_admin_observed_tests import run_node_admin_observed_tests
 from mcapp.node_admin_routes_tests import run_node_admin_routes_tests
 from mcapp.node_admin_service_tests import run_node_admin_service_tests
 from mcapp.node_admin_state_tests import run_node_admin_state_tests
@@ -64,6 +70,7 @@ from mcapp.node_console_tests import run_node_console_tests
 from mcapp.push_tests import run_push_tests
 from mcapp.qrz_tests import run_qrz_tests
 from mcapp.remote_cmd_tests import run_remote_cmd_tests
+from mcapp.rm1_suppression_tests import run_rm1_suppression_tests
 from mcapp.send_path_tests import run_send_path_tests
 from mcapp.server_imports_tests import run_server_imports_tests
 from mcapp.sqlite_storage import run_startup_tests as run_storage_tests
@@ -77,6 +84,7 @@ from mcapp.storage.connection_lifecycle_tests import run_connection_lifecycle_te
 from mcapp.storage.conv_dedup_tests import run_conv_dedup_tests
 from mcapp.storage.conversation_key_tests import run_conversation_key_tests
 from mcapp.storage.ingest_dedup_tests import run_ingest_dedup_tests
+from mcapp.storage.internet_feed_state_tests import run_internet_feed_state_tests
 from mcapp.storage.linkcheck_ingest_tests import run_linkcheck_ingest_tests
 from mcapp.storage.live_classification_tests import run_live_classification_tests
 from mcapp.storage.mheard_attribution_tests import run_mheard_attribution_tests
@@ -91,6 +99,7 @@ from mcapp.storage.suppression_tests import run_suppression_predicate_tests
 from mcapp.storage.telemetry_reconcile_tests import run_telemetry_reconcile_tests
 from mcapp.storage.unread_suppression_tests import run_unread_suppression_tests
 from mcapp.storage.uptime_tests import run_uptime_tests
+from mcapp.storage.www_ingest_tests import run_www_ingest_tests
 from mcapp.udp_handler import run_startup_tests as run_udp_handler_tests
 from mcapp.udp_parsing_tests import run_udp_parsing_tests
 from mcapp.wire_monitor_tests import run_wire_monitor_tests
@@ -122,6 +131,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     dedup_contract_ok = run_dedup_contract_tests()
     print(f"dedup_contract: {'PASS' if dedup_contract_ok else 'FAIL'}")
+
+    box_feed_contract_ok = run_box_feed_contract_tests()
+    print(f"box_feed_contract: {'PASS' if box_feed_contract_ok else 'FAIL'}")
 
     msg_core_ok = run_msg_core_tests()
     print(f"msg_core: {'PASS' if msg_core_ok else 'FAIL'}")
@@ -224,6 +236,30 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     node_admin_storage_ok = await run_node_admin_storage_tests()
     print(f"node_admin_storage: {'PASS' if node_admin_storage_ok else 'FAIL'}")
+
+    internet_feed_state_ok = await run_internet_feed_state_tests()
+    print(f"internet_feed_state: {'PASS' if internet_feed_state_ok else 'FAIL'}")
+
+    www_ingest_ok = await run_www_ingest_tests()
+    print(f"www_ingest: {'PASS' if www_ingest_ok else 'FAIL'}")
+
+    internet_feed_ok = await run_internet_feed_tests()
+    print(f"internet_feed: {'PASS' if internet_feed_ok else 'FAIL'}")
+
+    internet_feed_routes_ok = await run_internet_feed_routes_tests()
+    print(f"internet_feed_routes: {'PASS' if internet_feed_routes_ok else 'FAIL'}")
+
+    internet_feed_wiring_ok = await run_internet_feed_wiring_tests()
+    print(f"internet_feed_wiring: {'PASS' if internet_feed_wiring_ok else 'FAIL'}")
+
+    internet_positions_ok = run_internet_positions_tests()
+    print(f"internet_positions: {'PASS' if internet_positions_ok else 'FAIL'}")
+
+    rm1_suppression_ok = await run_rm1_suppression_tests()
+    print(f"rm1_suppression: {'PASS' if rm1_suppression_ok else 'FAIL'}")
+
+    node_admin_observed_ok = await run_node_admin_observed_tests()
+    print(f"node_admin_observed: {'PASS' if node_admin_observed_ok else 'FAIL'}")
 
     node_admin_hook_ok = await run_node_admin_hook_tests()
     print(f"node_admin_hook: {'PASS' if node_admin_hook_ok else 'FAIL'}")
@@ -330,6 +366,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and sse_format_ok
         and contract_parity_ok
         and dedup_contract_ok
+        and box_feed_contract_ok
         and linkcheck_ok
         and linkcheck_session_ok
         and linkcheck_ingest_ok
@@ -363,6 +400,14 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and uptime_ok
         and remote_cmd_ok
         and node_admin_storage_ok
+        and internet_feed_state_ok
+        and www_ingest_ok
+        and internet_feed_ok
+        and internet_feed_routes_ok
+        and internet_feed_wiring_ok
+        and internet_positions_ok
+        and rm1_suppression_ok
+        and node_admin_observed_ok
         and node_admin_hook_ok
         and node_admin_state_ok
         and node_admin_service_ok

@@ -68,6 +68,7 @@ from .telemetry_reconcile import (
     values_for,
 )
 from .uptime import is_uplink_time_beacon
+from .www import WWW_DUPLICATE_KEY, is_www_frame, is_www_src_type
 
 if TYPE_CHECKING:
     from ..node_admin_types import ReplyHook
@@ -464,6 +465,16 @@ class IngestMixin(StorageBase):
         double-count it; filling both columns from NULL is exactly the
         signature of a real complementary copy, never a plain repeat.
         """
+        # Internet-feed upgrade (concept §4.4): a www row that an RF copy of the
+        # same message later reaches is re-labelled with the RF copy's
+        # transport. One-directional: the WHERE only matches 'www', so an RF
+        # row is never downgraded and a repeated www copy changes nothing.
+        if src_type and not is_www_src_type(src_type):
+            await self._mutate(
+                "UPDATE messages SET src_type = ? WHERE id = ? AND src_type = 'www'",
+                (src_type, row_id),
+            )
+
         incoming = {
             "rssi": rssi,
             "snr": snr,
@@ -1821,7 +1832,7 @@ class IngestMixin(StorageBase):
                 dst,
             )
 
-    async def store_message(self, message: dict[str, Any], raw: str) -> None:  # noqa: PLR0912, PLR0915 - complex handler kept intact
+    async def store_message(self, message: dict[str, Any], raw: str) -> None:  # noqa: PLR0911, PLR0912, PLR0915 - complex handler kept intact
         """Store a message with automatic filtering.
 
         Dual-writes to both the legacy messages table AND the new
@@ -1837,7 +1848,8 @@ class IngestMixin(StorageBase):
         # placed after it would never fire. See doc/2026-08-21_2350-gateway-
         # uptime-plan.md §4a and CLAUDE.md's link-check "ingest guard" gotcha
         # (the same trap, same shape, hit twice before).
-        if is_uplink_time_beacon(message):
+        # A www frame is never our own link's beacon (storage/www.py).
+        if not is_www_frame(message) and is_uplink_time_beacon(message):
             await self.record_link_beacon(now_ms())
 
         # Node Admin (RM1) reply hook: same placement rule as the beacon hook
@@ -1846,7 +1858,7 @@ class IngestMixin(StorageBase):
         # reply reach it (the UDP copy may still carry the `{NNN` suffix); the
         # service dedups, not this seam. A raising hook must not lose the row.
         hook = self.reply_hook
-        if hook is not None:
+        if hook is not None and not is_www_frame(message):
             reply_text = message.get("msg")
             if isinstance(reply_text, str) and reply_text.startswith("RM1 "):
                 try:
@@ -1888,6 +1900,18 @@ class IngestMixin(StorageBase):
         rssi = message.get("rssi")
         snr = message.get("snr")
         src_type = message.get("src_type", "")
+
+        # Internet-feed (www) frames: chat text only (storage/www.py). Anything
+        # but `type == "msg"` is dropped unstored, so tele / ack / pos can never
+        # reach telemetry, the ack handler or station_positions. The feed has
+        # no RF reception, so any rssi/snr on it is not a reading: blank it
+        # before it can land on the row or in `_enrich_duplicate_row`.
+        if is_www_frame(message):
+            if msg_type != "msg":
+                logger.debug("store_message: www frame of type %r dropped", msg_type)
+                return
+            rssi = None
+            snr = None
 
         # BUG-1 (doc/2026-09-16_0807-message-detail-popover-bugfix-report.md):
         # rssi=0/snr=0 is the firmware's "no RF reception" sentinel, written
@@ -1999,7 +2023,7 @@ class IngestMixin(StorageBase):
         # + ASCII digits. [0-9], not \d — Python's \d matches any Unicode Nd
         # digit, which the firmware ('%-9.9s:ack%03i') never emits. The
         # `":ack" in msg` check is only a cheap prefilter; the regex re-checks.
-        if msg and ":ack" in msg:
+        if msg and ":ack" in msg and not is_www_frame(message):
             ack_match = re.search(r":ack([0-9]+)", msg)
             if ack_match:
                 ack_num = ack_match.group(1)
@@ -2113,7 +2137,7 @@ class IngestMixin(StorageBase):
         # for a message ALREADY held) has no role. Rank precedence is enforced
         # by `_write_delivery_status`, so this can never downgrade `failed` or
         # `acked`, and a repeat (UDP + BLE copy of one notice) does not overwrite.
-        if msg_type == "msg" and msg and ":sto" in msg:
+        if msg_type == "msg" and msg and ":sto" in msg and not is_www_frame(message):
             sto_match = _STO_NOTICE_RE.fullmatch(msg)
             if sto_match:
                 sto_candidates = await self._query(
@@ -2208,6 +2232,8 @@ class IngestMixin(StorageBase):
                     )
 
             if duplicate:
+                if is_www_frame(message):
+                    message[WWW_DUPLICATE_KEY] = True
                 # Presence, not truthiness — see the identical note in
                 # `_store_position`; a genuine all-zero beacon must still reach
                 # `store_telemetry`'s own transport-aware sentinel decoding.
@@ -2264,16 +2290,22 @@ class IngestMixin(StorageBase):
         # A lora `pos` packet updates both field groups (signal + position) in this
         # same call — they are independent column groups on station_positions, so
         # both branches below run rather than being mutually exclusive (UDP 2.0 Track U).
-        is_mheard = await self._ingest_signal(
-            callsign,
-            message,
-            src_type=src_type,
-            msg_type=msg_type,
-            msg_id=msg_id,
-            rssi=rssi,
-            snr=snr,
-            timestamp=timestamp,
-            signal_via=signal_via,
+        # A www frame has no signal and is chat only: never reaches the
+        # signal / position / MHeard writers (storage/www.py).
+        is_mheard = (
+            False
+            if is_www_frame(message)
+            else await self._ingest_signal(
+                callsign,
+                message,
+                src_type=src_type,
+                msg_type=msg_type,
+                msg_id=msg_id,
+                rssi=rssi,
+                snr=snr,
+                timestamp=timestamp,
+                signal_via=signal_via,
+            )
         )
         is_position = msg_type == "pos" and not is_mheard
 

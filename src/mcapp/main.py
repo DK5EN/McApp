@@ -67,6 +67,9 @@ from . import __version__
 from .classifier import Classifier
 from .classifier.seed import seed_defaults
 from .classifier.types import SSEEvent
+from .internet_feed import IdentityInputs, InternetFeedService
+from .internet_feed_types import POSITIONS_EVENT, WWW_MESSAGE_TOPIC
+from .internet_positions import InternetPositionCache
 from .node_admin_service import NodeAdminService
 from .qrz_service import QrzLookupService
 from .secret_box import SecretBox
@@ -408,6 +411,11 @@ class MessageRouter:
         if message_storage_handler:
             self.subscribe("mesh_message", self._storage_handler)
             self.subscribe("ble_notification", self._storage_handler)
+            # Internet feed (meshmap): storage FIRST of the three www_message
+            # subscribers (SSE broadcast and push follow), so store_message can
+            # annotate the shared dict (classifier fields, duplicate flag) before
+            # they read it. Commands and the wire monitor never subscribe.
+            self.subscribe(WWW_MESSAGE_TOPIC, self._storage_handler)
 
         self.subscribe("ble_message", self._ble_message_handler)
         self.subscribe("udp_message", self._udp_message_handler)
@@ -2401,6 +2409,7 @@ class AppContext:
     node_console: NodeConsoleSession
     qrz_service: QrzLookupService
     node_admin_service: NodeAdminService | None = None
+    internet_feed_service: InternetFeedService | None = None
 
 
 class _ClassifierBus:
@@ -2783,6 +2792,76 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
     )
     storage_handler.reply_hook = node_admin_service.on_reply
     await node_admin_service.start()
+
+    # Internet feed (meshmap box feed, doc/2026-10-11_1005-internet-feed-concept.md):
+    # always constructed, inert until enabled in Settings > Internet. Same lazy
+    # SSE lookup as Node Admin; the identity is rebuilt from the live BLE state on
+    # every check-in.
+    async def _internet_feed_emit(event: str, payload: dict[str, Any]) -> None:
+        if sse_manager is not None:
+            await sse_manager.broadcast_event(event, payload)
+
+    def _internet_feed_identity() -> IdentityInputs:
+        connected = ble_client is not None and _ble_connected(ble_client)
+        status = getattr(ble_client, "status", None) if connected else None
+        return IdentityInputs(
+            registers=dict(message_router.cached_ble_registers),
+            ble_connected=connected,
+            ble_expected=ble_mode != BLEMode.DISABLED,
+            ble_mac=getattr(status, "device_address", None),
+            my_callsign=message_router.my_callsign or "",
+            mcapp_version=VERSION,
+        )
+
+    # meshmap node positions (concept §4.5): RAM only, never station_positions.
+    # A blocked call never enters the cache; the replay on connect comes from
+    # sse_handler.initial_events.
+    def _blocked_callsigns() -> set[str]:
+        # The live global blocklist (kickbans + sperrliste), read once per batch
+        # so an entry added later drops the station on the next one.
+        blocked: set[str] = getattr(
+            message_router.get_protocol("commands"), "blocked_callsigns", set()
+        )
+        return blocked
+
+    internet_position_cache = InternetPositionCache(blocked=_blocked_callsigns)
+
+    async def _internet_positions(event: dict[str, Any]) -> None:
+        payload = internet_position_cache.apply(event)
+        if payload is not None and sse_manager is not None:
+            # A reset can carry thousands of rows (world mode): serialise off-loop.
+            await sse_manager.broadcast_event(POSITIONS_EVENT, payload, offload_json=True)
+
+    def _station_position() -> tuple[float, float] | None:
+        """Centre for radius mode: the node's live GPS, else config LAT/LONG."""
+        gps = message_router.cached_gps
+        if gps is not None:
+            return gps["lat"], gps["lon"]
+        loc = cfg.location
+        if loc.latitude is not None and loc.longitude is not None:
+            return loc.latitude, loc.longitude
+        return None
+
+    internet_feed_service = InternetFeedService(
+        storage=storage_handler,
+        secret_box=secret_box,
+        publish=message_router.publish,
+        emit_status=_internet_feed_emit,
+        identity_inputs=_internet_feed_identity,
+        station_position=_station_position,
+        on_positions=_internet_positions,
+    )
+
+    async def _internet_feed_identity_hint(routed_message: dict[str, Any]) -> None:
+        """BLE link changes, the identity registers and the node's GPS fix (`G`)
+        re-arm a feed check-in; the service decides whether the identity or
+        the radius centre actually changed. Subscribed AFTER `_wire_ble_caches`
+        (below) on purpose: `_cache_gps` must have stored the new fix before the
+        service compares centres (internet_feed_wiring_tests I7)."""
+        data = routed_message["data"]
+        if routed_message["type"] == "ble_status" or data.get("TYP") in ("I", "IS1", "G"):
+            internet_feed_service.notify_identity_changed()
+
     message_router.set_callsign(cfg.call_sign)
     storage_handler.set_message_router(message_router)
     # One-shot, idempotent read-cursor seed (unread-cursor plan §3): must run
@@ -2824,6 +2903,9 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
     message_router.cached_gps = None  # {lat, lon} — set when BLE device sends TYP="G"
     message_router.cached_ble_registers = {}  # {TYP: dict} — cached on ble_notification
     _wire_ble_caches(message_router)
+    # After the caches: the feed hint must see the GPS fix `_cache_gps` just stored.
+    message_router.subscribe("ble_status", _internet_feed_identity_hint)
+    message_router.subscribe("ble_notification", _internet_feed_identity_hint)
 
     # Command Handler Plugin
     command_handler = create_command_handler(
@@ -2874,6 +2956,8 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
             sse_manager.qrz_service = qrz_service
             sse_manager.node_admin_service = node_admin_service
             sse_manager.node_admin_allowed_origins = list(cfg.node_admin.allowed_origins)
+            sse_manager.internet_feed_service = internet_feed_service
+            sse_manager.internet_position_cache = internet_position_cache
             qrz_service.set_info_listener(
                 functools.partial(sse_manager.broadcast_event, "proxy:callsign_info")
             )
@@ -2960,6 +3044,7 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
         node_console=node_console,
         qrz_service=qrz_service,
         node_admin_service=node_admin_service,
+        internet_feed_service=internet_feed_service,
     )
 
 
@@ -3227,6 +3312,7 @@ class _BackgroundTasks:
     link_uptime_heartbeat_task: asyncio.Task[None]
     tz_warm_task: asyncio.Task[None]
     qrz_task: asyncio.Task[None]
+    internet_feed_task: asyncio.Task[None] | None
 
 
 async def _warm_timezone_finder_later(delay_s: float = 30.0) -> None:
@@ -3280,6 +3366,12 @@ def _start_background_tasks(
     tz_warm_task = asyncio.create_task(_warm_timezone_finder_later())
     # QRZ.com callsign lookup loop (issue #14): idles until credentials exist.
     qrz_task = asyncio.create_task(ctx.qrz_service.run(stop_event))
+    # Internet feed loop (meshmap): idles until enabled in Settings > Internet.
+    internet_feed_task = (
+        asyncio.create_task(ctx.internet_feed_service.run(stop_event))
+        if ctx.internet_feed_service is not None
+        else None
+    )
     return _BackgroundTasks(
         prune_task=prune_task,
         classifier_stats_task=classifier_stats_task,
@@ -3291,6 +3383,7 @@ def _start_background_tasks(
         link_uptime_heartbeat_task=link_uptime_heartbeat_task,
         tz_warm_task=tz_warm_task,
         qrz_task=qrz_task,
+        internet_feed_task=internet_feed_task,
     )
 
 
@@ -3305,6 +3398,8 @@ async def _cancel_background_tasks(tasks: _BackgroundTasks) -> None:
     tasks.converge_task.cancel()
     tasks.link_uptime_heartbeat_task.cancel()
     tasks.qrz_task.cancel()
+    if tasks.internet_feed_task is not None:
+        tasks.internet_feed_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await tasks.prune_task
     with contextlib.suppress(asyncio.CancelledError):
@@ -3319,6 +3414,9 @@ async def _cancel_background_tasks(tasks: _BackgroundTasks) -> None:
         await tasks.tz_warm_task
     with contextlib.suppress(asyncio.CancelledError):
         await tasks.qrz_task
+    if tasks.internet_feed_task is not None:
+        with contextlib.suppress(asyncio.CancelledError):
+            await tasks.internet_feed_task
 
 
 async def _shutdown_services(ctx: AppContext) -> None:

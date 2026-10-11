@@ -858,6 +858,37 @@ class MigrationsMixin(StorageBase):
                     # asserts every migration chain terminates there.
                     _set_schema_version(conn, 35)
 
+                if current_version < 36:  # noqa: PLR2004 - schema migration step
+                    # McApp internet feed (doc/2026-10-11_1005-internet-feed-concept.md
+                    # §4.1): settings + connection state, one row. `configured` stays 0
+                    # until the first settings save and drives the "suggested" defaults.
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS internet_feed_state (
+                            id INTEGER PRIMARY KEY CHECK (id = 1),
+                            enabled INTEGER NOT NULL DEFAULT 0,
+                            configured INTEGER NOT NULL DEFAULT 0,
+                            groups TEXT NOT NULL DEFAULT '[]',
+                            broadcast INTEGER NOT NULL DEFAULT 1,
+                            pos_mode TEXT NOT NULL DEFAULT 'off',
+                            radius_km INTEGER NOT NULL DEFAULT 300,
+                            box_id TEXT,
+                            token_enc TEXT,
+                            identity_json TEXT,
+                            cursor TEXT,
+                            last_connected_ms INTEGER,
+                            last_batch_ms INTEGER,
+                            last_error TEXT,
+                            last_error_ms INTEGER
+                        );
+                    """)
+                    conn.execute("INSERT OR IGNORE INTO internet_feed_state (id) VALUES (1);")
+                    logger.info(
+                        "Migration v%d → v36: created internet_feed_state"
+                        " (internet feed, inert until enabled)",
+                        current_version,
+                    )
+                    _set_schema_version(conn, 36)
+
         await asyncio.to_thread(_init_db)
 
         # Initialize bucket accumulators from existing signal_log

@@ -415,14 +415,18 @@ async def case_b_guards(record: Record) -> None:
         await env.setup()
         r = await env.send()
         await env.svc.drain()
-        before = len(env.bcasts)
+        # Only the reply event counts: every RM1 frame also emits the read-only
+        # `node_admin:observed` session update (Observed sessions panel).
+        before = sum(1 for e, _ in env.bcasts if e == "node_admin:reply")
         await env.reply(99)
         await env.reply(0)
         await env.svc.drain()
         rows = await env.rows()
         record(
             "b3. unknown ctr (valid tag) changes no row and emits nothing",
-            len(rows) == 1 and rows[0]["state"] == "waiting" and len(env.bcasts) == before,
+            len(rows) == 1
+            and rows[0]["state"] == "waiting"
+            and sum(1 for e, _ in env.bcasts if e == "node_admin:reply") == before,
         )
         await env.reply(r["ctr"], src="DK5EN-91")
         await env.svc.drain()

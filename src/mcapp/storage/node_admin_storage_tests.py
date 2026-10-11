@@ -813,8 +813,10 @@ async def _test_reset_hwm(results: list[tuple[str, bool]]) -> None:
 async def _test_migration_from_v34(results: list[tuple[str, bool]]) -> None:
     results.append(
         (
-            f"migration: LATEST_SCHEMA_VERSION is 35 (got {LATEST_SCHEMA_VERSION})",
-            LATEST_SCHEMA_VERSION == 35,
+            # The node admin tables arrive at v35; the terminus itself is pinned by
+            # migration_chain_tests.
+            f"migration: LATEST_SCHEMA_VERSION is >= 35 (got {LATEST_SCHEMA_VERSION})",
+            LATEST_SCHEMA_VERSION >= 35,
         )
     )
     results.append(

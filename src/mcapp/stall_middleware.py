@@ -84,16 +84,18 @@ _BODY_WITHHELD_EXACT = frozenset({"/api/qrz/credentials"})
 # Node admin keys carry the password in the PATH-parameterised PUT
 # `/api/node-admin/keys/{target}`, which an exact match never hits.
 _BODY_WITHHELD_PREFIX = "/api/node-admin/keys"
+# Internet feed settings: the service holds a box token; the body is withheld
+# for the exact path and everything under it (not `/api/internet-feedX`).
+_BODY_WITHHELD_FEED = "/api/internet-feed"
+_BODY_WITHHELD_ROOTS = (_BODY_WITHHELD_PREFIX, _BODY_WITHHELD_FEED)
 
 
 def _body_withheld(path: object) -> bool:
     if not isinstance(path, str):
         return False
-    return (
-        path in _BODY_WITHHELD_EXACT
-        or path == _BODY_WITHHELD_PREFIX
-        or path.startswith(_BODY_WITHHELD_PREFIX + "/")
-    )
+    if path in _BODY_WITHHELD_EXACT:
+        return True
+    return any(path == root or path.startswith(root + "/") for root in _BODY_WITHHELD_ROOTS)
 
 
 @dataclass(slots=True)

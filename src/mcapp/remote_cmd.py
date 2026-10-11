@@ -105,6 +105,12 @@ _REPLY_RE: Final = re.compile(
     r"(?P<tag>[0-9a-f]{16})"
 )
 
+# Command text after the ack suffix is gone: "RM1 <ctr> <cmd>[ <args>] <tag16>".
+_COMMAND_RE: Final = re.compile(
+    r"RM1 (?P<ctr>0|[1-9][0-9]{0,9}) (?P<cmd>[a-z]+)(?: (?P<args>.*))? "
+    r"(?P<tag>[0-9a-f]{16})"
+)
+
 
 class RmError(ValueError):
     """A call, password, command or counter was refused."""
@@ -119,6 +125,21 @@ class ParsedReply:
     result: str  # everything after "RM1 <ctr> ": includes the ok/err prefix (the tag input)
     body: str  # result without the "ok " / "err " prefix
     tag: str
+
+
+@dataclass(frozen=True)
+class ParsedCommand:
+    """A syntactically valid RM1 command. NOT authenticated until verify_command."""
+
+    ctr: int
+    cmd: str
+    args: str  # "" when the command takes none
+    tag: str
+
+    @property
+    def line(self) -> str:
+        """``<cmd>[ <args>]``: the tag input."""
+        return f"{self.cmd} {self.args}" if self.args else self.cmd
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +358,48 @@ def parse_reply(text: str) -> ParsedReply | None:
     return ParsedReply(
         ctr=ctr, status=status, result=result, body=m.group("body"), tag=m.group("tag")
     )
+
+
+def parse_command(text: str) -> ParsedCommand | None:
+    """Parse an RM1 command (any command word, observed traffic), or None.
+
+    Does NOT authenticate and does NOT apply the send allow-list: an observer
+    sees commands this box would never send. A reply (``ok`` / ``err``) is not a
+    command. The ``{NNN`` ack suffix is stripped first, like ``parse_reply``.
+    """
+    if not isinstance(text, str):
+        return None
+    t = strip_ack_suffix(text)
+    if len(t) > REPLY_MAX or not t.isascii() or not t.isprintable():
+        return None
+    m = _COMMAND_RE.fullmatch(t)
+    if m is None or m.group("cmd") in ("ok", "err"):
+        return None
+    ctr = int(m.group("ctr"))
+    if ctr > CTR_MAX:
+        return None
+    return ParsedCommand(
+        ctr=ctr, cmd=m.group("cmd"), args=m.group("args") or "", tag=m.group("tag")
+    )
+
+
+def verify_command(key: bytes, dst: str, src: str, text: str) -> ParsedCommand | None:
+    """Parse ``text`` and check its tag; None unless it authenticates.
+
+    ``dst`` = managed node, ``src`` = commanding node.
+    """
+    parsed = parse_command(text)
+    if parsed is None:
+        return None
+    try:
+        d = normalize_call(dst)
+        s = normalize_call(src)
+        want = rm_tag(key, d, s, parsed.ctr, parsed.line)
+    except RmError:
+        return None
+    if not hmac.compare_digest(want, parsed.tag):
+        return None
+    return parsed
 
 
 def reply_rejection(text: str) -> str | None:

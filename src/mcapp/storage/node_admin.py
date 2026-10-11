@@ -24,6 +24,7 @@ the API boundary; this layer stores whatever it is given.
 """
 
 import asyncio
+import re
 import sqlite3
 from collections.abc import Callable
 from typing import Any
@@ -40,6 +41,11 @@ logger = get_logger(__name__)
 NODE_ADMIN_CTR_MAX = 4_294_967_295
 # Default `tx_max` of a state row (mirrors the column default).
 NODE_ADMIN_DEFAULT_TX_MAX = 15
+
+
+# Strict RM1 shape check for observed sessions (own, on purpose: no shared predicate).
+_RM1_ROW_RE = re.compile(r"RM1 (?:0|[1-9][0-9]{0,9}) [a-z]")
+RM1_ROWS_MAX = 2000
 
 
 class NodeAdminCounterExhausted(ValueError):  # noqa: N818 - domain name reads better than *Error
@@ -316,6 +322,29 @@ class NodeAdminMixin(StorageBase):
                         (target, limit),
                     )
                 return [dict(r) for r in cursor.fetchall()]
+
+        return await asyncio.to_thread(_run)
+
+    async def get_rm1_rows(self, since_ms: int) -> list[dict[str, Any]]:
+        """Stored RM1 text frames since `since_ms`, oldest first (newest 2000 kept).
+
+        A GLOB prefilter (`RM1 <digit>*`, ctr 0 = sync included) then a strict
+        shape check in Python. Rows only: no decoding here.
+        """
+
+        def _run() -> list[dict[str, Any]]:
+            with db_read(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute(
+                    "SELECT src, dst, msg, timestamp, msg_id FROM messages"
+                    " WHERE type = 'msg' AND timestamp >= ? AND msg GLOB 'RM1 [0-9]*'"
+                    " ORDER BY timestamp DESC, id DESC LIMIT ?",
+                    (since_ms, RM1_ROWS_MAX),
+                )
+                rows = [dict(r) for r in cursor.fetchall()]
+            rows = [r for r in rows if _RM1_ROW_RE.match(str(r["msg"])) is not None]
+            rows.reverse()
+            return rows
 
         return await asyncio.to_thread(_run)
 

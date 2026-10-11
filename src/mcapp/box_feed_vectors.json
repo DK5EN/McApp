@@ -1,0 +1,515 @@
+{
+  "_comment": "Canonical McApp box feed contract corpus (docs/proposals/data-mcapp-box-feed.md section 8). Hand-copied to MCProxy with a sha256 pin; change feedVersion on any incompatible change. Every case is driven through the real functions by vectors.test.ts.",
+  "feedVersion": 1,
+  "destination": [
+    { "to": "*", "normalised": "*", "kind": "bcast", "text": "hello", "feedable": true },
+    {
+      "to": "20",
+      "normalised": "20",
+      "kind": "group",
+      "group": "20",
+      "text": "hello",
+      "feedable": true
+    },
+    {
+      "to": "99999",
+      "normalised": "99999",
+      "kind": "group",
+      "group": "99999",
+      "text": "hello",
+      "feedable": true
+    },
+    {
+      "to": "1",
+      "normalised": "1",
+      "kind": "group",
+      "group": "1",
+      "text": "hello",
+      "feedable": true
+    },
+    {
+      "to": "DB0KH-11,26261",
+      "normalised": "26261",
+      "kind": "group",
+      "group": "26261",
+      "text": "hello",
+      "feedable": true
+    },
+    { "to": "DB0KH-11,*", "normalised": "*", "kind": "bcast", "text": "hello", "feedable": true },
+    {
+      "to": "DB0KH-11, 262 ",
+      "normalised": "262",
+      "kind": "group",
+      "group": "262",
+      "text": "hello",
+      "feedable": true
+    },
+    {
+      "to": "#Wetter",
+      "normalised": "#Wetter",
+      "kind": "tag",
+      "tag": "#WETTER",
+      "text": "hello",
+      "feedable": true
+    },
+    {
+      "to": "#WETTER",
+      "normalised": "#WETTER",
+      "kind": "tag",
+      "tag": "#WETTER",
+      "text": "hello",
+      "feedable": true
+    },
+    {
+      "to": "#a_b-1",
+      "normalised": "#a_b-1",
+      "kind": "tag",
+      "tag": "#A_B-1",
+      "text": "hello",
+      "feedable": true
+    },
+    {
+      "to": "*",
+      "normalised": "*",
+      "kind": "bcast",
+      "text": "{CET}2026-10-11 12:00:00",
+      "feedable": false
+    },
+    {
+      "to": "20",
+      "normalised": "20",
+      "kind": "group",
+      "group": "20",
+      "text": "{CET}2026-10-11 12:00:00",
+      "feedable": false
+    },
+    {
+      "to": "DG0OPK-14",
+      "normalised": "DG0OPK-14",
+      "kind": null,
+      "text": "hello",
+      "feedable": false
+    },
+    {
+      "to": "DG0OPK-14,DL1ABC-1",
+      "normalised": "DL1ABC-1",
+      "kind": null,
+      "text": "hello",
+      "feedable": false
+    },
+    {
+      "to": "DL1ABC-1",
+      "normalised": "DL1ABC-1",
+      "kind": null,
+      "text": "DL1ABC-1 :ack12345",
+      "feedable": false
+    },
+    { "to": "", "normalised": "", "kind": null, "text": "hello", "feedable": false },
+    { "to": "20,", "normalised": "", "kind": null, "text": "hello", "feedable": false },
+    { "to": "0", "normalised": "0", "kind": null, "text": "hello", "feedable": false },
+    { "to": "100000", "normalised": "100000", "kind": null, "text": "hello", "feedable": false },
+    { "to": "007", "normalised": "007", "kind": null, "text": "hello", "feedable": false },
+    { "to": "-5", "normalised": "-5", "kind": null, "text": "hello", "feedable": false },
+    { "to": "2.0", "normalised": "2.0", "kind": null, "text": "hello", "feedable": false },
+    { "to": "#", "normalised": "#", "kind": null, "text": "hello", "feedable": false },
+    { "to": "##x", "normalised": "##x", "kind": null, "text": "hello", "feedable": false },
+    { "to": "#a b", "normalised": "#a b", "kind": null, "text": "hello", "feedable": false },
+    {
+      "to": "#a123456789012345678901",
+      "normalised": "#a123456789012345678901",
+      "kind": null,
+      "text": "hello",
+      "feedable": false
+    },
+    { "to": "**", "normalised": "**", "kind": null, "text": "hello", "feedable": false }
+  ],
+  "emergency": [
+    {
+      "name": "activity.html emergency, no TO column",
+      "type": "EMERGENCY",
+      "to": "",
+      "sentTo": "*"
+    },
+    {
+      "name": "emergency with an explicit group keeps it",
+      "type": "EMERGENCY",
+      "to": "20",
+      "sentTo": "20"
+    },
+    {
+      "name": "emergency addressed to a callsign stays dropped",
+      "type": "EMERGENCY",
+      "to": "DK5EN-98",
+      "sentTo": null
+    },
+    {
+      "name": "emergency with a trailing comma list is not the empty shape",
+      "type": "EMERGENCY",
+      "to": "X,",
+      "sentTo": null
+    },
+    {
+      "name": "empty to on a normal message stays dropped",
+      "type": "SMS",
+      "to": "",
+      "sentTo": null
+    }
+  ],
+  "subscription": [
+    {
+      "name": "empty query is a silent subscription",
+      "query": {},
+      "ok": true,
+      "sub": {
+        "groups": [],
+        "bcast": false,
+        "pos": "off",
+        "lat": null,
+        "lon": null,
+        "radiusKm": 300,
+        "since": null
+      }
+    },
+    {
+      "name": "groups, tag, bcast and radius",
+      "query": {
+        "groups": "20,262,#wetter",
+        "bcast": "1",
+        "pos": "radius",
+        "lat": "48.1",
+        "lon": "11.5",
+        "radiusKm": "150"
+      },
+      "ok": true,
+      "sub": {
+        "groups": ["20", "262", "#WETTER"],
+        "bcast": true,
+        "pos": "radius",
+        "lat": 48.1,
+        "lon": 11.5,
+        "radiusKm": 150,
+        "since": null
+      }
+    },
+    {
+      "name": "duplicate groups collapse",
+      "query": { "groups": "20,20,#a,#A" },
+      "ok": true,
+      "sub": {
+        "groups": ["20", "#A"],
+        "bcast": false,
+        "pos": "off",
+        "lat": null,
+        "lon": null,
+        "radiusKm": 300,
+        "since": null
+      }
+    },
+    {
+      "name": "world needs no coordinates",
+      "query": { "pos": "world" },
+      "ok": true,
+      "sub": {
+        "groups": [],
+        "bcast": false,
+        "pos": "world",
+        "lat": null,
+        "lon": null,
+        "radiusKm": 300,
+        "since": null
+      }
+    },
+    {
+      "name": "lat/lon ignored unless radius",
+      "query": { "pos": "off", "lat": "abc" },
+      "ok": true,
+      "sub": {
+        "groups": [],
+        "bcast": false,
+        "pos": "off",
+        "lat": null,
+        "lon": null,
+        "radiusKm": 300,
+        "since": null
+      }
+    },
+    {
+      "name": "radius bounds are inclusive",
+      "query": { "pos": "radius", "lat": "0", "lon": "-180", "radiusKm": "10" },
+      "ok": true,
+      "sub": {
+        "groups": [],
+        "bcast": false,
+        "pos": "radius",
+        "lat": 0,
+        "lon": -180,
+        "radiusKm": 10,
+        "since": null
+      }
+    },
+    {
+      "name": "since from query",
+      "query": { "since": "1791703630:687b4273" },
+      "ok": true,
+      "sub": {
+        "groups": [],
+        "bcast": false,
+        "pos": "off",
+        "lat": null,
+        "lon": null,
+        "radiusKm": 300,
+        "since": { "timeUnix": 1791703630, "msgId": "687B4273" }
+      }
+    },
+    {
+      "name": "Last-Event-ID is used when since is absent",
+      "query": {},
+      "lastEventId": "1791703630:687B4273",
+      "ok": true,
+      "sub": {
+        "groups": [],
+        "bcast": false,
+        "pos": "off",
+        "lat": null,
+        "lon": null,
+        "radiusKm": 300,
+        "since": { "timeUnix": 1791703630, "msgId": "687B4273" }
+      }
+    },
+    {
+      "name": "query since wins over Last-Event-ID",
+      "query": { "since": "100:AAAAAAAA" },
+      "lastEventId": "200:BBBBBBBB",
+      "ok": true,
+      "sub": {
+        "groups": [],
+        "bcast": false,
+        "pos": "off",
+        "lat": null,
+        "lon": null,
+        "radiusKm": 300,
+        "since": { "timeUnix": 100, "msgId": "AAAAAAAA" }
+      }
+    },
+    { "name": "11 groups", "query": { "groups": "1,2,3,4,5,6,7,8,9,10,11" }, "ok": false },
+    {
+      "name": "10 groups is fine",
+      "query": { "groups": "1,2,3,4,5,6,7,8,9,10" },
+      "ok": true,
+      "sub": {
+        "groups": ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"],
+        "bcast": false,
+        "pos": "off",
+        "lat": null,
+        "lon": null,
+        "radiusKm": 300,
+        "since": null
+      }
+    },
+    { "name": "group zero", "query": { "groups": "0" }, "ok": false },
+    { "name": "group too large", "query": { "groups": "100000" }, "ok": false },
+    { "name": "group leading zero", "query": { "groups": "020" }, "ok": false },
+    { "name": "callsign as group", "query": { "groups": "DL1ABC-1" }, "ok": false },
+    { "name": "star as group", "query": { "groups": "*" }, "ok": false },
+    { "name": "empty list entry", "query": { "groups": "20,,30" }, "ok": false },
+    { "name": "invalid tag", "query": { "groups": "#a b" }, "ok": false },
+    { "name": "bcast not 0/1", "query": { "bcast": "yes" }, "ok": false },
+    { "name": "pos unknown", "query": { "pos": "everywhere" }, "ok": false },
+    { "name": "radius without lat/lon", "query": { "pos": "radius" }, "ok": false },
+    { "name": "radius without lon", "query": { "pos": "radius", "lat": "48" }, "ok": false },
+    {
+      "name": "lat out of range",
+      "query": { "pos": "radius", "lat": "91", "lon": "0" },
+      "ok": false
+    },
+    {
+      "name": "lon out of range",
+      "query": { "pos": "radius", "lat": "0", "lon": "180.5" },
+      "ok": false
+    },
+    {
+      "name": "lat not a number",
+      "query": { "pos": "radius", "lat": "north", "lon": "0" },
+      "ok": false
+    },
+    {
+      "name": "radiusKm below minimum",
+      "query": { "pos": "radius", "lat": "0", "lon": "0", "radiusKm": "9" },
+      "ok": false
+    },
+    {
+      "name": "radiusKm above maximum",
+      "query": { "pos": "radius", "lat": "0", "lon": "0", "radiusKm": "2001" },
+      "ok": false
+    },
+    { "name": "radiusKm not a number", "query": { "radiusKm": "far" }, "ok": false },
+    { "name": "since malformed", "query": { "since": "yesterday" }, "ok": false },
+    { "name": "since short msgId", "query": { "since": "100:ABC" }, "ok": false },
+    { "name": "Last-Event-ID malformed", "query": {}, "lastEventId": "garbage", "ok": false },
+    { "name": "repeated param", "query": { "bcast": ["0", "1"] }, "ok": false }
+  ],
+  "radius": [
+    {
+      "name": "same point",
+      "center": [48.1, 11.5],
+      "point": [48.1, 11.5],
+      "radiusKm": 10,
+      "inside": true
+    },
+    {
+      "name": "Munich to Augsburg ~57 km, inside 100",
+      "center": [48.1372, 11.5756],
+      "point": [48.3705, 10.8978],
+      "radiusKm": 100,
+      "inside": true
+    },
+    {
+      "name": "Munich to Augsburg ~57 km, outside 50",
+      "center": [48.1372, 11.5756],
+      "point": [48.3705, 10.8978],
+      "radiusKm": 50,
+      "inside": false
+    },
+    {
+      "name": "Munich to Vienna ~355 km, outside 300",
+      "center": [48.1372, 11.5756],
+      "point": [48.2082, 16.3738],
+      "radiusKm": 300,
+      "inside": false
+    },
+    {
+      "name": "Munich to Vienna ~355 km, inside 400",
+      "center": [48.1372, 11.5756],
+      "point": [48.2082, 16.3738],
+      "radiusKm": 400,
+      "inside": true
+    },
+    {
+      "name": "across the antimeridian ~22 km",
+      "center": [0, 179.9],
+      "point": [0, -179.9],
+      "radiusKm": 30,
+      "inside": true
+    }
+  ],
+  "cursor": [
+    {
+      "cursor": "1791703630:687B4273",
+      "valid": true,
+      "timeUnix": 1791703630,
+      "msgId": "687B4273",
+      "canonical": "1791703630:687B4273"
+    },
+    {
+      "cursor": "1791703630:687b4273",
+      "valid": true,
+      "timeUnix": 1791703630,
+      "msgId": "687B4273",
+      "canonical": "1791703630:687B4273"
+    },
+    {
+      "cursor": "0:00000000",
+      "valid": true,
+      "timeUnix": 0,
+      "msgId": "00000000",
+      "canonical": "0:00000000"
+    },
+    { "cursor": "", "valid": false },
+    { "cursor": "1791703630", "valid": false },
+    { "cursor": "1791703630:", "valid": false },
+    { "cursor": ":687B4273", "valid": false },
+    { "cursor": "1791703630:687B427", "valid": false },
+    { "cursor": "1791703630:687B42731", "valid": false },
+    { "cursor": "1791703630:687B427G", "valid": false },
+    { "cursor": "-1:687B4273", "valid": false },
+    { "cursor": "17.5:687B4273", "valid": false },
+    { "cursor": "1791703630:687B4273:x", "valid": false }
+  ],
+  "after": [
+    {
+      "name": "later time",
+      "cursor": "100:BBBBBBBB",
+      "msg": { "timeUnix": 101, "msgId": "00000000" },
+      "after": true
+    },
+    {
+      "name": "earlier time",
+      "cursor": "100:BBBBBBBB",
+      "msg": { "timeUnix": 99, "msgId": "FFFFFFFF" },
+      "after": false
+    },
+    {
+      "name": "same time, greater msgId",
+      "cursor": "100:BBBBBBBB",
+      "msg": { "timeUnix": 100, "msgId": "BBBBBBBC" },
+      "after": true
+    },
+    {
+      "name": "same time, smaller msgId",
+      "cursor": "100:BBBBBBBB",
+      "msg": { "timeUnix": 100, "msgId": "BBBBBBBA" },
+      "after": false
+    },
+    {
+      "name": "the cursor message itself",
+      "cursor": "100:BBBBBBBB",
+      "msg": { "timeUnix": 100, "msgId": "BBBBBBBB" },
+      "after": false
+    }
+  ],
+  "events": {
+    "hello": {
+      "feedVersion": 1,
+      "boxId": "b_7KqExample",
+      "serverTime": 1791703600,
+      "batchIntervalS": 30,
+      "effective": {
+        "groups": ["20", "262"],
+        "bcast": true,
+        "pos": "radius",
+        "lat": 48.1,
+        "lon": 11.5,
+        "radiusKm": 300
+      }
+    },
+    "positions": {
+      "reset": true,
+      "positions": [
+        {
+          "call": "OE1ABC-12",
+          "lat": 48.21,
+          "lon": 16.37,
+          "altitudeM": 180,
+          "aprsSymGrp": "/",
+          "aprsSym": "#",
+          "hardware": "HELTEC V3",
+          "firmware": "4.35p",
+          "batteryPercent": 87,
+          "isGateway": true,
+          "lastSeenUnix": 1791703500
+        }
+      ]
+    },
+    "batch": {
+      "seq": 17,
+      "serverTime": 1791703630,
+      "messages": [
+        {
+          "msgId": "687B4273",
+          "from": "DF4ND-99",
+          "via": "DF4ND-99",
+          "to": "*",
+          "text": "Good morning from Middle Franconia jn59il.",
+          "timeUnix": 1791703597,
+          "hopCount": 4,
+          "country": "EU8",
+          "loraParams": "SF11CR46BW250",
+          "source": "oe"
+        }
+      ],
+      "positions": [],
+      "removed": ["OE1XYZ-1"]
+    },
+    "sseId": "1791703597:687B4273"
+  }
+}

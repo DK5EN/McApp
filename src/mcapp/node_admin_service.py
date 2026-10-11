@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from . import remote_cmd, util
 from .commands.parsing import resolve_dst_target, strip_relay_path
+from .node_admin_observed import build_sessions, pair_rows
 from .node_admin_state import fold
 from .node_admin_types import (
     NodeAdminBusyError,
@@ -63,6 +64,7 @@ UNIX_FLOOR_MIN_S: Final = 1_704_067_200  # 2024-01-01: firmware `clockUnix` plau
 TX_MAX_LIMIT: Final = 30
 REPLY_PREFIX: Final = "RM1 "
 REPLY_MAX_CHARS: Final = 200
+OBSERVED_LIVE_WINDOW_MS: Final = 24 * 3_600_000  # rows a live session update is built from
 HISTORY_SCAN: Final = 100  # rows scanned to find the newest row of a target
 HISTORY_LIMIT_MAX: Final = 1000
 HISTORY_ALL: Final = 10_000  # more than the per-target log cap (1000): every row of a target
@@ -845,6 +847,80 @@ class NodeAdminService:
             self._warn_rejected(message, msg)
             return
         self._spawn(self._handle_reply(message))
+        self._spawn(self._publish_observed(message))
+
+    async def _own_calls(self) -> set[str]:
+        """Calls this McApp sends from: the attached node's and every logged `src_call`
+        (the same notion of "ours" as `_note_foreign`)."""
+        own: set[str] = set()
+        attached = self._attached_call()
+        if attached:
+            with contextlib.suppress(ValueError):
+                own.add(remote_cmd.normalize_call(attached))
+        for t in await self._storage.list_node_admin_targets():
+            own.update(
+                str(r["src_call"])
+                for r in await self._storage.node_admin_history(str(t["target"]), HISTORY_SCAN)
+            )
+        return own
+
+    async def _observed_keys(self) -> dict[str, bytes]:
+        keys: dict[str, bytes] = {}
+        for t in await self._storage.list_node_admin_targets():
+            if not t["has_key"]:
+                continue
+            with contextlib.suppress(ValueError, NodeAdminUnavailableError):
+                keys[str(t["target"])] = await self._get_key(str(t["target"]))
+        return keys
+
+    async def observed(self, hours: int) -> list[dict[str, Any]]:
+        """Observed sessions of the last `hours` (decoded RM1 traffic, own and foreign)."""
+        now = self._clock()
+        rows = await self._storage.get_rm1_rows(now - hours * 3_600_000)
+        keys = await self._observed_keys()
+        own = await self._own_calls()
+        return await asyncio.to_thread(build_sessions, rows, now, keys, own)
+
+    async def _publish_observed(self, message: dict[str, Any]) -> None:
+        """Broadcast `node_admin:observed` with the updated session of this frame.
+
+        The hook runs BEFORE the row is stored, so the frame itself is appended to the
+        stored rows (a stored copy of it is deduplicated by `build_sessions`). Never
+        raises into the ingest path.
+        """
+        try:
+            now = self._clock()
+            src = self._call_of(message.get("src"), dst=False)
+            dst = self._call_of(message.get("dst"), dst=True)
+            if src is None or dst is None:
+                return
+            ts = message.get("timestamp")
+            frame = {
+                "src": src,
+                "dst": dst,
+                "msg": message.get("msg"),
+                "timestamp": ts if isinstance(ts, int) else now,
+            }
+            if remote_cmd.parse_command(str(frame["msg"])) is not None:
+                pair = (src, dst)
+            elif remote_cmd.parse_reply(str(frame["msg"])) is not None:
+                pair = (dst, src)
+            else:
+                return
+            rows = await self._storage.get_rm1_rows(now - OBSERVED_LIVE_WINDOW_MS)
+            keys = await self._observed_keys()
+            own = await self._own_calls()
+            # The event describes this pair only: build nothing else, and off the loop.
+            pair_only = pair_rows([*rows, frame], pair)
+            sessions = await asyncio.to_thread(build_sessions, pair_only, now, keys, own)
+            for session in sessions:
+                if (session["commander"], session["target"]) == pair:
+                    await self._broadcast("node_admin:observed", session)
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("node admin observed broadcast failed")
 
     @staticmethod
     def _warn_rejected(message: dict[str, Any], msg: str) -> None:

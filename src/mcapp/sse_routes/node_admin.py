@@ -195,6 +195,10 @@ def build_node_admin_router(
     ) -> list[dict[str, Any]]:
         return await _run(service().history(target, limit))
 
+    @router.get("/api/node-admin/observed")
+    async def get_observed(hours: int = Query(default=24, ge=1, le=168)) -> list[dict[str, Any]]:
+        return await _run(service().observed(hours))
+
     return router
 
 
