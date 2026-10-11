@@ -39,6 +39,7 @@ from mcapp.aprs_symbol_tests import run_aprs_symbol_tests
 from mcapp.ble_hydration_tests import run_ble_hydration_tests
 from mcapp.ble_protocol_tests import run_ble_protocol_tests
 from mcapp.blocklist_history_tests import run_blocklist_history_tests
+from mcapp.box_feed_contract_tests import run_box_feed_contract_tests
 from mcapp.classifier.tests import run_all_tests as run_classifier_tests
 from mcapp.commands.dedup_tests import run_dedup_tests
 from mcapp.commands.handler import create_command_handler
@@ -122,6 +123,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     dedup_contract_ok = run_dedup_contract_tests()
     print(f"dedup_contract: {'PASS' if dedup_contract_ok else 'FAIL'}")
+
+    box_feed_contract_ok = run_box_feed_contract_tests()
+    print(f"box_feed_contract: {'PASS' if box_feed_contract_ok else 'FAIL'}")
 
     msg_core_ok = run_msg_core_tests()
     print(f"msg_core: {'PASS' if msg_core_ok else 'FAIL'}")
@@ -330,6 +334,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and sse_format_ok
         and contract_parity_ok
         and dedup_contract_ok
+        and box_feed_contract_ok
         and linkcheck_ok
         and linkcheck_session_ok
         and linkcheck_ingest_ok
