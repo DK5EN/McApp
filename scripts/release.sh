@@ -809,7 +809,7 @@ build_tarball() {
 
   # src/mcapp/ package -- two shapes, decided by $include_tests.
   #
-  # PRODUCTION is runtime only: no `*_tests.py`, and none of the eleven .json
+  # PRODUCTION is runtime only: no `*_tests.py`, and none of the .json
   # corpora/contracts either, because nothing BUT those test modules reads them
   # (config.json comes from /etc/mcapp; load_dump takes an admin-supplied path).
   # Shipping a test harness to the fleet buys nothing and is one more thing to
