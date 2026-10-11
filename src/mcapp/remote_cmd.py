@@ -29,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Final, Literal
 
@@ -45,7 +46,9 @@ TX_MAX_DEFAULT: Final = 15  # lowest board maximum (Heltec V2); see plan D5
 
 PASSWD_MAX: Final = 14  # node_passwd is char[15]
 CMD_MAX: Final = 15  # RmCmd.cmd is char[16]
-ARGS_MAX: Final = 23  # RmCmd.args is char[24]
+ARGS_MAX: Final = 39  # RmCmd.args is char[40] (RM_MAX_ARGS)
+NAME_MAX: Final = 19  # RM_NAME_MAX (node_name is char[20])
+ATXT_MAX: Final = 39  # RM_ATXT_MAX (node_atxt is char[40])
 # Firmware draft 2: reply wire <= 140 chars, so result <= 108 including "ok " / "err ".
 RESULT_MAX: Final = 108
 REPLY_MAX: Final = 160  # rmVerifyReply refuses longer texts (140 + 4-char "{NNN" + margin)
@@ -60,6 +63,11 @@ TAG_HEX_LEN: Final = 16  # 8 bytes
 #   "onoff"    exactly "on" or "off"
 #   "txpower"  1..3 decimal digits, no leading zero, 0..tx_max
 #   "setout"   "<a0..a7|b0..b7> <on|off>"
+#   "led"      "on" | "off" | "flash"
+#   "chgled"   "auto" | "on" | "off"
+#   "name"/"atxt"  none (read) | free text (write), see _is_free_text
+#   "pos"      none (read) | "<lat> <lon> <alt>" (syntax only)
+#   "mh"       row index 0..999 | callsign with optional SSID
 ALLOWLIST: Final[dict[str, str]] = {
     "reboot": "none",
     "status": "none",
@@ -69,14 +77,32 @@ ALLOWLIST: Final[dict[str, str]] = {
     "gps": "onoff",
     "track": "onoff",
     "display": "onoff",
-    "led": "onoff",
+    "led": "led",
     "gateway": "onoff",
     "mesh": "onoff",
     "txpower": "txpower",
     "setout": "setout",
+    "chgled": "chgled",
+    "radio": "none",
+    "sens": "none",
+    "txq": "none",
+    "mbox": "none",
+    "maxhop": "none",
+    "name": "name",
+    "atxt": "atxt",
+    "pos": "pos",
+    "mh": "mh",
 }
 
 _ONOFF: Final = frozenset({"on", "off"})
+_LED: Final = frozenset({"on", "off", "flash"})
+_CHGLED: Final = frozenset({"auto", "on", "off"})
+# rmPosScan(): lat/lon = optional '-', 1-3 digits, optional '.' + 1-6 digits; alt = 1-5 digits.
+_POS_RE: Final = re.compile(r"-?[0-9]{1,3}(\.[0-9]{1,6})? -?[0-9]{1,3}(\.[0-9]{1,6})? [0-9]{1,5}")
+_ROW_RE: Final = re.compile(r"[0-9]{1,3}")
+_MH_CALL_RE: Final = re.compile(r"[A-Za-z0-9]{3,9}|[A-Za-z0-9]{2,7}-[0-9]{1,2}")
+# Args specs that may carry capitals on the wire (firmware: "only where a shape allows them").
+_CAPS_SPECS: Final = frozenset({"name", "atxt", "mh"})
 _TXPOWER_RE: Final = re.compile(r"(0|[1-9][0-9]{0,2})")
 _SETOUT_RE: Final = re.compile(r"[ab][0-7] (on|off)")
 _CMD_RE: Final = re.compile(r"[a-z]+")
@@ -91,8 +117,8 @@ _CALL_RE: Final = re.compile(r"([0-9A-Z]?[A-Z]?[0-9]+[A-Z][A-Z]?[A-Z]?)(?:-([0-9
 
 _SYNC_HWM_RE: Final = re.compile(r"ctr=([0-9]{1,10})(?![0-9])")
 _STATUS_POWER_RE: Final = re.compile(
-    r"p=(-?[0-9]{1,3})/([0-9]{1,3})"
-)  # cur may be < 0 (TX_POWER_MIN -9)
+    r"p=(-?[0-9]{1,3})(?:/(-?[0-9]{1,3}))?/([0-9]{1,3})"
+)  # p=<cur>/<max> or p=<cur>/<min>/<max>; cur and min may be < 0 (TX_POWER_MIN -9)
 
 # Shape of a reply before any limit is applied: "RM1 <digits> ok|err ...". A command
 # ("RM1 5 status <tag>") never matches, so rejecting a reply can be logged without
@@ -268,28 +294,51 @@ def _check_text(cmd: str, args: str, tx_max: int) -> None:
         raise RmError("forbidden character sequence")
     if _CMD_RE.fullmatch(cmd) is None:
         raise RmError("cmd must be lower-case letters only")
-    if args and (not args.isascii() or not args.isprintable() or args != args.lower()):
+    caps_ok = ALLOWLIST.get(cmd) in _CAPS_SPECS
+    if args and (
+        not args.isascii() or not args.isprintable() or (not caps_ok and args != args.lower())
+    ):
         raise RmError("args must be lower-case printable ASCII")
     if args.startswith(" ") or args.endswith(" ") or "  " in args:
         raise RmError("args need single spaces, none leading or trailing")
 
 
+def _is_free_text(args: str, max_len: int) -> bool:
+    """Firmware rmArgIsFreeText(): 1..max_len printable ASCII, none of ``{ } | :``."""
+    return 1 <= len(args) <= max_len and all(" " <= c <= "~" and c not in "{}|:" for c in args)
+
+
+def _mh_match(args: str) -> bool:
+    """Firmware RM_ARGS_MH: an all-digit token is a row index only, else a call."""
+    if args.isdigit() and args.isascii():
+        return _ROW_RE.fullmatch(args) is not None
+    # rmArgIsCall: 3..9 chars in total; with an SSID rmValidateCall wants base 2..7, SSID 1-2 digits
+    return len(args) <= CALL_MAX and _MH_CALL_RE.fullmatch(args) is not None
+
+
 def _args_match(spec: str, args: str, tx_max: int) -> bool:
     """Firmware allowed(): does ``args`` fit the command's argument shape?"""
-    if spec == "none":
-        return args == ""
-    if spec == "onoff":
-        return args in _ONOFF
-    if spec == "txpower":
-        return _TXPOWER_RE.fullmatch(args) is not None and int(args) <= tx_max
-    return _SETOUT_RE.fullmatch(args) is not None  # "setout"
+    matchers: dict[str, Callable[[], bool]] = {
+        "none": lambda: args == "",
+        "onoff": lambda: args in _ONOFF,
+        "txpower": lambda: _TXPOWER_RE.fullmatch(args) is not None and int(args) <= tx_max,
+        "led": lambda: args in _LED,
+        "chgled": lambda: args in _CHGLED,
+        "name": lambda: args == "" or _is_free_text(args, NAME_MAX),
+        "atxt": lambda: args == "" or _is_free_text(args, ATXT_MAX),
+        "pos": lambda: args == "" or _POS_RE.fullmatch(args) is not None,
+        "mh": lambda: _mh_match(args),
+        "setout": lambda: _SETOUT_RE.fullmatch(args) is not None,
+    }
+    matcher = matchers.get(spec)
+    return matcher is not None and matcher()
 
 
 def validate_command(cmd: str, args: str, tx_max: int = TX_MAX_DEFAULT) -> str:
     """Return the canonical command line, or raise RmError.
 
     Mirrors firmware ``rmCommandAllowed`` / ``allowed`` exactly: lower-case
-    ASCII, single spaces, ``cmd`` <= 15 and ``args`` <= 23 chars, no ``;`` ``{``
+    ASCII, single spaces, ``cmd`` <= 15 and ``args`` <= 39 chars, no ``;`` ``{``
     ``%`` ``--``, then the allowlist with its argument shape. ``txpower`` is
     bounded by ``tx_max`` because an over-limit value is a silent, lockout-counted
     reject on the node, never an ``err`` reply.
@@ -460,13 +509,13 @@ def parse_sync_hwm(body: str) -> int | None:
 def status_tx_power_max(result: str) -> int | None:
     """The board's TX power maximum from a ``status`` reply, or None.
 
-    The compact form carries ``p=<cur>/<max>`` (``max`` = the node's
-    ``TX_POWER_MAX``, the bound its ``allowed()`` applies to ``txpower``); the
-    older ``gw=/mesh=`` form has no ``p=`` token. Accepts the result with or
+    The compact form carries ``p=<cur>/<min>/<max>`` (older firmware ``p=<cur>/<max>``;
+    ``max`` = the node's ``TX_POWER_MAX``, the bound its ``allowed()`` applies to
+    ``txpower``); the older ``gw=/mesh=`` form has no ``p=`` token. Accepts the result with or
     without its ``ok `` prefix; call only on the text of a verified reply.
     """
     for token in result.split(" "):
         m = _STATUS_POWER_RE.fullmatch(token)
         if m is not None:
-            return int(m.group(2))
+            return int(m.group(3))
     return None

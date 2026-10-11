@@ -207,6 +207,29 @@ def _case_sessions(record: Any) -> None:
         "2k. own = commander or target is one of own_calls",
         own_by_cmdr and own_by_tgt and not foreign,
     )
+    mine = build_sessions(two, NOW, {}, [CMDR], {TARGET: {CTR}})
+    own_ex = {e["ctr"]: e.get("origin") for e in mine[0]["exchanges"]}
+    other_session = next(x for x in mine if x["commander"] == "DL1ABC")
+    record(
+        "2k2. own session: origin mcapp when McApp's log holds the ctr, else other; "
+        "a foreign session carries no origin key",
+        own_ex == {CTR: "mcapp", CTR + 20: "other"}
+        and all("origin" not in e for e in other_session["exchanges"])
+        and all("origin" not in e for e in build_sessions(two, NOW, {}, [CMDR])[1]["exchanges"]),
+    )
+    sync_mine = build_sessions(
+        [cmd_row(t0, cmd_text(0, "sync")), cmd_row(t0 + 20_000, c)],
+        NOW,
+        {},
+        [CMDR],
+        {TARGET: {0, CTR}},
+    )
+    sync_ex = {e["ctr"]: e for e in sync_mine[0]["exchanges"]}
+    record(
+        "2k3. a ctr-0 (sync) exchange of an own session carries no origin key, even though "
+        "McApp's log always holds ctr 0; a counted exchange of the same session still does",
+        "origin" not in sync_ex[0] and sync_ex[CTR].get("origin") == "mcapp",
+    )
     sync1 = cmd_text(0, "sync")
     sync_rep = reply_text(0, "ok ctr=1791705000 v=2")
     out_sync = build_sessions(

@@ -16,7 +16,8 @@ Evidence rules (all from concept 4.3):
 
 The tokenizer and status parser mirror the firmware (`rm_sender_policy.h` `rmStatusParse`,
 fork-dev): the compact form
-`ok v=<ver> up=<min> bat=<%> heap=<kB> s=<letters> p=<cur>/<max>[ led=<0|1>]` and the older
+`ok v=<ver> up=<min> bat=<%> heap=<kB> s=<letters> p=<cur>/<min>/<max>[ led=<0|1>]` (newer
+firmware; the older `p=<cur>/<max>` is still accepted, without a minimum) and the older
 `... gw=<0|1> mesh=<0|1>[ led=<0|1>]` form (only those switches known). The `D` letter means
 display ON; the BLE page inverts `SN.DISP`, which is a different source and must not be copied.
 """
@@ -49,7 +50,8 @@ _PENDING_STATES: Final = frozenset({"queued", "waiting"})
 _SILENT_STATES: Final = frozenset({"no_reply", "send_failed", "bad_tag", "abandoned"})
 
 _INT_RE: Final = re.compile(r"-?[0-9]{1,9}")
-_P_RE: Final = re.compile(r"(-?[0-9]{1,4})/(-?[0-9]{1,4})")
+# `p=<cur>/<max>` (older firmware) or `p=<cur>/<min>/<max>`; group 2 is the minimum.
+_P_RE: Final = re.compile(r"(-?[0-9]{1,4})(?:/(-?[0-9]{1,4}))?/(-?[0-9]{1,4})")
 
 RowState = Callable[[dict[str, Any], int], str]
 
@@ -62,7 +64,11 @@ class FieldEntry(TypedDict):
 
 
 class SwitchEntry(TypedDict):
-    """`state`: on | off | uncertain | pending | unknown.
+    """`state`: on | off | flash | on_or_flash | uncertain | pending | unknown.
+
+    `flash` comes only from a verified `led flash` ack (or a status `L` that confirms it);
+    `on_or_flash` is a status `L` with no led ack to tell the two apart (firmware `bRemoteLed`
+    is true for both).
 
     `stale` is an addition to Appendix A: a switch entry carries it like a field does (a reboot
     boundary lies after its evidence).
@@ -123,6 +129,7 @@ class StatusInfo:
     bat_pct: int | None
     heap_kb: int | None
     tx_cur: int | None
+    tx_min: int | None  # None for the older two-part `p=<cur>/<max>`
     tx_max: int | None
     gps: bool | None
     track: bool | None
@@ -194,7 +201,8 @@ def parse_status(result: object) -> StatusInfo | None:
         bat_pct=_int(toks.get("bat")),
         heap_kb=_int(toks.get("heap")),
         tx_cur=int(pm.group(1)) if pm else None,
-        tx_max=int(pm.group(2)) if pm else None,
+        tx_min=int(pm.group(2)) if pm and pm.group(2) is not None else None,
+        tx_max=int(pm.group(3)) if pm else None,
         gps=sw[0],
         track=sw[1],
         display=sw[2],
@@ -306,9 +314,28 @@ class _Folder:
         self._set_field("battery_pct", info.bat_pct, row)
         self._set_field("heap_kb", info.heap_kb, row)
         self._set_field("tx_power", info.tx_cur, row)
+        self._set_field("tx_power_min", info.tx_min, row)
         self._set_field("tx_power_max", info.tx_max, row)
         vals = (info.gps, info.track, info.display, info.mesh, info.gateway, info.led)
         for name, val in zip(SWITCHES, vals, strict=True):
+            if name == "led" and val:
+                # `L` is bRemoteLed: true for on AND flash. A led ack since the last reboot that
+                # said on/flash is confirmed by it; without one only "on or flash" is known.
+                # "Since the last reboot" is judged by the status itself (`up=` minutes): a
+                # power cycle, watchdog or another sender's reboot is a reboot McApp never saw,
+                # and the LED is RAM only. No `up=` -> the ack cannot be dated against the boot.
+                entry = self.sw["led"]
+                ack_at, reply_at = entry["at"], row.get("reply_at")
+                since_boot = (
+                    isinstance(ack_at, int)
+                    and isinstance(reply_at, int)
+                    and info.up_min is not None
+                    and ack_at > reply_at - info.up_min * 60_000
+                )
+                prior = entry["state"]
+                keep = since_boot and prior in ("on", "flash")
+                self._set_switch(name, prior if keep else "on_or_flash", row)
+                continue
             self._set_switch(name, None if val is None else ("on" if val else "off"), row)
         self.has_led = info.has_led
 
@@ -326,13 +353,17 @@ class _Folder:
         verdict = body.strip()
         if ok:
             value = tokenize(body).get(name)
-            if value not in ("on", "off"):
+            if value not in ("on", "off") and not (name == "led" and value == "flash"):
                 return
             self._set_switch(name, value, row)
             if name == "gps" and value == "off":
                 self._set_switch("track", "off", row)  # firmware: gps off also switches Track off
         elif verdict == "failed":
-            # the node tried and the setting did not change: it kept the opposite of what we asked
+            # the node tried and the setting did not change: it kept the opposite of what we asked.
+            # `led flash` has no opposite (the node may have been on or off): the earlier led
+            # evidence is left untouched rather than blanked or invented.
+            if name == "led" and str(row.get("args") or "").strip() == "flash":
+                return
             self._set_switch(name, _opposite(str(row.get("args") or "")), row)
         elif verdict == "unsupported" and name == "led":
             self.has_led = False

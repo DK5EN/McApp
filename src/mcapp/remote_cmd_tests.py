@@ -56,7 +56,7 @@ _MODULE_PATH = Path(__file__).parent / "remote_cmd.py"
 # sha256 of the raw bytes of the vendored vectors copy. A change means the
 # firmware corpus changed: re-copy it byte-exact, re-pin this constant and the
 # copy in ONE commit, and re-check the hand-written cases below still agree.
-_EXPECTED_SHA256 = "65cbfb36ac39fec42bc764e84351bc46e2783af700c3787a311cfccd8bd09418"
+_EXPECTED_SHA256 = "8744b36892182e7b150c6f7ef78950ea6acff024bad6c3d862bd6727500b3ef6"
 
 UDP_SUFFIX = "{087"  # the firmware ack-request suffix on an Extern-UDP copy
 
@@ -87,7 +87,7 @@ def _test_corpus(record: Record) -> None:
     corpus = _load()
     commands: list[dict[str, Any]] = corpus["commands"]
     replies: list[dict[str, Any]] = corpus["replies"]
-    record("vectors count 19 commands + 4 replies", len(commands) == 19 and len(replies) == 4)
+    record("vectors count 36 commands + 27 replies", len(commands) == 36 and len(replies) == 27)
 
     for i, v in enumerate(commands):
         key = derive_key(v["passwd"])
@@ -259,14 +259,57 @@ def _test_validate_command(record: Record) -> None:
         == {
             "reboot", "status", "sendpos", "sendtrack", "sync",
             "gps", "track", "display", "led", "gateway", "mesh",
-            "txpower", "setout",
+            "txpower", "setout", "chgled", "radio", "sens", "txq", "mbox", "maxhop",
+            "name", "atxt", "pos", "mh",
         },
     )  # fmt: skip
+    corpus_cmds = {v["cmd"] for v in _load()["commands"]}
+    record(
+        "allowlist command set equals the firmware corpus command set",
+        set(ALLOWLIST) == corpus_cmds,
+    )
+    _test_allowlist_shapes(record)
     record(
         "constants: firmware rate/cache and McApp reply timeout",
         (RM_RATE_MS, RM_CACHE_MS, RM_REPLY_TIMEOUT_MS, CTR_MAX, TX_MAX_DEFAULT)
         == (10_000, 600_000, 120_000, 4_294_967_295, 15),
     )
+
+
+def _test_allowlist_shapes(record: Record) -> None:
+    ok = {
+        "led": ["on", "off", "flash"],
+        "chgled": ["auto", "on", "off"],
+        "name": ["", "Martin", "a" * 19, "x, y/z"],
+        "atxt": ["", "MeshCom Garten", "A" * 39],
+        "pos": ["", "48.40812 11.73812 492", "-1 -2.5 0"],
+        "mh": ["0", "999", "DK5EN-98", "dk5en", "DK5EN", "1234AB"],
+        "radio": [""],
+        "maxhop": [""],
+    }
+    bad = {
+        "led": ["auto", "FLASH", ""],
+        "chgled": ["flash", ""],
+        "name": ["a" * 20, "a{b", "a|b", "a:b", "a}b"],
+        "atxt": ["A" * 40, "a:b"],
+        "pos": ["48.4", "1 2", "1 2 3 4", "1.1234567 2 3", "1 2 123456", "a b c"],
+        "mh": ["1234", "", "DK5EN-123", "AB", "DK5EN-", "DK5ENABCDE"],
+        "mbox": ["1"],
+    }
+    for cmd, vals in ok.items():
+        for a in vals:
+            record(f"shape accepts {cmd} {a!r}", _accepts(cmd, a))
+    for cmd, vals in bad.items():
+        for a in vals:
+            record(f"shape rejects {cmd} {a!r}", not _accepts(cmd, a))
+
+
+def _accepts(cmd: str, args: str) -> bool:
+    try:
+        validate_command(cmd, args)
+    except RmError:
+        return False
+    return True
 
 
 def _test_build_command(record: Record) -> None:
@@ -531,6 +574,9 @@ def _test_parse_reply(record: Record) -> None:
         ("v=4.40a p=15/20", 20),
         ("ok v=4.40a s=GTDMW p=-3/22", 22),  # firmware TX_POWER_MIN is -9
         ("ok p=-99/99", 99),  # rmClampDbm range
+        ("ok v=4.40a up=75 bat=0 heap=112 s=GtdMwl p=2/0/22", 22),  # p=<cur>/<min>/<max>
+        ("ok p=-3/-9/22", 22),
+        ("ok p=1/2/3/4", None),
         ("ok v=4.40a up=125 bat=87 heap=212 gw=0 mesh=1", None),
         ("ok p=abc/22", None),
         ("ok xp=5/6", None),

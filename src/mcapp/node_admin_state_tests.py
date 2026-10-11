@@ -645,6 +645,92 @@ def _test_capability(record: Record) -> None:
         )
 
 
+def _test_tx_min_and_led_flash(record: Record) -> None:
+    three = "ok v=4.40a up=75 bat=0 heap=112 s=GtdMwl p=2/0/22"
+    st = fold([status_row(1, three)], NOW)
+    record(
+        "p=2/0/22: tx_power 2, tx_power_min 0, tx_power_max 22",
+        fld(st, "tx_power") == 2 and fld(st, "tx_power_min") == 0 and fld(st, "tx_power_max") == 22,
+    )
+    info = parse_status(three)
+    record("p=2/0/22: StatusInfo.tx_min == 0", info is not None and info.tx_min == 0)
+    two = fold([status_row(1, LIVE)], NOW)
+    record(
+        "p=2/22 (two-part) still works, no tx_power_min",
+        fld(two, "tx_power") == 2
+        and fld(two, "tx_power_max") == 22
+        and "tx_power_min" not in two["fields"],
+    )
+    neg = parse_status("ok v=4.40a s=GTDMW p=-3/-9/22")
+    record(
+        "p=-3/-9/22 parses (negative min)",
+        neg is not None and (neg.tx_cur, neg.tx_min, neg.tx_max) == (-3, -9, 22),
+    )
+    bad = parse_status("ok v=4.40a s=GTDMW p=1/2/3/4")
+    record("p= with four parts is ignored", bad is not None and bad.tx_cur is None)
+
+    # LED: three states
+    led_off = "ok v=4.40a up=1 bat=1 heap=1 s=gtdmwl p=2/0/22"
+    led_up = "ok v=4.40a up=1 bat=1 heap=1 s=gtdmwL p=2/0/22"
+    st = fold([vrow(1, "led", "flash", "ok led=flash")], NOW)
+    record("led ack 'ok led=flash' sets state flash", sw(st, "led") == "flash")
+    st = fold([vrow(1, "led", "on", "ok led=on"), vrow(2, "led", "flash", "err failed")], NOW)
+    record(
+        "led flash 'err failed' leaves the earlier state (no invented opposite)",
+        sw(st, "led") == "on",
+    )
+    st = fold([vrow(1, "led", "flash", "err failed")], NOW)
+    record("led flash 'err failed' with no evidence stays unknown", sw(st, "led") == "unknown")
+    st = fold([status_row(1, led_up)], NOW)
+    record("status L alone -> on_or_flash", sw(st, "led") == "on_or_flash")
+    st = fold([status_row(1, led_off)], NOW)
+    record("status l alone -> off", sw(st, "led") == "off")
+    st = fold([vrow(1, "led", "flash", "ok led=flash"), status_row(2, led_up)], NOW)
+    record("led ack flash then status L -> flash", sw(st, "led") == "flash")
+    st = fold([vrow(1, "led", "on", "ok led=on"), status_row(2, led_up)], NOW)
+    record("led ack on then status L -> on", sw(st, "led") == "on")
+    st = fold([vrow(1, "led", "flash", "ok led=flash"), status_row(2, led_off)], NOW)
+    record("led ack flash then status l -> off", sw(st, "led") == "off")
+    st = fold(
+        [
+            vrow(1, "led", "flash", "ok led=flash"),
+            vrow(2, "reboot", "", "ok rebooting"),
+            status_row(3, led_up),
+        ],
+        NOW,
+    )
+    record(
+        "led flash, reboot, status L -> on_or_flash (ack predates the reboot)",
+        sw(st, "led") == "on_or_flash",
+    )
+    st = fold([vrow(1, "led", "flash", "ok led=flash"), vrow(2, "reboot", "", "ok rebooting")], NOW)
+    record("led flash then reboot -> off", sw(st, "led") == "off")
+
+    # A reboot McApp never saw (power cycle, watchdog, another sender): the status dates the boot.
+    t_ack = NOW - 3_000_000
+    t_status = t_ack + 600_000  # ten minutes later
+    up2 = "ok v=4.40a up=2 bat=1 heap=1 s=gtdmwL p=2/0/22"
+    up75 = "ok v=4.40a up=75 bat=1 heap=1 s=gtdmwL p=2/0/22"
+    no_up = "ok v=4.40a bat=1 heap=1 s=gtdmwL p=2/0/22"
+    ack = vrow(1, "led", "flash", "ok led=flash", t_ack)
+    st = fold([ack, status_row(2, up2, t_status)], NOW)
+    record(
+        "led flash ack, status L ten minutes later with up=2 (node booted after the ack) "
+        "-> on_or_flash",
+        sw(st, "led") == "on_or_flash",
+    )
+    st = fold([ack, status_row(2, up75, t_status)], NOW)
+    record(
+        "led flash ack, status L ten minutes later with up=75 (no boot since) -> flash",
+        sw(st, "led") == "flash",
+    )
+    st = fold([ack, status_row(2, no_up, t_status)], NOW)
+    record(
+        "led flash ack, status L without up= (ack cannot be dated against the boot) -> on_or_flash",
+        sw(st, "led") == "on_or_flash",
+    )
+
+
 def _test_injection(record: Record) -> None:
     calls: list[str] = []
 
@@ -674,6 +760,7 @@ def run_node_admin_state_tests() -> bool:
         _test_switch_states,
         _test_registers,
         _test_capability,
+        _test_tx_min_and_led_flash,
         _test_injection,
     ):
         try:
