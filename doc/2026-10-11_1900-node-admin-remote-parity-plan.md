@@ -82,3 +82,37 @@ hostile), `tools/tests/remote_cmd_vectors.json` (canonical corpus).
   event once one `other` exchange is in the 24 h window (compare the newest ctr instead); tag
   `other` only on verified exchanges; McApp exchanges read `other` after a Remove + re-add;
   `RemoteConnectHeader` excludes the in-flight reason by its text (check `state.in_flight`).
+
+## Wave 2 resume notes (recon 2026-10-11)
+
+Start here in a fresh session. Wave 1 commits: MCProxy `9bb6fe5`, webapp `1a8f42a`. The
+allowlist is already complete (folded into A1); Wave 2 is C2 (fold) + D1-D3 (cards).
+
+- **Reply grammar**: firmware `src/rm_format.h:75-90` and
+  `docs/rm-gui/extended-commands-concept.md:132-143`; boundary fixtures in the vendored corpus
+  `src/mcapp/remote_cmd_vectors.json` `replies` (no `cmd` field: match by result shape).
+  - `radio` `f=433.175 sf=11 cr=5 bw=250 p=<cur>/<min>/<max>` (3-part `p=` here too).
+  - `sens` `t= h= p= t2=`, `-` = absent; `err unsupported` without a sensor.
+  - `txq` `q=used/cap bp=quiet|qrs|qrt tx= rt= dr= u=%`; `tx`/`dr` per stats interval.
+  - `mbox` `m=off|own|list|heard u=used/slots b=bytes a=actions/ceiling st dl ak dr bl nt`;
+    `err unsupported` on classic ESP32.
+  - `maxhop` `t= p=`. `name` `n=`, `atxt` `a=` (free text, render as plain text).
+  - `pos` `<lat> <lon> <alt> gps|nofix|set`; write refused with `err gps` while GPS is on.
+  - `mh <row>` `<total> <next|-> CALL min ...` (paged; `0 -` empty);
+    `mh <call>` direct `d g m r s la lo di a n x h t`, routed `r h k g m rc=SNR@CALL t v`.
+  - Errors in the corpus: `err text|unknown|unsupported|end|gps|hidden|range`.
+- **C2 trap**: `_Folder._status` resets `self.fields = {}` on every status. The new read fields
+  (radio, sens, name, atxt, pos, txq, mbox, maxhop, mh, chgled) are NOT status-owned and must
+  survive a status; reset only the status-owned keys. A reboot marks them stale like the rest.
+- **Firmware page layout** (`src/web_functions/web_rm_page.cpp:118-138, 266-328`): Radio (with
+  Sensors), Identity (Name, APRS text), Position (Source + lat/lon/alt), Queues (TX queue as a
+  bar, Mailbox counters, Max hop), Heard list (Read pages by `next` until `-`/128 rows, "Read N
+  of total", Stop; "Other node" lookup, 9 chars, upper-cased), Advanced. Labels: bp quiet / slow
+  down / hold; Sent, Retransmitted, Dropped; Mode, Slots used, Bytes, Actions this hour; Stored,
+  Delivered, Acknowledged, Dropped, Blocked, Notified; Text messages, Position beacons.
+- **Webapp building blocks**: `NodeSettingsGroup` + `EditableField` (editable kinds include
+  `name` 19, `atxt` 39, `latitude`/`longitude`/`altitude` number inputs) from
+  `components/bluetooth/node-settings/`; `BaseSettingsGrid` is 3/2/1 columns, no spans. BLE page
+  order (`BtNodeSettings.vue:48-59`): Identity, Radio, Network, APRS, Sensor, Sensors, Time Zone,
+  GPS, Via, WiFi, Weather, PIN. Remote cards emit `{cmd, args, confirm}`; gate with
+  `sendDisabledReason`. 10 s spacing: reads are per card, never all on Connect.
