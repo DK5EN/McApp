@@ -27,7 +27,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Final, TypedDict
+from typing import Any, Final, TypedDict, cast
 
 from .remote_cmd import parse_sync_hwm
 
@@ -55,9 +55,50 @@ _P_RE: Final = re.compile(r"(-?[0-9]{1,4})(?:/(-?[0-9]{1,4}))?/(-?[0-9]{1,4})")
 
 RowState = Callable[[dict[str, Any], int], str]
 
+# A field value: scalars for the status-owned fields, JSON-shaped maps / lists for the read
+# commands (radio, sens, pos, txq, mbox, maxhop, mh, mh_call).
+JsonValue = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
+
+# Fields owned by a status snapshot: a status resets exactly these, never the read fields.
+STATUS_FIELDS: Final = (
+    "firmware",
+    "uptime_min",
+    "battery_pct",
+    "heap_kb",
+    "tx_power",
+    "tx_power_min",
+    "tx_power_max",
+)
+
+_FLOAT_RE: Final = re.compile(r"-?[0-9]{1,6}(?:\.[0-9]{1,6})?")
+_COUNT_RE: Final = re.compile(r"[0-9]{1,5}[kM]?")
+_RATIO_RE: Final = re.compile(r"([0-9]{1,6})/([0-9]{1,6})")
+# Firmware rm_format.h: a call is A-Z 0-9 `-`, every other byte is `?`, and a row / rc call longer
+# than 9 chars is emitted as exactly `?` (a churned-out mh row keeps its position as `?` too).
+_CALL_RE: Final = re.compile(r"[A-Z0-9?-]{1,9}")
+_POS_PARTS: Final = 4
+_MH_HEAD: Final = 2  # `<total> <next>` before the call / minutes pairs
+_BP: Final = frozenset({"quiet", "qrs", "qrt", "?"})
+_MBOX_MODES: Final = frozenset({"off", "own", "list", "heard"})
+_POS_SRC: Final = frozenset({"gps", "nofix", "set"})
+_READ_COMMANDS: Final = frozenset(
+    {"radio", "sens", "name", "atxt", "pos", "txq", "mbox", "maxhop", "chgled", "mh"}
+)
+_UNSUPPORTED: Final[dict[str, JsonValue]] = {"unsupported": True}
+_HIDDEN: Final[dict[str, JsonValue]] = {"hidden": True}
+# (cmd, whole result) of the `err` replies that ARE evidence about the node (firmware
+# rm_exec_read.cpp / rm_runtime.cpp: no sensor / mailbox / PMU charge LED, or a node that does
+# not beacon its position)
+_ERR_MARKERS: Final[dict[tuple[str, str], dict[str, JsonValue]]] = {
+    ("sens", "err unsupported"): _UNSUPPORTED,
+    ("mbox", "err unsupported"): _UNSUPPORTED,
+    ("chgled", "err unsupported"): _UNSUPPORTED,
+    ("pos", "err hidden"): _HIDDEN,
+}
+
 
 class FieldEntry(TypedDict):
-    value: str | int
+    value: JsonValue
     at: int | None
     log_id: int
     stale: bool
@@ -232,6 +273,191 @@ def _body(result: str) -> str:
     return result
 
 
+def _kv(body: str) -> dict[str, str]:
+    """Like `tokenize` but keeps the `-` ("absent") values, for replies that map them to None."""
+    out: dict[str, str] = {}
+    for tok in body.split(" "):
+        key, sep, value = tok.partition("=")
+        if sep and key and key not in out:
+            out[key] = value
+    return out
+
+
+def _flt(value: str | None) -> float | None:
+    if value is None or _FLOAT_RE.fullmatch(value) is None:
+        return None
+    return float(value)
+
+
+def _num(value: str) -> int | float | None:
+    if _INT_RE.fullmatch(value):
+        return int(value)
+    return _flt(value)
+
+
+def _opt_num(value: str | None) -> tuple[bool, int | float | None]:
+    """(ok, number): `-` is a valid None, a missing or unreadable value is not ok."""
+    if value is None:
+        return False, None
+    if value == "-":
+        return True, None
+    num = _num(value)
+    return num is not None, num
+
+
+def _ratio(value: str | None) -> tuple[int, int] | None:
+    m = _RATIO_RE.fullmatch(value or "")
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def _parse_radio(body: str) -> tuple[dict[str, JsonValue], re.Match[str] | None] | None:
+    kv = _kv(body)
+    f, bw = _flt(kv.get("f")), _flt(kv.get("bw"))
+    sf, cr = _int(kv.get("sf")), _int(kv.get("cr"))
+    if f is None or bw is None or sf is None or cr is None:
+        return None
+    return {"f": f, "sf": sf, "cr": cr, "bw": bw}, _P_RE.fullmatch(kv.get("p", ""))
+
+
+def _parse_sens(body: str) -> dict[str, JsonValue] | None:
+    kv = _kv(body)
+    out: dict[str, JsonValue] = {}
+    for key in ("t", "h", "p", "t2"):
+        raw = kv.get(key)
+        if raw is None:
+            return None
+        if raw == "-":
+            out[key] = None
+            continue
+        num = _flt(raw)
+        if num is None:
+            return None
+        out[key] = num
+    return out
+
+
+def _parse_pos(body: str) -> dict[str, JsonValue] | None:
+    parts = body.split(" ")
+    if len(parts) != _POS_PARTS or parts[3] not in _POS_SRC:
+        return None
+    lat, lon, alt = _flt(parts[0]), _flt(parts[1]), _num(parts[2])
+    if lat is None or lon is None or alt is None:
+        return None
+    return {"lat": lat, "lon": lon, "alt": alt, "src": parts[3]}
+
+
+def _parse_txq(body: str) -> dict[str, JsonValue] | None:
+    kv = _kv(body)
+    q, u = _ratio(kv.get("q")), _int(kv.get("u"))
+    counters = [kv.get(k, "") for k in ("tx", "rt", "dr")]
+    if q is None or u is None or kv.get("bp") not in _BP:
+        return None
+    if not all(_COUNT_RE.fullmatch(c) for c in counters):
+        return None
+    return {
+        "q_used": q[0],
+        "q_cap": q[1],
+        "bp": kv["bp"],
+        "tx": counters[0],
+        "rt": counters[1],
+        "dr": counters[2],
+        "u": u,
+    }
+
+
+def _parse_mbox(body: str) -> dict[str, JsonValue] | None:
+    kv = _kv(body)
+    u, a, b = _ratio(kv.get("u")), _ratio(kv.get("a")), _int(kv.get("b"))
+    counters = {k: kv.get(k, "") for k in ("st", "dl", "ak", "dr", "bl", "nt")}
+    if u is None or a is None or b is None or kv.get("m") not in _MBOX_MODES:
+        return None
+    if not all(_COUNT_RE.fullmatch(c) for c in counters.values()):
+        return None
+    out: dict[str, JsonValue] = {
+        "m": kv["m"],
+        "u_used": u[0],
+        "u_slots": u[1],
+        "b": b,
+        "a_used": a[0],
+        "a_ceiling": a[1],
+    }
+    out.update(counters)
+    return out
+
+
+def _parse_maxhop(body: str) -> dict[str, JsonValue] | None:
+    kv = _kv(body)
+    t, p = _int(kv.get("t")), _int(kv.get("p"))
+    return None if t is None or p is None else {"t": t, "p": p}
+
+
+def _parse_mh_page(body: str) -> tuple[int, int | None, list[dict[str, JsonValue]]] | None:
+    parts = body.split(" ")
+    if len(parts) < _MH_HEAD or (len(parts) - _MH_HEAD) % 2:
+        return None
+    total = _int(parts[0])
+    nxt = None if parts[1] == "-" else _int(parts[1])
+    if total is None or total < 0 or (nxt is None and parts[1] != "-"):
+        return None
+    rows: list[dict[str, JsonValue]] = []
+    for call, mins in zip(parts[2::2], parts[3::2], strict=True):
+        minutes = _int(mins)
+        if _CALL_RE.fullmatch(call) is None or minutes is None:
+            return None
+        rows.append({"call": call, "min": minutes})
+    return total, nxt, rows
+
+
+def _numbers(kv: dict[str, str], keys: tuple[str, ...]) -> dict[str, JsonValue] | None:
+    out: dict[str, JsonValue] = {}
+    for key in keys:
+        good, num = _opt_num(kv.get(key))
+        if not good:
+            return None
+        out[key] = num
+    return out
+
+
+def _parse_routed(kv: dict[str, str]) -> dict[str, JsonValue] | None:
+    out = _numbers(kv, ("h", "k", "g", "m", "t"))
+    rc, via = kv.get("rc"), kv.get("v")
+    if out is None or rc is None or via is None:
+        return None
+    snr: float | None = None
+    rc_call: str | None = None
+    if rc != "-":
+        snr_txt, at, rc_call = rc.partition("@")
+        snr = _flt(snr_txt)
+        if not at or _CALL_RE.fullmatch(rc_call) is None or snr is None:
+            return None
+    out["kind"] = "routed"
+    out["rc_snr"] = snr
+    out["rc_call"] = rc_call
+    hops = [] if via == "-" else via.split(",")
+    if not all(_CALL_RE.fullmatch(h) for h in hops):
+        return None
+    out["v"] = cast("list[JsonValue]", hops)
+    return out
+
+
+def _parse_mh_call(body: str) -> dict[str, JsonValue] | None:
+    kind, _, rest = body.partition(" ")
+    kv = _kv(rest)
+    if kind == "d":
+        direct = _numbers(kv, ("g", "m", "r", "s", "la", "lo", "di", "a", "n", "x", "h", "t"))
+        return None if direct is None else {"kind": "direct", **direct}
+    return _parse_routed(kv) if kind == "r" else None
+
+
+_SIMPLE_PARSERS: Final[dict[str, Callable[[str], dict[str, JsonValue] | None]]] = {
+    "sens": _parse_sens,
+    "pos": _parse_pos,
+    "txq": _parse_txq,
+    "mbox": _parse_mbox,
+    "maxhop": _parse_maxhop,
+}
+
+
 def _opposite(args: str) -> str | None:
     return {"on": "off", "off": "on"}.get(args.strip())
 
@@ -250,7 +476,7 @@ class _Folder:
     def _blank() -> SwitchEntry:
         return {"state": "unknown", "at": None, "log_id": None, "stale": False}
 
-    def _set_field(self, key: str, value: str | int | None, row: dict[str, Any]) -> None:
+    def _set_field(self, key: str, value: JsonValue, row: dict[str, Any]) -> None:
         if value is None:
             self.fields.pop(key, None)
             return
@@ -288,6 +514,8 @@ class _Folder:
             self._switch_reply(row, cmd, ok, _body(result))
         elif cmd == "txpower":
             self._txpower_reply(row, ok, _body(result))
+        elif cmd in _READ_COMMANDS:
+            self._read_reply(row, cmd, result)
 
     def _versioned(self, row: dict[str, Any], cmd: str, body: str, result: str) -> None:
         info = parse_status(result) if cmd == "status" else None
@@ -308,7 +536,8 @@ class _Folder:
             self.capability = rm if rm is not None and rm >= 0 else 1
 
     def _status(self, row: dict[str, Any], info: StatusInfo) -> None:
-        self.fields = {}
+        for key in STATUS_FIELDS:
+            self.fields.pop(key, None)
         self._set_field("firmware", info.version, row)
         self._set_field("uptime_min", info.up_min, row)
         self._set_field("battery_pct", info.bat_pct, row)
@@ -368,6 +597,88 @@ class _Folder:
         elif verdict == "unsupported" and name == "led":
             self.has_led = False
             self._set_switch("led", None, row)
+
+    def _read_reply(self, row: dict[str, Any], cmd: str, result: str) -> None:
+        """Read / write acks of the extended commands. Malformed or `err` replies change nothing
+        (the exceptions: `err unsupported` of sens / mbox / chgled, `err hidden` of pos,
+        `err unknown` of `mh <call>`)."""
+        marker = _ERR_MARKERS.get((cmd, result))
+        if marker is not None:
+            self._set_field(cmd, dict(marker), row)
+            return
+        if result == "err unknown" and cmd == "mh":
+            call = str(row.get("args") or "").strip().upper()
+            if call and not call.isdigit():
+                self._mh_call(row, call, {"kind": "unknown"})
+            return
+        if not result.startswith("ok "):
+            return
+        body = result[3:]
+        if cmd == "radio":
+            self._radio(row, body)
+        elif cmd in ("name", "atxt"):
+            prefix = "n=" if cmd == "name" else "a="
+            if body.startswith(prefix):
+                text = body[len(prefix) :]
+                self._set_field(cmd, "" if text == "-" else text, row)
+        elif cmd == "chgled":
+            mode = tokenize(body).get("chgled")
+            if mode in ("auto", "on", "off"):
+                self._set_field("chgled", mode, row)
+        elif cmd == "mh":
+            self._mh_reply(row, body)
+        else:
+            value = _SIMPLE_PARSERS[cmd](body)
+            if value is not None:
+                self._set_field(cmd, value, row)
+
+    def _radio(self, row: dict[str, Any], body: str) -> None:
+        parsed = _parse_radio(body)
+        if parsed is None:
+            return
+        self._set_field("radio", parsed[0], row)
+        pm = parsed[1]
+        if pm is not None:  # the same `p=` as status: 3-part has a minimum, 2-part has none
+            self._set_field("tx_power", int(pm.group(1)), row)
+            self._set_field("tx_power_min", int(pm.group(2)) if pm.group(2) else None, row)
+            self._set_field("tx_power_max", int(pm.group(3)), row)
+
+    def _mh_reply(self, row: dict[str, Any], body: str) -> None:
+        arg = str(row.get("args") or "").strip()
+        if arg.isdigit():
+            page = _parse_mh_page(body)
+            if page is None:
+                return
+            total, nxt, rows = page
+            start = int(arg)
+            old = self.fields.get("mh")
+            old_val = old["value"] if old is not None and not old["stale"] else None
+            if isinstance(old_val, dict) and old_val.get("next") == start and old_val.get("rows"):
+                prior = cast("list[JsonValue]", old_val["rows"])
+                start = cast(int, old_val["start"])
+                rows = [*cast("list[dict[str, JsonValue]]", prior), *rows]
+            self._set_field(
+                "mh",
+                {
+                    "total": total,
+                    "next": nxt,
+                    "start": start,
+                    "rows": cast("list[JsonValue]", rows),
+                },
+                row,
+            )
+        elif arg:
+            detail = _parse_mh_call(body)
+            if detail is not None:
+                self._mh_call(row, arg.upper(), detail)
+
+    def _mh_call(self, row: dict[str, Any], call: str, detail: dict[str, JsonValue]) -> None:
+        old = self.fields.get("mh_call")
+        merged: dict[str, JsonValue] = {}
+        if old is not None and not old["stale"] and isinstance(old["value"], dict):
+            merged = dict(old["value"])
+        merged[call] = detail
+        self._set_field("mh_call", merged, row)
 
     def _txpower_reply(self, row: dict[str, Any], ok: bool, body: str) -> None:
         if ok:

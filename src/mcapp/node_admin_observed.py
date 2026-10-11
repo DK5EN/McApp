@@ -125,9 +125,13 @@ def _exchange_dict(
             ex.reply is None and ex.command_ms is not None and now_ms - ex.command_ms > NO_REPLY_MS
         ),
     }
-    if keyed and _verified(ex):
+    verified = keyed and _verified(ex)
+    if verified:
         out["verified"] = True
-    if origin is not None:
+    # Both origins are claims about who signed the exchange ("McApp's own ctr" / "a different
+    # sender signed with our call"). An unverified frame may be a forgery that merely reuses a ctr
+    # in McApp's log, or an unkeyed copy, so it proves nothing: no ``origin`` unless verified.
+    if origin is not None and verified:
         out["origin"] = origin
     return out
 
@@ -218,7 +222,9 @@ def build_sessions(
     ``own_calls``: calls that make a session "this McApp" (commander or target).
     ``mcapp_ctrs``: target call -> counters in McApp's own log. Exchanges of a session whose
     commander is one of ``own_calls`` get ``origin`` ``"mcapp"`` (ctr in that set) or
-    ``"other"`` (another sender signing with our call); other sessions carry no ``origin``, and
+    ``"other"`` (another sender signing with our call), on VERIFIED exchanges only: an unverified
+    one may be a forgery reusing a ctr of McApp's log and carries no ``origin``; other sessions
+    carry no ``origin``, and
     neither do ctr-0 (sync) exchanges: McApp's log always holds ctr 0, so it proves nothing.
     """
     own = {c for c in (_norm(o) for o in own_calls) if c}

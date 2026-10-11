@@ -51,11 +51,11 @@ hostile), `tools/tests/remote_cmd_vectors.json` (canonical corpus).
 
 ## Waves
 
-| Wave | Content                                                                                               | Status  |
-| ---- | ----------------------------------------------------------------------------------------------------- | ------- |
-| 1    | Bugs 1-5: A1 backend parse/allowlist/corpus, A2 counter + observed origin, B1 webapp                  | running |
-| 2    | Command parity: C1 allowlist, C2 fold, D1 APRS/Position, D2 Radio/Sensors/Queues, D3 Heard/Charge LED | open    |
-| 3    | Dev release, deploy, live check against DK5EN-1 (transmits: ask first)                                | open    |
+| Wave | Content                                                                                               | Status |
+| ---- | ----------------------------------------------------------------------------------------------------- | ------ |
+| 1    | Bugs 1-5: A1 backend parse/allowlist/corpus, A2 counter + observed origin, B1 webapp                  | done   |
+| 2    | Command parity: C1 allowlist, C2 fold, D1 APRS/Position, D2 Radio/Sensors/Queues, D3 Heard/Charge LED | done   |
+| 3    | Dev release, deploy, live check against DK5EN-1 (transmits: ask first)                                | open   |
 
 ### Ownership
 
@@ -82,6 +82,29 @@ hostile), `tools/tests/remote_cmd_vectors.json` (canonical corpus).
   event once one `other` exchange is in the 24 h window (compare the newest ctr instead); tag
   `other` only on verified exchanges; McApp exchanges read `other` after a Remove + re-add;
   `RemoteConnectHeader` excludes the in-flight reason by its text (check `state.in_flight`).
+- Wave 2 dispatched 2026-10-11. Field wire shapes fixed up front in webapp
+  `utils/nodeAdminRemoteState.ts` (`RadioValue` .. `MhCallDetail`; `radio`'s `p=` also feeds
+  `tx_power*`; `mh` pages accumulate in `{total, next, start, rows}`, lookups in `fields.mh_call`;
+  `err unsupported` is `{unsupported: true}`; counters stay verbatim strings). Agents: C2
+  (`node_admin_state*`, `node_admin_observed*`: fold + `other` only when verified), D1
+  (`RemoteIdentityCard`, new `RemotePositionCard`), D2 (`RemoteRadioCard`, new
+  `RemoteSensorsCard`, `RemoteQueuesCard`), D3 (new `RemoteHeardCard`, `RemoteChargeLed`,
+  optional `utils/nodeAdminHeard.ts`), E (`stores/nodeAdmin.ts` newest-ctr refetch,
+  `RemoteConnectHeader` in-flight check). Orchestrator wires the cards into `NodeAdminView.vue`
+  at the gate. Still backlog: `other` after a Remove + re-add.
+- Wave 2 done 2026-10-11. Advisor: REWORK, applied by fresh agents, re-check APPROVED. Rework:
+  `mh` calls take `?` (firmware turns an illegal byte or a call over 9 chars into `?` and keeps a
+  churned row as `?`; one such row used to void the whole page), the observed refetch dedups on
+  (ctr, reply present) so the catch-up reply still refetches, Name/APRS text mirror
+  `rmTextAllowed` (allowlist; a name takes `,` `/`; atxt refuses only exact `none`), `pos err
+hidden` -> `{hidden: true}`, `chgled err unsupported` -> `{unsupported: true}` (blocks writes only
+  until a restart makes it stale: a failed PMU init is also reported that way), the pos write
+  needs GPS known off and fresh, observed `origin` (`mcapp` too) only on verified exchanges.
+- Backlog from the re-check (low, display only): a verified foreign reply whose command copy
+  failed verification raises `last_hwm` in the backend but carries no `origin`, so the webapp
+  does not refetch the counter. Fix: refetch on a verified reply alone, or publish a
+  targets-changed event from the catch-up.
+- Next: Wave 3 (dev release, deploy, live check against DK5EN-1; transmits on air: ask first).
 
 ## Wave 2 resume notes (recon 2026-10-11)
 

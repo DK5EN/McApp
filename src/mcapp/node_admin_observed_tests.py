@@ -207,7 +207,7 @@ def _case_sessions(record: Any) -> None:
         "2k. own = commander or target is one of own_calls",
         own_by_cmdr and own_by_tgt and not foreign,
     )
-    mine = build_sessions(two, NOW, {}, [CMDR], {TARGET: {CTR}})
+    mine = build_sessions(two, NOW, {TARGET: KEY}, [CMDR], {TARGET: {CTR}})
     own_ex = {e["ctr"]: e.get("origin") for e in mine[0]["exchanges"]}
     other_session = next(x for x in mine if x["commander"] == "DL1ABC")
     record(
@@ -220,7 +220,7 @@ def _case_sessions(record: Any) -> None:
     sync_mine = build_sessions(
         [cmd_row(t0, cmd_text(0, "sync")), cmd_row(t0 + 20_000, c)],
         NOW,
-        {},
+        {TARGET: KEY},
         [CMDR],
         {TARGET: {0, CTR}},
     )
@@ -249,6 +249,37 @@ def _case_sessions(record: Any) -> None:
         {"src": "???", "dst": TARGET, "msg": c, "timestamp": t0},
     ]
     record("2m. non-RM1 and unparseable rows are skipped", build_sessions(junk, NOW, {}, ()) == [])
+
+
+def _case_origin_verified(record: Any) -> None:
+    t0 = CTR * 1000
+    two = [
+        cmd_row(t0 + 100, cmd_text(CTR, "status")),
+        cmd_row(t0 + 20_000, cmd_text(CTR + 20, "status")),
+    ]
+    unverified = build_sessions(two, NOW, {}, [CMDR], {TARGET: {CTR}})
+    forged_other = build_sessions(
+        [cmd_row(t0 + 20_000, cmd_text(CTR + 20, "status", key=WRONG))],
+        NOW,
+        {TARGET: KEY},
+        [CMDR],
+        {TARGET: {CTR}},
+    )
+    forged_mcapp = build_sessions(
+        [cmd_row(t0 + 100, cmd_text(CTR, "status", key=WRONG))],
+        NOW,
+        {TARGET: KEY},
+        [CMDR],
+        {TARGET: {CTR}},
+    )
+    record(
+        "2k2b. origin (mcapp AND other) only on a VERIFIED exchange: without a key, or with a "
+        "failing tag, the exchange carries no origin (deliberately inverted: an unverified own "
+        "ctr used to read mcapp, but a forgery can reuse a ctr of McApp's log)",
+        all("origin" not in e for e in unverified[0]["exchanges"])
+        and "origin" not in forged_other[0]["exchanges"][0]
+        and "origin" not in forged_mcapp[0]["exchanges"][0],
+    )
 
 
 def _case_verified(record: Any) -> None:
@@ -625,6 +656,7 @@ async def run_node_admin_observed_tests() -> bool:
 
     _case_parse(_record)
     _case_sessions(_record)
+    _case_origin_verified(_record)
     _case_verified(_record)
     _case_forgery(_record)
     await _case_route(_record)
