@@ -333,7 +333,7 @@ Resume point for the coding sessions (`/orchestrate-waves` on this doc).
 | ---- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | 1    | Migration 36 + `InternetFeedStateMixin`; www ingest guards + www→RF `src_type` upgrade | Done 2026-10-11 (`81c028a`)                                            |
 | 2    | `internet_feed.py` service + `sse_routes/internet_feed.py` + main/sse wiring           | Done 2026-10-11 (this commit), advisor APPROVED after one rework round |
-| 3    | Webapp: Settings > Internet, Globe chip, bubble marker, history fallback, watchdog     | **Next**, fresh session from this section                              |
+| 3    | Webapp: Settings > Internet, Globe chip, bubble marker, history fallback, watchdog     | Done 2026-10-11 (webapp `4581877`), advisor rework round 1 applied     |
 | B    | Positions (RAM cache, `internet:positions`, map styling)                               | After the dev soak                                                     |
 
 Wave 1 as built (deviations from §4.1 and §4.3):
@@ -392,5 +392,20 @@ token}}` (AD `internet_feed.tokens`, LRU 4), so pi↔ble switching (startup befo
 - Suites: `internet_feed_tests.py` (service, fake server, 69 cases), `internet_feed_routes_tests.py`
   (guard, validation, suggested, body withheld), `internet_feed_wiring_tests.py` I1-I5 (subscriber
   order, replay/backfill gating), `www_ingest_tests.py` W10/W11.
+  Wave 3 as built (webapp `4581877`; deviations from §5):
+
+- The foreground beep mirrors the backend's 15-min www push age gate (`isStaleWwwMessage` in
+  `useForegroundPushSound.ts`): `mesh:message` now carries www messages, so without it a feed
+  backfill would beep while push stays silent.
+- Save stays disabled until the GET loaded: the PUT is the whole state, so saving the form's
+  defaults after a failed load would wipe the stored groups (the push-subscribe lesson again).
+- A GET snapshot older than a live `internet:status` (by `since_ms`) never rolls the state back.
+- The RF Monitor fallback tap in `stores/messages.ts` skips www too (it tapped every local frame).
+- Positions control is shown disabled ("coming soon"); the PUT always sends the stored
+  `pos_mode`/`radius_km` until wave B.
+- Hashtag groups follow the backend charset `#[A-Za-z0-9-]+` (no underscore).
+- `noInternetFeed.spec.ts` now also forbids any `://meshmap.oevsv.at` / `://mcmap.oevsv.at` URL in
+  source; the card may name the host in prose.
+
 - Not done here, needs the box: a live connect from mcapp.local (needs a dev release and the feed
   enabled, which happens through the wave 3 GUI or a `PUT /api/internet-feed`).
