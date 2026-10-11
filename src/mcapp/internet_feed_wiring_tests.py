@@ -11,6 +11,8 @@ routes and the www ingest guards have their own suites; this one covers the
       broadcast nor pushed again.
   I4  A backfilled message older than WWW_PUSH_MAX_AGE_MS is stored and
       broadcast, never pushed.
+  I7  The feed hint is subscribed after the BLE caches (GPS stored first).
+  I6  The connect burst replays the RAM position cache as one `reset`.
   I5  A replay storage never flagged (blocked / filtered, so never stored) is
       still broadcast only once (SSEManager seen-set).
 
@@ -24,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from .internet_feed_types import WWW_MESSAGE_TOPIC
+from .internet_positions import InternetPositionCache
 from .logging_setup import get_logger
 from .main import MessageRouter
 from .sqlite_storage import create_sqlite_storage
@@ -57,6 +60,22 @@ def _frame(msg_id: str, timestamp: int) -> dict[str, Any]:
         "type": "msg",
         "src_type": "www",
     }
+
+
+def _case_hint_order(results: list[tuple[str, bool]]) -> None:
+    # I7: subscription order in build_app (main.py) — the feed hint must be
+    # subscribed after `_wire_ble_caches`, so `_cache_gps` stores a new fix
+    # before the service compares radius centres. build_app needs the whole
+    # box, so the order is pinned on the source.
+    src = (Path(__file__).parent / "main.py").read_text(encoding="utf-8")
+    caches_at = src.find("    _wire_ble_caches(message_router)\n")
+    hint_at = src.find('message_router.subscribe("ble_notification", _internet_feed_identity_hint)')
+    results.append(
+        (
+            "I7 feed hint subscribed after _wire_ble_caches (GPS cached first)",
+            0 <= caches_at < hint_at,
+        )
+    )
 
 
 async def run_internet_feed_wiring_tests() -> bool:
@@ -139,11 +158,39 @@ async def run_internet_feed_wiring_tests() -> bool:
                     broadcast.count("D0000003") == 1,
                 )
             )
+
+            # A new webapp client gets the RAM position cache replayed as a reset.
+            cache = InternetPositionCache(blocked=set)
+            cache.apply(
+                {
+                    "reset": True,
+                    "positions": [
+                        {
+                            "call": "OE1ABC-12",
+                            "lat": 48.2,
+                            "lon": 16.37,
+                            "lastSeenUnix": now // 1000,
+                        }
+                    ],
+                    "removed": [],
+                }
+            )
+            manager.internet_position_cache = cache
+            burst = [chunk async for chunk in manager.initial_events("wiring-client")]
+            replay = [c for c in burst if "internet:positions" in c]
+            results.append(
+                (
+                    "I6 connect burst replays the position cache as a reset",
+                    len(replay) == 1 and "OE1ABC-12" in replay[0] and '"reset": true' in replay[0],
+                )
+            )
         except Exception as exc:
             logger.exception("internet feed wiring suite raised")
             results.append((f"wiring suite raised {exc!r}", False))
         finally:
             await storage.close()
+
+    _case_hint_order(results)
 
     failed = [label for label, ok in results if not ok]
     for label, ok in results:

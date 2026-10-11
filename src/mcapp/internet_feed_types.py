@@ -24,6 +24,10 @@ WWW_MESSAGE_TOPIC = "www_message"
 # SSE event the service emits on every state transition, replayed on connect.
 STATUS_EVENT = "internet:status"
 
+# SSE event carrying meshmap node positions from the RAM cache (concept §4.5):
+# {reset?, upserts[], removed[]}; a full `reset` snapshot is replayed on connect.
+POSITIONS_EVENT = "internet:positions"
+
 
 class InternetFeedSettingsError(ValueError):
     """A settings PUT failed validation; the message is safe to show."""

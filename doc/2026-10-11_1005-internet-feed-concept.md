@@ -334,7 +334,7 @@ Resume point for the coding sessions (`/orchestrate-waves` on this doc).
 | 1    | Migration 36 + `InternetFeedStateMixin`; www ingest guards + www→RF `src_type` upgrade | Done 2026-10-11 (`81c028a`)                                            |
 | 2    | `internet_feed.py` service + `sse_routes/internet_feed.py` + main/sse wiring           | Done 2026-10-11 (this commit), advisor APPROVED after one rework round |
 | 3    | Webapp: Settings > Internet, Globe chip, bubble marker, history fallback, watchdog     | Done 2026-10-11 (webapp `4581877`), advisor rework round 1 applied     |
-| B    | Positions (RAM cache, `internet:positions`, map styling)                               | After the dev soak                                                     |
+| B    | Positions (RAM cache, `internet:positions`, map styling)                               | Done 2026-10-11, two advisor rework rounds                             |
 
 Wave 1 as built (deviations from §4.1 and §4.3):
 
@@ -409,3 +409,21 @@ token}}` (AD `internet_feed.tokens`, LRU 4), so pi↔ble switching (startup befo
 
 - Not done here, needs the box: a live connect from mcapp.local (needs a dev release and the feed
   enabled, which happens through the wave 3 GUI or a `PUT /api/internet-feed`).
+
+Wave B as built (positions; deviations from §4.5 and §5.4):
+
+- `internet_positions.InternetPositionCache`: ≤ 5000 rows, 3 h TTL (also swept on the connect
+  replay), the live blocked set read once per batch. A **base** callsign in the blocklist hides
+  every SSID's internet position, while chat and RF positions match the exact call only: a policy
+  difference to decide later, documented in the module.
+- Payload rows are copies; a world reset and the connect replay serialise JSON off the event loop.
+- Radius centre = node GPS (`G`), else config LAT/LONG; without either the feed connects with
+  `pos=off` and the card shows the note. The `G` register re-arms the check (subscribed after the
+  BLE caches, pinned by wiring test I7); a movement > 5 km reconnects at most once per 10 min
+  (meshmap allows 10 registers/h/IP); a first-appearing position reconnects at once.
+- Webapp: internet-ONLY stations (`isInternetOnly`: www coordinates and `src_type` www) are on the
+  map only (dashed, muted, legend "Internet (meshmap)", popup "Source: Internet (meshmap)"); they are
+  not in the station list, the chat positions panel, the counts or the hop buckets, and never get a
+  Link check. A station our node hears with meshmap coordinates stays listed. A www upsert never
+  moves an RF or other non-www fix and never refreshes an existing row's last-heard time; feed rows
+  are never written to IndexedDB.

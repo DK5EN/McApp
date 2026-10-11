@@ -19,6 +19,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import os
 import random
 import re
@@ -52,6 +53,12 @@ KEYRING_MAX = 4
 # token-less re-register (a `reclaim` at meshmap) for the BLE identity right after.
 STARTUP_HOLDOFF_S = 30.0
 STARTUP_HOLDOFF_POLL_S = 1.0
+POSITION_MOVE_KM = 5.0  # a radius session reconnects when its centre moved further
+# Minimum gap between a session start and a MOVEMENT-only reconnect. Every connect POSTs
+# /register and meshmap allows 10 registers per hour per IP, so a moving station sending GPS
+# frames must not reconnect on each one. A move inside the window is remembered and applied
+# when it opens. A position APPEARING for a pending radius session is exempt (one-off).
+POSITION_RECONNECT_MIN_S = 600
 PUBLISH_DRAIN_S = 10.0
 WLAN_MAC_PATH = Path("/sys/class/net/wlan0/address")
 MODEL_PATH = Path("/proc/device-tree/model")
@@ -193,6 +200,14 @@ class _Halt(Exception):  # noqa: N818 - control-flow signal, not an error
         self.drop_token = drop_token
 
 
+def _haversine_km(a: tuple[float, float], b: tuple[float, float]) -> float:
+    lat1, lon1, lat2, lon2 = map(math.radians, (a[0], a[1], b[0], b[1]))
+    h = math.sin((lat2 - lat1) / 2) ** 2 + (
+        math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
+    )
+    return 2 * 6371.0088 * math.asin(math.sqrt(h))
+
+
 def _retry_floor(resp: httpx.Response) -> float:
     floor = 0.0
     header = resp.headers.get("retry-after")
@@ -228,6 +243,8 @@ class InternetFeedService:
         model_path: Path = MODEL_PATH,
         delay_scale: float = 1.0,
         startup_holdoff_s: float = STARTUP_HOLDOFF_S,
+        station_position: Callable[[], tuple[float, float] | None] = lambda: None,
+        on_positions: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> None:
         self._delay_scale = delay_scale  # test-only: shrinks real (non-injected) pauses
         self._holdoff_s = startup_holdoff_s
@@ -236,6 +253,16 @@ class InternetFeedService:
         self._publish = publish
         self._emit_status = emit_status
         self._identity_inputs = identity_inputs
+        self._station_position = station_position
+        self._on_positions = on_positions
+        # True until an empty reset was delivered after the last positions delivery (or since
+        # start), so going idle empties the consumer's cache exactly once.
+        self._positions_stale = True
+        # What the live session connected with: (effective pos mode, radius centre or None,
+        # stored mode was radius). None while no session has reached its query yet.
+        self._session_pos: tuple[str, tuple[float, float] | None, bool] | None = None
+        self._session_started_ms = 0  # clock at the live session's query (movement window anchor)
+        self._move_pending = False  # a movement reconnect is deferred until the window opens
         url = base_url or os.environ.get(BASE_URL_ENV) or DEFAULT_BASE_URL
         self._base = url.rstrip("/")
         self._transport = transport
@@ -279,6 +306,12 @@ class InternetFeedService:
 
     async def get_settings(self) -> dict[str, Any]:
         st = await self._storage.get_internet_feed_state()
+        effective, _centre = self._effective_pos(st)
+        note = (
+            "Radius needs a station position (node GPS or LAT/LONG)."
+            if st["pos_mode"] == "radius" and effective == "off"
+            else None
+        )
         return {
             "enabled": bool(st["enabled"]),
             "groups": list(st["groups"]),
@@ -288,6 +321,7 @@ class InternetFeedService:
             "configured": bool(st["configured"]),
             "status": {**self.status(), "last_connected_ms": st.get("last_connected_ms")},
             "registered": bool(st.get("box_id")),
+            "positions": {"effective": effective, "note": note},
         }
 
     async def apply_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
@@ -302,6 +336,8 @@ class InternetFeedService:
         self._rearm_and_wake()
         if not settings["enabled"]:
             await self._set_state("off")
+        if not settings["enabled"] or settings["pos_mode"] == "off":
+            await self._clear_positions()
         return await self.get_settings()
 
     async def forget(self) -> dict[str, Any]:
@@ -313,6 +349,7 @@ class InternetFeedService:
         st = await self._storage.get_internet_feed_state()
         if not st["enabled"]:
             await self._set_state("off")
+        await self._clear_positions()
         return await self.get_settings()
 
     def notify_identity_changed(self) -> None:
@@ -374,6 +411,7 @@ class InternetFeedService:
                 if not state["enabled"]:
                     self._halted = False
                     await self._set_state("off")
+                    await self._clear_positions()
                     await self._idle()
                     continue
                 if self._halted:
@@ -449,12 +487,21 @@ class InternetFeedService:
         task = asyncio.ensure_future(self._connect_once(state))
         stop_task = asyncio.ensure_future(self._stop.wait())
         outcome: BaseException | None = None
+        self._move_pending = False
         try:
             while True:
                 wake_task = asyncio.ensure_future(self._wake.wait())
+                # A deferred move re-checks when the window opens (scaled like every real pause).
+                timeout = (
+                    max(self._move_wait_s(), 0.0) * self._delay_scale
+                    if self._move_pending
+                    else None
+                )
                 try:
                     done, _ = await asyncio.wait(
-                        {task, stop_task, wake_task}, return_when=asyncio.FIRST_COMPLETED
+                        {task, stop_task, wake_task},
+                        timeout=timeout,
+                        return_when=asyncio.FIRST_COMPLETED,
                     )
                 finally:
                     wake_task.cancel()
@@ -468,11 +515,9 @@ class InternetFeedService:
                 if self._reconnect:
                     await self._cancel(task)
                     return
-                if self._identity_dirty:
-                    self._identity_dirty = False
-                    if self._identity_changed():
-                        await self._cancel(task)
-                        return
+                if self._should_restart_for_hint():
+                    await self._cancel(task)
+                    return
         finally:
             stop_task.cancel()
             if not task.done():
@@ -511,6 +556,81 @@ class InternetFeedService:
         current = self._session_identity
         return current is not None and identity_key(current) != identity_key(self._identity())
 
+    def _effective_pos(self, state: dict[str, Any]) -> tuple[str, tuple[float, float] | None]:
+        """The `pos` mode to connect with, and the radius centre (radius mode only)."""
+        mode = state["pos_mode"]
+        if mode == "radius":
+            centre = self._station_position()
+            return ("radius", centre) if centre is not None else ("off", None)
+        return (mode, None) if mode == "world" else ("off", None)
+
+    def _station_move(self) -> str | None:
+        """`"appeared"`: a pending radius session got a centre; `"moved"`: the centre of a radius
+        session moved > POSITION_MOVE_KM; None: nothing to do."""
+        sess = self._session_pos
+        if sess is None:
+            return None
+        mode, centre, wanted_radius = sess
+        if not wanted_radius:
+            return None
+        now = self._station_position()
+        if now is None:
+            return None
+        if mode != "radius" or centre is None:
+            return "appeared"
+        return "moved" if _haversine_km(centre, now) > POSITION_MOVE_KM else None
+
+    def _move_wait_s(self) -> float:
+        """Seconds until a movement reconnect is allowed (<= 0: allowed now)."""
+        opens_ms = self._session_started_ms + POSITION_RECONNECT_MIN_S * 1000
+        return (opens_ms - self._clock()) / 1000
+
+    def _should_restart_for_hint(self) -> bool:
+        """Evaluate an identity/position hint (or a deferred move's timer) for the live session.
+
+        Identity changes and a position appearing restart at once; a movement restarts only
+        when the register window is open, else it stays pending and is re-checked on timeout.
+        """
+        recheck = self._move_pending
+        if self._identity_dirty:
+            self._identity_dirty = False
+            if self._identity_changed():
+                return True
+            recheck = True
+        if not recheck:
+            return False
+        move = self._station_move()
+        self._move_pending = False
+        if move is None:
+            return False
+        if move == "appeared" or self._move_wait_s() <= 0:
+            return True
+        self._move_pending = True
+        return False
+
+    async def _run_positions(self, payload: dict[str, Any]) -> None:
+        """Deliver to `on_positions` to completion even if this session is cancelled meanwhile."""
+        callback = self._on_positions
+        if callback is None:
+            return
+        task: asyncio.Future[None] = asyncio.ensure_future(callback(payload))
+        self._inflight.add(task)
+
+        def _done(t: asyncio.Future[None]) -> None:
+            self._inflight.discard(t)
+            if not t.cancelled() and (exc := t.exception()) is not None:
+                logger.error("internet feed positions callback failed", exc_info=exc)
+
+        task.add_done_callback(_done)
+        with contextlib.suppress(Exception):  # already logged by _done
+            await asyncio.shield(task)
+
+    async def _clear_positions(self) -> None:
+        if self._on_positions is None or not self._positions_stale:
+            return
+        self._positions_stale = False
+        await self._run_positions({"reset": True, "positions": [], "removed": []})
+
     async def _halt(self, halt: _Halt) -> None:
         self._halted = True
         if halt.drop_token:
@@ -541,6 +661,7 @@ class InternetFeedService:
         await self._set_state("connecting")
         self._session_gen = self._gen
         self._session_identity = self._session_key = None
+        self._session_pos = None
         try:
             await self._startup_holdoff()
             token = await self._register()
@@ -670,17 +791,30 @@ class InternetFeedService:
         await self._storage.update_internet_feed_state(**fields)
         return token
 
-    async def _stream(self, state: dict[str, Any], token: str) -> None:
-        assert self._client is not None  # noqa: S101 - set by run()
-        fresh = await self._storage.get_internet_feed_state()
+    async def _feed_params(self, state: dict[str, Any], fresh: dict[str, Any]) -> dict[str, str]:
+        mode, centre = self._effective_pos(fresh)
+        self._session_pos = (mode, centre, fresh["pos_mode"] == "radius")
+        self._session_started_ms = self._clock()
         params: dict[str, str] = {
             "bcast": "1" if state["broadcast"] else "0",
-            "pos": "off",  # wave B
+            "pos": mode,
         }
+        if mode == "radius" and centre is not None:
+            params["lat"] = f"{centre[0]:.6f}"
+            params["lon"] = f"{centre[1]:.6f}"
+            params["radiusKm"] = str(int(fresh["radius_km"]))
+        if mode == "off":
+            await self._clear_positions()
         if state["groups"]:
             params["groups"] = ",".join(state["groups"])
         if fresh.get("cursor"):
             params["since"] = str(fresh["cursor"])
+        return params
+
+    async def _stream(self, state: dict[str, Any], token: str) -> None:
+        assert self._client is not None  # noqa: S101 - set by run()
+        fresh = await self._storage.get_internet_feed_state()
+        params = await self._feed_params(state, fresh)
         headers = {"Authorization": f"Bearer {token}", "Accept": "text/event-stream"}
         async with self._client.stream(
             "GET", f"{self._base}/api/v2/box/feed", params=params, headers=headers
@@ -722,7 +856,7 @@ class InternetFeedService:
             raise _Halt("error", "superseded")
         if event == "revoked":
             raise _Halt("revoked", "token revoked", drop_token=True)
-        if event not in ("hello", "batch"):
+        if event not in ("hello", "batch", "positions"):
             return
         try:
             payload = json.loads(raw) if raw else {}
@@ -733,6 +867,8 @@ class InternetFeedService:
             return
         if event == "hello":
             await self._on_hello(payload)
+        elif event == "positions":
+            await self._deliver_positions(True, payload)
         else:
             await self._on_batch(payload, event_id)
 
@@ -753,12 +889,26 @@ class InternetFeedService:
             if mapped is None:
                 continue
             await self._publish_one(mapped)
+        await self._deliver_positions(False, payload)
         self._last_batch_ms = self._clock()
         fields: dict[str, Any] = {"last_batch_ms": self._last_batch_ms}
         if event_id:
             fields["cursor"] = event_id
         await self._storage.update_internet_feed_state(**fields)
         await self._emit()
+
+    async def _deliver_positions(self, reset: bool, payload: dict[str, Any]) -> None:
+        raw_pos, raw_removed = payload.get("positions"), payload.get("removed")
+        positions = raw_pos if isinstance(raw_pos, list) else []
+        removed = raw_removed if isinstance(raw_removed, list) else []
+        if not reset and not positions and not removed:
+            return
+        if self._on_positions is None:
+            return
+        self._positions_stale = True
+        await self._run_positions(
+            {"reset": reset, "positions": positions, "removed": [] if reset else removed}
+        )
 
     async def _publish_one(self, mapped: dict[str, Any]) -> None:
         """Publish to completion even if this session is cancelled meanwhile.

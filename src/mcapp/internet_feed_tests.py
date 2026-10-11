@@ -22,6 +22,7 @@ from .commands.constants import has_console
 from .internet_feed import (
     BACKOFF_MAX_S,
     BACKOFF_START_S,
+    POSITION_RECONNECT_MIN_S,
     TOKENS_AD,
     IdentityInputs,
     InternetFeedService,
@@ -32,6 +33,7 @@ from .internet_feed import (
 from .internet_feed_types import STATUS_EVENT, WWW_MESSAGE_TOPIC
 from .secret_box import SecretBox
 from .sqlite_storage import SQLiteStorage, create_sqlite_storage
+from .util import now_ms
 
 TOKEN = "TOKEN-SECRET-xyz-0123456789"
 WAIT_S = 10.0
@@ -1112,6 +1114,290 @@ async def _case_secrecy(env: Env, record: Record) -> None:
     )
 
 
+# ── positions (wave B1b) ───────────────────────────────────────────────────
+
+
+class _Rec:
+    """Station position source and `on_positions` sink for the positions cases."""
+
+    def __init__(self) -> None:
+        self.station: tuple[float, float] | None = None
+        self.calls: list[dict[str, Any]] = []
+        self.raises = False
+        self.hook: Callable[[], Any] | None = None
+        self.changed = asyncio.Event()
+        self.clock_offset_ms = 0  # injected service clock = real time + this
+        self.decisions: list[str | None] = []  # every `_station_move` verdict, in order
+        self.decided = asyncio.Event()
+
+    def clock(self) -> int:
+        return now_ms() + self.clock_offset_ms
+
+    def station_fn(self) -> tuple[float, float] | None:
+        return self.station
+
+    async def cb(self, payload: dict[str, Any]) -> None:
+        self.calls.append(payload)
+        self.changed.set()
+        if self.hook is not None:
+            await self.hook()
+        if self.raises:
+            msg = "positions boom"
+            raise RuntimeError(msg)
+
+    def empties(self) -> int:
+        return sum(1 for c in self.calls if c == {"reset": True, "positions": [], "removed": []})
+
+
+CENTRE = (50.1, 8.5)
+
+
+async def _spin(n: int = 30) -> None:
+    for _ in range(n):
+        await asyncio.sleep(0)
+
+
+async def _case_pos_query(env: Env, record: Record, rec: _Rec) -> None:
+    env.script("register", reg_201(), reg_200(), reg_200(), reg_200())
+    env.script("feed", lambda _r: hanging(hello()))
+    await env.configure(enabled=True, pos_mode="off")
+    env.start()
+    await env.wait(lambda: env.state() == "connected")
+    q = env.calls("/feed")[-1].query
+    record("P1 pos=off query carries no centre", q["pos"] == "off" and "lat" not in q)
+    s = await env.svc.get_settings()
+    record(
+        "P1b off: positions effective off, no note",
+        s["positions"] == {"effective": "off", "note": None},
+    )
+    await env.svc.apply_settings(_settings(pos_mode="world"))
+    await _wait_feeds(env, 2)
+    q = env.calls("/feed")[-1].query
+    record(
+        "P2 pos=world: no lat/lon/radiusKm",
+        q["pos"] == "world" and not {"lat", "lon", "radiusKm"} & set(q),
+    )
+    rec.station = CENTRE
+    await env.svc.apply_settings(_settings(pos_mode="radius", radius_km=250))
+    await _wait_feeds(env, 3)
+    q = env.calls("/feed")[-1].query
+    record(
+        "P3 pos=radius sends 6-decimal lat/lon and radiusKm",
+        q["pos"] == "radius"
+        and q["lat"] == "50.100000"
+        and q["lon"] == "8.500000"
+        and q["radiusKm"] == "250",
+    )
+    s = await env.svc.get_settings()
+    record(
+        "P3b radius: positions effective radius",
+        s["positions"] == {"effective": "radius", "note": None} and s["pos_mode"] == "radius",
+    )
+    rec.station = None
+    await env.svc.apply_settings(_settings(pos_mode="radius", radius_km=250))
+    await _wait_feeds(env, 4)
+    q = env.calls("/feed")[-1].query
+    s = await env.svc.get_settings()
+    record(
+        "P4 radius without a station position connects pos=off and says why",
+        q["pos"] == "off"
+        and "lat" not in q
+        and s["positions"]["effective"] == "off"
+        and "station position" in str(s["positions"]["note"])
+        and s["pos_mode"] == "radius",
+    )
+
+
+async def _case_pos_events(env: Env, record: Record, rec: _Rec) -> None:
+    seen_at_cb: list[tuple[int, Any]] = []
+
+    async def hook() -> None:
+        st = await env.storage.get_internet_feed_state()
+        seen_at_cb.append((len(env.published), st["cursor"]))
+
+    rec.hook = hook
+    env.script("register", reg_201())
+    env.script(
+        "feed",
+        lambda _r: hanging(
+            hello(),
+            ("positions", {"reset": True, "positions": [{"call": "A"}, {"call": "B"}]}, None),
+            (
+                "batch",
+                {
+                    "messages": [_msg()],
+                    "positions": [{"call": "C"}],
+                    "removed": ["A"],
+                },
+                "1:ONE",
+            ),
+            (
+                "batch",
+                {"messages": [_msg(msgId="1AE1E057")], "positions": "x", "removed": 5},
+                "2:TWO",
+            ),
+            ("batch", {"messages": [], "positions": [], "removed": []}, "3:THREE"),
+        ),
+    )
+    await env.configure(enabled=True, pos_mode="world")
+    env.start()
+    await env.wait(lambda: len(env.published) >= 2)
+    await env.wait(lambda: (env.svc.status()["last_batch_ms"] or 0) > 0)
+    st = await env.storage.get_internet_feed_state()
+    await _eventually(lambda: st is not None and len(rec.calls) >= 2)
+    record(
+        "P5 positions event -> on_positions reset with the list",
+        rec.calls[0] == {"reset": True, "positions": [{"call": "A"}, {"call": "B"}], "removed": []},
+    )
+    record(
+        "P6 batch positions/removed -> callback after its publishes, before the cursor",
+        rec.calls[1] == {"reset": False, "positions": [{"call": "C"}], "removed": ["A"]}
+        and seen_at_cb[1] == (1, None),
+    )
+    await _eventually(lambda: env.svc.status()["last_batch_ms"] is not None)
+    for _ in range(3):
+        await _spin()
+    record(
+        "P7 malformed / empty batch fields -> no callback",
+        len(rec.calls) == 2,
+    )
+
+
+async def _case_pos_idle(env: Env, record: Record, rec: _Rec) -> None:
+    env.script("register", reg_201(), reg_200(), reg_200(), reg_200())
+    env.script(
+        "feed",
+        lambda _r: hanging(
+            hello(), ("positions", {"reset": True, "positions": [{"call": "A"}]}, None)
+        ),
+    )
+    await env.configure(enabled=True, pos_mode="world")
+    env.start()
+    await _eventually(lambda: len(rec.calls) >= 1, 5.0)
+    await env.svc.apply_settings(_settings(pos_mode="off"))
+    ok = await _eventually(lambda: rec.empties() == 1)
+    record("P8 pos_mode switched to off empties the cache once", ok)
+    await _wait_feeds(env, 2)
+    await _spin()
+    record("P8b ... and not again on the off reconnect", rec.empties() == 1)
+    await env.svc.apply_settings(_settings(pos_mode="world"))
+    await _eventually(lambda: rec.calls[-1].get("positions") == [{"call": "A"}], 5.0)
+    await env.svc.apply_settings(_settings(enabled=False, pos_mode="world"))
+    ok = await _eventually(lambda: rec.empties() == 2)
+    await _spin()
+    record("P9 disabling empties the cache once", ok and rec.empties() == 2)
+    await env.configure(enabled=True)
+    await env.svc.apply_settings(_settings(pos_mode="world"))
+    await _eventually(lambda: rec.calls[-1].get("positions") == [{"call": "A"}], 5.0)
+    await env.svc.forget()
+    ok = await _eventually(lambda: rec.empties() == 3)
+    record("P10 forget empties the cache", ok)
+
+
+async def _case_pos_station_moved(env: Env, record: Record, rec: _Rec) -> None:
+    rec.station = CENTRE
+    orig_move = env.svc._station_move
+
+    def spy() -> str | None:
+        verdict = orig_move()
+        rec.decisions.append(verdict)
+        rec.decided.set()
+        return verdict
+
+    env.svc._station_move = spy  # type: ignore[method-assign]
+
+    async def decided(n: int) -> None:
+        """Block (event-driven) until the service has judged `n` hints in total."""
+        while len(rec.decisions) < n:
+            rec.decided.clear()
+            if len(rec.decisions) >= n:
+                return
+            await asyncio.wait_for(rec.decided.wait(), WAIT_S)
+
+    env.script("register", env.contract_register)
+    env.script("feed", lambda _r: hanging(hello()))
+    await env.configure(enabled=True, pos_mode="radius", radius_km=300)
+    env.start()
+    await env.wait(lambda: env.state() == "connected")
+    rec.clock_offset_ms += (POSITION_RECONNECT_MIN_S + 100) * 1000  # register window is open
+    rec.station = (CENTRE[0] + 0.009, CENTRE[1])  # ~1 km
+    env.svc.notify_identity_changed()
+    await decided(1)
+    record(
+        "P11 station moved ~1 km: judged 'not moved', no reconnect",
+        rec.decisions == [None] and len(env.calls("/feed")) == 1,
+    )
+    rec.station = (CENTRE[0] + 0.054, CENTRE[1])  # ~6 km from the connect centre
+    env.svc.notify_identity_changed()
+    await _wait_feeds(env, 2)
+    q = env.calls("/feed")[-1].query
+    record(
+        "P12 station moved ~6 km: reconnect with the new lat/lon (exactly one more /feed)",
+        q["lat"] == "50.154000" and q["lon"] == "8.500000" and len(env.calls("/feed")) == 2,
+    )
+    record(
+        "P12b ... without backoff or identity churn (no sleep, same identity)",
+        env.sleeps == [] and len(env.tokenless) == 1 and env.rejected == [],
+    )
+    await env.wait(lambda: env.state() == "connected")
+    # P14: a second move 2 min after the reconnect is deferred, applied when the window opens.
+    rec.clock_offset_ms += 120 * 1000
+    rec.station = (CENTRE[0] + 0.108, CENTRE[1])  # ~6 km from the new centre
+    n = len(rec.decisions)
+    env.svc.notify_identity_changed()
+    await decided(n + 1)
+    record(
+        "P14 second move inside the window: judged 'moved' but deferred (pending, no reconnect)",
+        rec.decisions[-1] == "moved" and env.svc._move_pending and len(env.calls("/feed")) == 2,
+    )
+    rec.clock_offset_ms += (POSITION_RECONNECT_MIN_S - 120) * 1000  # window opens now
+    await _wait_feeds(env, 3)  # the timer, not another hint, re-checks
+    q = env.calls("/feed")[-1].query
+    record(
+        "P14b ... applied when the window opens, with the position then current",
+        q["lat"] == "50.208000" and len(env.calls("/feed")) == 3 and not env.svc._move_pending,
+    )
+    await env.wait(lambda: env.state() == "connected")
+    # P13 (exempt from the window): a position APPEARING for a pending radius reconnects at once.
+    rec.station = None
+    await env.svc.apply_settings(_settings(pos_mode="radius"))
+    await _wait_feeds(env, 4)
+    rec.station = CENTRE  # the session started moments ago: window closed
+    env.svc.notify_identity_changed()
+    await _wait_feeds(env, 5)
+    q = env.calls("/feed")[-1].query
+    record(
+        "P13 a station position appearing for a pending radius reconnects despite the window",
+        env.calls("/feed")[3].query["pos"] == "off"
+        and q["pos"] == "radius"
+        and q["lat"] == "50.100000",
+    )
+
+
+async def _case_pos_callback_raises(env: Env, record: Record, rec: _Rec) -> None:
+    rec.raises = True
+    env.script("register", reg_201())
+    env.script(
+        "feed",
+        lambda _r: hanging(
+            hello(),
+            ("positions", {"reset": True, "positions": [{"call": "A"}]}, None),
+            ("batch", {"messages": [_msg()], "positions": [{"call": "B"}]}, "1:ONE"),
+            ("batch", {"messages": [_msg(msgId="1AE1E057")]}, "2:TWO"),
+        ),
+    )
+    await env.configure(enabled=True, pos_mode="world")
+    env.start()
+    await env.wait(lambda: len(env.published) >= 2)
+    st = await env.storage.get_internet_feed_state()
+    await _eventually(lambda: len(rec.calls) >= 2)
+    st = await env.storage.get_internet_feed_state()
+    record(
+        "P15 a raising on_positions does not kill the session or the later batches",
+        env.state() == "connected" and len(rec.calls) == 2 and st["cursor"] == "2:TWO",
+    )
+
+
 async def run_internet_feed_tests() -> bool:
     if has_console:
         print("\n🧪 Testing internet feed service:")
@@ -1178,6 +1464,25 @@ async def run_internet_feed_tests() -> bool:
     await with_shared(lambda e, _i: _case_holdoff_timeout(e, record), True, startup_holdoff_s=0.2)
     await with_shared(lambda e, _i: _case_holdoff_stop(e, record), True, startup_holdoff_s=30.0)
     await with_shared(lambda e, _i: _case_holdoff_not_expected(e, record), False)
+
+    async def with_rec(fn: Callable[[Env, _Rec], Any]) -> None:
+        rec = _Rec()
+        try:
+            await _with_env(
+                lambda e: fn(e, rec),
+                station_position=rec.station_fn,
+                on_positions=rec.cb,
+                clock=rec.clock,
+                delay_scale=0.0002,  # a deferred move's 480 s window is a real 0.1 s timer
+            )
+        except Exception as exc:
+            record(f"{fn.__name__} crashed: {type(exc).__name__}: {exc}", False)
+
+    await with_rec(lambda e, r: _case_pos_query(e, record, r))
+    await with_rec(lambda e, r: _case_pos_events(e, record, r))
+    await with_rec(lambda e, r: _case_pos_idle(e, record, r))
+    await with_rec(lambda e, r: _case_pos_station_moved(e, record, r))
+    await with_rec(lambda e, r: _case_pos_callback_raises(e, record, r))
 
     passed = sum(1 for _, ok in results if ok)
     if has_console or passed != len(results):

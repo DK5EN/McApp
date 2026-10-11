@@ -55,6 +55,7 @@ from mcapp.identity_tests import run_identity_tests
 from mcapp.internet_feed_routes_tests import run_internet_feed_routes_tests
 from mcapp.internet_feed_tests import run_internet_feed_tests
 from mcapp.internet_feed_wiring_tests import run_internet_feed_wiring_tests
+from mcapp.internet_positions_tests import run_internet_positions_tests
 from mcapp.linkcheck_sse_tests import run_linkcheck_sse_tests
 from mcapp.linkcheck_tests import run_linkcheck_tests
 from mcapp.main import MessageRouter
@@ -251,6 +252,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     internet_feed_wiring_ok = await run_internet_feed_wiring_tests()
     print(f"internet_feed_wiring: {'PASS' if internet_feed_wiring_ok else 'FAIL'}")
 
+    internet_positions_ok = run_internet_positions_tests()
+    print(f"internet_positions: {'PASS' if internet_positions_ok else 'FAIL'}")
+
     rm1_suppression_ok = await run_rm1_suppression_tests()
     print(f"rm1_suppression: {'PASS' if rm1_suppression_ok else 'FAIL'}")
 
@@ -401,6 +405,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and internet_feed_ok
         and internet_feed_routes_ok
         and internet_feed_wiring_ok
+        and internet_positions_ok
         and rm1_suppression_ok
         and node_admin_observed_ok
         and node_admin_hook_ok

@@ -68,7 +68,8 @@ from .classifier import Classifier
 from .classifier.seed import seed_defaults
 from .classifier.types import SSEEvent
 from .internet_feed import IdentityInputs, InternetFeedService
-from .internet_feed_types import WWW_MESSAGE_TOPIC
+from .internet_feed_types import POSITIONS_EVENT, WWW_MESSAGE_TOPIC
+from .internet_positions import InternetPositionCache
 from .node_admin_service import NodeAdminService
 from .qrz_service import QrzLookupService
 from .secret_box import SecretBox
@@ -2812,22 +2813,55 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
             mcapp_version=VERSION,
         )
 
+    # meshmap node positions (concept §4.5): RAM only, never station_positions.
+    # A blocked call never enters the cache; the replay on connect comes from
+    # sse_handler.initial_events.
+    def _blocked_callsigns() -> set[str]:
+        # The live global blocklist (kickbans + sperrliste), read once per batch
+        # so an entry added later drops the station on the next one.
+        blocked: set[str] = getattr(
+            message_router.get_protocol("commands"), "blocked_callsigns", set()
+        )
+        return blocked
+
+    internet_position_cache = InternetPositionCache(blocked=_blocked_callsigns)
+
+    async def _internet_positions(event: dict[str, Any]) -> None:
+        payload = internet_position_cache.apply(event)
+        if payload is not None and sse_manager is not None:
+            # A reset can carry thousands of rows (world mode): serialise off-loop.
+            await sse_manager.broadcast_event(POSITIONS_EVENT, payload, offload_json=True)
+
+    def _station_position() -> tuple[float, float] | None:
+        """Centre for radius mode: the node's live GPS, else config LAT/LONG."""
+        gps = message_router.cached_gps
+        if gps is not None:
+            return gps["lat"], gps["lon"]
+        loc = cfg.location
+        if loc.latitude is not None and loc.longitude is not None:
+            return loc.latitude, loc.longitude
+        return None
+
     internet_feed_service = InternetFeedService(
         storage=storage_handler,
         secret_box=secret_box,
         publish=message_router.publish,
         emit_status=_internet_feed_emit,
         identity_inputs=_internet_feed_identity,
+        station_position=_station_position,
+        on_positions=_internet_positions,
     )
 
     async def _internet_feed_identity_hint(routed_message: dict[str, Any]) -> None:
-        """BLE link changes and the identity registers re-arm a feed check-in."""
+        """BLE link changes, the identity registers and the node's GPS fix (`G`)
+        re-arm a feed check-in; the service decides whether the identity or
+        the radius centre actually changed. Subscribed AFTER `_wire_ble_caches`
+        (below) on purpose: `_cache_gps` must have stored the new fix before the
+        service compares centres (internet_feed_wiring_tests I7)."""
         data = routed_message["data"]
-        if routed_message["type"] == "ble_status" or data.get("TYP") in ("I", "IS1"):
+        if routed_message["type"] == "ble_status" or data.get("TYP") in ("I", "IS1", "G"):
             internet_feed_service.notify_identity_changed()
 
-    message_router.subscribe("ble_status", _internet_feed_identity_hint)
-    message_router.subscribe("ble_notification", _internet_feed_identity_hint)
     message_router.set_callsign(cfg.call_sign)
     storage_handler.set_message_router(message_router)
     # One-shot, idempotent read-cursor seed (unread-cursor plan §3): must run
@@ -2869,6 +2903,9 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
     message_router.cached_gps = None  # {lat, lon} — set when BLE device sends TYP="G"
     message_router.cached_ble_registers = {}  # {TYP: dict} — cached on ble_notification
     _wire_ble_caches(message_router)
+    # After the caches: the feed hint must see the GPS fix `_cache_gps` just stored.
+    message_router.subscribe("ble_status", _internet_feed_identity_hint)
+    message_router.subscribe("ble_notification", _internet_feed_identity_hint)
 
     # Command Handler Plugin
     command_handler = create_command_handler(
@@ -2920,6 +2957,7 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
             sse_manager.node_admin_service = node_admin_service
             sse_manager.node_admin_allowed_origins = list(cfg.node_admin.allowed_origins)
             sse_manager.internet_feed_service = internet_feed_service
+            sse_manager.internet_position_cache = internet_position_cache
             qrz_service.set_info_listener(
                 functools.partial(sse_manager.broadcast_event, "proxy:callsign_info")
             )

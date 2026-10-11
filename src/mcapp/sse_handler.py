@@ -30,7 +30,7 @@ from .ble_client import ConnectionState
 from .classifier import Classifier
 from .command_echo import is_expected_command_echo
 from .commands.parsing import SPAM_GROUP
-from .internet_feed_types import STATUS_EVENT, WWW_MESSAGE_TOPIC
+from .internet_feed_types import POSITIONS_EVENT, STATUS_EVENT, WWW_MESSAGE_TOPIC
 from .linkcheck import is_link_check_payload
 from .logging_setup import get_logger
 from .rm1_shape import is_rm1_frame
@@ -52,6 +52,7 @@ if TYPE_CHECKING:
     # TYPE_CHECKING only — wire_monitor.py imports broadcast_verdict from
     # THIS module at runtime, so a real top-level import here would cycle.
     from .internet_feed_types import InternetFeedApi
+    from .internet_positions import InternetPositionCache
     from .node_admin_types import NodeAdminService
     from .node_console import NodeConsoleSession
     from .qrz_service import QrzLookupService
@@ -331,6 +332,8 @@ class SSEManager:
         # Internet feed (meshmap). Set by build_app (main.py); None keeps
         # /api/internet-feed at a 503 and omits the "internet_feed" feature.
         self.internet_feed_service: InternetFeedApi | None = None
+        # meshmap positions held in RAM (main.py); replayed to every new client.
+        self.internet_position_cache: InternetPositionCache | None = None
         # (sender, msg_id) -> broadcast time of www frames (_www_broadcast_handler).
         self._www_seen: dict[tuple[str, str], int] = {}
 
@@ -586,6 +589,11 @@ class SSEManager:
         # event name, so a reconnecting client never shows a stale chip.
         if self.internet_feed_service is not None:
             yield self.format_sse_event(self.internet_feed_service.status(), STATUS_EVENT)
+        if self.internet_position_cache is not None:
+            snapshot_json = await asyncio.to_thread(
+                json.dumps, self.internet_position_cache.snapshot()
+            )
+            yield self._format_sse_event_from_json(snapshot_json, POSITIONS_EVENT)
 
         # Send BLE status using same format the frontend expects
         ble_client = self.message_router.get_protocol("ble_client") if self.message_router else None
@@ -1001,7 +1009,9 @@ class SSEManager:
             return False
         return True
 
-    async def broadcast_event(self, event_type: str, payload: dict[str, Any]) -> None:
+    async def broadcast_event(
+        self, event_type: str, payload: dict[str, Any], *, offload_json: bool = False
+    ) -> None:
         """Fan out a pre-typed SSE event to all connected clients. Classifier events
         use this path so the inference in _get_event_type() stays limited to
         mesh-payload heuristics.
@@ -1011,7 +1021,12 @@ class SSEManager:
         if not clients:
             return
         # Serialize once, fan out in parallel so one slow client doesn't stall the rest.
-        event = self.format_sse_event(payload, event_type)
+        # A large payload (an internet position reset) serialises in the pool.
+        if offload_json:
+            json_str = await asyncio.to_thread(json.dumps, payload)
+            event = self._format_sse_event_from_json(json_str, event_type)
+        else:
+            event = self.format_sse_event(payload, event_type)
         results = await asyncio.gather(
             *(client.send(event) for client in clients),
             return_exceptions=True,
