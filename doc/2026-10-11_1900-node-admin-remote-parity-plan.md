@@ -56,6 +56,7 @@ hostile), `tools/tests/remote_cmd_vectors.json` (canonical corpus).
 | 1    | Bugs 1-5: A1 backend parse/allowlist/corpus, A2 counter + observed origin, B1 webapp                  | done   |
 | 2    | Command parity: C1 allowlist, C2 fold, D1 APRS/Position, D2 Radio/Sensors/Queues, D3 Heard/Charge LED | done   |
 | 3    | Dev release, deploy, live check against DK5EN-1 (transmits: ask first)                                | done   |
+| 4    | Live findings: card grid, observed labels, switch pending timer, BLE badge; Display RCA               | done*  |
 
 ### Ownership
 
@@ -124,6 +125,42 @@ hidden` -> `{hidden: true}`, `chgled err unsupported` -> `{unsupported: true}` (
     backend picks the transport itself, so frames still go over BLE.
   - The https origin served the previous bundle from its service worker until "Reload" was
     pressed (known pattern, see memory `project_webapp_sw_stale_verify`).
+
+- Wave 4 dispatched 2026-10-11 (operator: "fix the layout, fix the issues", plus an RCA of a
+  `display on` that seemed to reboot DK5EN-1 and wait forever). All webapp: L (Identity/Position
+  cells paint the panel bg; Queues splits into TX queue | Mailbox + Max hop, 6 cells in 2 rows),
+  O (`observedFormat.ts` labels per command; 3-part `p=`), S (`RemoteSwitches` `pendingSince`
+  prop -> "(M:SS of 2:00)"), B (`bleStore.statusKnown`; the view shows "Checking BLE…" until the
+  first status). Orchestrator: `NodeAdminView.vue` wiring + its spec.
+- BLE badge cause (measured): not stuck, a ~3 s transient on every page load until the SSE burst
+  delivers `ble:status`; the burst itself is correct (connect frame + cached `I`).
+- Wave 4 done 2026-10-11, webapp `33004d5` (gate: 5450 vitest, typecheck, eslint, prettier).
+  Advisor: one rework (an unheard reply labelled any `v=` "Firmware", but an `mh <call>` route
+  reply's `v=` is the via chain): status labels for a command-less reply now need a status shape
+  (`up` and `heap`); re-check APPROVED. \* Not released: the layout has not been seen in a
+  browser yet (Node Admin refuses foreign Origins, so only a deploy shows it). Next: dev release,
+  deploy, look at the grid at 3/2/1 columns; Display RCA needs a serial repro (below).
+
+### Display RCA (2026-10-11 20:03, DK5EN-1, Heltec V3 hw 43, firmware 4.40a)
+
+- McApp side correct: row 34 `display on` handed off 20:03:04 over BLE, no reply, `no_reply` at
+  20:05:04, tile "State not confirmed.", 5 min silent cool-down. The operator's screenshot was at
+  20:04:16, 72 s into the 120 s window. "verified" on the Observed sessions row is our command's
+  tag, not a reply.
+- Node side: the display did come on (command executed), but no reply ever went out, not even the
+  DM retransmit every other reply got ~1 min later (radio, sens, mh each arrived twice). DK5EN-1
+  was silent on air and BLE from 20:02:27 to 20:08:23; the 20:08 `status` returned `up=2`, so it
+  rebooted ~20:06, about 3 min after the command.
+- Firmware path: `rm_runtime.cpp` toggles run `runConsole("--display on")` ->
+  `command_functions.cpp:1534` (`save_settings()`, `sendDisplayHead(false)`) BEFORE `sendReply`.
+  The node hung in or right after that path; the reset ~3 min later was a watchdog or a manual
+  power cycle (unknown). No obvious crash in code (display init is unconditional at boot, no Vext
+  toggling on display on/off).
+- Open: the hang location is printed once at boot on serial (`[BOOT] LAST_LOOP_SECTION=...`,
+  `loop_breadcrumb.h`) and then cleared, so it is lost for this reboot. Closing the RCA needs a
+  repro with DK5EN-1's serial attached (opening the port resets an ESP32 once).
+- Side finding for Q6 (backlog): RM1 replies DO still get the firmware DM retransmit (second
+  copy 50-75 s later); keep the silent cool-down until that is gone.
 
 ## Wave 2 resume notes (recon 2026-10-11)
 
