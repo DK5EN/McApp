@@ -761,6 +761,18 @@ one, so change both together.
   success or a short failure reason for that purpose. Command replies travel through the same point,
   so a resolved `!wx` is `suppressed` (the raw command) plus `sent` (the reply).
 - `capture()` deep-copies and never raises into the publish path.
+- **DBG console lines are parsed here, not in the webapp** (2026-10-13, plan
+  `doc/2026-10-13_1500-monitor-console-parsing-plan.md`, firmware reference
+  `how-to-read-meshcom-logs.md`). `node_console._emit_line` attaches `frame.parsed` from
+  `console_parse.parse_console_line` (and `parsed.frame` from `frame_decode.decode_frame` for
+  `[MC-TEST] RX/TX_FRAME`) to every non-notice line, after the 1000-char cut, on the event loop
+  (~3 µs/line). Both never raise; `msg` stays the raw line. Severity and noise rules live in the
+  webapp contract (`docs/rf-monitor-plan.md`, "Parsed console lines") — change them there first.
+- **setlog is the third DBG flag, and its `--info` label is `DisplyLog`** (firmware spelling),
+  so the flag-state regex is a per-flag label map, not `name.upper()`. A flag whose state the
+  `--info` reply does not show is neither turned on nor restored: `--setlog on` runs
+  `tg_post_setlog_off` and wipes a node's `--setlog <CALL>` filter, and the reply window can cut
+  the late `DisplyLog` line. While setlog is on the node stops printing `[HEAP]` and `[MC-HWM]`.
 
 ## Web Push
 

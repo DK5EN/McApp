@@ -5,6 +5,56 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.1.11 (2026-10-11)
+
+Node Admin's remote view reaches parity with the firmware's RM1 command set. A stored node can
+now be read and configured card by card: radio, sensors, position, queues, the heard list and
+the charge LED, beside the existing status, TX power, LED and identity controls. Status replies
+from firmware 4.40a are read completely. Schema stays at 36 and `SYSTEM_EPOCH` stays at 5.
+
+### Highlights
+
+- **New remote cards.** Sensors, Position, TX queue, Mailbox + Max hop, Heard list (paged read
+  with Stop, plus a lookup of one call) and Charge LED. The Radio card reads frequency, SF, CR
+  and bandwidth; the Identity card reads and writes the node name and APRS text under the
+  firmware's text rules. Every card has its own Read button, gated like every other send.
+- **TX power respects the board minimum.** The status `p=` field (current/min/max) is read in
+  full, the TX power and Board max values render, and a setting below the board minimum is
+  refused before anything is sent.
+- **LED is three-way.** Off / On / Flash; a status that cannot tell on from flash reads
+  "On or flash".
+- **Counter catch-up.** A verified reply addressed to this box that another sender triggered
+  (for example the node's own web page) raises the stored high-water mark, so the next command
+  is not rejected as a replay. Observed sessions mark such exchanges as coming from elsewhere.
+
+### Backend (MCProxy)
+
+- The remote-view state fold covers radio, sens, name, atxt, pos, txq, mbox, maxhop, chgled and
+  the paged mh list plus mh lookups. A status resets only its own fields; a reboot marks the
+  others stale. `err hidden` / `err unsupported` are stored as markers, not errors.
+- The RM1 allowlist matches the firmware's `rm_commands.h`; `remote_cmd_vectors.json` re-synced
+  from the firmware repo (sha256 pinned).
+- Observed-session `origin` (`mcapp` / `other`) is set only on verified exchanges.
+- Dependencies refreshed (pydantic 2.14.1).
+
+### Frontend (webapp)
+
+- Remote cards laid out as a six-cell grid; a pending switch shows its reply window
+  (`0:27 of 2:00`).
+- Connect turns into Re-sync while connected; the result box no longer keeps "Sent.
+  Waiting..." after the reply arrived.
+- Observed sessions label reply fields per command.
+- The Via badge reads "Checking BLE..." until the first BLE status arrives, instead of claiming
+  "not connected" for a few seconds on every page load.
+- Dependencies refreshed (maplibre-gl 6.14.0).
+
+### Upgrade notes
+
+- No migration, no system converge. Nothing to do on the Pi.
+- The new cards need a node whose firmware supports the command; an unsupported read shows as
+  such instead of an error.
+- Reload the app once (the "Update available" banner) to pick up the new bundle.
+
 ## v2.1.10 (2026-10-11)
 
 McApp can now join the meshmap internet feed. With it, group and broadcast messages and station

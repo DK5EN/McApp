@@ -48,8 +48,10 @@ from mcapp.commands.linkcheck_session_tests import run_linkcheck_session_tests
 from mcapp.commands.parsing_tests import run_parsing_tests
 from mcapp.commands.response_tests import run_response_tests
 from mcapp.commands.routing_tests import run_routing_tests
+from mcapp.console_parse_tests import run_console_parse_tests
 from mcapp.contract_parity_tests import run_contract_parity_tests
 from mcapp.dedup_contract_tests import run_dedup_contract_tests
+from mcapp.frame_decode_tests import run_frame_decode_tests
 from mcapp.hey_path_tests import run_hey_path_tests
 from mcapp.identity_tests import run_identity_tests
 from mcapp.internet_feed_routes_tests import run_internet_feed_routes_tests
@@ -216,6 +218,12 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     node_console_ok = await run_node_console_tests()
     print(f"node_console: {'PASS' if node_console_ok else 'FAIL'}")
 
+    console_parse_ok = await run_console_parse_tests()
+    print(f"console_parse: {'PASS' if console_parse_ok else 'FAIL'}")
+
+    frame_decode_ok = await run_frame_decode_tests()
+    print(f"frame_decode: {'PASS' if frame_decode_ok else 'FAIL'}")
+
     signal_via_ok = await run_signal_via_tests()
     print(f"signal_via: {'PASS' if signal_via_ok else 'FAIL'}")
 
@@ -376,6 +384,8 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and linkcheck_sse_ok
         and wire_monitor_ok
         and node_console_ok
+        and console_parse_ok
+        and frame_decode_ok
         and aprs_symbol_ok
         and identity_ok
         and ble_service_ok

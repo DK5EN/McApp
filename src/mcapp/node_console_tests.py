@@ -128,12 +128,29 @@ class _FakeConsole:
         password: str = "",
         loradebug: str = "off",
         txcapture: str = "off",
+        setlog: str = "on",  # legacy scenarios predate setlog: already-on = left alone
         close_after_command: str | None = None,
         byte_delay_s: float = 0.003,
         send_banner: bool = True,
+        omit_info: frozenset[str] = frozenset(),
+        node_field: str = "43",
+        close_after_count: int = 1,
+        ignore_off_once: frozenset[str] = frozenset(),
     ) -> None:
         self.password = password
-        self.flags: dict[str, str] = {"loradebug": loradebug, "txcapture": txcapture}
+        # Flags whose label the `--info` reply leaves out (a reply the 4 s
+        # window cut short), the raw `...NODE <n>` digits, which occurrence of
+        # `close_after_command` closes the link, and flags whose FIRST
+        # `--<flag> off` the node swallows without acting (restore retry).
+        self.omit_info = omit_info
+        self.node_field = node_field
+        self.close_after_count = close_after_count
+        self._ignore_off_once = set(ignore_off_once)
+        self.flags: dict[str, str] = {
+            "loradebug": loradebug,
+            "txcapture": txcapture,
+            "setlog": setlog,
+        }
         self.close_after_command = close_after_command
         self._close_after_fired = False
         self.byte_delay_s = byte_delay_s
@@ -171,16 +188,27 @@ class _FakeConsole:
         await self.send_raw((text + "\r\n").encode())
 
     def _info_reply(self) -> bytes:
+        def lab(name: str, label: str) -> str:
+            return "" if name in self.omit_info else f"...{label} {self.flags[name]} "
+
         return (
-            f"...DEBUG off ...LORADEBUG {self.flags['loradebug']} ...NBRDEBUG off "
-            f"...TXCAPTURE {self.flags['txcapture']} ...GPSDEBUG off/0 ...SOFTSERDEBUG off\r\n"
+            "--MeshCom 4.40a (build: Oct 13 2026 / 10:00:00)\r\n"
+            f"...Call: <DK5EN-98> ...ID 0A1B2C3D ...NODE {self.node_field} <HELTEC_V3> "
+            "...UTC-OFF 1.0 [NTP]\r\n"
+            f"...DEBUG off {lab('loradebug', 'LORADEBUG')}...NBRDEBUG off "
+            f"{lab('txcapture', 'TXCAPTURE')}...GPSDEBUG off/0 ...SOFTSERDEBUG off\r\n"
+            "...DisplayInfo off ...DisplayCont off "
+            f"{lab('setlog', 'DisplyLog')}...contrast 5\r\n"
         ).encode()
 
     def _execute(self, cmd: str) -> None:
-        for name in ("loradebug", "txcapture"):
+        for name in ("loradebug", "txcapture", "setlog"):
             if cmd == f"--{name} on":
                 self.flags[name] = "on"
             elif cmd == f"--{name} off":
+                if name in self._ignore_off_once:
+                    self._ignore_off_once.discard(name)
+                    continue
                 self.flags[name] = "off"
 
     async def _read_command_line(
@@ -259,6 +287,7 @@ class _FakeConsole:
                     not self._close_after_fired
                     and self.close_after_command is not None
                     and cmd == self.close_after_command
+                    and self.commands.count(cmd) >= self.close_after_count
                 ):
                     self._close_after_fired = True
                     writer.close()
@@ -394,7 +423,7 @@ async def _test_flags_set_and_restored(record: RecordFn) -> None:
         )
         record(
             "no-password: prior_flags recorded correctly",
-            session.prior_flags == {"loradebug": "off", "txcapture": "on"},
+            session.prior_flags == {"loradebug": "off", "txcapture": "on", "setlog": "on"},
         )
         record(
             "no-password: the fake's loradebug flag is actually on",
@@ -436,6 +465,146 @@ async def _test_flags_set_and_restored(record: RecordFn) -> None:
         )
     finally:
         command_echo.clear()
+        await console.stop()
+
+
+async def _test_setlog_label_and_restore(record: RecordFn) -> None:
+    """`--info` prints setlog as `DisplyLog` (firmware spelling): it must be
+    set on, seen in `flags`, and its restore CONFIRMED (not stuck pending)."""
+    console = _FakeConsole(loradebug="on", txcapture="on", setlog="off")
+    await console.start()
+    command_echo.clear()
+    try:
+        wire_monitor = WireMonitor()
+        recorder = _RecordingSSEManager()
+        wire_monitor.sse_manager = recorder
+        session = _new_session(wire_monitor, console)
+        await session.start()
+        record("setlog: reaches active", await _wait_until(lambda: session.state == "active"))
+        record(
+            "setlog: --setlog on is sent",
+            await _wait_until(lambda: "--setlog on" in console.commands),
+        )
+        record("setlog: prior read as off", session.prior_flags.get("setlog") == "off")
+        record("setlog: flags shows it on", session.status()["flags"]["setlog"] == "on")
+        record(
+            "setlog: a broadcast carried flags.setlog == on",
+            any(
+                e == "monitor:console" and d.get("flags", {}).get("setlog") == "on"
+                for e, d in recorder.events
+            ),
+        )
+        node = session.status()["node"]
+        record(
+            "node: parsed from --info (hw_id, board, firmware)",
+            node == {"hw_id": 43, "board": "HELTEC_V3", "firmware": "4.40a"},
+        )
+        await session.stop()
+        record(
+            "setlog: session settles idle",
+            await _wait_until(lambda: session.state == "idle", timeout_s=5.0),
+        )
+        record("setlog: --setlog off sent", "--setlog off" in console.commands)
+        record("setlog: node flag confirmed off", console.flags["setlog"] == "off")
+        record("setlog: not left pending", session.pending_restore == set())
+        record(
+            "setlog: flags back to off after confirmed restore",
+            session.status()["flags"]["setlog"] == "off",
+        )
+        record(
+            "setlog: final broadcast has flags.setlog off",
+            recorder.events[-1][1]["flags"]["setlog"] == "off",
+        )
+        record(
+            "setlog: untouched (already-on) loradebug stays on in flags",
+            session.status()["flags"]["loradebug"] == "on",
+        )
+    finally:
+        command_echo.clear()
+        await console.stop()
+
+
+async def _test_setlog_already_on_left_alone(record: RecordFn) -> None:
+    """A node already on `DisplyLog on` may run `--setlog <CALL>`: sending
+    `--setlog on` or restoring with `--setlog off` would clear its filter."""
+    console = _FakeConsole(loradebug="off", txcapture="off", setlog="on")
+    await console.start()
+    command_echo.clear()
+    try:
+        wire_monitor = WireMonitor()
+        session = _new_session(wire_monitor, console)
+        await session.start()
+        await _wait_until(lambda: "--loradebug on" in console.commands)
+        await asyncio.sleep(_FAST_TIMINGS["info_reply_window_s"] + 0.1)
+        record("setlog-on: --setlog on NOT sent", "--setlog on" not in console.commands)
+        record("setlog-on: prior is on", session.prior_flags["setlog"] == "on")
+        await session.stop()
+        await _wait_until(lambda: session.state == "idle", timeout_s=5.0)
+        record("setlog-on: --setlog off NEVER sent", "--setlog off" not in console.commands)
+        record("setlog-on: node flag still on", console.flags["setlog"] == "on")
+    finally:
+        command_echo.clear()
+        await console.stop()
+
+
+async def _test_node_absent_tolerant(record: RecordFn) -> None:
+    console = _FakeConsole()
+    await console.start()
+    try:
+        session = _new_session(WireMonitor(), console)
+        record("node: None before the first probe", session.status()["node"] is None)
+        record(
+            "flags: all None before the first probe",
+            set(session.status()["flags"].values()) == {None},
+        )
+        console._info_reply = lambda: b"...LORADEBUG off ...TXCAPTURE off ...DisplyLog off\r\n"  # type: ignore[method-assign]  # test stub
+        await session.start()
+        await _wait_until(lambda: session.state == "active")
+        await asyncio.sleep(_FAST_TIMINGS["info_reply_window_s"] + 0.1)
+        node = session.status()["node"]
+        record(
+            "node: absent lines leave fields None, no crash",
+            node is None or node == {"hw_id": None, "board": None, "firmware": None},
+        )
+        await session.stop()
+        await _wait_until(lambda: session.state == "idle", timeout_s=5.0)
+    finally:
+        await console.stop()
+
+
+async def _test_parsed_on_console_lines(record: RecordFn) -> None:
+    console = _FakeConsole()
+    await console.start()
+    try:
+        wire_monitor = WireMonitor()
+        session = _new_session(wire_monitor, console)
+        await session.start()
+        await _wait_until(lambda: session.state == "active")
+        await console.send_line("12:00:01 [LOG] ERR something")
+        rx = "[MC-TEST] RX_FRAME len=7 rssi=-90 snr=5 hex=41AABBCCDD0102"
+        await console.send_line(rx)
+        await console.send_line("some untagged chatter")
+        await _wait_until(lambda: "some untagged chatter" in _console_texts(wire_monitor))
+        frames = [env["frame"] for env in wire_monitor._console_ring]
+        by_msg = {f["msg"]: f for f in frames}
+        log = by_msg.get("12:00:01 [LOG] ERR something", {})
+        record(
+            "parsed: [LOG] line carries family log",
+            log.get("parsed", {}).get("family") == "log",
+        )
+        rxf = by_msg.get(rx, {})
+        record(
+            "parsed: RX_FRAME carries mc-test + a decoded frame",
+            rxf.get("parsed", {}).get("family") == "mc-test"
+            and isinstance(rxf.get("parsed", {}).get("frame"), dict),
+        )
+        notices = [f for f in frames if f.get("notice")]
+        record("parsed: notices exist", bool(notices))
+        record("parsed: notices carry NO parsed", all("parsed" not in f for f in notices))
+        record("parsed: msg stays the raw line", rxf.get("msg") == rx)
+        await session.stop()
+        await _wait_until(lambda: session.state == "idle", timeout_s=5.0)
+    finally:
         await console.stop()
 
 
@@ -584,7 +753,7 @@ async def _test_max_session_auto_stop(record: RecordFn) -> None:
 
 
 async def _test_shutdown_restores(record: RecordFn) -> None:
-    console = _FakeConsole(loradebug="off", txcapture="off")
+    console = _FakeConsole(loradebug="off", txcapture="off", setlog="off")
     await console.start()
     try:
         wire_monitor = WireMonitor()
@@ -594,7 +763,9 @@ async def _test_shutdown_restores(record: RecordFn) -> None:
         record("shutdown: reaches active", await _wait_until(lambda: session.state == "active"))
         record(
             "shutdown: both flags turned on",
-            await _wait_until(lambda: console.flags == {"loradebug": "on", "txcapture": "on"}),
+            await _wait_until(
+                lambda: console.flags == {"loradebug": "on", "txcapture": "on", "setlog": "on"}
+            ),
         )
 
         await session.shutdown()
@@ -604,7 +775,7 @@ async def _test_shutdown_restores(record: RecordFn) -> None:
         )
         record(
             "shutdown: both flags are CONFIRMED restored off",
-            console.flags == {"loradebug": "off", "txcapture": "off"},
+            console.flags == {"loradebug": "off", "txcapture": "off", "setlog": "off"},
         )
     finally:
         await console.stop()
@@ -640,7 +811,7 @@ async def _test_stop_during_info_window_sends_nothing(record: RecordFn) -> None:
         )
         record(
             "stop-during-probe: the fake's flag state is untouched",
-            console.flags == {"loradebug": "off", "txcapture": "off"},
+            console.flags == {"loradebug": "off", "txcapture": "off", "setlog": "on"},
         )
         record(
             "stop-during-probe: nothing was ever pending to restore",
@@ -689,6 +860,10 @@ async def _test_rst_after_restore_command_pending_then_recovered(record: RecordF
         record(
             "rst: status() reflects pending_restore",
             session.status()["pending_restore"] == ["loradebug"],
+        )
+        record(
+            "rst: flags stays on while its restore is unconfirmed (never off before confirmed)",
+            session.status()["flags"]["loradebug"] == "on",
         )
 
         # Next session: pending_restore forces prior "off" regardless of
@@ -811,6 +986,303 @@ async def _test_eof_while_active_background_retry_succeeds(record: RecordFn) -> 
         )
         record("eof-retry: error is cleared too", session.error is None)
     finally:
+        await console.stop()
+
+
+# ── 14. Unknown prior state: a flag missing from --info is left alone ──────
+
+
+async def _unknown_prior_case(record: RecordFn, name: str) -> None:
+    label = f"unknown-prior[{name}]"
+    # The omitted flag really is ON on the node (e.g. setlog with a filter);
+    # the other two are off and must keep the normal on/restore cycle.
+    console = _FakeConsole(
+        loradebug="on" if name == "loradebug" else "off",
+        txcapture="on" if name == "txcapture" else "off",
+        setlog="on" if name == "setlog" else "off",
+        omit_info=frozenset({name}),
+    )
+    await console.start()
+    command_echo.clear()
+    try:
+        wire_monitor = WireMonitor()
+        session = _new_session(wire_monitor, console)
+        await session.start()
+        record(f"{label}: reaches active", await _wait_until(lambda: session.state == "active"))
+        others = [n for n in ("loradebug", "txcapture", "setlog") if n != name]
+        record(
+            f"{label}: the known flags are still turned on",
+            await _wait_until(lambda: all(f"--{n} on" in console.commands for n in others)),
+        )
+        await asyncio.sleep(_FAST_TIMINGS["info_reply_window_s"] + 0.1)
+        record(
+            f"{label}: --{name} on never sent",
+            f"--{name} on" not in console.commands,
+        )
+        record(f"{label}: prior recorded as unknown", session.prior_flags[name] is None)
+        record(
+            f"{label}: a session notice says the state is unknown",
+            any(f"{name} state unknown" in t for t in _console_texts(wire_monitor)),
+        )
+        await session.stop()
+        record(
+            f"{label}: session settles idle",
+            await _wait_until(lambda: session.state == "idle", timeout_s=5.0),
+        )
+        record(
+            f"{label}: no --{name} command at all (neither on nor off) across start and stop",
+            not any(c.startswith(f"--{name} ") for c in console.commands),
+        )
+        record(f"{label}: node flag untouched", console.flags[name] == "on")
+        record(
+            f"{label}: the known flags are restored off",
+            all(console.flags[n] == "off" for n in others),
+        )
+        record(f"{label}: nothing pending", session.pending_restore == set())
+    finally:
+        command_echo.clear()
+        await console.stop()
+
+
+async def _test_unknown_prior_left_untouched(record: RecordFn) -> None:
+    """A flag whose label the `--info` reply did not carry (reply cut short
+    by the window) has an UNKNOWN prior. Turning it on would clear a
+    `--setlog <CALL>` filter (`--setlog on` runs `tg_post_setlog_off`) and
+    the later `off` would persist that to flash: unknown means untouched,
+    for all three flags, at start AND at stop."""
+    for name in ("setlog", "loradebug", "txcapture"):
+        await _unknown_prior_case(record, name)
+
+
+# ── 15. Link drops during drain after the on-command was written ────────
+
+
+class _DrainFailsWriter:
+    """Writer proxy: once `trigger` has been written (so the bytes are on
+    their way and the node will execute them), every drain() raises, like a
+    link that drops between write() and the flush completing."""
+
+    def __init__(self, inner: asyncio.StreamWriter, trigger: bytes) -> None:
+        self._inner = inner
+        self._trigger = trigger
+        self._armed = False
+
+    def write(self, data: bytes) -> None:
+        self._inner.write(data)
+        if data == self._trigger:
+            self._armed = True
+
+    async def drain(self) -> None:
+        await self._inner.drain()
+        if self._armed:
+            raise ConnectionResetError("link dropped during drain")
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
+async def _test_drain_failure_after_write_still_pending(record: RecordFn) -> None:
+    console = _FakeConsole(loradebug="off", txcapture="off", setlog="off")
+    await console.start()
+    command_echo.clear()
+    try:
+        wire_monitor = WireMonitor()
+        session = _new_session(wire_monitor, console, restore_retry_backoffs_s=(1.0,))
+        orig_connect = session._connect
+        calls = 0
+
+        async def patched_connect() -> tuple[asyncio.StreamReader, asyncio.StreamWriter, bytes]:
+            nonlocal calls
+            reader, writer, pending = await orig_connect()
+            calls += 1
+            if calls == 1:
+                writer = cast("asyncio.StreamWriter", _DrainFailsWriter(writer, b"--setlog on\n"))
+            return reader, writer, pending
+
+        session._connect = patched_connect  # type: ignore[method-assign]  # test seam
+        await session.start()
+        record(
+            "drain-fail: session lands in error",
+            await _wait_until(lambda: session.state == "error", timeout_s=5.0),
+        )
+        record(
+            "drain-fail: setlog is in pending_restore although drain() raised",
+            "setlog" in session.pending_restore,
+        )
+        record(
+            "drain-fail: pending_restore is exactly the three flags turned on",
+            session.pending_restore == {"loradebug", "txcapture", "setlog"},
+        )
+    finally:
+        await session.shutdown()
+        command_echo.clear()
+        await console.stop()
+
+
+# ── 16. setlog in the restore set: RST mid-restore, then background retry ──
+
+
+async def _test_setlog_in_restore_set_rst_and_retry(record: RecordFn) -> None:
+    console = _FakeConsole(
+        loradebug="off", txcapture="off", setlog="off", close_after_command="--txcapture off"
+    )
+    await console.start()
+    command_echo.clear()
+    try:
+        wire_monitor = WireMonitor()
+        session = _new_session(wire_monitor, console, restore_retry_backoffs_s=(0.5, 0.5, 0.5))
+        await session.start()
+        record(
+            "setlog-rst: all three flags turned on",
+            await _wait_until(
+                lambda: console.flags == {"loradebug": "on", "txcapture": "on", "setlog": "on"}
+            ),
+        )
+        await asyncio.sleep(_FAST_TIMINGS["info_reply_window_s"] + 0.1)
+        await session.stop()
+        record(
+            "setlog-rst: lands in error after the link closes right after --txcapture off",
+            await _wait_until(lambda: session.state == "error", timeout_s=5.0),
+        )
+        # No post-restore --info was ever answered, so nothing was CONFIRMED:
+        # all three stay pending, setlog (last in restore order) included.
+        record(
+            "setlog-rst: pending_restore is exactly {loradebug, txcapture, setlog}",
+            session.pending_restore == {"loradebug", "txcapture", "setlog"},
+        )
+        record(
+            "setlog-rst: flags stays on for every unconfirmed flag",
+            session.status()["flags"] == {"loradebug": "on", "txcapture": "on", "setlog": "on"},
+        )
+        record(
+            "setlog-rst: background retry empties pending_restore",
+            await _wait_until(lambda: session.pending_restore == set(), timeout_s=5.0),
+        )
+        record(
+            "setlog-rst: background retry settles idle",
+            await _wait_until(lambda: session.state == "idle", timeout_s=3.0),
+        )
+        record(
+            "setlog-rst: status flags are all off after the retry",
+            session.status()["flags"] == {"loradebug": "off", "txcapture": "off", "setlog": "off"},
+        )
+        record(
+            "setlog-rst: the node confirms all three off",
+            console.flags == {"loradebug": "off", "txcapture": "off", "setlog": "off"},
+        )
+    finally:
+        await session.shutdown()
+        command_echo.clear()
+        await console.stop()
+
+
+# ── 17. Exception path of _graceful_stop re-adds only unconfirmed flags ────
+
+
+async def _test_graceful_stop_exception_keeps_only_unconfirmed(record: RecordFn) -> None:
+    # Attempt 0: loradebug/txcapture confirm off, the node swallows the first
+    # `--setlog off`. Attempt 1: link closes right after the second one, before
+    # the confirming --info. Only setlog is genuinely unconfirmed.
+    console = _FakeConsole(
+        loradebug="off",
+        txcapture="off",
+        setlog="off",
+        ignore_off_once=frozenset({"setlog"}),
+        close_after_command="--setlog off",
+        close_after_count=2,
+    )
+    await console.start()
+    command_echo.clear()
+    try:
+        wire_monitor = WireMonitor()
+        session = _new_session(wire_monitor, console, restore_retry_backoffs_s=(1.0,))
+        await session.start()
+        record(
+            "partial-confirm: all three turned on",
+            await _wait_until(
+                lambda: console.flags == {"loradebug": "on", "txcapture": "on", "setlog": "on"}
+            ),
+        )
+        await asyncio.sleep(_FAST_TIMINGS["info_reply_window_s"] + 0.1)
+        await session.stop()
+        record(
+            "partial-confirm: lands in error",
+            await _wait_until(lambda: session.state == "error", timeout_s=8.0),
+        )
+        record(
+            "partial-confirm: pending_restore is only the unconfirmed flag",
+            session.pending_restore == {"setlog"},
+        )
+        record(
+            "partial-confirm: flags agree (confirmed off, unconfirmed on)",
+            session.status()["flags"] == {"loradebug": "off", "txcapture": "off", "setlog": "on"},
+        )
+    finally:
+        await session.shutdown()
+        command_echo.clear()
+        await console.stop()
+
+
+# ── 18. Hostile NODE digits cannot raise out of --info parsing ─────────────
+
+
+async def _test_hw_id_bounded_cannot_raise(record: RecordFn) -> None:
+    # 5000 digits: int() on that raises ValueError (4300-digit str limit).
+    console = _FakeConsole(loradebug="on", txcapture="on", setlog="on", node_field="9" * 5000)
+    await console.start()
+    command_echo.clear()
+    try:
+        wire_monitor = WireMonitor()
+        session = _new_session(wire_monitor, console)
+        await session.start()
+        record("hw-id: reaches active", await _wait_until(lambda: session.state == "active"))
+        await asyncio.sleep(_FAST_TIMINGS["info_reply_window_s"] + 0.1)
+        node = session.status()["node"]
+        record("hw-id: session did not fail", session.state == "active" and session.error is None)
+        record(
+            "hw-id: oversized NODE value ignored, firmware still parsed",
+            node is not None and node["hw_id"] is None and node["firmware"] == "4.40a",
+        )
+        await session.stop()
+        record(
+            "hw-id: settles idle",
+            await _wait_until(lambda: session.state == "idle", timeout_s=5.0),
+        )
+    finally:
+        command_echo.clear()
+        await console.stop()
+
+
+# ── 19. Unexpected exception never forgets a turned-on flag ─────────────────
+
+
+async def _test_unexpected_exception_keeps_flags_pending(record: RecordFn) -> None:
+    console = _FakeConsole(loradebug="off", txcapture="off", setlog="off")
+    await console.start()
+    command_echo.clear()
+    try:
+        wire_monitor = WireMonitor()
+        session = _new_session(wire_monitor, console)
+
+        async def boom(reader: asyncio.StreamReader, buf: bytes) -> None:
+            raise RuntimeError("injected failure after the flags are on")
+
+        session._stream_lines = boom  # type: ignore[method-assign]  # test seam
+        await session.start()
+        record(
+            "unexpected-exc: session lands in error",
+            await _wait_until(lambda: session.state == "error", timeout_s=5.0),
+        )
+        record(
+            "unexpected-exc: error is the generic internal one",
+            "internal error" in (session.error or ""),
+        )
+        record(
+            "unexpected-exc: every turned-on flag moved into pending_restore",
+            session.pending_restore == {"loradebug", "txcapture", "setlog"},
+        )
+    finally:
+        command_echo.clear()
         await console.stop()
 
 
@@ -1206,6 +1678,10 @@ async def run_node_console_tests() -> bool:
 
     await _test_wrong_password(_record)
     await _test_flags_set_and_restored(_record)
+    await _test_setlog_label_and_restore(_record)
+    await _test_setlog_already_on_left_alone(_record)
+    await _test_node_absent_tolerant(_record)
+    await _test_parsed_on_console_lines(_record)
     await _test_lines_and_partial_flush(_record)
     await _test_stream_lines_no_data_loss_across_yielding_broadcast(_record)
     await _test_max_session_auto_stop(_record)
@@ -1214,6 +1690,12 @@ async def run_node_console_tests() -> bool:
     await _test_rst_after_restore_command_pending_then_recovered(_record)
     await _test_graceful_stop_failure_triggers_background_retry(_record)
     await _test_eof_while_active_background_retry_succeeds(_record)
+    await _test_unknown_prior_left_untouched(_record)
+    await _test_drain_failure_after_write_still_pending(_record)
+    await _test_setlog_in_restore_set_rst_and_retry(_record)
+    await _test_graceful_stop_exception_keeps_only_unconfirmed(_record)
+    await _test_hw_id_bounded_cannot_raise(_record)
+    await _test_unexpected_exception_keeps_flags_pending(_record)
     await _test_pending_restore_change_is_broadcast(_record)
     await _test_start_from_error_launches_fresh_session_in_same_call(_record)
     await _test_start_during_idle_tail_race(_record)

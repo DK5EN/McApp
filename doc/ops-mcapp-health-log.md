@@ -1,6 +1,6 @@
 # McApp production health log — mcapp.local
 
-> **Status:** Current — newest section: §34 (2026-10-11 20:41 CEST, pre-release sweep of `v2.1.11-dev.2` (Node Admin remote parity) before the v2.1.11 promotion, green, zero findings, ~9 min soak at the operator's decision). Before that: §33 (2026-10-11 15:05 CEST, pre-release sweep of `v2.1.10-dev.3` (meshmap internet feed, RM1 out of chat) before the v2.1.10 promotion, green, zero findings, ~13 min soak at the operator's decision; W20 recurred before the deploy). Before that: §32 (2026-10-10 15:35 CEST, pre-release sweep of `v2.1.7-dev.1` (Internet feed removed) before the v2.1.7 promotion, green, zero findings, ~15 min soak). Before that: §31 (2026-10-06, v2.1.6-dev.6 short soak). Before that: §30 (2026-10-05 19:08 CEST, sweep of `v2.1.5-dev.2` node time zone, green, zero findings). Before that: §26 (2026-10-04 09:36 CEST, pre-release sweep of
+> **Status:** Current — newest section: §36 (2026-10-13 16:34 CEST, pre-release sweep of `v2.1.12-dev.1` (parsed DBG console lines, setlog as third flag, live `flags`/`node` in the console status) before the v2.1.12 promotion, green, zero findings, ~8 min soak at the operator's decision; new watch point W26). Before that: §35 (2026-10-11 20:53 CEST, post-release sweep of production `v2.1.11`, 3 min after the deploy, green, zero release findings; internet feed found disabled by a settings save between 20:42 and 20:49, not by the release). Before that: §34 (2026-10-11 20:41 CEST, pre-release sweep of `v2.1.11-dev.2` (Node Admin remote parity) before the v2.1.11 promotion, green, zero findings, ~9 min soak at the operator's decision). Before that: §33 (2026-10-11 15:05 CEST, pre-release sweep of `v2.1.10-dev.3` (meshmap internet feed, RM1 out of chat) before the v2.1.10 promotion, green, zero findings, ~13 min soak at the operator's decision; W20 recurred before the deploy). Before that: §32 (2026-10-10 15:35 CEST, pre-release sweep of `v2.1.7-dev.1` (Internet feed removed) before the v2.1.7 promotion, green, zero findings, ~15 min soak). Before that: §31 (2026-10-06, v2.1.6-dev.6 short soak). Before that: §30 (2026-10-05 19:08 CEST, sweep of `v2.1.5-dev.2` node time zone, green, zero findings). Before that: §26 (2026-10-04 09:36 CEST, pre-release sweep of
 > `v2.1.1-dev.2` before the v2.1.1 promotion) — green, zero findings, **~3 min soak at the operator's
 > decision**; new watch point **W23** (QRZ lookup budget). Before that: §25 (2026-10-02, no-soak
 > sign-off of v2.0.19, re-released as v2.1.0). Before that: §24 (2026-09-29 10:03 CEST, post-release sweep of
@@ -2452,3 +2452,132 @@ messages, no `{CET}` rows stored, no feed error, no uptime gap since 13:16.
 **Watch points.** W19: two more deploys today (19:40, 20:32), each with its startup cluster. The
 post-release sweep should confirm Node Admin's new fold paths produce no `handler` or `loop_lag`
 stacks once remote reads are exercised. No new W or F.
+
+## 35. 2026-10-11 20:53 CEST — post-release sweep of production v2.1.11, 3 min after the deploy
+
+| Anchor         | Value                                                                                |
+| -------------- | ------------------------------------------------------------------------------------ |
+| Active slot    | slot-0, `v2.1.11` (`webapp/version.html`), service up since 20:49:39                 |
+| Deploy         | webapp Update page, production mode, from slot-1 (`v2.1.11-dev.2`); no auto-rollback |
+| Schema / epoch | 36 = `LATEST_SCHEMA_VERSION`; system epoch 5 = `REQUIRED_SYSTEM_EPOCH`               |
+| Host           | up 4 d 12 h, no reboot                                                               |
+
+**Verdict: green, zero release findings.** The deploy landed cleanly. The internet feed is off,
+but the release did not do it (see F-note below). Run only minutes after the deploy at the
+operator's request, so rates and stalls cover a very short window.
+
+- Services: `mcapp`, `mcapp-ble`, `caddy`, `lighttpd` active; `NRestarts` 0 on both McApp units.
+  Journal warnings since 20:49: 0.
+- Production slot carries no test harness: 0 `*_tests.py` / `*.json` under `src/mcapp`, no
+  `run_startup_tests.py` (expected for the production tarball shape).
+- `/api/status`: `version` v2.1.11, `udp_target_kind` `first_seen` at 168 s uptime (W11);
+  `udp_multiple_sources` false, `udp_untrusted_source_ips` empty, `udp_suppressed_target_changes`
+  0; `features` `['node_admin', 'internet_feed']`.
+- DB 55 MB, WAL 2 MB; messages 27335 (3 `www`), stations 422, signal_log 50338. Classifier
+  version 5, 38 rules, 0 unclassified in the last hour; 0 `{CET}` rows in `messages`.
+- Rates (1 h window ending 20:52, spans the restart): msg 59, pos 82, signal_log 320 — in line with
+  §34's 62 / 89 / 340.
+- Gateway uptime 24 h: 95.9 %, coverage 100.0 %; last `{CET}` 57 s old, heartbeat 16 s. No new
+  gap or dark row (the restart was under the tolerance).
+- Stalls since the restart (non-sample): `loop_lag` 2 critical / 3 stall, `http` 0/2,
+  `client_http` 0/5. All in the first 46 s; none after 20:50:25. The two criticals carry
+  import-phase stacks (`importlib._path_stat`), the third a `typing` stack — W19 startup noise.
+- Host: disk 9 % (51 G free), 186 MB RAM available, ~26 MB swapped, load 0.14, 45.1 C.
+- Secrets/TLS: `vapid.json` 0600, `config.json` 0640; Caddy internal 12 h leaf
+  (12:32:45 → 00:32:45 UTC), mid-life. `sw.js` has `SKIP_WAITING`.
+
+**Internet feed off — not caused by the release.** `/api/internet-feed` reads `enabled: false`,
+`state: off` since 20:49:50 (the service start). The DB row has `enabled = 0`. At §34 (20:41) it
+was enabled and connected, and its last batch arrived at 20:42:43. The only writer of `enabled` is
+`PUT /api/internet-feed` (webapp Settings > Internet, explicit Save only, no auto-save path), so
+the setting was saved as off between 20:42:43 and the 20:49:36 shutdown. Nothing in the deploy
+path writes that row. The settings also changed earlier the same day (radius 300 km at §33,
+100 km at §34), consistent with operator edits. Neither the feed nor lighttpd logs the PUT, so
+the source cannot be named from the box; confirm with the operator. If it was not intentional,
+re-enable it in Settings > Internet.
+
+**Absent signals.** No restarts, no journal warnings, no UDP provenance anomaly, no unclassified
+messages, no `{CET}` rows stored, no uptime gap, no stall after the first minute.
+
+**Dismissed.** `udp_target_kind` `first_seen` (W11). Startup `loop_lag` criticals (W19).
+
+**Watch points.** W19: one more deploy (20:49). The §33/§34 follow-ups (feed reconnects,
+`loop_lag` stacks naming `internet_feed` or the Node Admin fold) cannot be judged yet: the feed is
+off and no remote reads ran since the deploy. Re-check after a few hours of runtime with the feed
+re-enabled and Node Admin used. No new W or F.
+
+## 36. 2026-10-13 16:34 CEST — pre-release sweep of v2.1.12-dev.1 (parsed DBG console lines) before the v2.1.12 promotion (short soak)
+
+| Anchor         | Value                                                                                               |
+| -------------- | --------------------------------------------------------------------------------------------------- |
+| Active slot    | slot-2, `v2.1.12-dev.1` (`webapp/version.html`), service up since 16:25:41                          |
+| Deploy         | webapp Update page, from slot-0 (`v2.1.11`); no auto-rollback                                       |
+| Soak           | about 8 min (snapshot 16:34), the operator overrode the soak rule; see §33, §34                     |
+| Schema / epoch | 36 = `LATEST_SCHEMA_VERSION` (no migration in this cycle); system epoch 5 = `REQUIRED_SYSTEM_EPOCH` |
+| Host           | up 6 d 8 h, no reboot since §35                                                                     |
+
+**Verdict: green, zero findings.** The release adds parsed DBG console lines (`frame.parsed`),
+setlog as a third DBG flag, live `flags`/`node` in `GET /api/monitor/console`, and Monitor UI
+changes. None of it sits on the ingest path, and the ingest rates are in line with §35. The
+operator ran one DBG session from the new webapp during the soak (16:31:57 to 16:32:51), which
+gave the console path a real-world check beyond the idle state.
+
+- Services: `mcapp`, `mcapp-ble`, `caddy`, `lighttpd` active; `NRestarts` 0 on both McApp units.
+  Journal warnings (`mcapp`, `mcapp-ble`, `-p warning`) since 16:25 and in 24 h: 0.
+- Change-specific: `DisplyLog` appears 2 times in the active slot's `src/mcapp/node_console.py`;
+  `console_parse.py` (23810 B) and `frame_decode.py` (6842 B) exist, both dated 16:22. The slot
+  carries 37 `*_tests*` files under `src/mcapp` (dev tarball shape, expected before promotion).
+- `GET /api/monitor/console` now: `state` idle, `flags` loradebug off, txcapture off, setlog on;
+  `node` hw_id 43, board HELTEC_V3, firmware 4.40a; `pending_restore` `[]`, `error` null. Both
+  new keys are present.
+- DBG session by the operator (Safari, webapp `v2.1.11-10-g776bb79`; not started by the sweep):
+  `POST /api/monitor/console/start` 200 at 16:31:57. The RF Monitor ring holds 278 `console`
+  frames from 16:31:57 to 16:32:51, 271 of them with `frame.parsed` (`family`, `kind`,
+  `node_time`, `noise`, `severity`, `fields`); the 7 without are the session `notice` lines. The
+  notices run `connecting`, `active`, `flags set: loradebug (was off), txcapture (was off)`
+  (setlog was already on, so it was not touched), `stopping`, `flags restored: loradebug off,
+txcapture off`, `idle`. The restore was clean and no session is left open. No `loop_lag` or
+  `handler` row falls in the session window.
+- `/api/status`: `version` v2.1.12, `udp_target_kind` `identified`, `udp_multiple_sources` false,
+  `udp_untrusted_source_ips` empty, `udp_suppressed_target_changes` 0, `node_fwver` 4.40 a,
+  `features` `['node_admin', 'internet_feed']`, one SSE client.
+- `/api/internet-feed`: `enabled: false`, `state: off` (carried over from §35's operator save, not
+  changed by this release; the DB row is untouched by a deploy).
+- DB 60.4 MB, WAL 4.5 MB; messages 27083 (3 `www`), stations 416, signal_log 48381 (the drop
+  against §35's 27335 / 422 / 50338 is the two nightly 04:00 prunes). Classifier version 5, 38
+  rules, markers `v0 v1 v3 v4 v5`, 0 unclassified in the last hour; 0 `{CET}` rows in `messages`.
+- Rates (1 h window ending 16:35, spans the 16:25 restart): msg 28, pos 70, signal_log 228,
+  against §35's 59 / 82 / 320 and §1's 11 / 87 / 347. Tuesday afternoon; msg is above §1,
+  pos and signal are the low side of the same band, nothing near a factor of two off the table.
+- Gateway uptime 24 h (`range=24h`): 100.0 %, coverage 100.0 %, longest outage 0, one `up`
+  segment. **No `dark` row for the deploy restart**: the ~15 s downtime stayed inside the
+  tolerance, as at §35. Last `{CET}` 457 s old (606 s cadence, 12 min tolerance), heartbeat 8 s.
+- Stalls since the restart (non-sample): `loop_lag` 2 critical / 3 stall, `http` 0/7,
+  `client_http` 0/4, `client_error` 0/5. The five `loop_lag` rows are 16:26:00 to 16:26:33, the
+  first minute after the start; the two criticals (1352 ms, 791 ms) carry `anyio` import and
+  `asyncio.runners` stacks, the stalls fastapi route setup and `main.run` — W19 startup noise.
+  The later rows are a `/api/weather` 750 ms (closed non-issue), a burst of five
+  `POST /api/read_cursor` at 16:30:50 (`http` 532 to 1387 ms, client `Load failed` at ~310 ms:
+  the operator's tab reloading onto the new bundle; W17), one more `read_cursor` at 16:33:55
+  (874 ms) and the console start below.
+- Stalls 1 h (non-sample) additionally show `client_http` 3 critical (max 4715 ms) and `http`
+  1 critical (2231 ms), all before 16:25:41, i.e. under v2.1.11 around the deploy.
+- Host: disk 9 % (51 G free), 180 MB RAM available, ~24 MB swapped, load 0.34, 44.0 C.
+- Secrets/TLS: `vapid.json` 0600 (raw scalar, not PEM), `config.json` 0640; Caddy internal 12 h
+  leaf (13:32:45 → 01:32:45 UTC), mid-life; `/` answers 301; `sw.js` has `SKIP_WAITING`.
+
+**Absent signals.** No restarts, no journal warnings, no UDP provenance anomaly, no unclassified
+messages, no `{CET}` rows stored, no uptime gap and no dark row, no `loop_lag` or `handler` row
+after the first minute, no left-open console session, no pending flag restore.
+
+**Dismissed.** Startup `loop_lag` criticals (W19). `read_cursor` `http` stalls and the
+`Load failed` burst at the bundle reload (W17). `/api/weather` 750 ms (closed 2026-09-18).
+`POST /api/monitor/console/start` `client_http` 1092 ms with no server `http` row (the server
+side stayed under the 0.5 s threshold; the extra time is the client hop, the same shape as the
+`read_cursor` rows). Internet feed off (§35, operator setting).
+
+**Watch points.** W26 (new): the parsed console path has seen exactly one ~54 s operator session.
+After a longer session (the cap is 1800 s) or a busy `loradebug` stream, re-check `loop_lag`
+stacks for `console_parse` or `frame_decode` and the Monitor ring for `frame.parsed` coverage
+(here 271 of 278; the gap is the notices). W19: one more deploy (16:25). The §33/§34 follow-ups
+(feed reconnects, Node Admin fold) remain open: the feed is off and no remote reads ran. No new F.

@@ -63,6 +63,8 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from .command_echo import expect_command_echo
+from .console_parse import ConsoleParsed, parse_console_line
+from .frame_decode import decode_frame
 from .logging_setup import get_logger
 from .util import now_ms
 
@@ -103,15 +105,51 @@ IDLE_TAIL_JOIN_S = 2.0
 RESTORE_RETRY_BACKOFFS_S: tuple[float, ...] = (5.0, 30.0, 60.0)
 
 # Flags this session manages, in the order commands are sent/restored.
-FLAG_NAMES: tuple[str, ...] = ("loradebug", "txcapture")
+FLAG_NAMES: tuple[str, ...] = ("loradebug", "txcapture", "setlog")
+
+# How `--info` spells each flag. NOT derivable from the flag name: the firmware
+# prints setlog as `...DisplyLog on|off` (sic, command_functions.cpp), so a
+# `name.upper()` pattern would never confirm a setlog restore.
+_FLAG_INFO_LABELS: dict[str, str] = {
+    "loradebug": "LORADEBUG",
+    "txcapture": "TXCAPTURE",
+    "setlog": "DisplyLog",
+}
 
 _FLAG_STATE_RE = {
-    name: re.compile(rb"\.\.\." + name.upper().encode("ascii") + rb" (on|off)")
+    name: re.compile(rb"\.\.\." + _FLAG_INFO_LABELS[name].encode("ascii") + rb" (on|off)")
     for name in FLAG_NAMES
 }
 
+# `...NODE <hw_id int> <<board name>>` and the header `--MeshCom 4.40a (build: ...)`
+# (format `%-4.4s%-1.1s`: version padded to 4, then the sub letter).
+# hw_id is bounded to 6 digits so int() can never see an oversized string.
+_NODE_RE = re.compile(rb"\.\.\.NODE (\d{1,6}) <([^>\r\n]*)>")
+_FIRMWARE_RE = re.compile(rb"--MeshCom ([^\r\n(]{1,8}?)\s*\(build")
+
 _EOF_ERROR = "console connection closed by node (reboot or link loss?)"
 _BUSY_ERROR = "console busy (another client connected?) or node not accepting connections"
+
+
+def _num_or_none(v: object) -> int | float | None:
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _parse_for_monitor(text: str) -> ConsoleParsed | None:
+    """Structure for one raw console line (never a notice); attaches the
+    decoded frame for `[MC-TEST] RX_FRAME` / `TX_FRAME`. Pure, inline-cheap."""
+    parsed = parse_console_line(text)
+    if parsed is None:
+        return None
+    if parsed["family"] == "mc-test" and parsed["kind"] in ("RX_FRAME", "TX_FRAME"):
+        hex_str = parsed["fields"].get("hex")
+        if isinstance(hex_str, str):
+            parsed["frame"] = decode_frame(
+                hex_str,
+                _num_or_none(parsed["fields"].get("rssi")),
+                _num_or_none(parsed["fields"].get("snr")),
+            )
+    return parsed
 
 
 class ConsoleBusyError(ConnectionError):
@@ -173,6 +211,10 @@ class NodeConsoleSession:
         self.error: str | None = None
         self.since: int | None = None
         self.prior_flags: dict[str, str | None] = dict.fromkeys(FLAG_NAMES)
+        # What McApp believes is set on the node right now (see status()).
+        self._flags_live: dict[str, str | None] = dict.fromkeys(FLAG_NAMES)
+        # From the latest --info probe; None until the first one answered.
+        self.node: dict[str, Any] | None = None
         # A flag we turned on and could not *confirm* restored — survives
         # across sessions on purpose (see module docstring). Never reset by
         # start(); only discard()/update() ever touch it.
@@ -193,7 +235,7 @@ class NodeConsoleSession:
 
     def status(self) -> dict[str, Any]:
         """`{state, host, port, since, error, prior_flags, pending_restore,
-        max_session_s}` — never includes the password."""
+        max_session_s, flags, node}` — never includes the password."""
         return {
             "state": self.state,
             "host": self.host,
@@ -203,6 +245,8 @@ class NodeConsoleSession:
             "prior_flags": dict(self.prior_flags),
             "pending_restore": sorted(self.pending_restore),
             "max_session_s": self.max_session_s,
+            "flags": dict(self._flags_live),
+            "node": dict(self.node) if self.node is not None else None,
         }
 
     async def start(self) -> dict[str, Any]:
@@ -243,6 +287,7 @@ class NodeConsoleSession:
         self.error = None
         self.since = None
         self.prior_flags = dict.fromkeys(FLAG_NAMES)
+        self._flags_live = dict.fromkeys(FLAG_NAMES)
         self._flags_turned_on = set()
         self._stop_event = asyncio.Event()
         await self._set_state("connecting")
@@ -353,10 +398,15 @@ class NodeConsoleSession:
             return
         if len(text) > MAX_LINE_CHARS:
             text = text[:MAX_LINE_CHARS]
+        frame: dict[str, Any] = {"type": "con", "msg": text, "src": self.host}
         try:
-            await self._wire_monitor.capture(
-                "console", "rx", "shown", None, {"type": "con", "msg": text, "src": self.host}
-            )
+            parsed = _parse_for_monitor(text)
+            if parsed is not None:
+                frame["parsed"] = parsed
+        except Exception:
+            logger.exception("NodeConsoleSession: console line parse failed")
+        try:
+            await self._wire_monitor.capture("console", "rx", "shown", None, frame)
         except Exception:
             logger.exception("NodeConsoleSession: line capture failed")
 
@@ -483,11 +533,30 @@ class NodeConsoleSession:
         for name in FLAG_NAMES:
             match = _FLAG_STATE_RE[name].search(buf)
             flags[name] = match.group(1).decode("ascii") if match else None
+        self._update_node(buf)
 
         while b"\n" in buf:
             line, _, buf = buf.partition(b"\n")
             await self._emit_line(line.decode("utf-8", errors="replace"))
         return flags, buf
+
+    def _update_node(self, buf: bytes) -> None:
+        """Fold `NODE <hw> <board>` and the `--MeshCom` header of an --info
+        reply into `self.node`. Tolerant: a reply without either leaves it
+        as it was (None before the first answered probe)."""
+        node_m = _NODE_RE.search(buf)
+        fw_m = _FIRMWARE_RE.search(buf)
+        if node_m is None and fw_m is None:
+            return
+        node = self.node or {"hw_id": None, "board": None, "firmware": None}
+        if node_m is not None:
+            node["hw_id"] = int(node_m.group(1))
+            node["board"] = node_m.group(2).decode("utf-8", errors="replace").strip() or None
+        if fw_m is not None:
+            node["firmware"] = (
+                fw_m.group(1).decode("ascii", errors="replace").replace(" ", "") or None
+            )
+        self.node = node
 
     async def _apply_flags(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, pending: bytes
@@ -506,29 +575,47 @@ class NodeConsoleSession:
         """
         polled, buf = await self._read_info_reply(reader, writer, pending)
         to_set: list[str] = []
+        unknown: list[str] = []
         for name in FLAG_NAMES:
             prior = "off" if name in self.pending_restore else polled.get(name)
             self.prior_flags[name] = prior
-            if prior != "on":
+            self._flags_live[name] = prior
+            if prior is None:
+                # Not in the --info reply (the window cut it short): the node's
+                # state is unknown. `--setlog on` would clear a `--setlog <CALL>`
+                # filter and the later off would persist that, so an unknown
+                # flag is neither turned on nor restored.
+                unknown.append(name)
+            elif prior != "on":
                 to_set.append(name)
 
         if self._stop_event.is_set():
             await self._notice("stop requested during --info probe — no flag commands sent")
             return buf
 
+        for name in unknown:
+            await self._notice(f"{name} state unknown (not in --info reply) — left untouched")
+
         for i, name in enumerate(to_set):
             expect_command_echo(f"--{name} on")
+            # Recorded BEFORE the write: once write() has handed the bytes to
+            # the transport the node may execute and persist the command even
+            # if the link drops during drain(), and the flag must then reach
+            # pending_restore. A spare `off` for a flag that was off is
+            # harmless (its prior is known "off" here).
+            self._flags_turned_on.add(name)
+            self._flags_live[name] = "on"
             writer.write(f"--{name} on\n".encode())
             await writer.drain()
-            self._flags_turned_on.add(name)
             if i < len(to_set) - 1:
                 await asyncio.sleep(self._flag_command_gap_s)
 
         if to_set:
-            summary = ", ".join(f"{n} (was {self.prior_flags[n] or 'unknown'})" for n in to_set)
+            summary = ", ".join(f"{n} (was {self.prior_flags[n]})" for n in to_set)
             await self._notice(f"flags set: {summary}")
         else:
             await self._notice("flags already set: no commands sent")
+        await self._broadcast_status()
         return buf
 
     def _flags_needing_restore(self) -> list[str]:
@@ -573,6 +660,9 @@ class NodeConsoleSession:
             newly_confirmed = [n for n in still_on if polled.get(n) == "off"]
             for n in newly_confirmed:
                 self.pending_restore.discard(n)
+                self._flags_live[n] = "off"
+            if newly_confirmed:
+                await self._broadcast_status()
             still_on = [n for n in still_on if n not in newly_confirmed]
 
             if not still_on:
@@ -725,13 +815,17 @@ class NodeConsoleSession:
                 reader, writer, b"", to_restore
             )
         except (ConnectionError, OSError) as exc:
-            self.pending_restore.update(to_restore)
+            # Only flags still believed on: a flag already confirmed off in
+            # this same call must not be re-added (flags would say off while
+            # pending_restore lists it).
+            unconfirmed = [n for n in to_restore if self._flags_live.get(n) == "on"]
+            self.pending_restore.update(unconfirmed)
             self._flags_turned_on = set()
             self._writer = None
             self.since = None
             with contextlib.suppress(OSError):
                 writer.close()
-            restore_note = ", ".join(sorted(to_restore)) if to_restore else "none"
+            restore_note = ", ".join(sorted(unconfirmed)) if unconfirmed else "none"
             await self._set_state(
                 "error",
                 error=(
@@ -871,6 +965,12 @@ class NodeConsoleSession:
             writer = None
         except Exception:
             logger.exception("NodeConsoleSession: session loop failed unexpectedly")
+            # Never forget a flag we turned on and did not confirm off, same
+            # as the EOF path: the next start() drives it through restore.
+            self.pending_restore.update(
+                n for n in self._flags_needing_restore() if self._flags_live.get(n) != "off"
+            )
+            self._flags_turned_on = set()
             await self._fail("internal error — see server logs")
         finally:
             if writer is not None:
