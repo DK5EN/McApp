@@ -1,0 +1,1760 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>McApp Monitor Help</title>
+    <style>
+      :root {
+        --bg: #ffffff;
+        --fg: #1c2230;
+        --muted: #5b6475;
+        --line: #d9deea;
+        --card: #f5f7fb;
+        --accent: #0b6fa4;
+        --warn-bg: #fff3d6;
+        --warn-fg: #6b4a00;
+        --msg-bg: #dde7ff;
+        --msg-fg: #1b3a8a;
+        --pos-bg: #d9f2de;
+        --pos-fg: #17602b;
+        --tel-bg: #eadcfb;
+        --tel-fg: #51238f;
+        --ack-bg: #d6f0f5;
+        --ack-fg: #0e5563;
+        --sys-bg: #e5e7ec;
+        --sys-fg: #3a4150;
+        --dbg-bg: #fde0d2;
+        --dbg-fg: #8a3510;
+        --lora-bg: #fbd9d4;
+        --lora-fg: #8a1f12;
+        --srv-bg: #cfe8f5;
+        --srv-fg: #0b4f73;
+        --ble-bg: #dcdcf7;
+        --ble-fg: #2b2b8a;
+        --udp-bg: #cdeff0;
+        --udp-fg: #0b5a5c;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0f1420;
+          --fg: #e3e8f2;
+          --muted: #9aa5ba;
+          --line: #2a3347;
+          --card: #171e2e;
+          --accent: #5cc8f0;
+          --warn-bg: #3a2d0a;
+          --warn-fg: #f3d17a;
+          --msg-bg: #24357a;
+          --msg-fg: #cdd9ff;
+          --pos-bg: #1c4a29;
+          --pos-fg: #bfeccb;
+          --tel-bg: #43246f;
+          --tel-fg: #e2cffa;
+          --ack-bg: #124650;
+          --ack-fg: #c4eef5;
+          --sys-bg: #333a49;
+          --sys-fg: #d5dae5;
+          --dbg-bg: #5a2a12;
+          --dbg-fg: #fbd5c0;
+          --lora-bg: #6a2118;
+          --lora-fg: #fbd3cd;
+          --srv-bg: #144a69;
+          --srv-fg: #cbe8f7;
+          --ble-bg: #2c2c78;
+          --ble-fg: #d6d6fa;
+          --udp-bg: #0f5154;
+          --udp-fg: #c8eeef;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          16px/1.6 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          Roboto,
+          sans-serif;
+      }
+      .wrap {
+        max-width: 920px;
+        margin: 0 auto;
+        padding: 24px 16px 80px;
+      }
+      h1 {
+        font-size: 1.9rem;
+        margin: 0.2em 0 0.1em;
+      }
+      h2 {
+        font-size: 1.35rem;
+        margin: 1.6em 0 0.5em;
+        padding-top: 0.6em;
+        border-top: 1px solid var(--line);
+      }
+      h3 {
+        font-size: 1.05rem;
+        margin: 1.5em 0 0.3em;
+      }
+      p,
+      li {
+        max-width: 72ch;
+      }
+      .lead {
+        color: var(--muted);
+        margin-top: 0;
+      }
+      nav {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 12px 18px;
+        margin: 20px 0;
+      }
+      nav ol {
+        margin: 0;
+        padding-left: 1.2em;
+        columns: 2;
+      }
+      nav a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      code,
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.92em;
+      }
+      code {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0 0.3em;
+      }
+      .pill {
+        display: inline-block;
+        font:
+          600 0.82rem ui-monospace,
+          Menlo,
+          monospace;
+        padding: 1px 8px;
+        border-radius: 5px;
+      }
+      .msg {
+        background: var(--msg-bg);
+        color: var(--msg-fg);
+      }
+      .pos {
+        background: var(--pos-bg);
+        color: var(--pos-fg);
+      }
+      .tel {
+        background: var(--tel-bg);
+        color: var(--tel-fg);
+      }
+      .ack {
+        background: var(--ack-bg);
+        color: var(--ack-fg);
+      }
+      .sys {
+        background: var(--sys-bg);
+        color: var(--sys-fg);
+      }
+      .dbg {
+        background: var(--dbg-bg);
+        color: var(--dbg-fg);
+      }
+      .lora {
+        background: var(--lora-bg);
+        color: var(--lora-fg);
+      }
+      .srv {
+        background: var(--srv-bg);
+        color: var(--srv-fg);
+      }
+      .ble {
+        background: var(--ble-bg);
+        color: var(--ble-fg);
+      }
+      .udp {
+        background: var(--udp-bg);
+        color: var(--udp-fg);
+      }
+      .warnpill {
+        background: var(--warn-bg);
+        color: var(--warn-fg);
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        margin: 0.8em 0 1.2em;
+        font-size: 0.95rem;
+      }
+      th,
+      td {
+        text-align: left;
+        vertical-align: top;
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--line);
+      }
+      th {
+        background: var(--card);
+        font-weight: 600;
+      }
+      .callout {
+        background: var(--card);
+        border-left: 4px solid var(--accent);
+        border-radius: 6px;
+        padding: 10px 16px;
+        margin: 1em 0;
+      }
+      .callout.warn {
+        border-left-color: #d49a00;
+        background: var(--warn-bg);
+        color: var(--warn-fg);
+      }
+      .qa {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 4px 18px 10px;
+        margin: 1.2em 0;
+      }
+      .qa h3 {
+        margin-top: 0.9em;
+      }
+      .row {
+        font:
+          0.88rem ui-monospace,
+          Menlo,
+          monospace;
+        background: #0f1530;
+        color: #dfe5f7;
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin: 0.8em 0;
+        overflow-x: auto;
+        white-space: pre;
+      }
+      .row .t {
+        color: #9aa5c4;
+      }
+      .row {
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      @media (max-width: 640px) {
+        nav ol {
+          columns: 1;
+        }
+      }
+      @media print {
+        nav {
+          display: none;
+        }
+        .row {
+          background: #fff;
+          color: #000;
+          border: 1px solid #999;
+        }
+        .row .t {
+          color: #444;
+        }
+        nav,
+        .row,
+        .qa,
+        tr {
+          break-inside: avoid;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>McApp Monitor &mdash; Reading Guide</h1>
+      <p class="lead">
+        Settings &rarr; Monitor (<code>/webapp/settings?section=monitor</code>).
+        A terminal-style live view of everything your McApp backend sees on the
+        wire, including frames the normal chat views hide. Written for McApp
+        v2.1.8. Old bookmarks to <code>/monitor</code> redirect here.
+      </p>
+
+      <nav>
+        <strong>Contents</strong>
+        <ol>
+          <li><a href="#faq">Start here: your five questions</a></li>
+          <li><a href="#cheat">Symptom to meaning</a></li>
+          <li><a href="#big-picture">The big picture</a></li>
+          <li><a href="#anatomy">Anatomy of one line</a></li>
+          <li><a href="#kinds">Kinds</a></li>
+          <li><a href="#origin-link">Origin vs. link</a></li>
+          <li><a href="#merging">Merged lines (&times;N)</a></li>
+          <li><a href="#signal">RSSI, SNR, icon</a></li>
+          <li><a href="#verdicts">Verdicts</a></li>
+          <li><a href="#toolbar">Toolbar and status bar</a></li>
+          <li><a href="#dbg">DBG: the node console</a></li>
+          <li><a href="#glossary">Terms</a></li>
+        </ol>
+      </nav>
+
+      <div class="callout">
+        <strong>New in v2.1.9:</strong> MHeard entries now have their own
+        <span class="pill" style="background: #ccfbf1; color: #134e4a">MH</span>
+        kind instead of looking like POS lines, each copy says where it came
+        from (for example &ldquo;MHeard report &middot; BLE register&rdquo;),
+        the bare &ldquo;shown&rdquo; is gone, node command replies are the
+        hidden <code>CMD</code> kind, and the <strong>(i)</strong> button in the
+        toolbar opens a legend. Screenshots from before show the older wording.
+      </div>
+      <h2 id="faq">Start here: the five things on your screenshots</h2>
+      <div class="callout">
+        <strong>Safe to ignore:</strong>
+        <code>dropped &middot; command_echo</code> after a reconnect;
+        <code>redirected &middot; blocklist</code> on a
+        <code>response</code> line; <code>0 dBm / 0 dB</code> on Server lines
+        (and its icon); TEL lines full of zeros; repeated MHeard POS lines (one
+        per station per minute).
+      </div>
+
+      <div class="qa">
+        <h3>
+          FAQ 1. Why so many &ldquo;shown&rdquo; lines with a signal report, and
+          what are they?
+        </h3>
+        <p>
+          <strong
+            >Short answer: &ldquo;shown&rdquo; only means &ldquo;not
+            filtered&rdquo;. These lines are the node&rsquo;s list of stations
+            it hears directly, not new packets.</strong
+          >
+        </p>
+        <p>
+          <strong>&ldquo;shown&rdquo; is not an event, it is a verdict.</strong>
+          It only says &ldquo;this copy was passed on to the normal
+          views&rdquo;. Every ordinary copy says it, so an expanded line is full
+          of it. The interesting part is what follows: the time, the link and
+          the signal values.
+        </p>
+        <p>
+          The lines in your screenshot (DL2JA-1, DB0ED-99, DL2JA-2, DL2UD-1,
+          DF2SI-12 with <span class="pill ble">BLE</span> origin and &times;3 to
+          &times;6) have
+          <strong>no coordinates, no battery and no via path</strong>, only a
+          hardware label such as <code>[Heltec V3]</code> and a signal. These
+          are <strong>MHeard entries</strong>: your node keeps a list of the
+          stations it has heard directly and reports it over Bluetooth, together
+          with the RSSI and SNR of the last packet it received from each. McApp
+          turns each report into a POS-like line so the signal data can be
+          stored and charted.
+        </p>
+        <p>
+          Why repeated: on the DK5EN fork firmware the node reports a heard
+          station <strong>at most once per minute</strong>, with the signal of
+          its latest direct packet from that station and an SNR averaged over
+          its recent frames (checked in the fork source,
+          <code>mhPhoneLive</code>). On official firmware the node reports on
+          every update with that one packet&rsquo;s values. After a Bluetooth
+          reconnect the node also sends its whole MHeard list once, which
+          explains the burst right after &ldquo;Reconnecting&rdquo;. Each
+          sub-line is therefore <em>one MHeard report</em>, not necessarily one
+          received packet, and the time shown is when the Pi received the
+          report. The node&rsquo;s own heard-at time is not shown: it is
+          node-local wall time and only approximate.
+        </p>
+        <p>
+          Since v2.1.9 these lines are the
+          <span class="pill" style="background: #ccfbf1; color: #134e4a"
+            >MH</span
+          >
+          kind, the header summarises them (&ldquo;14 reports &middot; 13 min
+          &middot; RSSI &minus;118&hellip;&minus;117 dBm &middot; SNR
+          &minus;7&hellip;&minus;6 dB&rdquo;), and an expanded line shows the
+          newest five reports with a button for the rest.
+        </p>
+        <p>
+          Practical use: this is the quickest way to see
+          <em>who your node hears directly</em> and how well. A column of stable
+          values (&minus;126 dBm / &minus;15 dB for DL2JA-1) tells you the link
+          is steady; a station that keeps appearing with SNR near &minus;15 dB
+          is at the edge of what your node can decode.
+        </p>
+      </div>
+
+      <div class="qa">
+        <h3>
+          FAQ 2. Why &ldquo;TEL&rdquo; &mdash; we have McApp, no telephone?
+        </h3>
+        <p>
+          <strong
+            >Short answer: telemetry (sensor readings), not telephone.</strong
+          >
+        </p>
+        <p>
+          TEL means <strong>telemetry</strong>, not telephone. MeshCom nodes
+          with sensors (or with the sensor fields enabled) periodically
+          broadcast a telemetry frame containing temperature, a second
+          temperature, humidity, air pressure (QFE at station height, QNH at sea
+          level), gas resistance, CO2 and battery level. McApp shows them as
+          <span class="pill tel">TEL</span> and uses them for the WX page.
+        </p>
+        <p>
+          In your screenshot the values
+          <code
+            >0&deg;C T2 0&deg;C 0% relH QFE 0 hPa QNH 0 hPa 0 k&Omega; CO2 0
+            ppm</code
+          >
+          mean the node <strong>has no sensor attached</strong> (or none
+          enabled) but still sends the telemetry frame, so the readings are
+          zero. Typically only the battery figure is real, and
+          <code>battery 0%</code> on a powered node generally means &ldquo;not
+          measured&rdquo;. DG7RJ-8 on the other hand shows
+          <code>26.2&deg;C ... 44% relH</code>: a real temperature and humidity
+          sensor.
+        </p>
+        <p>
+          A TEL line typically appears next to the POS line of the same station
+          and time because nodes usually send them back to back. If they bother
+          you, switch the <strong>TEL</strong> chip off in the toolbar.
+        </p>
+      </div>
+
+      <div class="qa">
+        <h3>FAQ 3. Why &ldquo;dropped&rdquo;?</h3>
+        <p>
+          <strong
+            >Short answer: McApp&rsquo;s own setup command was echoed by the
+            node and hidden on purpose.</strong
+          >
+        </p>
+        <p>
+          The line
+          <code
+            >18:23:41 MSG RX BLE response &rarr; * --ackinfo on
+            <span class="pill warnpill"
+              >dropped &middot; command_echo</span
+            ></code
+          >
+          is McApp talking to your node.
+        </p>
+        <ol>
+          <li>
+            At 18:23:28 the Monitor shows
+            <em>Reconnecting to MC-b878-DK5EN-98</em>: the Bluetooth link was
+            re-established.
+          </li>
+          <li>
+            On every (re)connect McApp sends the node a few setup commands,
+            among them <code>--ackinfo on</code>, which makes the node report
+            who acknowledged a message.
+          </li>
+          <li>
+            The node answers each command with a text frame from the fake sender
+            name (pseudo-callsign) <code>response</code>, repeating the command.
+          </li>
+          <li>
+            That answer is a pure echo of McApp's own housekeeping, so the chat
+            view drops it. The Monitor still lists it so nothing is invisible,
+            and marks it <strong>dropped &middot; command_echo</strong>.
+          </li>
+        </ol>
+        <p>
+          It is harmless and expected after every Bluetooth reconnect. It only
+          matches a small fixed list of self-sent commands; a reply to a command
+          <em>you</em> typed is not dropped. Other reasons you may see:
+          <code>linkcheck</code> (ping/pong frames) and
+          <code>blocklist</code> (blocked sender).
+        </p>
+        <p>
+          The yellow bar on the left edge marks lines whose copies were all
+          filtered. Use the <strong>Filtered</strong> chip to hide them.
+        </p>
+      </div>
+
+      <div class="qa">
+        <h3>
+          FAQ 4. Why different RSSI and SNR values, and where do they come from?
+        </h3>
+        <p>
+          <strong
+            >Short answer: your node&rsquo;s receiver measures them per report
+            and they belong to the last hop; 0/0 means &ldquo;no radio
+            measurement&rdquo;.</strong
+          >
+        </p>
+        <p>
+          <strong>Source.</strong> The values are measured by
+          <em>your node's LoRa receiver</em> at the moment it receives a packet,
+          and are passed to the Pi: over UDP as <code>rssi</code> /
+          <code>snr</code> fields, over Bluetooth in the MHeard report. The
+          backend never calculates them and never rescales them: RSSI is dBm as
+          measured, SNR is already in dB.
+        </p>
+        <p><strong>Why they differ between lines and copies:</strong></p>
+        <ul>
+          <li>
+            <strong>Every report is a new measurement.</strong> Radio
+            propagation fluctuates constantly (fading, weather, noise), and the
+            MHeard report refers to the <em>latest</em> packet of any type from
+            that station. The same station at &minus;118 dBm / &minus;7 dB and
+            then &minus;8 dB is normal: 1 dB differences are noise, not a change
+            of the link.
+          </li>
+          <li>
+            <strong>RSSI and SNR may be computed differently.</strong> In an
+            MHeard report the RSSI is that of the latest direct packet, while on
+            the fork firmware the SNR is a running average over recent frames.
+            That is why such SNR values barely move.
+          </li>
+          <li>
+            <strong>The measurement belongs to the last hop.</strong> For a
+            relayed frame (<code
+              >DF2SI-12 &middot;&middot;&middot; DL2JA-1 &rarr;</code
+            >), RSSI/SNR describe the link from <em>DL2JA-1</em> to your node,
+            not from DF2SI-3 who originated it.
+          </li>
+          <li>
+            <strong>Only one copy may carry a value.</strong> In the expanded
+            view the UDP copy usually has RSSI/SNR while the BLE copy of the
+            same frame has none (compare DF2KX-1, 18:25:40). The line then shows
+            the one that exists. Copies are not averaged.
+          </li>
+          <li>
+            <strong>Placeholder zeros.</strong>
+            <code>0 dBm / 0 dB</code> appears on lines with origin
+            <span class="pill srv">Server</span> (DO2QG-1, DG6YHX-1, OE1XAR-33
+            <code>{CET}</code>). Those came over the internet from the MeshCom
+            server and were never received by radio, so the node reports 0/0 as
+            &ldquo;no measurement&rdquo;. A real reading of exactly 0 dBm / 0 dB
+            is not plausible on LoRa. The full-bars icon next to it is a display
+            artefact (the webapp treats 0 as a reading): ignore it.
+          </li>
+        </ul>
+        <p>
+          How to judge: compare <em>the same station over time</em> in one
+          expanded line. A stable value is a stable link; a trend of falling
+          RSSI and SNR is a link getting worse. Comparing different stations
+          says more about distance and antennas than about link quality.
+        </p>
+      </div>
+
+      <div class="qa">
+        <h3>
+          FAQ 5. Why does <code>--loradebug off</code> say &ldquo;redirected
+          &middot; blocklist&rdquo;?
+        </h3>
+        <p>
+          <strong
+            >Short answer: harmless. Since v2.1.9 the Monitor says
+            <code>node_reply</code> (&ldquo;Node reply, moved to group
+            9999&rdquo;) instead of &ldquo;blocklist&rdquo;, and these lines are
+            the hidden <code>CMD</code> kind.</strong
+          >
+        </p>
+        <p>
+          No real person is blocked here. The sender of these lines is the
+          pseudo-callsign <code>response</code>: that is how McApp labels every
+          <em>reply of your node to a console command</em> (<code
+            >--loradebug off</code
+          >, <code>--txcapture off</code>, <code>--info</code> and so on). The
+          word <code>response</code> is on the curated global blocklist
+          (<code>sperrliste.json</code>), deliberately, so that such replies
+          never appear as chat messages from a station called
+          &ldquo;response&rdquo;.
+        </p>
+        <p>
+          What the verdict means: the destination is <code>*</code> (broadcast).
+          Blocked broadcast and group traffic is not discarded but
+          <strong>redirected</strong> to the spam group 9999, where you can
+          still inspect it; blocked direct messages would be
+          <strong>dropped</strong>. The Monitor shows the verdict the chat made,
+          so you see <code>redirected &middot; blocklist</code> instead of
+          <code>dropped</code>.
+        </p>
+        <p>
+          Why these two lines at 18:30:53 and 18:30:54: you stopped the DBG
+          session. McApp switched on whichever of the debug flags
+          <code>loradebug</code>, <code>txcapture</code> and
+          <code>setlog</code> was off for the session, and now sets back only
+          those to <code>off</code>; the node confirms each with a reply. They
+          are harmless. (The reply to <code>--ackinfo on</code> after a
+          reconnect is hidden by a different rule,
+          <code>dropped &middot; command_echo</code>, because McApp sends that
+          command itself on every connect; the DBG restore replies are not in
+          that short list and take the blocklist path.)
+        </p>
+        <p>
+          Since v2.1.9 the node's echo of the flag commands McApp itself sends
+          during a DBG session is hidden as <code>command_echo</code>, so you no
+          longer see each of them twice. The same lines appear as
+          <span class="pill dbg">DBG</span> rows (<code>--loradebug off</code>
+          at 18:30:58): that is the node's console showing the same command from
+          its own side, not a second reply.
+        </p>
+        <p>
+          If you want to be sure it is not a leftover rule of your own: the
+          entry comes from the central list, not from a
+          <code>!kb</code> kickban.
+        </p>
+      </div>
+
+      <h2 id="cheat">Symptom to meaning</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>You see</th>
+            <th>It means</th>
+          </tr>
+        </thead>
+        <tr>
+          <td><code>&times;N</code></td>
+          <td>
+            N copies of the same frame folded into one line. Click to expand.
+          </td>
+        </tr>
+        <tr>
+          <td><code>shown</code> on a sub-line</td>
+          <td>That copy was delivered to the normal views. Not an event.</td>
+        </tr>
+        <tr>
+          <td>POS without coordinates, origin BLE</td>
+          <td>
+            MHeard report: &ldquo;my node heard this station, last signal was
+            X&rdquo;.
+          </td>
+        </tr>
+        <tr>
+          <td>POS with coordinates and via path</td>
+          <td>Real position beacon, possibly relayed.</td>
+        </tr>
+        <tr>
+          <td>TEL full of zeros</td>
+          <td>Node without sensor. Only battery is real.</td>
+        </tr>
+        <tr>
+          <td><code>0 dBm / 0 dB</code></td>
+          <td>No radio measurement (frame came via the internet server).</td>
+        </tr>
+        <tr>
+          <td>Yellow stripe, <code>dropped &middot; command_echo</code></td>
+          <td>
+            Node's reply to McApp's own setup command after a Bluetooth
+            reconnect.
+          </td>
+        </tr>
+        <tr>
+          <td>SYS &ldquo;Reconnecting to &hellip;&rdquo;</td>
+          <td>
+            Bluetooth link to the node was lost and is being re-established
+            (attempt 1/4 etc.).
+          </td>
+        </tr>
+        <tr>
+          <td><code>{CET}2026-10-10 16:24:32</code></td>
+          <td>
+            Time beacon from the MeshCom server. Ignore the wall time in the
+            text: it is the sender's clock, not yours. McApp uses only its
+            arrival time.
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <code>redirected &middot; blocklist</code> on a
+            <code>response</code> line
+          </td>
+          <td>
+            Node reply to a console command; the pseudo-sender
+            <code>response</code> is on the blocklist on purpose. Harmless.
+          </td>
+        </tr>
+        <tr>
+          <td>Both UDP and BLE badge</td>
+          <td>Same frame arrived over both links. Normal.</td>
+        </tr>
+        <tr>
+          <td>Link check always times out</td>
+          <td>
+            Check the node's firmware and the node's EXT IP (it must point to
+            this Pi).
+          </td>
+        </tr>
+        <tr>
+          <td>No lines with a UDP badge</td>
+          <td>
+            Extern-UDP is off on the node, or its EXT IP points elsewhere.
+          </td>
+        </tr>
+        <tr>
+          <td>Only SYS lines, no frames</td>
+          <td>Node not connected over Bluetooth; check the status bar.</td>
+        </tr>
+      </table>
+
+      <h2 id="reference">Reference</h2>
+      <p class="lead">Background for the sections above.</p>
+
+      <h2 id="big-picture">1. The big picture</h2>
+      <p>
+        Your Raspberry Pi runs the McApp backend. It talks to your MeshCom node
+        over two links at the same time:
+      </p>
+      <ul>
+        <li>
+          <strong>UDP</strong> &mdash; the node's Extern-UDP feed (JSON, port
+          1799).
+        </li>
+        <li><strong>BLE</strong> &mdash; Bluetooth to the same node.</li>
+      </ul>
+      <p>
+        The same radio event often arrives over <em>both</em> links, a fraction
+        of a second apart. The Monitor records every frame the backend receives
+        or sends. It tags each with what happened to it. Identical frames are
+        folded into one line; expand it to see the copies. Nothing here is a
+        second radio: it is the backend's view of the node's traffic.
+      </p>
+      <div class="callout">
+        The Monitor keeps the last 2000 frames in the backend's memory (lost on
+        restart) and up to 5000 lines in the browser. It is a diagnostic view,
+        not a message archive.
+      </div>
+
+      <h2 id="anatomy">2. Anatomy of one line</h2>
+      <div class="row">
+        <span class="t">18:25:40</span> POS RX BLE DF2KX-1 DF2KX-12
+        &middot;&middot;&middot; DL2JA-2 &rarr; 48.4666&deg;N 11.9228&deg;E 420
+        m 15.1 km battery 0% [Heltec V3] [4.40a] -124 dBm / -13 dB BLE UDP
+        &times;2 EEFC312E
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Part</th>
+            <th>Meaning</th>
+          </tr>
+        </thead>
+        <tr>
+          <td><code>18:25:40</code></td>
+          <td>
+            Time the backend first saw the frame (your browser's local time).
+          </td>
+        </tr>
+        <tr>
+          <td><span class="pill pos">POS</span></td>
+          <td>Kind of frame, see section 3.</td>
+        </tr>
+        <tr>
+          <td><code>RX</code> / <code>TX</code></td>
+          <td>
+            Direction. RX = received. TX = sent by this backend or echoed back
+            by your own node.
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <span class="pill lora">LoRa</span>
+            <span class="pill srv">Server</span>
+            <span class="pill ble">BLE</span>
+          </td>
+          <td>
+            <strong>Origin</strong>: where the frame came from on the mesh. See
+            section 4. A <code>?</code> means the origin is not known.
+          </td>
+        </tr>
+        <tr>
+          <td><code>DF2KX-1</code></td>
+          <td>Sender (source callsign).</td>
+        </tr>
+        <tr>
+          <td><code>DF2KX-12 &middot;&middot;&middot; DL2JA-2 &rarr;</code></td>
+          <td>
+            The relay path (&ldquo;via&rdquo;) the frame took, in order. The
+            last station in the list is the one your node actually heard
+            directly. Without a via list there is just an arrow.
+          </td>
+        </tr>
+        <tr>
+          <td>destination</td>
+          <td>
+            Group number (e.g. <code>262</code>), <code>*</code> for everyone,
+            or a callsign for a direct message.
+          </td>
+        </tr>
+        <tr>
+          <td>payload</td>
+          <td>
+            Text for MSG, coordinates / altitude / distance from you / battery /
+            hardware / firmware for POS, sensor readings for TEL.
+          </td>
+        </tr>
+        <tr>
+          <td><code>-124 dBm / -13 dB</code></td>
+          <td>
+            Signal strength (RSSI) and signal-to-noise (SNR) with a small signal
+            icon. See section 6.
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <span class="pill ble">BLE</span> <span class="pill udp">UDP</span>
+          </td>
+          <td>Links this frame was seen on. See section 4.</td>
+        </tr>
+        <tr>
+          <td><code>&times;2</code></td>
+          <td>
+            Number of copies folded into this line. Click the line to see each
+            copy.
+          </td>
+        </tr>
+        <tr>
+          <td><code>EEFC312E</code></td>
+          <td>Message ID (8 hex digits), when the frame has one.</td>
+        </tr>
+      </table>
+
+      <h2 id="kinds">3. Kinds</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Badge</th>
+            <th>Meaning</th>
+          </tr>
+        </thead>
+        <tr>
+          <td><span class="pill msg">MSG</span></td>
+          <td>
+            A text message: group, direct or broadcast. Includes
+            <code>{CET}</code> time beacons from the MeshCom server.
+          </td>
+        </tr>
+        <tr>
+          <td><span class="pill pos">POS</span></td>
+          <td>
+            A position / station beacon. Two flavours: a real position
+            (coordinates, altitude, distance, battery, hardware, firmware) or a
+            signal-only entry without coordinates (see FAQ 1).
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <span class="pill" style="background: #ccfbf1; color: #134e4a"
+              >MH</span
+            >
+          </td>
+          <td>
+            An entry from your node&rsquo;s MHeard list (stations it hears
+            directly) with their signal. Not a new packet. Before v2.1.9 these
+            were shown as POS.
+          </td>
+        </tr>
+        <tr>
+          <td><span class="pill tel">TEL</span></td>
+          <td>
+            <strong>Telemetry</strong>, not telephone: sensor readings a node
+            broadcasts (temperature, humidity, air pressure QFE/QNH, gas, CO2,
+            battery). See FAQ 2.
+          </td>
+        </tr>
+        <tr>
+          <td><span class="pill ack">ACK</span></td>
+          <td>
+            An acknowledgement: a text receipt like <code>:ack123</code>, or a
+            delivery-status frame from your node.
+          </td>
+        </tr>
+        <tr>
+          <td><span class="pill sys">SYS</span></td>
+          <td>
+            Backend notices, mainly Bluetooth state: &ldquo;Reconnecting to
+            MC-xxxx&rdquo;, the node's IP address, &ldquo;finished sending
+            config&rdquo;.
+          </td>
+        </tr>
+        <tr>
+          <td><code>CMD</code></td>
+          <td>
+            The node&rsquo;s reply to a console command (sender
+            <code>response</code>). Hidden by default; enable its chip in the
+            toolbar.
+          </td>
+        </tr>
+        <tr>
+          <td><span class="pill dbg">DBG</span></td>
+          <td>
+            Live lines from the node's debug console. Only exists while you
+            press the DBG button; see section 9.
+          </td>
+        </tr>
+      </table>
+
+      <h2 id="origin-link">4. Origin vs. link &mdash; two different badges</h2>
+      <p>
+        This is the most common source of confusion. A line carries two
+        independent facts.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th>Question it answers</th>
+            <th>Where on the line</th>
+          </tr>
+        </thead>
+        <tr>
+          <td><strong>Origin</strong></td>
+          <td>Where did the frame come from on the mesh?</td>
+          <td>Left, next to RX/TX</td>
+        </tr>
+        <tr>
+          <td><strong>Link</strong></td>
+          <td>How did the frame reach the backend on the Pi?</td>
+          <td>Right, after the signal values</td>
+        </tr>
+      </table>
+      <h3>Origin badges</h3>
+      <table>
+        <tr>
+          <td><span class="pill lora">LoRa</span></td>
+          <td>Heard on air by a LoRa radio.</td>
+        </tr>
+        <tr>
+          <td><span class="pill srv">Server</span></td>
+          <td>
+            Injected from the MeshCom server via an internet gateway,
+            <em>not</em> received by radio. It has no radio signal at all (see
+            FAQ 4, <code>0 dBm / 0 dB</code>).
+          </td>
+        </tr>
+        <tr>
+          <td><span class="pill ble">BLE</span></td>
+          <td>
+            Reported by your node over Bluetooth, typically from its MHeard list
+            (see FAQ 1).
+          </td>
+        </tr>
+        <tr>
+          <td><code>Node</code></td>
+          <td>Your own node's transmission, echoed back.</td>
+        </tr>
+        <tr>
+          <td><code>WWW</code>, <code>?</code></td>
+          <td>Web origin / unknown.</td>
+        </tr>
+      </table>
+      <h3>Link badges</h3>
+      <table>
+        <tr>
+          <td><span class="pill udp">UDP</span></td>
+          <td>Arrived over the node's Extern-UDP feed.</td>
+        </tr>
+        <tr>
+          <td><span class="pill ble">BLE</span></td>
+          <td>Arrived over Bluetooth.</td>
+        </tr>
+        <tr>
+          <td><code>APP</code></td>
+          <td>
+            Sent by this backend (a message you typed, or an automatic command
+            reply).
+          </td>
+        </tr>
+        <tr>
+          <td><code>CONSOLE</code></td>
+          <td>Line from the node's debug console.</td>
+        </tr>
+      </table>
+      <div class="callout">
+        Example: <em>Origin Server + links UDP and BLE</em> means &ldquo;the
+        MeshCom server sent it, and your node delivered it to the Pi on both
+        channels&rdquo;.
+      </div>
+
+      <h2 id="merging">5. Merged lines and copies (&times;N)</h2>
+      <p>
+        The same frame often shows up more than once: UDP and BLE copies of one
+        packet, or a station repeating its beacon. The Monitor folds copies into
+        one line and shows <code>&times;N</code>. Click a line (or use
+        <strong>Expand all</strong>) to see one sub-line per copy:
+      </p>
+      <div class="row">
+        <span class="t">18:25:40</span> POS RX BLE DF2KX-1 ... BLE UDP &times;2
+        EEFC312E <span class="t">18:25:40</span> BLE shown DF2KX-1
+        &middot;&middot;&middot; DF2KX-12 &middot;&middot;&middot; DL2JA-2
+        <span class="t">18:25:40</span> UDP shown -124 dBm / -13 dB DF2KX-12
+        &middot;&middot;&middot; DL2JA-2
+      </div>
+      <p>
+        Each sub-line: time of that copy, the link, the verdict, the signal
+        values of that copy (if it has any), and the via path.
+      </p>
+      <p>How folding works:</p>
+      <ul>
+        <li>
+          MSG, POS and ACK frames with a message ID: same sender and same ID
+          within 60 minutes.
+        </li>
+        <li>
+          MSG without an ID: same sender, destination and text within 2 minutes.
+        </li>
+        <li>
+          POS without an ID: same station at the same position (4 decimals)
+          within 2 minutes.
+        </li>
+        <li>TEL: same station with identical readings within 60 seconds.</li>
+        <li>
+          SYS and DBG lines are never folded. DBG lines have their own cap (500,
+          2000 or 5000 lines, default 2000, set in the console filter) and do
+          not count against the 5000-row cap of the normal list.
+        </li>
+      </ul>
+      <p>
+        Folding is a display feature: it never changes what is stored or shown
+        elsewhere.
+      </p>
+
+      <h2 id="signal">6. RSSI, SNR and the signal icon</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Value</th>
+            <th>Meaning</th>
+            <th>Rule of thumb</th>
+          </tr>
+        </thead>
+        <tr>
+          <td><strong>RSSI</strong> (dBm)</td>
+          <td>Received power. More negative = weaker.</td>
+          <td>&minus;100 is good, &minus;120 is near the limit</td>
+        </tr>
+        <tr>
+          <td><strong>SNR</strong> (dB)</td>
+          <td>
+            How far the signal sits above the noise floor. LoRa can decode below
+            zero.
+          </td>
+          <td>
+            Above 0 good; below about &minus;15 marginal at typical spreading
+            factors
+          </td>
+        </tr>
+      </table>
+      <p>
+        Icon next to the numbers (from SNR): full = better than &minus;4 dB, two
+        bars = better than &minus;8, one bar = better than &minus;12, none =
+        &minus;12 or worse. When a line has several copies, the line shows the
+        most recent copy that carries a measurement.
+      </p>
+      <div class="callout warn">
+        <strong>Two cautions.</strong> (1) RSSI and SNR describe the
+        <em>last hop</em>, i.e. the station your node heard directly (the last
+        entry of the via list), not the originator of a relayed frame. (2)
+        <code>0 dBm / 0 dB</code> is a placeholder meaning &ldquo;no radio
+        measurement&rdquo; (see FAQ 4), not a perfect signal.
+      </div>
+
+      <h2 id="verdicts">7. Verdicts: shown, dropped, redirected</h2>
+      <p>
+        Every copy carries a verdict from the same decision function the live
+        chat uses, so what the Monitor says is exactly what the chat did.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Verdict</th>
+            <th>Meaning</th>
+          </tr>
+        </thead>
+        <tr>
+          <td><code>shown</code></td>
+          <td>Delivered to the normal views as usual. Most lines.</td>
+        </tr>
+        <tr>
+          <td>
+            <span class="pill warnpill">dropped &middot; command_echo</span>
+          </td>
+          <td>
+            The node's reply to a command McApp sent by itself on connect (<code
+              >--ackinfo on</code
+            >). Hidden because it is noise (FAQ 3).
+          </td>
+        </tr>
+        <tr>
+          <td><span class="pill warnpill">dropped &middot; linkcheck</span></td>
+          <td>
+            A <code>{ping}</code> / <code>{pong}</code> link-check frame. Used
+            internally, never shown as chat.
+          </td>
+        </tr>
+        <tr>
+          <td><span class="pill warnpill">dropped &middot; blocklist</span></td>
+          <td>
+            Sender is on the blocklist (curated list plus your own kickbans).
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <span class="pill warnpill">redirected &middot; blocklist</span>
+          </td>
+          <td>
+            Blocked group / broadcast traffic, moved to the spam group instead
+            of the original group. Also applies to node command replies (sender
+            <code>response</code>), see FAQ 5.
+          </td>
+        </tr>
+        <tr>
+          <td><code>sent</code> / <code>failed</code></td>
+          <td>
+            Outbound frames: handed to the transport, or rejected (the reason
+            follows).
+          </td>
+        </tr>
+        <tr>
+          <td><code>suppressed</code></td>
+          <td>
+            Your text was a local command (e.g. <code>!wx</code>) and was never
+            transmitted; the reply goes out as its own <code>sent</code> frame.
+          </td>
+        </tr>
+      </table>
+      <p>
+        A line whose copies were <em>all</em> filtered gets a yellow stripe on
+        the left and a chip with the reason. The
+        <strong>Filtered</strong> toggle hides or shows such lines.
+      </p>
+
+      <h2 id="toolbar">8. Toolbar and status bar</h2>
+      <h3>Toolbar (top)</h3>
+      <ul>
+        <li>
+          <strong>Search</strong>: callsign (source, destination, via), text or
+          message ID.
+        </li>
+        <li>
+          <strong>DBG</strong>: starts a live tap on the node's debug console
+          and shows its lines in the same list. ESP32 nodes only; fails with
+          &ldquo;console busy&rdquo; if another tool (e.g. meshlogger) holds the
+          node's single console connection. Next to it:
+          <strong>Console filter</strong> and <strong>Pause</strong>. All of it
+          is explained in section 9.
+        </li>
+        <li>
+          <strong>MSG / POS / MH / TEL / ACK / SYS / CMD</strong>: show or hide
+          each kind. The <strong>(i)</strong> button at the end opens a legend.
+          Highlighted = shown.
+        </li>
+        <li>
+          <strong>Filtered</strong>: show or hide lines that were dropped or
+          redirected.
+        </li>
+        <li>
+          <strong>Expand all</strong>: open every line to show its copies. The
+          setting is remembered.
+        </li>
+        <li>
+          <strong>N entries</strong> and the trash icon: line count, and clear
+          the view (this clears the browser view, not the backend's ring).
+        </li>
+      </ul>
+      <h3>Status bar (bottom)</h3>
+      <p>
+        Your own node at a glance: callsign, board and firmware, battery,
+        position, <code>RX n / TX n</code> counters for this session, and the
+        last station heard with its signal values.
+      </p>
+      <p>
+        The &ldquo;<em>N new</em>&rdquo; pill appears when you have scrolled up
+        and newer lines arrived below; click it to jump to the end.
+      </p>
+
+      <!-- DBG-CHAPTER-BEGIN -->
+      <h2 id="dbg">9. DBG: reading the node console</h2>
+
+      <h3>9.1 What DBG is and what it needs</h3>
+      <p>
+        The <strong>DBG</strong> button in the toolbar opens the node's own
+        debug console (TCP port 2323) and shows every console line as a
+        <span class="pill dbg">DBG</span> row among the mesh frames. This is the
+        node's view of itself: what it received (including damaged frames), what
+        it queued, what it sent, and how busy the channel is. Mesh frames tell
+        you what was on the air; the console tells you what the node did with
+        it.
+      </p>
+      <ul>
+        <li>
+          <strong>ESP32 nodes only.</strong> The network console exists on ESP32
+          boards. An nRF52 board (RAK4631) has no network console, so DBG cannot
+          work there.
+        </li>
+        <li>
+          <strong>One client only.</strong> The console accepts exactly one
+          connection. While <code>meshlogger</code> is attached, DBG fails with
+          &ldquo;console busy&rdquo;; while DBG runs, meshlogger cannot connect.
+        </li>
+        <li>
+          <strong>Flags.</strong> A session turns on <code>loradebug</code>,
+          <code>txcapture</code> and <code>setlog</code> on the node, each only
+          if it is not on already, and switches back only those it turned on
+          (see 9.7). While a session runs, the toolbar shows a note such as
+          <code
+            >DBG on &lt;board&gt; (fw &lt;version&gt;): loradebug, txcapture,
+            setlog</code
+          >.
+        </li>
+      </ul>
+
+      <h3>9.2 Reading a DBG row</h3>
+      <p>From left to right:</p>
+      <ul>
+        <li>
+          <strong>Two times.</strong> The first is the arrival time at McApp
+          with milliseconds; the second is the node's own clock
+          (<code>HH:MM:SS</code>) when the line carries one. Many lines have no
+          node time at all.
+        </li>
+        <li>
+          <strong>Family pill.</strong> What kind of console line it is: for
+          example <code>MH-LoRa</code> (the tag of a packet line),
+          <code>LOG STAT</code>, <code>DBG CHANNEL_UTIL</code>, <code>SM</code>,
+          <code>CAP</code>, <code>WDT</code>. Hover over it for a short
+          explanation; many words in the line itself have such a tooltip too.
+        </li>
+        <li>
+          <strong>Severity.</strong> A coloured stripe on the left plus a word,
+          <code>warn</code> or <code>alarm</code>, so colour is never the only
+          cue. Lines without it are plain information.
+        </li>
+        <li>
+          <strong>The line itself.</strong> Packet lines are split into chips
+          (see 9.4); everything else is the raw text with the numbers and names
+          highlighted.
+        </li>
+      </ul>
+
+      <h3>9.3 Line families at a glance</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Family (pill)</th>
+            <th>Example</th>
+            <th>What to look at</th>
+          </tr>
+        </thead>
+        <tr>
+          <td>
+            Packet lines (<code>MH-LoRa</code>, <code>RX-LoRa2</code>,
+            <code>TX-LoRa</code>, <code>RX-UDP</code>, <code>TX-UDP</code>,
+            <code>NEW-HEY</code>, ...)
+          </td>
+          <td>
+            <code
+              >00:00:56 MH-LoRa 064 @ xA183638F H02 S0 T0 M01 DF8RD-1,...</code
+            >
+          </td>
+          <td>
+            One line per frame the node handled. Needs <code>--setinfo</code> or
+            <code>--loradebug</code> on the node. See 9.4.
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <code>LOG RX</code>, <code>LOG RLY</code>, <code>LOG TX</code>,
+            <code>LOG ERR</code>
+          </td>
+          <td><code>[LOG] RLY x3BAC51B8 ! H00 q=gwcap prio=0 slot=-1</code></td>
+          <td>
+            Setlog lines. <code>RX</code> adds RSSI/SNR, <code>DUP</code> and
+            <code>OWN</code>; <code>RLY</code> says what became of a new frame
+            (<code>q=tx</code> queued for relay, <code>q=hop0</code> hop budget
+            used up, <code>q=full</code> relay wanted but the TX ring was full);
+            <code>TX</code> shows <code>wait=</code> in ms from queueing to air;
+            <code>ERR</code> is a frame lost to CRC or another receive error.
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <code>LOG STAT</code>, <code>LOG DM</code>, <code>LOG MBOX</code>
+          </td>
+          <td><code>[LOG] STAT util=6 rx=15541 tx=4030 ...</code></td>
+          <td>The node's five-minute summary. See 9.5.</td>
+        </tr>
+        <tr>
+          <td>
+            <code>DBG ...</code> (<code>CHANNEL_UTIL</code>,
+            <code>CRC_ERROR</code>, <code>RING_STATUS</code>, ...)
+          </td>
+          <td>
+            <code
+              >[MC-DBG] CRC_ERROR rssi= snr= freq_err=-24.2 size=100 ts=</code
+            >
+          </td>
+          <td>
+            Reception, dedup, TX ring, relay and CSMA events. The word after the
+            tag is the event; the severity rules in 9.6 decide which of them are
+            flagged.
+          </td>
+        </tr>
+        <tr>
+          <td><code>SM</code></td>
+          <td>
+            <code>[MC-SM] &lt;from&gt; -&gt; &lt;to&gt; rc=&lt;n&gt;</code>
+          </td>
+          <td>
+            Radio state machine transitions. High volume; hidden as noise. A
+            non-zero <code>rc</code> is flagged.
+          </td>
+        </tr>
+        <tr>
+          <td><code>CAP</code></td>
+          <td>
+            <code>[MC-TEST] RX_FRAME len=115 rssi=-114 snr=-2 hex=...</code>
+          </td>
+          <td>
+            The raw bytes of a received or sent frame. Has a
+            <strong>decode</strong> button (9.4).
+            <code>CAPTURE_DROPPED</code> means frames did not fit the capture
+            buffer: the capture is not complete.
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <code>STAT</code>, <code>PRIO</code>, <code>HWM</code>,
+            <code>TRICKLE</code>
+          </td>
+          <td><code>[MC-STAT] t=300s qmax=5/20</code></td>
+          <td>
+            Periodic statistics: TX ring per priority, queue-to-air latency,
+            long-term high-water marks, HEY interval (Trickle).
+            <code>HWM</code> is not printed while setlog is on.
+          </td>
+        </tr>
+        <tr>
+          <td><code>WDT</code>, <code>WARN</code></td>
+          <td>
+            <code
+              >[MC-WDT] TX_WATCHDOG fired after 15000ms - forcing RX
+              recovery</code
+            >
+          </td>
+          <td>
+            A <code>WDT</code> line is always an alarm: the transmit-done
+            interrupt never arrived. <code>WARN ONRXDONE_SLOW</code> is
+            background on an ESP32 gateway and is not flagged.
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <code>HEAP</code>, <code>BOOT</code>, <code>LoRa</code>,
+            <code>EXT</code>, <code>NBR</code>, <code>WIFI</code>,
+            <code>NTP</code>, ...
+          </td>
+          <td><code>[BOOT] RESET_REASON=1 POWERON</code></td>
+          <td>
+            Housekeeping: heap, reset reason, radio events, Extern-UDP,
+            neighbour matrix, network and time. A <code>BOOT</code> line with
+            reason <code>PANIC</code>, <code>INT_WDT</code>,
+            <code>TASK_WDT</code> or <code>BROWNOUT</code> is an alarm.
+          </td>
+        </tr>
+      </table>
+
+      <h3>9.4 Packet lines and decoding a frame</h3>
+      <p>
+        A packet line (and the <code>LOG RX</code> and
+        <code>LOG ACK</code> lines) is shown as a row of chips instead of one
+        long string. Hover over a chip for its meaning.
+      </p>
+      <ul>
+        <li>
+          <strong>Type and message id</strong> (<code>x</code> followed by 8 hex
+          digits), and <strong>hops left</strong>: how many more hops the frame
+          was allowed to make when this node received it. On an ACK line the
+          shown number is the whole byte (server flag included);
+          <code>H8n</code> is normal there.
+        </li>
+        <li>
+          <strong>S / T / M</strong>: server flag (the frame has passed a
+          gateway), track flag, mesh flag (relaying allowed). A letter appears
+          only when the flag is set.
+        </li>
+        <li>
+          <strong>Path</strong>, <strong>originator first</strong>, then the
+          relays in order, followed by the destination and the payload.
+        </li>
+        <li>
+          <strong>HW</strong> (hardware of the originator),
+          <strong>FW</strong> (firmware version and sub-version) and
+          <strong>LH</strong> (hardware of the <em>last hop</em>, the station
+          that transmitted this copy), and <strong>FCS</strong> (the frame
+          checksum as printed).
+        </li>
+        <li>
+          <strong>RSSI / SNR</strong> with the signal icon (only on
+          <code>LOG RX</code>), and two badges: <strong>DUP</strong> (an id the
+          node had already seen: a second copy) and <strong>OWN</strong> (the
+          node's own call is in the path: an echo of its own transmission).
+        </li>
+        <li>
+          <strong>raw</strong> shows the original text of the line next to the
+          chips.
+        </li>
+      </ul>
+      <p>
+        A <code>CAP</code> row (<code>RX_FRAME</code> / <code>TX_FRAME</code>)
+        shows the raw bytes shortened; its <strong>raw</strong> button shows the
+        full line and <strong>decode</strong> opens a table with type, length,
+        message id, the flags byte bit by bit, hops left, path, destination,
+        payload, hardware, modulation, firmware, last-hop hardware, RSSI/SNR and
+        the full hex. The <strong>FCS</strong> row compares the checksum in the
+        frame with one McApp computes over the received bytes and says
+        <code>OK</code> or <code>FAIL</code>. A failing FCS means the bytes were
+        damaged on the way (or the dump is cut short), so none of the other
+        fields can be trusted.
+      </p>
+      <p>
+        The same fields now appear on the ordinary RF rows too: each copy of a
+        decoded frame shows its
+        <em>hops left</em>, the S / T / M flags, a warning badge when its FCS
+        check failed, and the hardware of the last transmitting node.
+      </p>
+
+      <h3>9.5 Reading STAT</h3>
+      <p>
+        Every 300 seconds the node prints one <code>[LOG] STAT</code> line
+        (needs setlog). All counters are for the last five minutes and restart
+        after each line. &ldquo;Normal&rdquo; below are values seen on one busy
+        gateway, not limits set by the firmware, except where stated.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Meaning</th>
+            <th>Normal / alarming</th>
+          </tr>
+        </thead>
+        <tr>
+          <td><code>util</code></td>
+          <td>
+            Channel occupancy in percent over the 300 s window (receive plus
+            transmit airtime).
+          </td>
+          <td>
+            6-31 % per window at a busy site. Sustained above 50 % means
+            congestion.
+          </td>
+        </tr>
+        <tr>
+          <td><code>rx</code>, <code>tx</code></td>
+          <td>Summed airtime in ms.</td>
+          <td>
+            <code>tx</code> should be small against <code>rx</code>. On old
+            ESP32 builds <code>rx</code> is too high (see 9.8).
+          </td>
+        </tr>
+        <tr>
+          <td><code>newid</code>, <code>dup</code></td>
+          <td>New message ids seen, and duplicate receptions.</td>
+          <td>
+            A mesh produces several copies per frame; about 58 % duplicates were
+            seen.
+          </td>
+        </tr>
+        <tr>
+          <td><code>err</code></td>
+          <td>CRC and other receive errors.</td>
+          <td>
+            About 5-6 % of receptions at the observed site. Bursts mean
+            collisions or interference.
+          </td>
+        </tr>
+        <tr>
+          <td><code>txn</code></td>
+          <td>Own transmissions: own, relayed and gateway-fed.</td>
+          <td></td>
+        </tr>
+        <tr>
+          <td><code>txfail</code></td>
+          <td>Transmissions aborted by the 15 s transmit watchdog.</td>
+          <td>Must be 0. Above 0 is flagged as an alarm.</td>
+        </tr>
+        <tr>
+          <td><code>ringmax</code></td>
+          <td>Highest fill of the TX queue, as <code>used/20</code>.</td>
+          <td>17/20 was seen in a busy hour. At 20/20 frames are dropped.</td>
+        </tr>
+        <tr>
+          <td><code>drop=a/b/c/d/e</code></td>
+          <td>
+            Frames dropped from the TX queue per priority: 1 ACK and direct
+            message, 2 group and broadcast, 3 relay, 4 position, 5 HEY.
+          </td>
+          <td>
+            A non-zero first or second number means user traffic was lost:
+            alarm. Drops in 3-5 are load shedding: warn.
+          </td>
+        </tr>
+        <tr>
+          <td><code>mh</code></td>
+          <td>Neighbour count from the neighbour matrix.</td>
+          <td></td>
+        </tr>
+        <tr>
+          <td><code>heap</code></td>
+          <td>
+            Free heap in bytes (with setlog on, this is where heap is reported).
+          </td>
+          <td>
+            A falling trend over days is a leak. About 125-129 kB on a Heltec V3
+            gateway, about 104 kB on a RAK4631.
+          </td>
+        </tr>
+        <tr>
+          <td><code>trk=i/c</code></td>
+          <td>
+            HEY interval in seconds and consistent HEYs heard since the last
+            reset. The interval doubles from 30 s up to 900 s; a topology change
+            resets it to 30 s.
+          </td>
+          <td><code>900/24</code> on a stable, quiet node.</td>
+        </tr>
+        <tr>
+          <td><code>up</code></td>
+          <td>Uptime in seconds.</td>
+          <td>A decrease between two STAT lines means the node rebooted.</td>
+        </tr>
+      </table>
+      <p>
+        <code>fw=</code> is the firmware version and build id,
+        <code>t=</code> is the node's millisecond counter. The
+        <code>DM</code> and <code>MBOX</code> lines that follow in the same tick
+        count direct messages (sent, acknowledged, given up) and the
+        store-and-forward mailbox.
+      </p>
+
+      <h3>9.6 Severity colours and what &ldquo;noise&rdquo; hides</h3>
+      <p>
+        McApp rates each console line as plain information,
+        <code>warn</code> (yellow stripe) or <code>alarm</code> (red stripe).
+        The ratings follow the firmware reference.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Rating</th>
+            <th>Lines</th>
+          </tr>
+        </thead>
+        <tr>
+          <td><span class="pill warnpill">alarm</span></td>
+          <td>
+            <code>[MC-WDT]</code>; <code>RING_DROP_NEW</code> of priority 1 or 2
+            (user traffic lost); <code>RING_OVERFLOW</code>,
+            <code>RING_REJECT</code>, <code>RETRANSMIT_GIVEUP_DM</code>; a state
+            machine transition with <code>rc</code> other than 0 (except the
+            usual back-off <code>TX_PREPARE -&gt; IDLE rc=-1</code>);
+            <code>RX_RESTART*</code> or <code>TX_DONE</code> with
+            <code>state</code> other than 0 (a radio fault);
+            <code>[LOG] STAT</code> with <code>txfail</code> above 0 or drops in
+            priority 1 or 2; a <code>[BOOT]</code> with reason
+            <code>PANIC</code>, <code>INT_WDT</code>, <code>TASK_WDT</code> or
+            <code>BROWNOUT</code>.
+          </td>
+        </tr>
+        <tr>
+          <td><span class="pill warnpill">warn</span></td>
+          <td>
+            <code>RX_OTHER_ERROR</code>, <code>CRC_ERROR</code>,
+            <code>[LOG] ERR</code>; <code>RING_DROP_NEW</code> of priority 3-5
+            (load shedding), <code>RING_DROP_PRIO</code>,
+            <code>RING_DROP_STALE</code>, <code>RETRANSMIT_GIVEUP</code>;
+            <code>[LOG] RLY q=full</code>; <code>CAPTURE_DROPPED</code>;
+            <code>CHANNEL_UTIL</code> with <code>util</code> of 70 or more;
+            <code>[LOG] STAT</code> with drops in priority 3-5.
+          </td>
+        </tr>
+      </table>
+      <p>
+        <code>ONRXDONE_SLOW</code> is deliberately <em>not</em> flagged: it was
+        background on a gateway that was working normally.
+      </p>
+      <p>
+        <strong>Noise</strong> is the high-volume plumbing that is rarely what
+        you are looking for: all state machine (<code>SM</code>) lines, the
+        receive/transmit timer and gate events (<code>RX_TIMEOUT_FIRE</code>,
+        <code>RX_RESTART</code>, <code>RX_RESTARTED</code>,
+        <code>RX_FLAG_PROCESS</code>, <code>TX_GATE_ENTER</code>,
+        <code>TX_START</code>, <code>CAD_FREE</code>, <code>RADIO_TX</code>,
+        <code>RING_PRIO</code>), the bare firmware words
+        <code>receiveflag</code>, <code>transmittedFlag</code>,
+        <code>OnTXDone</code>, <code>OnRxDone</code>, the
+        <code>[CHECK]</code> and <code>MESH :</code> lines, and a
+        <code>[LoRa]</code> timeout. Noise is hidden by default; untick
+        <strong>Hide noise</strong> in the console filter when you need the full
+        radio trace. A noise line rated warn or alarm (for example
+        <code>RX_RESTART</code> with a non-zero <code>state</code>) is never
+        hidden.
+      </p>
+
+      <h3>9.7 Console filter, Pause, flags and restore</h3>
+      <ul>
+        <li>
+          <strong>Console filter</strong> (next to DBG):
+          <strong>Hide noise</strong> (on by default);
+          <strong>Alarms only (warn / alarm)</strong>;
+          <strong>Mute families</strong>, a list of the families present with a
+          line count each (a muted family with no lines stays listed so you can
+          unmute it; <strong>Clear mutes</strong> undoes all); and
+          <strong>Keep</strong>, the number of DBG lines held: 500, 2000 or 5000
+          (default 2000). DBG lines have their own cap and do not count against
+          the 5000-row cap of the normal list. The filter only hides lines from
+          view.
+        </li>
+        <li>
+          <strong>Pause</strong>: freezes the list so you can read it. Your
+          filters keep applying while paused. The button shows
+          <code>Resume (N new)</code>, with the number of lines that arrived
+          meanwhile.
+        </li>
+        <li>
+          <strong>Flags.</strong> A session turns on <code>loradebug</code>,
+          <code>txcapture</code> and <code>setlog</code> unless already on; a
+          flag whose state the node did not report is left untouched. When you
+          stop it, McApp restores only what it turned on and waits for the
+          node's confirmation. If a confirmation is outstanding, the toolbar
+          says so (&ldquo;flags may still be on at the node&rdquo;) and the
+          restore is retried at the next DBG session. The node's replies to the
+          restore commands appear as hidden <code>CMD</code> lines (see FAQ 5).
+        </li>
+        <li>
+          <strong
+            >A node that already runs <code>--setlog &lt;CALL&gt;</code></strong
+          >
+          counts as &ldquo;setlog already on&rdquo;: McApp leaves it alone, so
+          your callsign filter on the <code>[LOG] RX</code> lines survives the
+          session.
+        </li>
+        <li>
+          <strong>Setlog hides two families.</strong> While setlog is on, the
+          node does not print <code>[HEAP]</code> and
+          <code>[MC-HWM]</code> lines. This is not a fault: heap is in
+          <code>[LOG] STAT heap=</code>.
+        </li>
+      </ul>
+
+      <h3>9.8 Pitfalls</h3>
+      <ul>
+        <li>
+          <strong>Arrival times are batch times.</strong> The console is read in
+          chunks, so several lines share one millisecond. Never compute an
+          interval from the left-hand time. Use the node's own counters in the
+          line: <code>t=</code> (LOG lines), <code>ts=</code> (DBG lines),
+          <code>wait=</code> and <code>lat=</code> (transmit lines).
+        </li>
+        <li>
+          <strong>Old ESP32 builds overstate reception time.</strong> Builds
+          before firmware commit <code>f2d6532f</code> (2026-08-25) bill every
+          reception as a 255-byte frame. Then <code>CHANNEL_UTIL rx=</code> and
+          <code>STAT rx=</code> (and with them <code>util</code>) are too high,
+          every <code>CRC_ERROR</code> says <code>size=255</code>, and the
+          damaged-bytes dump ends in garbage. A tell-tale: every non-zero
+          <code>rx=</code> is a multiple of 2476 ms. <code>tx=</code> stays
+          correct.
+        </li>
+        <li>
+          <strong>The console is best effort.</strong> When the connection is
+          congested the node drops bytes, so a line can be missing or cut off. A
+          line that stops in the middle of a field is such a cut.
+        </li>
+        <li>
+          <strong>A damaged dump proves nothing.</strong> The bytes of a
+          <code>CRC_PAYLOAD</code> dump can be wrong anywhere, including the
+          separators between callsigns. Do not count callsigns from it as
+          senders.
+        </li>
+        <li>
+          <strong>Some lines only exist with a flag.</strong>
+          <code>CHANNEL_UTIL</code> and <code>ONRXDONE_*</code> need
+          <code>loradebug</code>; with only setlog on they are absent, while
+          <code>STAT util=</code> still works. <code>dedup=100/100</code> is
+          normal once the ring has wrapped.
+        </li>
+        <li>
+          <strong>Direct-message numbering.</strong> A direct message carries
+          <code>{NNN</code>
+          with an opening brace and no closing brace, and its acknowledgement is
+          the separate text
+          <code>:ackNNN</code>. A retry flips bits of the message id, so a retry
+          has a different <code>x...</code> id than the original.
+        </li>
+        <li>
+          <strong>Line shapes differ by platform.</strong>
+          <code>[HEAP]</code> comes with a space or a semicolon after the tag
+          depending on the board and firmware path; McApp accepts both.
+        </li>
+      </ul>
+      <!-- DBG-CHAPTER-END -->
+
+      <h2 id="glossary">Terms</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Term</th>
+            <th>Meaning</th>
+          </tr>
+        </thead>
+        <tr>
+          <td>RSSI</td>
+          <td>Received signal strength in dBm. More negative = weaker.</td>
+        </tr>
+        <tr>
+          <td>SNR</td>
+          <td>Signal-to-noise ratio in dB. LoRa decodes below 0.</td>
+        </tr>
+        <tr>
+          <td>MHeard</td>
+          <td>
+            The node's own list of stations it heard directly, with the last
+            signal of each. Reported over Bluetooth.
+          </td>
+        </tr>
+        <tr>
+          <td>via</td>
+          <td>The relay stations a frame passed through, in order.</td>
+        </tr>
+        <tr>
+          <td>last hop</td>
+          <td>
+            The last relay, i.e. the station your node heard directly. RSSI/SNR
+            belong to it.
+          </td>
+        </tr>
+        <tr>
+          <td>Extern-UDP</td>
+          <td>The node's JSON feed to the Pi (port 1799).</td>
+        </tr>
+        <tr>
+          <td>fake sender name (pseudo-callsign)</td>
+          <td>A label such as <code>response</code> that is not a station.</td>
+        </tr>
+        <tr>
+          <td>spam group 9999</td>
+          <td>Where blocked group/broadcast traffic is redirected.</td>
+        </tr>
+        <tr>
+          <td><code>shown</code></td>
+          <td>Verdict: not filtered, delivered to the normal views.</td>
+        </tr>
+        <tr>
+          <td>sentinel</td>
+          <td>
+            A fixed placeholder value, e.g. 0/0 for &ldquo;no
+            measurement&rdquo;.
+          </td>
+        </tr>
+      </table>
+    </div>
+  </body>
+</html>
