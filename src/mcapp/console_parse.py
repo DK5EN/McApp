@@ -27,6 +27,8 @@ import re
 from collections.abc import Callable
 from typing import NotRequired, TypedDict
 
+from .frame_decode import DecodedFrame
+
 FieldValue = str | int | float | bool | list[int] | None
 
 
@@ -66,7 +68,7 @@ class ConsoleParsed(TypedDict):
     fields: dict[str, FieldValue]
     packet: NotRequired[PacketLine]
     # Filled by the caller (frame_decode) for mc-test RX_FRAME / TX_FRAME; never here.
-    frame: NotRequired[dict[str, object]]
+    frame: NotRequired[DecodedFrame]
 
 
 # ── regexes ────────────────────────────────────────────────────────────────
@@ -93,15 +95,17 @@ _PACKET_TAG_RE = re.compile(r"^(" + "|".join(_PACKET_TAGS) + r"):?(?=\s)\s*(.*)$
 
 _HEAD_RE = re.compile(r"^(\d+)\s+(\S)\s+x([0-9A-Fa-f]{8})\s*(.*)$")
 _ACK_RE = re.compile(
-    r"^H([0-9A-Fa-f]{2})\s+x([0-9A-Fa-f]{8})(?:\s+([0-9A-Fa-f]{2}))?(?:\s+([0-9A-Fa-f]{2}))?\s*(.*)$"
+    r"^H([0-9A-Fa-f]{2})(?:\s+x([0-9A-Fa-f]{8}))?(?:\s+([0-9A-Fa-f]{2}))?(?:\s+([0-9A-Fa-f]{2}))?\s*(.*)$"
 )
 _FLAGS_RE = re.compile(r"^H([0-9A-Fa-f]{2})\s+S(\d)\s+T(\d)\s+M([0-9A-Fa-f]{2})\s+(.*)$")
+# `(?<!\s)` + possessive quantifiers: a search must not retry from every position of a long
+# whitespace run (that was O(n^2): 3.3 ms for 950 spaces).
 _TAIL_RE = re.compile(
-    r"(?:\s+(?:RSSI:-?\d+(?:\.\d+)?|SNR:-?\d+(?:\.\d+)?|DUP:\S|OWN:\S|t=\d+))+\s*$"
+    r"(?<!\s)(?:\s++(?:RSSI:-?\d+(?:\.\d+)?+|SNR:-?\d+(?:\.\d+)?+|DUP:\S|OWN:\S|t=\d++))++\s*+$"
 )
 _TAIL_ITEM_RE = re.compile(r"(RSSI|SNR|DUP|OWN):(\S+)|t=(\d+)")
 _TRAILER_RE = re.compile(
-    r"^(.*?)\s+HW:(\d+)\s+MOD:([0-9A-Fa-f])/(\d+)\s+FCS:([0-9A-Fa-f]{4})"
+    r"^(.*?)(?<!\s)\s++HW:(\d+)\s+MOD:([0-9A-Fa-f])/(\d+)\s+FCS:([0-9A-Fa-f]{4})"
     r"\s+FW:(\d+):(\S)\s+LH:([0-9A-Fa-f]{2})\s*$"
 )
 
@@ -118,11 +122,15 @@ _LORA_RX_RE = re.compile(
 _EXT_LEN_RE = re.compile(r"Len:\s*(\d+)\s*$")
 _TIMECLIENT_RE = re.compile(r"^TimeClient now \(UTC\):\s*(\d\d:\d\d:\d\d)")
 _TRICKLE_CONS_RE = re.compile(r"consistent=(\d+)[<>=]+k=(\d+)")
+_UPPER_WORD_RE = re.compile(r"[A-Z][A-Z0-9_]*")
+_RESET_NAME_RE = re.compile(r"reset_reason=\S*\s+([^\s=]+)(?=\s|$)", re.IGNORECASE)
 _BOOT_RE = re.compile(r"^(?:\[BOOT\]|\.\.\.BOOT)(?=[; ]|$)[; ]*(.*)$")
 
 # ── constants ──────────────────────────────────────────────────────────────
 
-_STR_KEYS = frozenset({"msg_id", "retid", "hex", "from", "to", "call", "bssid", "reason_name"})
+_STR_KEYS = frozenset(
+    {"msg_id", "retid", "hex", "from", "to", "call", "bssid", "reason_name", "type", "status"}
+)
 _ID_KEYS = frozenset({"msg_id", "retid"})
 
 _NOISE_DBG = frozenset(
@@ -142,7 +150,7 @@ _NOISE_WORDS = frozenset({"receiveflag", "transmittedFlag", "OnTXDone", "OnRxDon
 _NOISE_PREFIXES = ("[CHECK]", "checkOwnTx:", "Insert own_msg_id:")
 _MESH_NOISE_RE = re.compile(r"^MESH\s+:")
 
-_ALARM_DBG = frozenset({"RING_DROP_NEW", "RING_OVERFLOW", "RING_REJECT", "RETRANSMIT_GIVEUP_DM"})
+_ALARM_DBG = frozenset({"RING_OVERFLOW", "RING_REJECT", "RETRANSMIT_GIVEUP_DM"})
 _WARN_DBG = frozenset(
     {
         "RX_OTHER_ERROR",
@@ -171,6 +179,7 @@ _NET_TAGS = frozenset({"WIFI", "ETH", "NTP"})
 
 _LH_MASK = 0x7F
 _DROP_CLASSES = 5
+_USER_PRIO_MAX = 2
 _UTIL_WARN = 70
 _SEV_ORDER = {"info": 0, "warn": 1, "alarm": 2}
 
@@ -311,7 +320,7 @@ def _parse_packet(tag: str, rest: str) -> PacketLine | None:
         if not ack:
             return None
         pkt["hops"] = int(ack.group(1), 16)  # whole byte 5 (guide 2.3)
-        pkt["acked_id"] = ack.group(2).upper()
+        pkt["acked_id"] = ack.group(2).upper() if ack.group(2) else None
     else:
         fl = _FLAGS_RE.match(body)
         if not fl:
@@ -444,7 +453,7 @@ def _first_word_kind(rest: str) -> tuple[str | None, str]:
     """`SEND consistent=0<k=2 ...` -> ("SEND", args); `p5_lat_avg=...` -> (None, rest)."""
     rest = rest.strip()
     first, _, args = rest.partition(" ")
-    if first and re.fullmatch(r"[A-Z][A-Z0-9_]*", first):
+    if first and _UPPER_WORD_RE.fullmatch(first):
         return first, args
     return None, rest
 
@@ -463,7 +472,11 @@ def _parse_mc_dbg(rest: str, nt: str | None) -> ConsoleParsed:
     else:
         fields = _kv(args)
     sev = "info"
-    if event in _ALARM_DBG:
+    if event == "RING_DROP_NEW":
+        # prio 1-2 is user traffic lost; 3-5 is load shedding (revised 2026-10-13)
+        prio = _num(fields.get("prio"))
+        sev = "alarm" if prio is not None and prio <= _USER_PRIO_MAX else "warn"
+    elif event in _ALARM_DBG:
         sev = "alarm"
     elif event in _WARN_DBG:
         sev = "warn"
@@ -575,9 +588,9 @@ def _parse_boot(rest: str, nt: str | None) -> ConsoleParsed:
             key = m.group(1).lower()
             fields[key] = _coerce(key, m.group(3))
     if "reset_reason" in fields:
-        after = rest.split("RESET_REASON=", 1)[1].split()
-        if len(after) > 1 and "=" not in after[1]:
-            fields["reason_name"] = after[1]
+        name_m = _RESET_NAME_RE.search(rest)
+        if name_m:
+            fields["reason_name"] = name_m.group(1)
     if rest and "=" not in rest.split(None, 1)[0] and ";" in rest:
         fields.update(_semi_fields(rest))
     sev = "info"

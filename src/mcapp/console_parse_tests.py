@@ -491,7 +491,8 @@ def _test_mc_dbg(record: Recorder) -> None:
         return (
             r["fields"]["queued"] == "0/20"
             and r["fields"]["src"] == "auto_pos"
-            and r["fields"]["type"] == 40
+            and r["fields"]["type"] == "40"
+            and r["fields"]["status"] == "FF"
         )
 
     _run("mc-dbg RING_WRITE", record, ring_write)
@@ -688,7 +689,8 @@ def _test_mc_other(record: Recorder) -> None:
 def _test_severity(record: Recorder) -> None:
     def alarms() -> object:
         lines = [
-            "[MC-DBG] RING_DROP_NEW slot=3 prio=5 type=40 msg_id=1AE1E034 (queue full)",
+            "[MC-DBG] RING_DROP_NEW slot=3 prio=1 type=40 msg_id=1AE1E034 (queue full)",
+            "[MC-DBG] RING_DROP_NEW slot=3 prio=2 type=40 msg_id=1AE1E034 (queue full)",
             "[MC-DBG] RING_OVERFLOW buf=tx",
             "[MC-DBG] RING_REJECT len=0 src=x",
             "[MC-DBG] RETRANSMIT_GIVEUP_DM msg_id=1AE1E034 dest=DK5EN-1",
@@ -950,6 +952,86 @@ def _test_other_families(record: Recorder) -> None:
     _run("noise: lookalikes are not noise", record, not_noise)
 
 
+def _test_wave2_nits(record: Recorder) -> None:
+    import time
+
+    def drop_new_warn() -> object:
+        return all(
+            _p(f"[MC-DBG] RING_DROP_NEW slot=3 prio={n} type=40 msg_id=1AE1E034")["severity"]
+            == "warn"
+            for n in (3, 4, 5)
+        )
+
+    _run("RING_DROP_NEW prio 3-5 is warn (revised contract)", record, drop_new_warn)
+
+    def str_keys() -> object:
+        r = _p("[MC-DBG] RING_WRITE slot=1 type=3A status=00 len=3 msg_id=1AE1E034")
+        r2 = _p("[MC-DBG] RING_WRITE slot=1 type=40 status=12 len=3 msg_id=1AE1E034")
+        return (
+            r["fields"]["type"] == "3A"
+            and r["fields"]["status"] == "00"
+            and r2["fields"]["type"] == "40"
+            and r2["fields"]["status"] == "12"
+        )
+
+    _run("type/status stay strings even when all-decimal", record, str_keys)
+
+    def short_ack() -> object:
+        log = _p("07:52:01 [LOG] 007 A x00F76491 H81 01 RSSI:-116 SNR:-4 DUP:n OWN:- t=40371047")
+        pkt = _p("08:02:52 TX-Lora  007 A x083DC0E9 H83 01")
+        return (
+            log["kind"] == "ACK"
+            and log["packet"]["acked_id"] is None
+            and log["packet"]["msg_id"] == "00F76491"
+            and log["packet"]["rssi"] == -116
+            and pkt["family"] == "packet"
+            and pkt["packet"]["acked_id"] is None
+            and pkt["packet"]["hops"] == 0x83
+        )
+
+    _run("7-byte short ACK parses as ACK with acked_id None", record, short_ack)
+
+    def reset_reason_safe() -> object:
+        a = _p("[BOOT] reset_reason=4 PANIC")
+        b = _p("[BOOT] Reset_Reason=4 PANIC")
+        return a["fields"].get("reason_name") == "PANIC" and b["severity"] in ("alarm", "info")
+
+    _run("[BOOT] reset_reason parsed case-insensitively without split", record, reset_reason_safe)
+
+    def reset_name_anchored() -> object:
+        # A key=value token right after the reason number is NOT a reason name.
+        a = _p("[BOOT] RESET_REASON=4 heap=1234")
+        b = _p("[BOOT] RESET_REASON=4 PANIC heap=1234")
+        c = _p("[BOOT] RESET_REASON=4")
+        return (
+            "reason_name" not in a["fields"]
+            and a["fields"].get("reset_reason") == 4
+            and b["fields"].get("reason_name") == "PANIC"
+            and "reason_name" not in c["fields"]
+        )
+
+    _run("[BOOT] reset_reason name must be a bare word, not key=value", record, reset_name_anchored)
+
+    def timed(line: str) -> float:
+        t0 = time.perf_counter()
+        parse_console_line(line)
+        return time.perf_counter() - t0
+
+    def ws_runs() -> object:
+        head = "00:00:17 [LOG] 049 @ x1AE1E033 H03 S1 T0 M01 DK5EN-98>HG@R6;"
+        lines = [
+            head + " " * 950 + "tail",
+            head + " " * 950 + "HW:43 MOD:8/8 FCS:0B58 FW:40:a LH:AB RSSI:-1 x",
+            "00:00:17 [LOG] 049 @ x1AE1E033 H03 S1 T0 M01 A>B:" + " " * 950 + "RSSI:-114 y",
+            "00:00:17 [LOG] 049 @ x1AE1E033 H03 S1 T0 M01 A>B:" + " " * 950 + "HW:4",
+            "00:00:17 [LOG] 012 A x00F76491 H81 x03B50343 " + " " * 950 + "z",
+        ]
+        worst = max(min(timed(ln) for _ in range(3)) for ln in lines)
+        return worst < 0.005
+
+    _run("whitespace runs (950 spaces) parse in < 5 ms (no O(n^2) regex)", record, ws_runs)
+
+
 def _test_never_raises(record: Recorder) -> None:
     def empty() -> object:
         return (
@@ -1090,6 +1172,7 @@ async def run_console_parse_tests() -> object:
     _test_severity(_record)
     _test_other_families(_record)
     _test_never_raises(_record)
+    _test_wave2_nits(_record)
 
     passed = sum(1 for _, ok in results if ok)
     total = len(results)

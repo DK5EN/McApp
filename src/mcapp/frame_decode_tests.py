@@ -174,13 +174,21 @@ def _test_ack(record: _Record) -> None:
         and d["fcs_ok"] is None
         and d["error"] is None,
     )
-    short = decode_frame("41" + "9164F700" + "81" + "01")
+    seven = decode_frame("41" + "9164F700" + "81" + "01")
     record(
-        "ACK short form: decodes what is there, sets error",
-        short["msg_id"] == "00F76491"
-        and short["flags_byte"] == 0x81
-        and short["error"] is not None,
+        "ACK 7-byte form (firmware printBuffer_ack size==7): valid, no acked id, no error",
+        seven["msg_id"] == "00F76491"
+        and seven["flags_byte"] == 0x81
+        and seven["acked_id"] is None
+        and seven["error"] is None,
     )
+    short = decode_frame("41" + "9164F700" + "81" + "0102")
+    record(
+        "ACK 8-byte form: decodes what is there, sets error",
+        short["msg_id"] == "00F76491" and short["error"] is not None,
+    )
+    cut = decode_frame("41" + "9164F700" + "81")
+    record("ACK 6-byte form is truncated", cut["error"] == "truncated")
 
 
 def _test_corruption(record: _Record) -> None:

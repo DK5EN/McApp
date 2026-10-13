@@ -32,6 +32,7 @@ _OFF_ID = 1
 _OFF_FLAGS = 5
 _OFF_PATH = 6
 _ACK_LEN = 12
+_ACK_SHORT_LEN = 7  # no acked id (firmware printBuffer_ack size==7)
 _ACK_ACKED_END = 10  # acked id occupies bytes 6..9
 _TRAILER_LEN = 4  # hw, mod, fcs(2)
 _END_MARKER = 0x7E
@@ -137,6 +138,8 @@ def _decode_ack(data: bytes, out: DecodedFrame) -> None:
     _fill_header(data, out)
     if n >= _ACK_ACKED_END:
         out["acked_id"] = _le32(data, _OFF_PATH)
+    if n == _ACK_SHORT_LEN:
+        return  # firmware printBuffer_ack size==7: valid, carries no acked id
     if n < _ACK_LEN:
         out["error"] = "short ack" if n >= _ACK_ACKED_END else "truncated"
 
