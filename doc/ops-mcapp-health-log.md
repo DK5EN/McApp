@@ -1,6 +1,6 @@
 # McApp production health log — mcapp.local
 
-> **Status:** Current — newest section: §34 (2026-10-11 20:41 CEST, pre-release sweep of `v2.1.11-dev.2` (Node Admin remote parity) before the v2.1.11 promotion, green, zero findings, ~9 min soak at the operator's decision). Before that: §33 (2026-10-11 15:05 CEST, pre-release sweep of `v2.1.10-dev.3` (meshmap internet feed, RM1 out of chat) before the v2.1.10 promotion, green, zero findings, ~13 min soak at the operator's decision; W20 recurred before the deploy). Before that: §32 (2026-10-10 15:35 CEST, pre-release sweep of `v2.1.7-dev.1` (Internet feed removed) before the v2.1.7 promotion, green, zero findings, ~15 min soak). Before that: §31 (2026-10-06, v2.1.6-dev.6 short soak). Before that: §30 (2026-10-05 19:08 CEST, sweep of `v2.1.5-dev.2` node time zone, green, zero findings). Before that: §26 (2026-10-04 09:36 CEST, pre-release sweep of
+> **Status:** Current — newest section: §35 (2026-10-11 20:53 CEST, post-release sweep of production `v2.1.11`, 3 min after the deploy, green, zero release findings; internet feed found disabled by a settings save between 20:42 and 20:49, not by the release). Before that: §34 (2026-10-11 20:41 CEST, pre-release sweep of `v2.1.11-dev.2` (Node Admin remote parity) before the v2.1.11 promotion, green, zero findings, ~9 min soak at the operator's decision). Before that: §33 (2026-10-11 15:05 CEST, pre-release sweep of `v2.1.10-dev.3` (meshmap internet feed, RM1 out of chat) before the v2.1.10 promotion, green, zero findings, ~13 min soak at the operator's decision; W20 recurred before the deploy). Before that: §32 (2026-10-10 15:35 CEST, pre-release sweep of `v2.1.7-dev.1` (Internet feed removed) before the v2.1.7 promotion, green, zero findings, ~15 min soak). Before that: §31 (2026-10-06, v2.1.6-dev.6 short soak). Before that: §30 (2026-10-05 19:08 CEST, sweep of `v2.1.5-dev.2` node time zone, green, zero findings). Before that: §26 (2026-10-04 09:36 CEST, pre-release sweep of
 > `v2.1.1-dev.2` before the v2.1.1 promotion) — green, zero findings, **~3 min soak at the operator's
 > decision**; new watch point **W23** (QRZ lookup budget). Before that: §25 (2026-10-02, no-soak
 > sign-off of v2.0.19, re-released as v2.1.0). Before that: §24 (2026-09-29 10:03 CEST, post-release sweep of
@@ -2452,3 +2452,56 @@ messages, no `{CET}` rows stored, no feed error, no uptime gap since 13:16.
 **Watch points.** W19: two more deploys today (19:40, 20:32), each with its startup cluster. The
 post-release sweep should confirm Node Admin's new fold paths produce no `handler` or `loop_lag`
 stacks once remote reads are exercised. No new W or F.
+
+## 35. 2026-10-11 20:53 CEST — post-release sweep of production v2.1.11, 3 min after the deploy
+
+| Anchor         | Value                                                                                |
+| -------------- | ------------------------------------------------------------------------------------ |
+| Active slot    | slot-0, `v2.1.11` (`webapp/version.html`), service up since 20:49:39                 |
+| Deploy         | webapp Update page, production mode, from slot-1 (`v2.1.11-dev.2`); no auto-rollback |
+| Schema / epoch | 36 = `LATEST_SCHEMA_VERSION`; system epoch 5 = `REQUIRED_SYSTEM_EPOCH`               |
+| Host           | up 4 d 12 h, no reboot                                                               |
+
+**Verdict: green, zero release findings.** The deploy landed cleanly. The internet feed is off,
+but the release did not do it (see F-note below). Run only minutes after the deploy at the
+operator's request, so rates and stalls cover a very short window.
+
+- Services: `mcapp`, `mcapp-ble`, `caddy`, `lighttpd` active; `NRestarts` 0 on both McApp units.
+  Journal warnings since 20:49: 0.
+- Production slot carries no test harness: 0 `*_tests.py` / `*.json` under `src/mcapp`, no
+  `run_startup_tests.py` (expected for the production tarball shape).
+- `/api/status`: `version` v2.1.11, `udp_target_kind` `first_seen` at 168 s uptime (W11);
+  `udp_multiple_sources` false, `udp_untrusted_source_ips` empty, `udp_suppressed_target_changes`
+  0; `features` `['node_admin', 'internet_feed']`.
+- DB 55 MB, WAL 2 MB; messages 27335 (3 `www`), stations 422, signal_log 50338. Classifier
+  version 5, 38 rules, 0 unclassified in the last hour; 0 `{CET}` rows in `messages`.
+- Rates (1 h window ending 20:52, spans the restart): msg 59, pos 82, signal_log 320 — in line with
+  §34's 62 / 89 / 340.
+- Gateway uptime 24 h: 95.9 %, coverage 100.0 %; last `{CET}` 57 s old, heartbeat 16 s. No new
+  gap or dark row (the restart was under the tolerance).
+- Stalls since the restart (non-sample): `loop_lag` 2 critical / 3 stall, `http` 0/2,
+  `client_http` 0/5. All in the first 46 s; none after 20:50:25. The two criticals carry
+  import-phase stacks (`importlib._path_stat`), the third a `typing` stack — W19 startup noise.
+- Host: disk 9 % (51 G free), 186 MB RAM available, ~26 MB swapped, load 0.14, 45.1 C.
+- Secrets/TLS: `vapid.json` 0600, `config.json` 0640; Caddy internal 12 h leaf
+  (12:32:45 → 00:32:45 UTC), mid-life. `sw.js` has `SKIP_WAITING`.
+
+**Internet feed off — not caused by the release.** `/api/internet-feed` reads `enabled: false`,
+`state: off` since 20:49:50 (the service start). The DB row has `enabled = 0`. At §34 (20:41) it
+was enabled and connected, and its last batch arrived at 20:42:43. The only writer of `enabled` is
+`PUT /api/internet-feed` (webapp Settings > Internet, explicit Save only, no auto-save path), so
+the setting was saved as off between 20:42:43 and the 20:49:36 shutdown. Nothing in the deploy
+path writes that row. The settings also changed earlier the same day (radius 300 km at §33,
+100 km at §34), consistent with operator edits. Neither the feed nor lighttpd logs the PUT, so
+the source cannot be named from the box; confirm with the operator. If it was not intentional,
+re-enable it in Settings > Internet.
+
+**Absent signals.** No restarts, no journal warnings, no UDP provenance anomaly, no unclassified
+messages, no `{CET}` rows stored, no uptime gap, no stall after the first minute.
+
+**Dismissed.** `udp_target_kind` `first_seen` (W11). Startup `loop_lag` criticals (W19).
+
+**Watch points.** W19: one more deploy (20:49). The §33/§34 follow-ups (feed reconnects,
+`loop_lag` stacks naming `internet_feed` or the Node Admin fold) cannot be judged yet: the feed is
+off and no remote reads ran since the deploy. Re-check after a few hours of runtime with the feed
+re-enabled and Node Admin used. No new W or F.
