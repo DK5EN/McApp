@@ -57,3 +57,28 @@ firmware console), N3 line splitting.
 ## Wave status log
 
 - W0: contract and plan written (2026-10-13).
+- W1 (2026-10-13): webapp `bfb6d9d` (tokenizer on real lines, types, wire fields on copies), MCProxy
+  `1dd96a7` (`console_parse.py`, `frame_decode.py`, both suites gated). Advisors approved both.
+  Parser on the full dk5en-98 log: 154,511 lines in 0.45 s, 0 exceptions, 5,144 frames all FCS-ok.
+  Contract revised `11871e0`: `RING_DROP_NEW` alarm only for prio 1-2; hex keys stay strings.
+  Deferred into W2-E: quadratic tail regex, 7-byte short ACK, two small parser robustness nits.
+  Open for the user: `transmission finished!`, `OnRxError`, `[INFO]...Check GRC` are unflagged
+  `other` lines (~2 %); not in the noise set.
+- W2 (2026-10-13): webapp `a764ee5` (structured DBG rows, decode popover, console filter, pause,
+  own DBG cap) after one advisor rework round; `81f53df` hide-noise never hides warn/alarm.
+  MCProxy `1728692` (parsed lines on the wire, setlog third flag via the `DisplyLog` label,
+  live `flags` and `node` in status) after one advisor rework round: an unknown flag state is
+  never touched, flags recorded before the write, unexpected errors keep `pending_restore`.
+- W3 (2026-10-13): help DBG chapter in webapp `docs/monitor-help.html` (`776bb79`) and the
+  untracked MCProxy `doc/McApp-Monitor-Help.html` (identical chapter, left uncommitted);
+  CLAUDE.md RF Monitor bullets.
+
+## Open follow-ups
+
+- After an unexpected session error the background restore retry is not started (flags stay
+  in `pending_restore` until the next DBG start). Advisor: not blocking, cheap should-fix.
+- `pending_restore` is in memory only: a process restart forgets flash-persisted flags
+  (pre-existing).
+- Unflagged `other` lines (~2 %): `transmission finished!`, `OnRxError`, `[INFO]...Check GRC`.
+- N3: a slowly written console line can still split into two rows after the 1 s idle flush.
+- Not verified on hardware: no DBG session was run against a real node in this campaign.
