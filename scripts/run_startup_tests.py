@@ -104,6 +104,7 @@ from mcapp.storage.telemetry_reconcile_tests import run_telemetry_reconcile_test
 from mcapp.storage.unread_suppression_tests import run_unread_suppression_tests
 from mcapp.storage.uptime_tests import run_uptime_tests
 from mcapp.storage.www_ingest_tests import run_www_ingest_tests
+from mcapp.template_override_tests import run_template_override_tests
 from mcapp.udp_handler import run_startup_tests as run_udp_handler_tests
 from mcapp.udp_parsing_tests import run_udp_parsing_tests
 from mcapp.wire_monitor_tests import run_wire_monitor_tests
@@ -295,6 +296,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     unread_suppression_ok = await run_unread_suppression_tests()
     print(f"unread_suppression: {'PASS' if unread_suppression_ok else 'FAIL'}")
 
+    template_override_ok = await run_template_override_tests()
+    print(f"template_override: {'PASS' if template_override_ok else 'FAIL'}")
+
     conv_dedup_ok = await run_conv_dedup_tests()
     print(f"conv_dedup: {'PASS' if conv_dedup_ok else 'FAIL'}")
 
@@ -435,6 +439,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and read_cursor_ok
         and suppression_predicate_ok
         and unread_suppression_ok
+        and template_override_ok
         and conv_dedup_ok
         and live_classification_ok
         and ingest_dedup_ok
