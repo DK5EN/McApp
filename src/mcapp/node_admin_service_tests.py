@@ -1035,7 +1035,9 @@ async def case_i_refusals(record: Record) -> None:
     async with make_env() as env:
         await env.setup()
         checks = [
-            await raises(ValueError, env.send("txpower", "16")),  # above tx_max 15
+            await raises(
+                ValueError, env.send("txpower", "31")
+            ),  # above TX_MAX_LIMIT, no board range known
             await raises(ValueError, env.send("format-disk")),
             await raises(ValueError, env.send("gps", "maybe")),
             await raises(ValueError, env.svc.send("not a call", "status", "", "udp")),
@@ -1184,15 +1186,14 @@ async def case_j_misc(record: Record) -> None:
             await raises(ValueError, env.svc.set_key(TARGET, "x" * 15, None)),
             await raises(ValueError, env.svc.set_key(TARGET, " lead", None)),
             await raises(ValueError, env.svc.set_key(TARGET, "none", None)),
-            await raises(ValueError, env.svc.set_key(TARGET, "ok", 31)),
-            await raises(ValueError, env.svc.set_key(TARGET, "ok", -1)),
             await raises(ValueError, env.svc.set_key("TOOLONGCALL-99", "ok", None)),
         ]
         await env.svc.set_key(TARGET, "ok", 0)
-        await env.svc.set_key(TARGET, "ok", None)  # None keeps tx_max
+        await env.svc.set_key(TARGET, "ok", 99)  # legacy tx_max: accepted, ignored
+        await env.svc.set_key(TARGET, "ok", None)
         record(
-            "j6. set_key validates password, tx_max 0..30 and the callsign; None keeps tx_max",
-            all(results) and (await env.target_info())["tx_max"] == 0,
+            "j6. set_key validates password and callsign; tx_max is ignored and not listed",
+            all(results) and "tx_max" not in await env.target_info(),
         )
         proto: NodeAdminServiceProtocol = env.svc
         record("j7. conforms to the Protocol", await proto.history(None, 5) == [])
@@ -1426,8 +1427,13 @@ async def case_m_txpower_bound(record: Record) -> None:
         r = await env.send("txpower", "25")
         await env.svc.drain()
         record(
-            "m6c. no known node maximum: the key's tx_max alone bounds txpower (as before)",
+            "m6c. no known node maximum: TX_MAX_LIMIT (30) alone bounds txpower",
             r["ctr"] == 1,
+        )
+        await env.time.advance(11_000)
+        record(
+            "m6c2. no known node maximum: above TX_MAX_LIMIT is refused",
+            await raises(ValueError, env.send("txpower", "31")),
         )
 
     # The newest verified status that CARRIES p= decides; a newer old-form status does not lift it.
@@ -1449,6 +1455,25 @@ async def case_m_txpower_bound(record: Record) -> None:
             "m6d. a newer verified status without p= leaves the earlier maximum in force",
             await raises(ValueError, env.send("txpower", "16")),
         )
+
+
+async def case_m_txpower_no_operator_ceiling(record: Record) -> None:
+    # Regression (2026-10-16): a key stored with the old 15 dBm ceiling no longer caps txpower.
+    async with make_env() as env:
+        await env.setup(tx_max=15)
+        s = await env.send("status")
+        await env.svc.drain()
+        await env.time.advance(20_000)
+        await env.reply(s["ctr"], STATUS_P_RANGE)  # p=15/2/22: board max 22
+        await env.svc.drain()
+        await env.time.advance(11_000)
+        try:
+            ok = await env.send("txpower", "20")
+            goes_out = ok["ctr"] > s["ctr"]
+        except Exception:
+            goes_out = False
+        await env.svc.drain()
+        record("m6h. key tx_max 15 + board max 22: txpower 20 is accepted", goes_out)
 
 
 async def case_m_txpower_min(record: Record) -> None:
@@ -2523,6 +2548,7 @@ async def run_node_admin_service_tests() -> bool:
         case_m_result_max,
         case_m_txpower_bound,
         case_m_txpower_min,
+        case_m_txpower_no_operator_ceiling,
         case_m_txpower_held,
         case_m_synced_and_broadcast,
         case_n_cooldown,

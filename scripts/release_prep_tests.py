@@ -440,6 +440,72 @@ def _case_webapp_missing_version(record: _Record) -> None:
             )
 
 
+_BRANCH_DRIVER = """set -euo pipefail
+PROJECT_DIR="$1"
+WEBAPP_DIR="$2"
+WEBAPP_BRANCH="$3"
+log_info() {{ :; }}
+log_warn() {{ :; }}
+log_error() {{ echo "ERROR: $*" >&2; }}
+{function}
+validate_on_development "$4"
+"""
+
+
+def _case_webapp_branch_override(record: Callable[[str, bool, str], None]) -> None:
+    """`WEBAPP_BRANCH` lets a DEV release take the webapp from a feature branch.
+
+    MCProxy must still be on development, the webapp must be on exactly the
+    named branch, and a production release must refuse the override (it merges
+    development into main and would publish something other than what it tags).
+    """
+    assert _BASH is not None
+    assert _GIT is not None
+    source = _RELEASE_SH.read_text(encoding="utf-8")
+    script = _BRANCH_DRIVER.format(function=_extract_function(source, "validate_on_development"))
+
+    with tempfile.TemporaryDirectory() as raw_tmp:
+        tmp = Path(raw_tmp)
+        project, webapp = tmp / "proj", tmp / "webapp"
+        _init_repo(project, {"README": "p\n"})
+        _init_repo(webapp, {"README": "w\n"})
+        _run([_GIT, "checkout", "-b", "feature/x"], webapp)
+
+        def check(webapp_branch: str, mode: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(  # noqa: S603 - fixed argv, absolute binaries
+                [_BASH, "-c", script, "drv", str(project), str(webapp), webapp_branch, mode],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        ok = check("feature/x", "dev")
+        record(
+            "WEBAPP_BRANCH: dev release accepts webapp on the named feature branch",
+            ok.returncode == 0,
+            f"(rc={ok.returncode}, stderr: {ok.stderr.strip()[:200]})",
+        )
+        default = check("development", "dev")
+        record(
+            "WEBAPP_BRANCH: default still requires webapp on development",
+            default.returncode != 0 and "must be on 'development'" in default.stderr,
+            f"(rc={default.returncode}, stderr: {default.stderr.strip()[:200]})",
+        )
+        prod = check("feature/x", "production")
+        record(
+            "WEBAPP_BRANCH: production release refuses the override",
+            prod.returncode != 0 and "only allowed for a dev pre-release" in prod.stderr,
+            f"(rc={prod.returncode}, stderr: {prod.stderr.strip()[:200]})",
+        )
+        _run([_GIT, "checkout", "-b", "feature/x"], project)
+        backend = check("feature/x", "dev")
+        record(
+            "WEBAPP_BRANCH: MCProxy itself must stay on development",
+            backend.returncode != 0 and "proj is on branch 'feature/x'" in backend.stderr,
+            f"(rc={backend.returncode}, stderr: {backend.stderr.strip()[:200]})",
+        )
+
+
 def run_release_prep_tests() -> bool:
     """Return True if every invariant holds."""
     if _BASH is None or _GIT is None:
@@ -479,6 +545,7 @@ def run_release_prep_tests() -> bool:
         _case_bump_and_push(record)
         _case_webapp_already_at_target(record)
         _case_webapp_missing_version(record)
+        _case_webapp_branch_override(record)
     except AssertionError as exc:
         # `_extract_function` raises when release.sh no longer defines one of
         # the functions this suite extracts by name (e.g. a rename). Left

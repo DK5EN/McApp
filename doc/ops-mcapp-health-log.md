@@ -1,6 +1,6 @@
 # McApp production health log — mcapp.local
 
-> **Status:** Current — newest section: §36 (2026-10-13 16:34 CEST, pre-release sweep of `v2.1.12-dev.1` (parsed DBG console lines, setlog as third flag, live `flags`/`node` in the console status) before the v2.1.12 promotion, green, zero findings, ~8 min soak at the operator's decision; new watch point W26). Before that: §35 (2026-10-11 20:53 CEST, post-release sweep of production `v2.1.11`, 3 min after the deploy, green, zero release findings; internet feed found disabled by a settings save between 20:42 and 20:49, not by the release). Before that: §34 (2026-10-11 20:41 CEST, pre-release sweep of `v2.1.11-dev.2` (Node Admin remote parity) before the v2.1.11 promotion, green, zero findings, ~9 min soak at the operator's decision). Before that: §33 (2026-10-11 15:05 CEST, pre-release sweep of `v2.1.10-dev.3` (meshmap internet feed, RM1 out of chat) before the v2.1.10 promotion, green, zero findings, ~13 min soak at the operator's decision; W20 recurred before the deploy). Before that: §32 (2026-10-10 15:35 CEST, pre-release sweep of `v2.1.7-dev.1` (Internet feed removed) before the v2.1.7 promotion, green, zero findings, ~15 min soak). Before that: §31 (2026-10-06, v2.1.6-dev.6 short soak). Before that: §30 (2026-10-05 19:08 CEST, sweep of `v2.1.5-dev.2` node time zone, green, zero findings). Before that: §26 (2026-10-04 09:36 CEST, pre-release sweep of
+> **Status:** Current — newest section: §37 (2026-10-16 20:23 CEST, pre-release sweep of `v2.1.13-dev.4` (on-device Browser AI, Q-code/locator links, Node Admin TX ceiling dropped, bootstrap TMPDIR) before the v2.1.13 promotion, green, zero findings, ~21 min soak at the operator's decision). Before that: §36 (2026-10-13 16:34 CEST, pre-release sweep of `v2.1.12-dev.1` (parsed DBG console lines, setlog as third flag, live `flags`/`node` in the console status) before the v2.1.12 promotion, green, zero findings, ~8 min soak at the operator's decision; new watch point W26). Before that: §35 (2026-10-11 20:53 CEST, post-release sweep of production `v2.1.11`, 3 min after the deploy, green, zero release findings; internet feed found disabled by a settings save between 20:42 and 20:49, not by the release). Before that: §34 (2026-10-11 20:41 CEST, pre-release sweep of `v2.1.11-dev.2` (Node Admin remote parity) before the v2.1.11 promotion, green, zero findings, ~9 min soak at the operator's decision). Before that: §33 (2026-10-11 15:05 CEST, pre-release sweep of `v2.1.10-dev.3` (meshmap internet feed, RM1 out of chat) before the v2.1.10 promotion, green, zero findings, ~13 min soak at the operator's decision; W20 recurred before the deploy). Before that: §32 (2026-10-10 15:35 CEST, pre-release sweep of `v2.1.7-dev.1` (Internet feed removed) before the v2.1.7 promotion, green, zero findings, ~15 min soak). Before that: §31 (2026-10-06, v2.1.6-dev.6 short soak). Before that: §30 (2026-10-05 19:08 CEST, sweep of `v2.1.5-dev.2` node time zone, green, zero findings). Before that: §26 (2026-10-04 09:36 CEST, pre-release sweep of
 > `v2.1.1-dev.2` before the v2.1.1 promotion) — green, zero findings, **~3 min soak at the operator's
 > decision**; new watch point **W23** (QRZ lookup budget). Before that: §25 (2026-10-02, no-soak
 > sign-off of v2.0.19, re-released as v2.1.0). Before that: §24 (2026-09-29 10:03 CEST, post-release sweep of
@@ -2581,3 +2581,58 @@ After a longer session (the cap is 1800 s) or a busy `loradebug` stream, re-chec
 stacks for `console_parse` or `frame_decode` and the Monitor ring for `frame.parsed` coverage
 (here 271 of 278; the gap is the notices). W19: one more deploy (16:25). The §33/§34 follow-ups
 (feed reconnects, Node Admin fold) remain open: the feed is off and no remote reads ran. No new F.
+
+## 37. 2026-10-16 20:23 CEST — pre-release sweep of v2.1.13-dev.4 (on-device Browser AI, Q-code/locator links, Node Admin TX ceiling dropped, bootstrap TMPDIR) before the v2.1.13 promotion (short soak)
+
+| Anchor         | Value                                                                                                |
+| -------------- | ---------------------------------------------------------------------------------------------------- |
+| Active slot    | slot-0, `v2.1.13-dev.4` (`webapp/version.html`), service up since 20:01:15                           |
+| Soak           | about 21 min (snapshot 20:23), the operator accepted a short soak (under an hour); see §33, §34, §36 |
+| Schema / epoch | 36 = `LATEST_SCHEMA_VERSION` (no migration in this cycle); system epoch 5 = `REQUIRED_SYSTEM_EPOCH`  |
+| Host           | up 9 d 12 h, no reboot since §36                                                                     |
+
+**Verdict: green, zero findings.** The release adds the on-device Browser AI bundle (webapp, ~35 MB
+tarball, 112 MB served webapp directory), Q-code/locator links in chat, drops the Node Admin per-key
+TX ceiling and sets `TMPDIR=/var/tmp` in the bootstrap. None of it sits on the ingest path.
+
+- Services: `mcapp`, `mcapp-ble`, `caddy`, `lighttpd` active; `NRestarts` 0 on both McApp units.
+  Journal warnings (`mcapp`, `mcapp-ble`, `-p warning`) since 20:01 and in 24 h: 0 (`-- No entries --`).
+- Change-specific: `bootstrap/mcapp.sh` in the active slot mentions `TMPDIR`; `/api/status` `version`
+  v2.1.13, `node_build` 20261016-181306; `webapp/version.html` v2.1.13-dev.4; `sw.js` has
+  `SKIP_WAITING`. The slot carries the dev tarball shape (tests present), expected before promotion.
+- `/health` healthy; `/api/status`: `udp_target_kind` `identified`, `udp_multiple_sources` false,
+  `udp_untrusted_source_ips` empty, `udp_suppressed_target_changes` 0, `node_fwver` 4.40 a,
+  `features` `['node_admin', 'internet_feed']`, 2 SSE clients.
+- DB 60.6 MB, WAL 4.1 MB; messages 28214 (3 `www`), stations 428, signal_log 49583. Classifier
+  version 5, 38 rules, markers `v0 v1 v3 v4 v5`, 0 unclassified in the last hour; 0 `{CET}` rows in
+  `messages`.
+- Rates (1 h window ending 20:23, spans the 20:01 restart): msg 14, pos 95, signal_log 254,
+  against §36's 28 / 70 / 228 and §1's 11 / 87 / 347. Friday evening; within the band.
+- Gateway uptime 24 h (`range=24h`): 98.6 %, coverage 100.0 %, longest outage 20 min 15 s. That
+  gap is **18:07:18 to 18:27:33**, 34 min before this deploy: a `gap` row (proxy up, no beacon),
+  not caused by the release and not a `dark` row. No `gap` or `dark` row since the 20:01 restart
+  (the ~15 s downtime stayed inside the tolerance, as at §35/§36). Last `{CET}` 279 s old,
+  heartbeat 3 s. Same shape as W20 (upstream uplink outage).
+- Stalls since the restart (non-sample): `loop_lag` 2 critical (1193 ms, 760 ms at 20:01:28/29) /
+  5 stall (max 429 ms), `http` 0/2, `client_http` 0/3. The `loop_lag` rows are all in the first
+  minute (20:01:28 to 20:02:01) except one 141 ms at 20:19:37: W19 startup noise. The `http`
+  rows are `GET /api/node-admin/targets` 522 ms at 20:01:30 (first load after the restart, client
+  547 ms) and `GET /api/weather` 1529 ms at 20:07 (closed non-issue); `POST /api/send` 511 ms
+  appears only client-side. No `handler`, `pool_wait`, `sse_*` or `client_error` row.
+- Host: disk 10 % (51 G free), 180 MB RAM available, ~28 MB swapped (SwapFree 445 of 473 MB),
+  load 0.01, 42.4 C.
+- Secrets/TLS: `vapid.json` 0600, `config.json` 0640; Caddy internal 12 h leaf (15:02:45 →
+  03:02:45 UTC), mid-life; `/` answers 301.
+
+**Absent signals.** No restarts, no journal warnings, no UDP provenance anomaly, no unclassified
+messages, no `{CET}` rows stored, no uptime gap or dark row since the deploy, no `loop_lag` after
+the first minute beyond one 141 ms stall, no `handler`/`pool_wait` stalls, no memory pressure from
+the larger webapp bundle (available RAM unchanged from §36, disk 9 % to 10 %).
+
+**Dismissed.** Startup `loop_lag` criticals (W19). `/api/weather` 1529 ms (closed 2026-09-18).
+First `node-admin/targets` call 522 ms after the restart (cold, once). The 18:07 to 18:27 `{CET}`
+gap, upstream and before the deploy (W20).
+
+**Watch points.** W19: one more deploy (20:01). W20: one more uplink gap (20 min, 18:07), pre-deploy.
+The Browser AI runs entirely in the browser; the iPhone and browser-matrix checks are not
+observable from the Pi and stay open. No new W, no F.

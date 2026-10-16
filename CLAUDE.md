@@ -956,7 +956,9 @@ firmware side: `MeshCom-Firmware-DEV-Main` (`src/remote_cmd.cpp`, `docs/adr-remo
   newer ack (`node_admin_state.fold`, mutation-pinned). Only `verified = 1` rows are evidence; a status is an atomic
   snapshot; `gps off` also clears Track on the node (the reply says only `gps=off`); LED is RAM-only (off after reboot).
 - **Send gates, all BEFORE counter allocation and on every path** (direct, held-behind-sync, sync): 10 s spacing, one in
-  flight, txpower <= min(key `tx_max`, board max from the newest verified status `p=`), 5 min cool-down after a silent
+  flight, txpower within the board range from the newest verified status `p=<cur>/<min>/<max>` (unknown range:
+  `TX_MAX_LIMIT` 30; the per-key operator ceiling `tx_max` was dropped 2026-10-16 by operator decision, PUT still
+  accepts and ignores it, the storage column is dead), 5 min cool-down after a silent
   row (the node's DM retry ladder resends RM1 frames; a late copy is a counted replay strike), 120 s pause after another
   station's RM1 frame to/from the target (`_note_foreign`). The lockout guard is a backstop, not the floor. Re-ask: once
   per row, never while the guard or the foreign pause holds. `_synced` is set only by a VERIFIED sync; a command held

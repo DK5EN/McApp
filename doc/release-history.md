@@ -1,71 +1,70 @@
 # Release History
 
-## v2.1.12 (2026-10-13)
+## v2.1.13 (2026-10-16)
 
-The Monitor's DBG view now reads the node's console. Console lines from an ESP32 node used to
-show as plain text with a colour highlighter that misread most real firmware lines. McApp now
-parses each line: packet lines, `[LOG]` records including the 5-minute `STAT` health line,
-debug events and raw frame dumps. The Monitor shows them with fields, units, normal ranges and
-warnings. Schema stays at 36 and `SYSTEM_EPOCH` stays at 5.
+The webapp can now run an AI model in your own browser. Once you switch it on in Settings > AI
+and download a model, it annotates incoming messages (language, tone, translation), marks
+emergencies, and summarises what you missed in a conversation. Everything runs on your device:
+no message leaves the browser, and the Pi never serves or runs the model. Off by default.
+Schema stays at 36 and `SYSTEM_EPOCH` stays at 5.
 
 ### Highlights
 
-- **Structured DBG rows.** Each console line shows its family (packet, `LOG STAT`, `DBG
-CRC_ERROR`, ...), the time to the millisecond and the node's own clock. Packet lines show hops
-  left, server/track/mesh flags, the relay path with the originator first, FCS, hardware and
-  firmware, and RSSI/SNR. Hovering a line explains its fields, with units and normal ranges.
-- **Warnings and alarms are marked.** A TX watchdog, dropped user traffic (priority 1-2), a
-  failed send, a radio restart error or a crash reboot is an alarm; CRC errors, relay drops
-  under load and channel use of 70 % or more are warnings. Both have a coloured stripe and a
-  text label.
-- **Frame decode.** A raw `RX_FRAME` / `TX_FRAME` dump opens a decode panel with every header
-  field, the FCS check (OK or FAIL) and the full hex.
-- **Less noise, more control.** The new Console filter hides radio plumbing (state machine,
-  timers, restarts) by default but never hides a warning or alarm. It also offers "alarms only",
-  per-family mute, and how many DBG lines to keep (500 / 2000 / 5000, default 2000). DBG lines
-  no longer push RF rows out of the 5000-row history. Pause freezes the view while new lines
-  are still counted.
-- **The session states what it is doing.** While DBG runs, the toolbar names the board, its
-  firmware and the debug flags that are on.
+- **On-device AI (opt-in).** Settings > AI offers Gemma 4 E2B (about 2.0 GB) or E4B (about
+  3.0 GB). The model is downloaded once from Hugging Face into the browser's own storage and
+  runs on the GPU (WebGPU). Without a capable GPU or browser the tab says so and nothing changes.
+- **Message annotations.** A small row under a chat bubble shows the language with a
+  translation, and a tone chip (humorous, urgent, question, help, testing). Positions and
+  telemetry are skipped; an `@CALL` mention counts as chat.
+- **Emergency chip.** With AI switched on, a red chip marks any received message that says
+  MAYDAY, SOS, NOTFALL or EMERGENCY (HILFE when written in capitals). The keyword check does not
+  wait for the model; the model can flag further emergencies.
+- **Catch-up summary.** A Summary button in the conversation filter bar summarises the messages
+  that were unread when you opened the conversation (or the newest 40). The summary is shown in
+  place and is never sent or stored.
+- **Q-codes and locators in chat, no AI needed.** Q-codes and common abbreviations (QTH, 73, ...)
+  explain themselves on hover. A Maidenhead locator such as `JO40nu` is underlined as a link,
+  shows its hint at once on hover, and opens the map centred on it.
 
 ### Backend (MCProxy)
 
-- Every console line carries a parsed record next to the raw text
-  (`console_parse.py`, `frame_decode.py`, about 3 µs per line). The parser never fails a line:
-  anything it does not recognise stays plain text.
-- A DBG session now also turns on `--setlog` (the `[LOG]` lines) and restores it at the end
-  like `loradebug` and `txcapture`. The node reports it as `DisplyLog` in `--info`.
-- Restore safety: a flag whose state the node did not report is left untouched. This matters
-  because `--setlog on` clears a node's `--setlog <CALL>` filter. A flag is recorded as turned
-  on before the command is sent, so a dropped link still restores it, and an unexpected
-  session error keeps the flags in the pending-restore list.
-- `GET /api/monitor/console` adds the live `flags` and the node's `node` (board, hardware id,
-  firmware).
-- Dependencies refreshed (starlette 1.8.0).
+- Node Admin: the per-node "Max TX" ceiling is gone. TX power is now bounded by the node's own
+  board range from its latest status, or 30 dBm when that is not known yet. Older webapps that
+  still send `tx_max` are accepted and the value is ignored.
+- The installer unpacks releases on disk (`/var/tmp`) instead of the 150 MB `/tmp` RAM disk,
+  which a release with the AI runtime no longer fits into on the manual install path.
+- Dependencies refreshed (fastapi 0.143.3, py-vapid 1.9.6).
 
 ### Frontend (webapp)
 
-- RF rows show per reception: hops left, server/track/mesh flags, a failed FCS and the
-  last-hop hardware, where the frame carries them.
-- The console highlighter (used for lines without parsed data) now matches real firmware lines.
-  It no longer marks `rx=`/`tx=` fields as direction, 8-digit counters as message ids or
-  `FCS:06DB` as a dB value.
-- The Monitor help has a new chapter on reading DBG output.
-- Dependencies refreshed (vue 3.5.44, vitest 5.0.4, dompurify 3.4.17).
+- Settings > AI: model download with progress, storage status, and delete. Safari downloads now
+  complete, and the browser is asked to keep the model so it is not evicted.
+- Node Admin: the Max TX field is gone; the TX power control follows the node's board maximum.
+- Gateway Availability cards name their gateway in the title.
+- Feed Deliveries flags a path that has never received anything.
+- Loading chat history: a slow page request for one conversation no longer blocks another, and
+  a page answer that arrives after the 10 s timeout is still shown.
+- Dependencies refreshed.
 
 ### Upgrade notes
 
 - No migration, no system converge. Nothing to do on the Pi.
-- DBG works with ESP32 nodes only (TCP console 2323). A DBG session now sets three flags in the
-  node's flash, `loradebug`, `txcapture` and `setlog`, and restores the ones it turned on when
-  you stop it. While `setlog` is on, the node prints no `[HEAP]` or `[MC-HWM]` lines; free
-  heap appears in `[LOG] STAT heap=` instead.
+- The release tarball grew to about 35 MB because it carries the AI runtime (WebAssembly). The
+  Update button handles it; the first update from v2.1.12 takes a little longer to download.
+- The AI model itself (2-3 GB) is never part of the release. It is downloaded by each browser
+  that enables AI, directly from Hugging Face.
 - Reload the app once (the "Update available" banner) to pick up the new bundle.
 
 ## Earlier releases, in brief
 
 One entry per release. The full notes as published are in
 [`doc/archive/release-history-full.md`](https://github.com/DK5EN/McApp/blob/development/doc/archive/release-history-full.md).
+
+### v2.1.12 (2026-10-13)
+
+- Monitor DBG view parses the node's console (packet, `[LOG] STAT`, debug and raw-frame lines)
+  with warnings and alarms; a DBG session also sets the node's `setlog` flag and restores it.
+  Schema 36, `SYSTEM_EPOCH` 5.
 
 ### v2.1.11 (2026-10-11)
 

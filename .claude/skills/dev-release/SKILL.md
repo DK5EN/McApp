@@ -86,6 +86,11 @@ development...origin/development` and, when it is workflow-only, a quick `ruff` 
 `1` = dev pre-release, `2` = production. With an argument the dev path is fully non-interactive
 (production still stops to wait for `doc/release-history.md`).
 
+To test a webapp feature branch on the box, run `WEBAPP_BRANCH=feature/<name> ./scripts/release.sh 1`
+with the webapp checked out on that branch: MCProxy must still be on `development`, the webapp tag
+lands on the feature-branch commit, and the pre-release notes name the branch. Production refuses
+the override.
+
 The script refuses to start unless **both** repos are on `development` and **both** working trees
 are clean. Run nothing else that builds the webapp (`npm run build*`, a review agent's gate) while it
 runs or while you inspect `webapp/dist`: concurrent builds rewrite `dist/` under each other, and a
