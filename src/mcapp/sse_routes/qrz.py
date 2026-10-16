@@ -51,7 +51,7 @@ def build_qrz_router(manager: SSEManager) -> APIRouter:
         return await svc.status()
 
     @router.get("/api/callsign_info")
-    async def get_callsign_info() -> dict[str, dict[str, str | None]]:
+    async def get_callsign_info() -> dict[str, dict[str, Any]]:
         return await manager.require_storage().get_callsign_info_map()
 
     return router

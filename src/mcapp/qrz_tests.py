@@ -44,8 +44,11 @@ from .qrz_client import (
     Outcome,
     first_name,
     is_lookup_candidate,
+    latlon_to_locator,
+    parse_latlon,
     parse_response,
     qth_from_addr2,
+    validate_grid,
 )
 from .qrz_service import (
     BACKOFF_BASE_MS,
@@ -103,6 +106,7 @@ def _with_sub_exp(body: str, sub_exp: str | None) -> str:
     return body.replace("<SubExp>non-subscriber</SubExp>", tag)
 
 
+_NO_POS: dict[str, Any] = {"lat": None, "lon": None, "locator": None}
 DK5EN = {"call": "DK5EN", "fname": "Martin Stefan", "name": "Werner", "addr2": "Freising",
          "state": "BY", "country": "Germany"}  # fmt: skip
 
@@ -447,7 +451,8 @@ async def _test_spacing_and_encryption(env: Env, record: Record) -> None:
     info = await env.storage.get_callsign_info_map()
     record(
         "Q5. found entries cached by base callsign with name and QTH",
-        info.get("DK5EN") == {"first_name": "Martin", "qth": "Freising", "country": "Germany"}
+        info.get("DK5EN")
+        == {**_NO_POS, "first_name": "Martin", "qth": "Freising", "country": "Germany"}
         and set(info) == {"DK5EN", "OE5HWN", "DL1ABC", "DK3PB", "OE1KBC"},
     )
     record(
@@ -542,9 +547,9 @@ async def _test_live_push(env: Env, record: Record) -> None:
     await env.add_heard("DK5EN", T0)
     await env.add_heard("NO1BODY", T0 - 1)
     await env.add_heard("OE5HWN", T0 - 2)
-    pushed: list[dict[str, dict[str, str | None]]] = []
+    pushed: list[dict[str, dict[str, Any]]] = []
 
-    async def listener(info: dict[str, dict[str, str | None]]) -> None:
+    async def listener(info: dict[str, dict[str, Any]]) -> None:
         pushed.append(info)
         if "OE5HWN" in info:
             raise RuntimeError("client queue full")
@@ -565,8 +570,15 @@ async def _test_live_push(env: Env, record: Record) -> None:
         "Q32. each hit pushed once as a one-entry delta, a miss pushes nothing",
         pushed
         == [
-            {"DK5EN": {"first_name": "Martin", "qth": "Freising", "country": "Germany"}},
-            {"OE5HWN": {"first_name": "Martin", "qth": "Freising", "country": "Germany"}},
+            {"DK5EN": {**_NO_POS, "first_name": "Martin", "qth": "Freising", "country": "Germany"}},
+            {
+                "OE5HWN": {
+                    **_NO_POS,
+                    "first_name": "Martin",
+                    "qth": "Freising",
+                    "country": "Germany",
+                }
+            },
         ],
     )
     record(
@@ -611,8 +623,128 @@ async def _test_connect_snapshot(env: Env, record: Record) -> None:
         "Q34. connect burst carries the snapshot: {} when empty, found entries only",
         payload(empty) == {}
         and payload(full)
-        == {"DK5EN": {"first_name": "Martin", "qth": "Freising", "country": "Germany"}},
+        == {"DK5EN": {**_NO_POS, "first_name": "Martin", "qth": "Freising", "country": "Germany"}},
     )
+
+
+def _test_locator_helpers(record: Record) -> None:
+    record(
+        "Q50. latlon_to_locator: 49.4/10.8 -> JN59jj (hand-computed), mixed case",
+        latlon_to_locator(49.4, 10.8) == "JN59jj",
+    )
+    record(
+        "Q51. locator edges: +/-90 and +/-180 clamp into range",
+        latlon_to_locator(90, 180) == "RR99xx"
+        and latlon_to_locator(-90, -180) == "AA00aa"
+        and latlon_to_locator(90, -180) == "AR09ax"
+        and latlon_to_locator(-90, 180) == "RA90xa",
+    )
+    record(
+        "Q52. parse_latlon: valid pair, both-or-neither, range, non-numeric",
+        parse_latlon("49.4", "10.8") == (49.4, 10.8)
+        and parse_latlon("90", "-180") == (90.0, -180.0)
+        and parse_latlon("49.4", None) == (None, None)
+        and parse_latlon("91", "10") == (None, None)
+        and parse_latlon("10", "180.5") == (None, None)
+        and parse_latlon("abc", "10") == (None, None)
+        and parse_latlon("nan", "10") == (None, None)
+        and parse_latlon("", "") == (None, None),
+    )
+    record(
+        "Q53. validate_grid: canonical 4/6 char, invalid -> None",
+        validate_grid("jn59il") == "JN59il"
+        and validate_grid("JN59") == "JN59"
+        and validate_grid(" JN59IL ") == "JN59il"
+        and validate_grid("SN59") is None
+        and validate_grid("JN5") is None
+        and validate_grid("JN59yy") is None
+        and validate_grid("JN59i") is None
+        and validate_grid("") is None
+        and validate_grid(None) is None,
+    )
+
+
+async def _test_coordinates(env: Env, record: Record) -> None:
+    """Subscriber records carry lat/lon/grid; free ones do not."""
+    for i, call in enumerate(("DK5EN", "OE5HWN", "DL1ABC", "DK3PB", "OE1KBC", "DL9GRD", "DM4GRD")):
+        await env.add_heard(call, T0 - i)
+    pushed: list[dict[str, dict[str, Any]]] = []
+
+    async def listener(info: dict[str, dict[str, Any]]) -> None:
+        pushed.append(info)
+
+    env.service.set_info_listener(listener)
+    extra = {
+        "DK5EN": {"lat": "49.4", "lon": "10.8"},
+        "OE5HWN": {"lat": "49.4", "lon": "10.8", "grid": "JO62kk"},
+        "DL1ABC": {"lat": "95", "lon": "10.8"},
+        "DK3PB": {"lat": "xx", "lon": "10.8", "grid": "ZZ99"},
+        "DM4GRD": {"lat": "49.4", "lon": "10.8", "grid": "JN59"},
+    }
+    # A record with a position but neither fname nor addr2.
+    bare = {"DL9GRD": {"call": "DL9GRD", "grid": "JO40ab"}}
+    env.qrz.responder = lambda form: (
+        (200, _session_xml(), {})
+        if "username" in form
+        else (
+            200,
+            _session_xml(
+                callsign=bare.get(
+                    form["callsign"],
+                    {**DK5EN, "call": form["callsign"], **extra.get(form["callsign"], {})},
+                )
+            ),
+            {},
+        )
+    )
+    await env.service.set_credentials("DK5EN", PASSWORD)
+    await env.run_for(10 * 60_000)
+    info = await env.storage.get_callsign_info_map()
+    record(
+        "Q54. lat/lon stored and locator derived (JN59jj)",
+        info["DK5EN"]["lat"] == 49.4
+        and info["DK5EN"]["lon"] == 10.8
+        and info["DK5EN"]["locator"] == "JN59jj",
+    )
+    record(
+        "Q55. a valid QRZ grid wins over the derived locator",
+        info["OE5HWN"]["locator"] == "JO62kk" and info["OE5HWN"]["lat"] == 49.4,
+    )
+    record(
+        "Q56. out-of-range lat -> all None; invalid grid ignored; non-numeric -> None",
+        info["DL1ABC"] == {**info["DL1ABC"], **_NO_POS}
+        and info["DK3PB"] == {**info["DK3PB"], **_NO_POS},
+    )
+    record(
+        "Q57. free-tier record: all three None, keys present on the wire",
+        info["OE1KBC"] == {**info["OE1KBC"], **_NO_POS}
+        and all(
+            set(v) == {"first_name", "qth", "country", "lat", "lon", "locator"}
+            for v in info.values()
+        )
+        and all(
+            set(d[c]) == {"first_name", "qth", "country", "lat", "lon", "locator"}
+            for d in pushed
+            for c in d
+        ),
+    )
+    record(
+        "Q58. live delta carries the position",
+        any(d.get("DK5EN", {}).get("locator") == "JN59jj" for d in pushed),
+    )
+    record(
+        "Q60. a position-only record reaches the snapshot AND the live delta",
+        info.get("DL9GRD", {}).get("locator") == "JO40ab"
+        and any(d.get("DL9GRD", {}).get("locator") == "JO40ab" for d in pushed),
+    )
+    record(
+        "Q61. a 4-char grid never overrides the 6-char locator derived from lat/lon",
+        info["DM4GRD"]["locator"] == "JN59jj",
+    )
+    # not_found keeps the earlier coordinates
+    await env.storage.touch_callsign_info("DK5EN", T0 + 1)
+    info = await env.storage.get_callsign_info_map()
+    record("Q59. touch keeps earlier coordinates", info["DK5EN"]["locator"] == "JN59jj")
 
 
 async def _test_ledger_counts_failed_requests(env: Env, record: Record) -> None:
@@ -1518,9 +1650,13 @@ async def _test_routes(env: Env, record: Record) -> None:
     app = FastAPI()
     app.include_router(build_qrz_router(_Manager(env.service, env.storage)))  # type: ignore[arg-type]  # duck-typed manager stub
     bodies: list[str] = []
+    await env.storage.upsert_callsign_info(
+        "DL9SUB", "found", T0, first_name="Sub", lat=49.4, lon=10.8, locator="JN59jj"
+    )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://t"
     ) as client:
+        subscriber = await client.get("/api/callsign_info")
         put = await client.put(
             "/api/qrz/credentials", json={"username": "dk5en", "password": PASSWORD}
         )
@@ -1531,6 +1667,10 @@ async def _test_routes(env: Env, record: Record) -> None:
         bad = await client.put("/api/qrz/credentials", json={"username": "DK5EN", "password": ""})
         deleted = await client.delete("/api/qrz/credentials")
         bodies.append(deleted.text)
+    record(
+        "Q62. GET /api/callsign_info answers 200 with float lat/lon (response model)",
+        subscriber.status_code == 200 and subscriber.json()["DL9SUB"]["lat"] == 49.4,
+    )
     record(
         "Q27. routes: PUT/enable/DELETE work and no response ever contains the password",
         put.status_code == 200
@@ -1581,6 +1721,7 @@ async def run_qrz_tests() -> bool:
 
     _test_secret_box(record)
     _test_parser(record)
+    _test_locator_helpers(record)
     for case in (
         _test_unconfigured,
         _test_spacing_and_encryption,
@@ -1627,6 +1768,7 @@ async def run_qrz_tests() -> bool:
         _test_run_loop_wakes,
         _test_live_push,
         _test_connect_snapshot,
+        _test_coordinates,
     ):
         await _with_env(lambda env, case=case: case(env, record))  # type: ignore[misc]  # default-arg binding of the loop variable
 

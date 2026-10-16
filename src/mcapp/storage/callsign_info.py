@@ -88,14 +88,17 @@ class CallsignInfoMixin(StorageBase):
         first_name: str | None = None,
         qth: str | None = None,
         country: str | None = None,
+        lat: float | None = None,
+        lon: float | None = None,
+        locator: str | None = None,
         raw: dict[str, str] | None = None,
     ) -> None:
         raw = raw or {}
         await self._mutate(
             """INSERT INTO callsign_info
                    (callsign, status, first_name, qth, country, fname, name, addr2, state,
-                    fetched_at, source)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'qrz')
+                    lat, lon, locator, fetched_at, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'qrz')
                ON CONFLICT(callsign) DO UPDATE SET
                    status = excluded.status,
                    first_name = excluded.first_name,
@@ -105,6 +108,9 @@ class CallsignInfoMixin(StorageBase):
                    name = excluded.name,
                    addr2 = excluded.addr2,
                    state = excluded.state,
+                   lat = excluded.lat,
+                   lon = excluded.lon,
+                   locator = excluded.locator,
                    fetched_at = excluded.fetched_at,
                    source = excluded.source""",
             (
@@ -117,6 +123,9 @@ class CallsignInfoMixin(StorageBase):
                 raw.get("name"),
                 raw.get("addr2"),
                 raw.get("state"),
+                lat,
+                lon,
+                locator,
                 fetched_at,
             ),
         )
@@ -135,14 +144,21 @@ class CallsignInfoMixin(StorageBase):
         rows = await self._query("SELECT callsign, status, fetched_at FROM callsign_info")
         return {r["callsign"]: (r["status"], int(r["fetched_at"])) for r in rows}
 
-    async def get_callsign_info_map(self) -> dict[str, dict[str, str | None]]:
-        """Display data for every callsign with a name or QTH on file."""
+    async def get_callsign_info_map(self) -> dict[str, dict[str, Any]]:
+        """Display data for every callsign with a name, QTH or position on file."""
         rows = await self._query(
-            "SELECT callsign, first_name, qth, country FROM callsign_info"
-            " WHERE first_name IS NOT NULL OR qth IS NOT NULL"
+            "SELECT callsign, first_name, qth, country, lat, lon, locator FROM callsign_info"
+            " WHERE first_name IS NOT NULL OR qth IS NOT NULL OR locator IS NOT NULL"
         )
         return {
-            r["callsign"]: {"first_name": r["first_name"], "qth": r["qth"], "country": r["country"]}
+            r["callsign"]: {
+                "first_name": r["first_name"],
+                "qth": r["qth"],
+                "country": r["country"],
+                "lat": r["lat"],
+                "lon": r["lon"],
+                "locator": r["locator"],
+            }
             for r in rows
         }
 

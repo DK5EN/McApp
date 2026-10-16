@@ -43,8 +43,11 @@ from .qrz_client import (
     base_callsign,
     first_name,
     is_lookup_candidate,
+    latlon_to_locator,
+    parse_latlon,
     parse_response,
     qth_from_addr2,
+    validate_grid,
 )
 from .secret_box import SecretBox, SecretBoxError
 from .util import PLACEHOLDER_CALLSIGN_BASES, now_ms
@@ -456,10 +459,22 @@ class QrzLookupService:
 
         if result.outcome is Outcome.FOUND:
             rec = result.record
-            info = {
+            # Field NAMES only: lat/lon are a home position and never logged.
+            logger.debug("QRZ record %s fields=%s", callsign, sorted(rec))
+            lat, lon = parse_latlon(rec.get("lat"), rec.get("lon"))
+            # A 6-char QRZ grid wins; a 4-char one is coarser than what lat/lon
+            # give, and an 8-char one fails validation: both fall back to the
+            # derived value (the 4-char grid stays only when there is no lat/lon).
+            locator = validate_grid(rec.get("grid"))
+            if (locator is None or len(locator) < 6) and lat is not None and lon is not None:  # noqa: PLR2004 - Maidenhead subsquare length
+                locator = latlon_to_locator(lat, lon)
+            info: dict[str, Any] = {
                 "first_name": first_name(rec.get("fname")),
                 "qth": qth_from_addr2(rec.get("addr2")),
                 "country": rec.get("country"),
+                "lat": lat,
+                "lon": lon,
+                "locator": locator,
             }
             await self._storage.upsert_callsign_info(callsign, "found", now, raw=rec, **info)
             await self._publish(callsign, info)
@@ -482,10 +497,10 @@ class QrzLookupService:
         else:
             await self._handle_failure(result, now)
 
-    async def _publish(self, callsign: str, info: dict[str, str | None]) -> None:
-        # Same filter as get_callsign_info_map: an entry with neither name nor
-        # QTH is never on the wire, live or in the connect snapshot.
-        if self._on_info is None or not (info["first_name"] or info["qth"]):
+    async def _publish(self, callsign: str, info: dict[str, Any]) -> None:
+        # Same filter as get_callsign_info_map: an entry with no name, QTH or
+        # position is never on the wire, live or in the connect snapshot.
+        if self._on_info is None or not (info["first_name"] or info["qth"] or info["locator"]):
             return
         try:
             await self._on_info({callsign: info})

@@ -889,6 +889,19 @@ class MigrationsMixin(StorageBase):
                     )
                     _set_schema_version(conn, 36)
 
+                if current_version < 37:  # noqa: PLR2004 - schema migration step
+                    # QRZ subscriber accounts return lat/lon/grid; keep them next
+                    # to the name/QTH so the webapp can place the station.
+                    cols = {r[1] for r in conn.execute("PRAGMA table_info(callsign_info)")}
+                    for col, decl in (("lat", "REAL"), ("lon", "REAL"), ("locator", "TEXT")):
+                        # `cols` empty = a fixture stamped past v33 without the table.
+                        if cols and col not in cols:
+                            conn.execute(f"ALTER TABLE callsign_info ADD COLUMN {col} {decl};")
+                    logger.info(
+                        "Migration v%d → v37: callsign_info.lat/lon/locator", current_version
+                    )
+                    _set_schema_version(conn, 37)
+
         await asyncio.to_thread(_init_db)
 
         # Initialize bucket accumulators from existing signal_log
