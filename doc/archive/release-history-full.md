@@ -5,6 +5,68 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.1.12 (2026-10-13)
+
+The Monitor's DBG view now reads the node's console. Console lines from an ESP32 node used to
+show as plain text with a colour highlighter that misread most real firmware lines. McApp now
+parses each line: packet lines, `[LOG]` records including the 5-minute `STAT` health line,
+debug events and raw frame dumps. The Monitor shows them with fields, units, normal ranges and
+warnings. Schema stays at 36 and `SYSTEM_EPOCH` stays at 5.
+
+### Highlights
+
+- **Structured DBG rows.** Each console line shows its family (packet, `LOG STAT`, `DBG
+CRC_ERROR`, ...), the time to the millisecond and the node's own clock. Packet lines show hops
+  left, server/track/mesh flags, the relay path with the originator first, FCS, hardware and
+  firmware, and RSSI/SNR. Hovering a line explains its fields, with units and normal ranges.
+- **Warnings and alarms are marked.** A TX watchdog, dropped user traffic (priority 1-2), a
+  failed send, a radio restart error or a crash reboot is an alarm; CRC errors, relay drops
+  under load and channel use of 70 % or more are warnings. Both have a coloured stripe and a
+  text label.
+- **Frame decode.** A raw `RX_FRAME` / `TX_FRAME` dump opens a decode panel with every header
+  field, the FCS check (OK or FAIL) and the full hex.
+- **Less noise, more control.** The new Console filter hides radio plumbing (state machine,
+  timers, restarts) by default but never hides a warning or alarm. It also offers "alarms only",
+  per-family mute, and how many DBG lines to keep (500 / 2000 / 5000, default 2000). DBG lines
+  no longer push RF rows out of the 5000-row history. Pause freezes the view while new lines
+  are still counted.
+- **The session states what it is doing.** While DBG runs, the toolbar names the board, its
+  firmware and the debug flags that are on.
+
+### Backend (MCProxy)
+
+- Every console line carries a parsed record next to the raw text
+  (`console_parse.py`, `frame_decode.py`, about 3 µs per line). The parser never fails a line:
+  anything it does not recognise stays plain text.
+- A DBG session now also turns on `--setlog` (the `[LOG]` lines) and restores it at the end
+  like `loradebug` and `txcapture`. The node reports it as `DisplyLog` in `--info`.
+- Restore safety: a flag whose state the node did not report is left untouched. This matters
+  because `--setlog on` clears a node's `--setlog <CALL>` filter. A flag is recorded as turned
+  on before the command is sent, so a dropped link still restores it, and an unexpected
+  session error keeps the flags in the pending-restore list.
+- `GET /api/monitor/console` adds the live `flags` and the node's `node` (board, hardware id,
+  firmware).
+- Dependencies refreshed (starlette 1.8.0).
+
+### Frontend (webapp)
+
+- RF rows show per reception: hops left, server/track/mesh flags, a failed FCS and the
+  last-hop hardware, where the frame carries them.
+- The console highlighter (used for lines without parsed data) now matches real firmware lines.
+  It no longer marks `rx=`/`tx=` fields as direction, 8-digit counters as message ids or
+  `FCS:06DB` as a dB value.
+- The Monitor help has a new chapter on reading DBG output.
+- Dependencies refreshed (vue 3.5.44, vitest 5.0.4, dompurify 3.4.17).
+
+### Upgrade notes
+
+- No migration, no system converge. Nothing to do on the Pi.
+- DBG works with ESP32 nodes only (TCP console 2323). A DBG session now sets three flags in the
+  node's flash, `loradebug`, `txcapture` and `setlog`, and restores the ones it turned on when
+  you stop it. While `setlog` is on, the node prints no `[HEAP]` or `[MC-HWM]` lines; free
+  heap appears in `[LOG] STAT heap=` instead.
+- Reload the app once (the "Update available" banner) to pick up the new bundle.
+
 ## v2.1.11 (2026-10-11)
 
 Node Admin's remote view reaches parity with the firmware's RM1 command set. A stored node can
