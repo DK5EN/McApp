@@ -1006,7 +1006,7 @@ On-device layout:
 - Slots: `~/mcapp-slots/slot-{0,1,2}`, with `~/mcapp-slots/current` symlinked to the active one
 - Service: `systemctl status mcapp` — `ExecStart=/home/martin/.local/bin/uv run mcapp`; logs via `sudo journalctl -u mcapp.service -f`
 - DB: `/var/lib/mcapp/messages.db` (SQLite, WAL)
-- Deploy installs deps with `uv sync --all-packages` (pulls the Web Push crypto libs + the BLE workspace member) — see `bootstrap/lib/deploy.sh`
+- Deploy installs deps with `uv sync --all-packages --no-dev` (pulls the Web Push crypto libs + the BLE workspace member, never the `dev` group's mypy) — see `bootstrap/lib/deploy.sh`. Running `uv run` on the box re-syncs the default groups and brings mypy back into that slot; the next deploy drops it again
 - **Slot activation never restores the database, and must never again.** The Update page's
   Activate button (`POST /api/update/activate {slot}`, runner mode `activate`) switches code +
   webapp bundle + services to an already-deployed slot and keeps `/var/lib/mcapp/messages.db`
