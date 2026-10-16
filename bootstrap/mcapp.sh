@@ -64,6 +64,24 @@ GITHUB_RAW_BASE=""
 # Re-enable nounset now that BASH_SOURCE detection is done
 set -u
 
+# Point mktemp at disk, not /tmp. /tmp on a McApp box is a 150 MB tmpfs
+# (lib/system.sh), and a release tarball plus its unpacked tree no longer fits
+# there: v2.1.13-dev.1 with the browser-AI wasm is 37 MB packed, 117 MB
+# unpacked, and the deploy died in `tar -xzf` right after the checksum passed.
+# Every temp dir in this script and its libs comes from plain `mktemp`, so one
+# export covers them all. An operator's own non-/tmp TMPDIR is kept.
+use_disk_tmpdir() {
+  local candidate="${1:-/var/tmp}"
+  case "${TMPDIR:-/tmp}" in
+    /tmp | /tmp/) ;;
+    *) return 0 ;;
+  esac
+  if [[ -d "$candidate" && -w "$candidate" ]]; then
+    export TMPDIR="$candidate"
+  fi
+}
+use_disk_tmpdir
+
 # Installation paths
 readonly CONFIG_DIR="/etc/mcapp"
 readonly CONFIG_FILE="${CONFIG_DIR}/config.json"

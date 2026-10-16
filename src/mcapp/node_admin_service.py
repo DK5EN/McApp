@@ -309,16 +309,12 @@ class NodeAdminService:
     async def set_key(self, target: str, password: str, tx_max: int | None) -> None:
         t = remote_cmd.normalize_call(target)
         remote_cmd.validate_password(password)
-        if tx_max is not None and (
-            isinstance(tx_max, bool)
-            or not isinstance(tx_max, int)
-            or not 0 <= tx_max <= TX_MAX_LIMIT
-        ):
-            msg = f"tx_max must be an integer 0..{TX_MAX_LIMIT}"
-            raise ValueError(msg)
+        # `tx_max` is accepted for older webapps and ignored: the operator ceiling was dropped
+        # (decision 2026-10-16); a txpower is bounded by the node's own board range only.
+        del tx_max
         token = await asyncio.to_thread(self._box.encrypt, password, _aad(t))
         self._keys.pop(t, None)
-        await self._storage.set_node_admin_key(t, token, tx_max)
+        await self._storage.set_node_admin_key(t, token, None)
         self._keys.pop(t, None)
         # A new password invalidates the earlier sync: the next command syncs again.
         self._synced.discard(t)
@@ -397,7 +393,6 @@ class NodeAdminService:
                     "ctr": item["ctr"],
                     "last_hwm": item["last_hwm"],
                     "last_sync_at": item["last_sync_at"],
-                    "tx_max": item["tx_max"],
                     "possible_lockout_until_ms": _lockout_until_ms(rows, now),
                 }
             )
@@ -435,10 +430,9 @@ class NodeAdminService:
         return src
 
     async def _tx_max(self, target: str) -> int:
-        for item in await self._storage.list_node_admin_targets():
-            if item["target"] == target:
-                return int(item["tx_max"])
-        return remote_cmd.TX_MAX_DEFAULT
+        """Upper bound for `txpower`: the board maximum, else the protocol limit."""
+        _board_min, board_max = await self._node_tx_range(target)
+        return board_max if board_max is not None else TX_MAX_LIMIT
 
     async def _node_tx_range(self, target: str) -> tuple[int | None, int | None]:
         """``(minimum, maximum)`` TX power from the newest verified `status` carrying `p=`.
@@ -459,9 +453,9 @@ class NodeAdminService:
     async def _check_txpower(self, target: str, cmd: str, args: str) -> None:
         """Refuse `txpower` outside the node's own range (a counted, silent reject there).
 
-        The key's `tx_max` is only the operator's ceiling; the node's `allowed()` bounds by its
+        There is no operator ceiling (dropped 2026-10-16); the node's `allowed()` bounds by its
         board's ``TX_POWER_MAX`` and also requires ``v >= minTxPower``, which its `status`
-        reply reports as `p=<cur>/<min>/<max>`. Unknown range: the key's `tx_max` alone.
+        reply reports as `p=<cur>/<min>/<max>`. Unknown range: ``TX_MAX_LIMIT`` alone.
         """
         if cmd != "txpower" or not args.isdigit():
             return
@@ -542,8 +536,8 @@ class NodeAdminService:
             return await self._sync(t, transport)
         key = await self._get_key(t)
         tx_max = await self._tx_max(t)
+        await self._check_txpower(t, cmd, args)  # first: names the node's own range
         remote_cmd.validate_command(cmd, args, tx_max)
-        await self._check_txpower(t, cmd, args)
         src_call = self._src_call(t)
         resolved = self._resolve_transport(transport)
         async with self._lock(t):

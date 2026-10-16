@@ -45,11 +45,15 @@ class NodeAdminService(Protocol):
     """
 
     async def list_targets(self) -> list[dict[str, Any]]:
-        """`[{target, has_key, key_unreadable, ctr, last_hwm, last_sync_at, tx_max}]`."""
+        """`[{target, has_key, key_unreadable, ctr, last_hwm, last_sync_at, lockout...}]`."""
         ...
 
     async def set_key(self, target: str, password: str, tx_max: int | None) -> None:
-        """Validate, encrypt (AAD `node_admin.password:<TARGET>`) and store. Never returned."""
+        """Validate, encrypt (AAD `node_admin.password:<TARGET>`) and store. Never returned.
+
+        `tx_max` is accepted for older webapps and ignored: `txpower` is bounded by the node's
+        own board range (newest verified status) or, unknown, by `TX_MAX_LIMIT`.
+        """
         ...
 
     async def delete_target(self, target: str) -> None:
