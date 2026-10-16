@@ -7,6 +7,10 @@
 #   Production       → Merges to main, tags, builds, publishes, preps next version
 #
 # Manages BOTH repos (MCProxy + webapp) for tags and branch switching.
+#
+# WEBAPP_BRANCH=<branch> (dev pre-release only) releases the webapp from that
+# branch instead of `development`, to put a feature branch on the box for
+# testing. MCProxy stays on `development`; production refuses the override.
 # Produces a single combined tarball with backend + webapp.
 # Includes automatic cleanup on failure (rollback tags, release, artifacts, branches).
 
@@ -16,6 +20,7 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 readonly WEBAPP_DIR="$(cd "${PROJECT_DIR}/../webapp" && pwd)"
 readonly GITHUB_REPO="DK5EN/McApp"
+readonly WEBAPP_BRANCH="${WEBAPP_BRANCH:-development}"
 
 # Colors
 readonly RED='\033[0;31m'
@@ -170,18 +175,32 @@ validate_tools() {
 }
 
 validate_on_development() {
+  local mode="$1"
+
+  if [[ "$WEBAPP_BRANCH" != "development" && "$mode" != "dev" ]]; then
+    log_error "WEBAPP_BRANCH=${WEBAPP_BRANCH} is only allowed for a dev pre-release"
+    log_error "A production release merges development → main; unset WEBAPP_BRANCH."
+    exit 1
+  fi
+
   for repo_dir in "$PROJECT_DIR" "$WEBAPP_DIR"; do
     local repo_name
     repo_name=$(basename "$repo_dir")
+    local expected="development"
+    [[ "$repo_dir" == "$WEBAPP_DIR" ]] && expected="$WEBAPP_BRANCH"
     local branch
     branch=$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD)
 
-    if [[ "$branch" != "development" ]]; then
-      log_error "${repo_name} is on branch '${branch}' — must be on 'development'"
-      log_error "Switch both repos to development before running this script."
+    if [[ "$branch" != "$expected" ]]; then
+      log_error "${repo_name} is on branch '${branch}' — must be on '${expected}'"
+      log_error "Switch the repo to ${expected} before running this script."
       exit 1
     fi
   done
+
+  if [[ "$WEBAPP_BRANCH" != "development" ]]; then
+    log_warn "webapp is released from feature branch '${WEBAPP_BRANCH}', not development"
+  fi
 }
 
 validate_repos_clean() {
@@ -966,6 +985,11 @@ upload_dev() {
 
   log_info "Creating GitHub pre-release ${version}..."
 
+  local notes="McApp development pre-release ${version}"
+  if [[ "$WEBAPP_BRANCH" != "development" ]]; then
+    notes+=" (webapp from feature branch ${WEBAPP_BRANCH})"
+  fi
+
   local -a assets=("${PROJECT_DIR}/${tarball}" "${PROJECT_DIR}/${checksum}")
 
   # The tag must already be on the remote (push_tags_both_repos). gh does NOT
@@ -975,7 +999,7 @@ upload_dev() {
   gh release create "$version" \
     --repo "$GITHUB_REPO" \
     --title "McApp ${version} (dev)" \
-    --notes "McApp development pre-release ${version}" \
+    --notes "$notes" \
     --prerelease \
     --verify-tag \
     "${assets[@]}"
@@ -1077,8 +1101,6 @@ main() {
   echo ""
 
   validate_tools
-  validate_on_development
-  validate_repos_clean
 
   local mode
   if [[ "${1:-}" == "1" ]]; then
@@ -1088,6 +1110,9 @@ main() {
   else
     mode=$(prompt_release_type)
   fi
+
+  validate_on_development "$mode"
+  validate_repos_clean
 
   local current
   current=$(read_pyproject_version)
