@@ -56,7 +56,7 @@ _MODULE_PATH = Path(__file__).parent / "remote_cmd.py"
 # sha256 of the raw bytes of the vendored vectors copy. A change means the
 # firmware corpus changed: re-copy it byte-exact, re-pin this constant and the
 # copy in ONE commit, and re-check the hand-written cases below still agree.
-_EXPECTED_SHA256 = "8744b36892182e7b150c6f7ef78950ea6acff024bad6c3d862bd6727500b3ef6"
+_EXPECTED_SHA256 = "4f269c5d99706c8cefb6d5dbe976717adafbbb62d5eb2e749f6a97d9e106e601"
 
 UDP_SUFFIX = "{087"  # the firmware ack-request suffix on an Extern-UDP copy
 
@@ -87,7 +87,7 @@ def _test_corpus(record: Record) -> None:
     corpus = _load()
     commands: list[dict[str, Any]] = corpus["commands"]
     replies: list[dict[str, Any]] = corpus["replies"]
-    record("vectors count 36 commands + 27 replies", len(commands) == 36 and len(replies) == 27)
+    record("vectors count 40 commands + 35 replies", len(commands) == 40 and len(replies) == 35)
 
     for i, v in enumerate(commands):
         key = derive_key(v["passwd"])
@@ -260,7 +260,7 @@ def _test_validate_command(record: Record) -> None:
             "reboot", "status", "sendpos", "sendtrack", "sync",
             "gps", "track", "display", "led", "gateway", "mesh",
             "txpower", "setout", "chgled", "radio", "sens", "txq", "mbox", "maxhop",
-            "name", "atxt", "pos", "mh",
+            "name", "atxt", "pos", "mh", "net", "upd",
         },
     )  # fmt: skip
     corpus_cmds = {v["cmd"] for v in _load()["commands"]}
@@ -286,6 +286,8 @@ def _test_allowlist_shapes(record: Record) -> None:
         "mh": ["0", "999", "DK5EN-98", "dk5en", "DK5EN", "1234AB"],
         "radio": [""],
         "maxhop": [""],
+        "net": [""],
+        "upd": ["", "check", "go v4.40a", "go v4.40a.hbserver", "go " + "A" * 23],
     }
     bad = {
         "led": ["auto", "FLASH", ""],
@@ -295,6 +297,8 @@ def _test_allowlist_shapes(record: Record) -> None:
         "pos": ["48.4", "1 2", "1 2 3 4", "1.1234567 2 3", "1 2 123456", "a b c"],
         "mh": ["1234", "", "DK5EN-123", "AB", "DK5EN-", "DK5ENABCDE"],
         "mbox": ["1"],
+        "net": ["x"],
+        "upd": ["go", "go ", "go " + "a" * 24, "go v4 40", "go a/b", "check now", "CHECK", "x"],
     }
     for cmd, vals in ok.items():
         for a in vals:

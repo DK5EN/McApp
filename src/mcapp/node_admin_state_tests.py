@@ -1017,7 +1017,7 @@ def _test_status_keeps_reads(record: Record) -> None:
 
 
 def _test_net_upd(record: Record) -> None:
-    """`net` / `upd` read parsers (dormant until the firmware ships the commands)."""
+    """`net` / `upd` read parsers (firmware grammar, reply of 2026-10-17)."""
 
     def one(cmd: str, args: str, result: str) -> Any:
         return fold_any([vrow(1, cmd, args, result)], NOW)["fields"].get(cmd)
@@ -1048,9 +1048,21 @@ def _test_net_upd(record: Record) -> None:
             "avail": "v4.41a",
             "staged": None,
             "busy": False,
+            "go": None,
             "err": None,
             "check_min": None,
         },
+    )
+    live = one("upd", "", "ok m=off c=prod n=0 a=- st=v4.40a.10.17 b=0 g=1 ck=- e=-")["value"]
+    record(
+        "upd read: bench reply (staged, g=1, '-' for none) parsed",
+        (live["avail"], live["staged"], live["go"], live["err"], live["check_min"])
+        == (None, "v4.40a.10.17", True, None, None),
+    )
+    record(
+        "net: bench reply parsed, eff=- is None",
+        one("net", "", "ok mtu=1280 srv=OE net=auto eff=-")["value"]
+        == {"mtu": 1280, "srv": "OE", "net": "auto", "eff": None},
     )
     more = one("upd", "", "ok m=auto c=dev n=0 a=v4.41a st=v4.41a b=1 e=nowifi ck=12")["value"]
     record(

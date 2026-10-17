@@ -395,7 +395,7 @@ _NET_MTU: Final = (576, 9000)
 _NET_MODES: Final = frozenset({"auto", "inet", "hamnet"})
 _NET_EFF: Final = frozenset({"inet", "hamnet"})
 _SRV_RE: Final = re.compile(r"[A-Z]{2}")
-_TAG_RE: Final = re.compile(r"[A-Za-z0-9._-]{1,24}")
+_TAG_RE: Final = re.compile(r"[A-Za-z0-9._-]{1,23}")
 _UPD_ERR_RE: Final = re.compile(r"[^ ]{1,40}")
 _UPD_MODES: Final = frozenset({"off", "notify", "auto"})
 _UPD_CHANS: Final = frozenset({"prod", "dev"})
@@ -423,11 +423,15 @@ def _flag(value: str | None) -> bool | None:
 
 
 def _tag(value: str | None) -> str | None:
-    return value if value is not None and _TAG_RE.fullmatch(value) else None
+    """A release tag, or None for the firmware's `-` (none) and anything off-charset."""
+    return value if value is not None and value != "-" and _TAG_RE.fullmatch(value) else None
 
 
 def _parse_upd(body: str) -> dict[str, JsonValue] | None:
-    """The READ form of `upd`: `m= c= n= a= st= b= e= ck=`; an invalid key reads as None."""
+    """The READ form of `upd`: `m= c= n= a= st= b= g= ck= e=`; an invalid key reads as None.
+
+    `-` is the firmware's "none" for `a`, `st`, `ck` and `e`; it reads as None, never as a value.
+    """
     kv = tokenize(body)
     mode, chan, err = kv.get("m"), kv.get("c"), kv.get("e")
     out: dict[str, JsonValue] = {
@@ -437,7 +441,8 @@ def _parse_upd(body: str) -> dict[str, JsonValue] | None:
         "avail": _tag(kv.get("a")),
         "staged": _tag(kv.get("st")),
         "busy": _flag(kv.get("b")),
-        "err": err if err is not None and _UPD_ERR_RE.fullmatch(err) else None,
+        "go": _flag(kv.get("g")),
+        "err": err if err is not None and err != "-" and _UPD_ERR_RE.fullmatch(err) else None,
         "check_min": _int(kv.get("ck")),
     }
     return out if any(v is not None for v in out.values()) else None
