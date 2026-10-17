@@ -5,6 +5,59 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.1.14 (2026-10-17)
+
+The on-device AI can now translate what you send: pick French, Italian, Spanish or Polish in the
+compose box and the translation is what goes on air. QRZ.com subscriber lookups now carry the
+station's position, so the QTH links to the map, and the `!wx` reply names the weather station's
+locator. Schema 36 → 37 (runs automatically); `SYSTEM_EPOCH` stays at 5.
+
+### Highlights
+
+- **Outgoing translation (opt-in, needs the on-device AI).** With Browser AI switched on and a
+  model downloaded, a language picker appears below Dest. Choose fr, it, es or pl and the message
+  box splits: you type in your language, the translation appears next to it (stacked on a phone)
+  and that is what is sent. Callsigns, numbers, locators, Q-codes and 73/55 are kept as written;
+  you can edit the translation before sending, and a stale translation is never sent. The choice
+  is remembered per conversation. If the AI is not ready, a notice says the original will be sent.
+- **QTH on the map.** A QRZ.com subscriber lookup now stores the station's coordinates and
+  6-character locator; the QTH in the station card opens the map at that point. On a free
+  account the locator in the QTH text is linked instead.
+- **Locator in `!wx`.** The weather reply reads `WX <station> <LOCATOR>:`, e.g.
+  `WX Leonding JN78dg: 12.0C ...`, using the node's GPS position or the configured one. When the
+  reply is too long the locator is the last thing dropped.
+
+### Backend (MCProxy)
+
+- Schema 37: `callsign_info` gains `lat`, `lon` and `locator`, filled from QRZ.com subscriber
+  records and carried on `proxy:callsign_info` and `GET /api/callsign_info`. Coordinates are
+  never logged.
+- Beacon-template promote/demote overrides: `GET /api/classifier/templates?user_action_only=true`
+  lists exactly the overridden templates, and every change is broadcast as
+  `proxy:template_override`.
+- Deploys install the runtime environment without the development tools (mypy and helpers are no
+  longer in every slot).
+- Command contract synced with mc-chat (locator cases for `!wx`).
+- Dependencies refreshed.
+
+### Frontend (webapp)
+
+- Template overrides apply to the spam filter from the first connect, not only after opening the
+  Beacon Templates card; this fixes unread badges that disagreed with the server after a reload.
+- Gateway Availability: hover, tap or focus a segment to see its state, exact from/to times and
+  duration.
+- Locators are recognised when glued to an emoji, written in lower case or followed by a slash
+  suffix.
+- RF Monitor: the message text no longer collapses into a one-character column next to a long
+  relay path; long paths are shortened to first ··· +N ··· last.
+- Dependencies refreshed.
+
+### Upgrade notes
+
+- Migration 37 runs on the first start (adds three columns, no data rewrite). No system converge.
+- Outgoing translation sends the translated text only; the original stays on your screen.
+- Reload the app once (the "Update available" banner) to pick up the new bundle.
+
 ## v2.1.13 (2026-10-16)
 
 The webapp can now run an AI model in your own browser. Once you switch it on in Settings > AI

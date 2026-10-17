@@ -1,62 +1,56 @@
 # Release History
 
-## v2.1.14 (2026-10-17)
+## v2.1.15 (2026-10-17)
 
-The on-device AI can now translate what you send: pick French, Italian, Spanish or Polish in the
-compose box and the translation is what goes on air. QRZ.com subscriber lookups now carry the
-station's position, so the QTH links to the map, and the `!wx` reply names the weather station's
-locator. Schema 36 → 37 (runs automatically); `SYSTEM_EPOCH` stays at 5.
+Node Admin can now read a remote node's network and firmware-update state and install an update,
+and the remote view is tidier. `net` and `upd` are live against firmware that implements the RM1
+reply of 2026-10-17 (DK5EN-1 on 4.40a). No schema change (stays at 37); `SYSTEM_EPOCH` stays at 5.
 
 ### Highlights
 
-- **Outgoing translation (opt-in, needs the on-device AI).** With Browser AI switched on and a
-  model downloaded, a language picker appears below Dest. Choose fr, it, es or pl and the message
-  box splits: you type in your language, the translation appears next to it (stacked on a phone)
-  and that is what is sent. Callsigns, numbers, locators, Q-codes and 73/55 are kept as written;
-  you can edit the translation before sending, and a stale translation is never sent. The choice
-  is remembered per conversation. If the AI is not ready, a notice says the original will be sent.
-- **QTH on the map.** A QRZ.com subscriber lookup now stores the station's coordinates and
-  6-character locator; the QTH in the station card opens the map at that point. On a free
-  account the locator in the QTH text is linked instead.
-- **Locator in `!wx`.** The weather reply reads `WX <station> <LOCATOR>:`, e.g.
-  `WX Leonding JN78dg: 12.0C ...`, using the node's GPS position or the configured one. When the
-  reply is too long the locator is the last thing dropped.
+- **Network and Firmware update cards work.** Read shows MTU, MeshCom server and network mode
+  (Internet or HAMNET); Firmware update shows mode, channel, the release the node found, a staged
+  release, busy and "go armed", and the last check. Check asks the node to look now. Update now
+  installs the staged release, or the newer one the node found, only while the node is idle.
+  Boards without auto-update (RAK4631) answer that the feature is not available.
+- **Plain-language update errors.** The node's refusals read as sentences: no internet, no valid
+  clock or phone connected, release changed, already current, no firmware file for the board.
+- **Faster follow-up commands.** A verified reply from the node releases the 10 s spacing at once
+  instead of making you wait it out.
+- **Tidier remote view.** The node picker, key and transport block now sits in a card like Node
+  control; the Sync button shows its state, and Max hop is in the Radio card.
 
 ### Backend (MCProxy)
 
-- Schema 37: `callsign_info` gains `lat`, `lon` and `locator`, filled from QRZ.com subscriber
-  records and carried on `proxy:callsign_info` and `GET /api/callsign_info`. Coordinates are
-  never logged.
-- Beacon-template promote/demote overrides: `GET /api/classifier/templates?user_action_only=true`
-  lists exactly the overridden templates, and every change is broadcast as
-  `proxy:template_override`.
-- Deploys install the runtime environment without the development tools (mypy and helpers are no
-  longer in every slot).
-- Command contract synced with mc-chat (locator cases for `!wx`).
+- RM1 `net` and `upd` (`check`, `go <tag>`) are on the allowlist; the firmware vector corpus is
+  adopted. `-` means "none" in the replies and never reads as a release tag or an error.
+- `upd go` is an install: never re-asked and never offered by history Run again.
 - Dependencies refreshed.
 
 ### Frontend (webapp)
 
-- Template overrides apply to the spam filter from the first connect, not only after opening the
-  Beacon Templates card; this fixes unread badges that disagreed with the server after a reload.
-- Gateway Availability: hover, tap or focus a segment to see its state, exact from/to times and
-  duration.
-- Locators are recognised when glued to an emoji, written in lower case or followed by a slash
-  suffix.
-- RF Monitor: the message text no longer collapses into a one-character column next to a long
-  relay path; long paths are shortened to first ··· +N ··· last.
+- Network and Firmware update cards enabled; Update now offered only when a release is ready and
+  the node is neither busy nor waiting on an armed update.
+- Positions keeps the map camera, style, selection and filters across route changes.
+- Node Admin: Telemetry tab hidden (not working yet).
+- Sidebar, setup checklist, search, update-version and status-panel polish from the UX campaign.
 - Dependencies refreshed.
 
 ### Upgrade notes
 
-- Migration 37 runs on the first start (adds three columns, no data rewrite). No system converge.
-- Outgoing translation sends the translated text only; the original stays on your screen.
-- Reload the app once (the "Update available" banner) to pick up the new bundle.
+- No migration, no system converge. Reload the app once to pick up the new bundle.
+- Update now starts a real firmware install on the remote node and restarts it. The download path
+  (a node that must fetch the release first) has not been tested on air; staged installs have.
 
 ## Earlier releases, in brief
 
 One entry per release. The full notes as published are in
 [`doc/archive/release-history-full.md`](https://github.com/DK5EN/McApp/blob/development/doc/archive/release-history-full.md).
+
+### v2.1.14 (2026-10-17)
+
+- Outgoing translation in the compose box (fr, it, es, pl, needs the on-device AI); QRZ subscriber
+  QTH on the map; locator in the `!wx` reply. Schema 37, `SYSTEM_EPOCH` 5.
 
 ### v2.1.13 (2026-10-16)
 
