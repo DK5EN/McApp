@@ -88,7 +88,6 @@ def qth_from_addr2(addr2: str | None) -> str | None:
 _GRID_RE = re.compile(r"^([A-R]{2})([0-9]{2})(?:([A-X]{2}))?$", re.IGNORECASE)
 _MAX_LAT = 90.0
 _MAX_LON = 180.0
-_SUBSQUARES_PER_AXIS = 4320  # 18 fields x 10 squares x 24 subsquares (both axes)
 
 
 def _float_or_none(value: str | None) -> float | None:
@@ -105,20 +104,6 @@ def parse_latlon(lat: str | None, lon: str | None) -> tuple[float | None, float 
     if la is None or lo is None or abs(la) > _MAX_LAT or abs(lo) > _MAX_LON:
         return None, None
     return la, lo
-
-
-def latlon_to_locator(lat: float, lon: float) -> str:
-    """6-char Maidenhead locator (JN59il); +90 / +180 clamp to the last cell."""
-    x = min(int((lon + 180.0) * 12), _SUBSQUARES_PER_AXIS - 1)
-    y = min(int((lat + 90.0) * 24), _SUBSQUARES_PER_AXIS - 1)
-    return (
-        chr(65 + x // 240)
-        + chr(65 + y // 240)
-        + str((x // 24) % 10)
-        + str((y // 24) % 10)
-        + chr(97 + x % 24)
-        + chr(97 + y % 24)
-    )
 
 
 def validate_grid(grid: str | None) -> str | None:

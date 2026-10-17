@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from .geo import latlon_to_locator
 from .qrz_client import (
     QRZ_AGENT,
     QRZ_XML_URL,
@@ -43,7 +44,6 @@ from .qrz_client import (
     base_callsign,
     first_name,
     is_lookup_candidate,
-    latlon_to_locator,
     parse_latlon,
     parse_response,
     qth_from_addr2,

@@ -40,11 +40,11 @@ import httpx
 from fastapi import FastAPI
 
 from .commands.constants import has_console
+from .geo import latlon_to_locator
 from .qrz_client import (
     Outcome,
     first_name,
     is_lookup_candidate,
-    latlon_to_locator,
     parse_latlon,
     parse_response,
     qth_from_addr2,

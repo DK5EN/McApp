@@ -42,7 +42,7 @@ _CORPUS_PATH = pathlib.Path(__file__).parent / "contract" / "command_contract.js
 # edit it in mc-chat and re-sync), a subtree pull brought new content, or the
 # pull has not been run yet. For an intentional upstream change, re-capture the
 # hash in the same commit as the pull.
-_EXPECTED_SHA256 = "454c787d0810e13b3188ffbe4575e855b4c27f11a168486d7bbfb7755c26e15a"
+_EXPECTED_SHA256 = "5ace37afdedee7016cccef4b81d2254568bef6a7fb5f2ffd067857ccec2660fc"
 
 
 def run_contract_parity_tests() -> bool:
@@ -80,12 +80,19 @@ def run_contract_parity_tests() -> bool:
 
     # format_for_lora output (weather-string wire snapshot, incl. day/night)
     fmt = corpus["format_for_lora"]
+    for case in fmt["cases"]:
+        pos = case.get("position") or {}
+        ws = WeatherService(
+            lat=pos.get("lat", fmt["lat"]),
+            lon=pos.get("lon", fmt["lon"]),
+            stat_name=fmt["stat_name"],
+            max_age_minutes=30,
+        )
+        actual_str = ws.format_for_lora(dict(case["weather_data"]), prefix_text=case["prefix"])
+        _record(f"format_for_lora: {case['why']}", actual_str == case["expected"])
     ws = WeatherService(
         lat=fmt["lat"], lon=fmt["lon"], stat_name=fmt["stat_name"], max_age_minutes=30
     )
-    for case in fmt["cases"]:
-        actual_str = ws.format_for_lora(dict(case["weather_data"]), prefix_text=case["prefix"])
-        _record(f"format_for_lora: {case['why']}", actual_str == case["expected"])
     err = fmt["error_case"]
     _record(
         "format_for_lora error case",

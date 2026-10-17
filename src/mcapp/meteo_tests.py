@@ -344,6 +344,11 @@ def _test_format_for_lora() -> None:
     _check(
         "format_for_lora: normal case matches production formatting exactly",
         normal,
+        "🌤️ WX TestStation JN58sd: 21.5C 55% rF, 1013.2hPa, windstill, unbekannt",
+    )
+    _check(
+        "format_for_lora: no position -> no locator, pre-locator string",
+        WeatherService(lat=None, lon=None, stat_name="TestStation").format_for_lora(canned),
         "🌤️ WX TestStation: 21.5C 55% rF, 1013.2hPa, windstill, unbekannt",
     )
 
