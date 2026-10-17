@@ -604,20 +604,17 @@ async def case_e_sync_spacing(record: Record) -> None:
             and busy,
         )
         await env.time.advance(3_000)
-        await env.reply(0, "ok ctr=5 v=4.40a")
-        await until(lambda: 10_000 in env.time.pending_deltas())
         await settle()
         held = len(env.tx) == 1
-        await env.time.advance(9_999)
-        held_still = len(env.tx) == 1
-        await env.time.advance(1)
+        await env.reply(0, "ok ctr=5 v=4.40a")
         await until(lambda: len(env.tx) == 2)
+        no_sleep = 10_000 not in env.time.pending_deltas()
         want = remote_cmd.build_command_text(key, TARGET, ATTACHED, 6, "status", "", 15)
         rows = await env.rows()
         record(
-            "e2. command goes out only after a verified sync reply AND 10 s of sleep after it",
+            "e2. held command goes out right after the verified sync reply, with no 10 s sleep",
             held
-            and held_still
+            and no_sleep
             and len(env.tx) == 2
             and env.tx[1][2] == want
             and await env.hwm() == 5
@@ -707,17 +704,32 @@ async def case_e_dropped(record: Record) -> None:
             await env.send(transport="ble")
             await until(lambda: len(env.tx) == 1)
             sync_id = (await env.rows())[0]["id"]
+            # The held command now goes out on the verified sync reply with no sleep in
+            # between, so the fault is injected at the one point left: after the release,
+            # before the frame is built (the sync reply itself still needs the key).
+            svc: Any = env.svc
+            send_pending = svc._send_pending
+
+            async def faulty(
+                target: str,
+                pend: Any,
+                *,
+                _drop: bool = drop_ble,
+                _env: Env = env,
+                _orig: Any = send_pending,
+            ) -> None:
+                if _drop:
+                    _env.ble = False
+                else:
+                    # The service refuses a removal while a command is held (case o), so the
+                    # key goes the way another process would take it; the sync row stays.
+                    with db_write(_env.storage.db_path) as conn:
+                        conn.execute("DELETE FROM node_admin_keys")
+                    _env.svc._keys.pop(TARGET, None)
+                await _orig(target, pend)
+
+            svc._send_pending = faulty
             await env.reply(0, "ok ctr=5 v=4.40a")
-            await until(lambda: 10_000 in env.time.pending_deltas())
-            if drop_ble:
-                env.ble = False
-            else:
-                # The service refuses a removal while a command is held (case o), so the key
-                # goes the way another process would take it; the sync row stays.
-                with db_write(env.storage.db_path) as conn:
-                    conn.execute("DELETE FROM node_admin_keys")
-                env.svc._keys.pop(TARGET, None)
-            await env.time.advance(10_000)
             await until(lambda: any("warning" in p for _, p in env.bcasts))
             warned = [p for _, p in env.bcasts if "warning" in p]
             record(
@@ -738,14 +750,38 @@ async def case_e_spacing(record: Record) -> None:
         await env.time.advance(5_000)
         await env.reply(a["ctr"])
         await env.svc.drain()
-        await env.time.advance(9_999)
-        early = await raises(NodeAdminBusyError, env.send())
-        await env.time.advance(1)
+        await env.time.advance(1_000)
+        info = await env.state()
         late = await env.send()
         record(
-            "e5. a send < 10 s after the previous REPLY is refused (anchor is the reply)",
-            early and late["ctr"] == a["ctr"] + 1,
+            "e5a. a VERIFIED reply releases the 10 s spacing: send at +1 s accepted, "
+            "next_allowed_at null",
+            info["next_allowed_at"] is None and late["ctr"] == a["ctr"] + 1,
         )
+
+    async with make_env() as env:
+        await env.setup()
+        a = await env.send()
+        await env.svc.drain()
+        await env.time.advance(5_000)
+        await env.reply(a["ctr"], bad=True)
+        await env.svc.drain()
+        await env.time.advance(1_000)
+        early = await raises(NodeAdminBusyError, env.send())
+        record("e5b. an UNVERIFIED (bad tag) reply still anchors the 10 s spacing", early)
+
+    # e5c: the one helper behind the send gate, the re-ask gate and next_allowed_at
+    rows: list[dict[str, Any]] = [
+        {"handed_off_at": 1_000, "reply_at": 5_000, "verified": 1, "send_error": None},
+        {"handed_off_at": 2_000, "reply_at": 3_000, "verified": 0, "send_error": None},
+        {"handed_off_at": 9_000, "reply_at": None, "verified": None, "send_error": "x"},
+    ]
+    only_verified = nas._last_frame_ms(rows[:1])
+    record(
+        "e5c. _last_frame_ms (send gate, re-ask gate, state): a verified row anchors nothing, "
+        "an unverified one keeps hand-off and reply, a refused hand-off counts for nothing",
+        only_verified is None and nas._last_frame_ms(rows) == 3_000,
+    )
 
     async with make_env() as env:
         await env.setup()
@@ -1713,12 +1749,10 @@ async def case_n_cooldown_more(record: Record) -> None:
         await env.time.advance(125_000)
         await env.reply(a["ctr"])
         await env.svc.drain()
-        early = await busy_text(env.send())
-        await env.time.advance(10_000)
         ok = await env.send()
         record(
-            "n1e. a late verified reply lifts the cool-down (only the 10 s spacing remains)",
-            early is not None and "one frame per 10 s" in early and ok["ctr"] == a["ctr"] + 1,
+            "n1e. a late verified reply lifts the cool-down and anchors no 10 s spacing",
+            ok["ctr"] == a["ctr"] + 1,
         )
 
 
@@ -1994,12 +2028,12 @@ async def case_n_state(record: Record) -> None:
         await env.time.advance(11_000)
         idle = await env.state()
         record(
-            "n5d. a verified reply ends in_flight, feeds the fold and re-anchors the 10 s "
-            "spacing on the reply; idle -> next_allowed_at null",
+            "n5d. a verified reply ends in_flight, feeds the fold and releases the 10 s "
+            "spacing at once (next_allowed_at null)",
             done["in_flight"] is None
             and done["switches"]["gps"]["state"] == "on"
             and done["switches"]["gps"]["log_id"] == a["log_id"]
-            and done["next_allowed_at"] == T0 + 30_000
+            and done["next_allowed_at"] is None
             and idle["next_allowed_at"] is None
             and idle["now_ms"] == T0 + 31_000,
         )

@@ -919,6 +919,13 @@ firmware side: `MeshCom-Firmware-DEV-Main` (`src/remote_cmd.cpp`, `docs/adr-remo
   lock RM1 for 5 min, silencing even a valid sync, reachable by anyone on air). Every one of these is SILENT: wrong
   password, rate limit, lockout, RM off and "never heard over LoRa" are indistinguishable on air. The service therefore
   enforces ONE command in flight per target, 10 s spacing and a "possible lockout" refusal itself; do not loosen them.
+  **One deliberate exception (operator decision 2026-10-17): a VERIFIED reply releases the 10 s spacing at
+  once**, including the held-behind-sync path. The firmware anchors `RM_RATE_MS` at acceptance, just before
+  the reply; a rate reject is silent and NOT a strike; the limiter (and the sync's own 60 s one) is armed
+  only with `node_rmstrict` on, which is off by default. Residual risk, accepted: on a strict node a fast
+  reply plus an immediate next command can be dropped silently (120 s no-reply + cool-down). Unverified
+  replies and unanswered hand-offs still anchor 10 s (`_last_frame_ms`, webapp `lastFrameMs`). Asked of
+  the firmware: report `rs=` in status, or defer instead of drop.
 - **Counter = `MAX(ctr + 1, last_hwm + 1, unix_seconds)`**, the firmware sender's own rule (`rm_runtime.cpp`), allocated
   in ONE `db_write` transaction in `to_thread` (`allocate_node_admin_command`). `_mutate` returns a rowcount and `_query`
   never commits, so `UPDATE ... RETURNING` through them silently rolls back and every send reuses the counter. Refusals

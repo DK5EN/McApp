@@ -6,7 +6,8 @@ is `remote_cmd`, persistence is the `NodeAdminMixin` of `storage/node_admin.py`;
 this module owns the rules in between:
 
   * ONE command in flight per target, >= `RM_RATE_MS` after the last frame
-    (command, sync or reply), and no sends while a lockout is likely (D3).
+    (command, sync or reply) unless its reply verified, and no sends while a
+    lockout is likely (D3).
   * The counter and the tag exist only at allocation time, in one storage
     transaction; every refusal happens BEFORE it, so a refusal burns no value.
   * `send()` returns after the row insert. The transmit, the optional
@@ -125,9 +126,17 @@ def _last_frame_ms(rows: list[dict[str, Any]]) -> int | None:
     A hand-off that the transport refused never reached the air, so it does
     not count; a reply (even a late one to an older row) is the node's own
     frame and always does.
+
+    A row whose reply VERIFIED anchors nothing (operator decision 2026-10-17):
+    the firmware anchors its 10 s window at acceptance, just before the reply,
+    a rate reject is silent and not a lockout strike, and strict mode (which
+    enables the limit) is off by default. Residual risk of a silent drop on a
+    strict node is accepted.
     """
     best: int | None = None
     for r in rows:
+        if r.get("verified") == 1:
+            continue
         if r.get("reply_at") is not None:
             best = max(best or 0, int(r["reply_at"]))
         if r.get("handed_off_at") is not None and not r.get("send_error"):
@@ -196,7 +205,6 @@ class _Pending:
     args: str
     requested_transport: str
     released: asyncio.Event = field(default_factory=asyncio.Event)
-    reply_at: int = 0
 
 
 class NodeAdminService:
@@ -689,9 +697,9 @@ class NodeAdminService:
                 )
                 await self._broadcast_row(target, pend.sync_log_id, SYNC_DROPPED)
                 return
-            wait_s = (pend.reply_at + remote_cmd.RM_RATE_MS - self._clock()) / 1000
-            if wait_s > 0:
-                await self._sleep(wait_s)
+            # No spacing after the sync reply: the firmware's sync has its own limiter and
+            # never arms the 10 s command window (remote_cmd.cpp rmCheck), and a verified
+            # reply releases the spacing anyway (operator decision 2026-10-17).
             await self._send_pending(target, pend)
         except asyncio.CancelledError:
             raise
@@ -1239,7 +1247,6 @@ class NodeAdminService:
             self._synced.add(target)
         pend = self._pending.get(target)
         if verified.ctr == 0 and pend is not None and pend.sync_log_id == row["id"]:
-            pend.reply_at = now
             pend.released.set()
         logger.info("node admin %s: verified reply to RM1 %d", target, verified.ctr)
         await self._broadcast_row(target, row["id"])
