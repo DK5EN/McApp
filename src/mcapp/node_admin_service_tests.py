@@ -877,6 +877,23 @@ async def case_f_reask_rules(record: Record) -> None:
             "f5. refused for reboot", await raises(NodeAdminBusyError, env.svc.reask(r["log_id"]))
         )
 
+    # `upd go <tag>` starts an install: never asked again; a plain `upd` read is (rows seeded,
+    # since the firmware corpus, and so the allowlist, has no `upd` yet).
+    for args, refused_want in (("go v4.41a", True), (None, False)):
+        async with make_env() as env:
+            await env.setup()
+            t0 = env.time.now
+            row = await env.storage.allocate_node_admin_command(
+                TARGET, ATTACHED, "upd", args, "udp", t0, 0, lambda c: f"RM1 {c} upd seeded"
+            )
+            await env.storage.mark_node_admin_handed_off(row["id"], t0)
+            await env.time.advance(61_000)
+            refused = await raises(NodeAdminBusyError, env.svc.reask(row["id"]))
+            record(
+                f"f5b. upd {args or '(read)'}: re-ask refused={refused_want}",
+                refused is refused_want,
+            )
+
     async with make_env() as env:
         await env.setup()
         s = await env.svc.sync(TARGET)

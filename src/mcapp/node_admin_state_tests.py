@@ -1016,6 +1016,82 @@ def _test_status_keeps_reads(record: Record) -> None:
     )
 
 
+def _test_net_upd(record: Record) -> None:
+    """`net` / `upd` read parsers (dormant until the firmware ships the commands)."""
+
+    def one(cmd: str, args: str, result: str) -> Any:
+        return fold_any([vrow(1, cmd, args, result)], NOW)["fields"].get(cmd)
+
+    full = one("net", "", "ok mtu=1280 srv=OE net=auto eff=hamnet")
+    record(
+        "net: full reply parsed",
+        full["value"] == {"mtu": 1280, "srv": "OE", "net": "auto", "eff": "hamnet"},
+    )
+    record(
+        "net: '-' and out-of-range / unknown values read as None",
+        one("net", "", "ok mtu=1280 srv=OE net=auto eff=-")["value"]["eff"] is None
+        and one("net", "", "ok mtu=100 srv=oe net=x eff=inet")["value"]
+        == {"mtu": None, "srv": None, "net": None, "eff": "inet"},
+    )
+    record(
+        "net: garbage leaves no field",
+        one("net", "", "ok blah") is None and one("net", "", "ok mtu=1 srv=x net=y eff=z") is None,
+    )
+    upd = one("upd", "", "ok m=notify c=prod n=1 a=v4.41a st=- b=0 e=-")
+    record(
+        "upd read: full reply parsed",
+        upd["value"]
+        == {
+            "mode": "notify",
+            "chan": "prod",
+            "newer": True,
+            "avail": "v4.41a",
+            "staged": None,
+            "busy": False,
+            "err": None,
+            "check_min": None,
+        },
+    )
+    more = one("upd", "", "ok m=auto c=dev n=0 a=v4.41a st=v4.41a b=1 e=nowifi ck=12")["value"]
+    record(
+        "upd read: st / b / e / ck parsed",
+        (more["staged"], more["busy"], more["err"], more["check_min"])
+        == ("v4.41a", True, "nowifi", 12)
+        and (more["mode"], more["chan"], more["newer"]) == ("auto", "dev", False),
+    )
+    bad = one("upd", "", "ok m=bogus c=x n=2 a=bad/tag st=- b=9 e=- ck=abc")
+    record(
+        "upd read: invalid values dropped, nothing parsed leaves no field",
+        bad is None and one("upd", "", "ok m=bogus n=1")["value"]["newer"] is True,
+    )
+    base = [vrow(1, "upd", "", "ok m=off c=prod n=1 a=v4.41a st=- b=0 e=-")]
+    after = fold_any(
+        [
+            *base,
+            # key=value results on purpose: without the args guard they WOULD parse
+            vrow(2, "upd", "check", "ok m=auto n=0 a=-"),
+            vrow(3, "upd", "go v4.41a", "ok m=auto n=0 a=-"),
+        ],
+        NOW,
+    )["fields"]["upd"]
+    record(
+        "upd check / go replies do not touch fields['upd']",
+        after["value"]["avail"] == "v4.41a" and after["value"]["mode"] == "off",
+    )
+    no_args = fold_any([*base, {**vrow(2, "upd", "", "ok m=auto n=0 a=-"), "args": None}], NOW)[
+        "fields"
+    ]["upd"]
+    record("upd with args None is a read like ''", no_args["value"]["mode"] == "auto")
+    newest = fold_any(
+        [*base, vrow(2, "upd", "", "ok m=auto c=prod n=0 a=- st=- b=0 e=-")],
+        NOW,
+    )["fields"]["upd"]["value"]
+    record(
+        "upd read: the newer verified read wins (send order)",
+        newest["mode"] == "auto" and newest["newer"] is False and newest["avail"] is None,
+    )
+
+
 def run_node_admin_state_tests() -> bool:
     results: list[tuple[str, bool]] = []
 
@@ -1037,6 +1113,7 @@ def run_node_admin_state_tests() -> bool:
         _test_tx_min_and_led_flash,
         _test_injection,
         _test_read_fields,
+        _test_net_upd,
         _test_read_markers,
         _test_status_keeps_reads,
     ):

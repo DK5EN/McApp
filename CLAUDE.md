@@ -979,6 +979,14 @@ firmware side: `MeshCom-Firmware-DEV-Main` (`src/remote_cmd.cpp`, `docs/adr-remo
   command leaves before a verified sync learns the node's mark. Remove is REFUSED while a command is in flight, a
   cool-down or a possible lockout runs: those windows are derived from the log it deletes, so removing and re-adding
   inside one would silently drop the protection.
+- **`net` and `upd` are prepared but NOT sendable yet** (2026-10-17, firmware handover
+  `MeshCom-Firmware` request, draft grammar in `node_admin_state._parse_net`/`_parse_upd`). The
+  readers are dormant and the webapp's Network / Firmware update cards are greyed out through
+  `FIRMWARE_PENDING_COMMANDS` (webapp `nodeAdminCommands.ts`). When the firmware corpus ships them:
+  copy `remote_cmd_vectors.json` + its sha256, add both to `ALLOWLIST` with their arg specs, re-check
+  the reply grammar against the parsers, and empty the webapp set. `upd go <tag>` is an install:
+  never re-asked (service guard) and never offered by history Run again / Ask again
+  (`isUpdateInstall`).
 - **Feature flag to the webapp is `/api/status` `features`** (`"node_admin"`), not the mc-chat flag: `requiresAdminBackend` means
   "mc-chat only". The webapp uses `adminStatus.nodeAdminAvailable` and a three-state view (no router guard: the backend flag is `null`
   at first paint). `useProxyAPI` tolerates a body-less 204 and carries the backend `detail` on `ProxyAPIError.detail`.

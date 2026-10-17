@@ -766,7 +766,8 @@ class NodeAdminService:
         if compute_state(row, now) not in {"waiting", "no_reply"}:
             msg = "this row is not waiting for a reply"
             raise NodeAdminBusyError(msg)
-        if row["cmd"] in {"reboot", "sync"} or int(row["ctr"]) < 1:
+        upd_go = row["cmd"] == "upd" and str(row.get("args") or "").split()[:1] == ["go"]
+        if row["cmd"] in {"reboot", "sync"} or int(row["ctr"]) < 1 or upd_go:  # go = an install
             msg = f"{row['cmd']} is never asked again"
             raise NodeAdminBusyError(msg)
         if row["id"] in self._reasked:
