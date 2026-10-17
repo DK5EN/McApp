@@ -1,6 +1,6 @@
 # McApp production health log — mcapp.local
 
-> **Status:** Current — newest section: §39 (2026-10-17 14:56 CEST, pre-release sweep of `v2.1.14-dev.3` before the v2.1.14 promotion, green, zero findings, 2 h 46 min soak; the operator promoted HEAD, 6 commits past the tag, unsoaked). Before that: §38 (2026-10-16 20:29 CEST, post-release sweep of production `v2.1.13`, 2 min after the deploy, green, zero findings, `NRestarts` 0, schema 36). Before that: §37 (2026-10-16 20:23 CEST, pre-release sweep of `v2.1.13-dev.4` (on-device Browser AI, Q-code/locator links, Node Admin TX ceiling dropped, bootstrap TMPDIR) before the v2.1.13 promotion, green, zero findings, ~21 min soak at the operator's decision). Before that: §36 (2026-10-13 16:34 CEST, pre-release sweep of `v2.1.12-dev.1` (parsed DBG console lines, setlog as third flag, live `flags`/`node` in the console status) before the v2.1.12 promotion, green, zero findings, ~8 min soak at the operator's decision; new watch point W26). Before that: §35 (2026-10-11 20:53 CEST, post-release sweep of production `v2.1.11`, 3 min after the deploy, green, zero release findings; internet feed found disabled by a settings save between 20:42 and 20:49, not by the release). Before that: §34 (2026-10-11 20:41 CEST, pre-release sweep of `v2.1.11-dev.2` (Node Admin remote parity) before the v2.1.11 promotion, green, zero findings, ~9 min soak at the operator's decision). Before that: §33 (2026-10-11 15:05 CEST, pre-release sweep of `v2.1.10-dev.3` (meshmap internet feed, RM1 out of chat) before the v2.1.10 promotion, green, zero findings, ~13 min soak at the operator's decision; W20 recurred before the deploy). Before that: §32 (2026-10-10 15:35 CEST, pre-release sweep of `v2.1.7-dev.1` (Internet feed removed) before the v2.1.7 promotion, green, zero findings, ~15 min soak). Before that: §31 (2026-10-06, v2.1.6-dev.6 short soak). Before that: §30 (2026-10-05 19:08 CEST, sweep of `v2.1.5-dev.2` node time zone, green, zero findings). Before that: §26 (2026-10-04 09:36 CEST, pre-release sweep of
+> **Status:** Current — newest section: §40 (2026-10-17 15:11 CEST, post-release sweep of production `v2.1.14`, 2 min after the deploy, green, zero findings, schema 37, no mypy in the slot). Before that: §39 (2026-10-17 14:56 CEST, pre-release sweep of `v2.1.14-dev.3` before the v2.1.14 promotion, green, zero findings, 2 h 46 min soak; the operator promoted HEAD, 6 commits past the tag, unsoaked). Before that: §38 (2026-10-16 20:29 CEST, post-release sweep of production `v2.1.13`, 2 min after the deploy, green, zero findings, `NRestarts` 0, schema 36). Before that: §37 (2026-10-16 20:23 CEST, pre-release sweep of `v2.1.13-dev.4` (on-device Browser AI, Q-code/locator links, Node Admin TX ceiling dropped, bootstrap TMPDIR) before the v2.1.13 promotion, green, zero findings, ~21 min soak at the operator's decision). Before that: §36 (2026-10-13 16:34 CEST, pre-release sweep of `v2.1.12-dev.1` (parsed DBG console lines, setlog as third flag, live `flags`/`node` in the console status) before the v2.1.12 promotion, green, zero findings, ~8 min soak at the operator's decision; new watch point W26). Before that: §35 (2026-10-11 20:53 CEST, post-release sweep of production `v2.1.11`, 3 min after the deploy, green, zero release findings; internet feed found disabled by a settings save between 20:42 and 20:49, not by the release). Before that: §34 (2026-10-11 20:41 CEST, pre-release sweep of `v2.1.11-dev.2` (Node Admin remote parity) before the v2.1.11 promotion, green, zero findings, ~9 min soak at the operator's decision). Before that: §33 (2026-10-11 15:05 CEST, pre-release sweep of `v2.1.10-dev.3` (meshmap internet feed, RM1 out of chat) before the v2.1.10 promotion, green, zero findings, ~13 min soak at the operator's decision; W20 recurred before the deploy). Before that: §32 (2026-10-10 15:35 CEST, pre-release sweep of `v2.1.7-dev.1` (Internet feed removed) before the v2.1.7 promotion, green, zero findings, ~15 min soak). Before that: §31 (2026-10-06, v2.1.6-dev.6 short soak). Before that: §30 (2026-10-05 19:08 CEST, sweep of `v2.1.5-dev.2` node time zone, green, zero findings). Before that: §26 (2026-10-04 09:36 CEST, pre-release sweep of
 > `v2.1.1-dev.2` before the v2.1.1 promotion) — green, zero findings, **~3 min soak at the operator's
 > decision**; new watch point **W23** (QRZ lookup budget). Before that: §25 (2026-10-02, no-soak
 > sign-off of v2.0.19, re-released as v2.1.0). Before that: §24 (2026-09-29 10:03 CEST, post-release sweep of
@@ -2732,3 +2732,46 @@ or `client_error` row, no memory pressure.
 **Watch points.** W19: one more deploy (12:10). The six post-tag commits are covered only by the
 local gate, not by this sweep; the post-release sweep is their first field observation. No new W,
 no F.
+
+## 40. 2026-10-17 15:11 CEST — post-release sweep of production v2.1.14, 2 min after the deploy
+
+| Anchor         | Value                                                                                                                                                                                              |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Active slot    | slot-1, `v2.1.14` (`webapp/version.html`), `mcapp` up since 15:09:15                                                                                                                               |
+| Deploy         | update runner, production mode (`POST /api/update/start {"dev": false}`, the Update button's call), from slot-2 (`v2.1.14-dev.3`); runner result `success`, converge `ok`, 113 s; no auto-rollback |
+| Schema / epoch | 37 = `LATEST_SCHEMA_VERSION` = DB `schema_version`; `callsign_info` has `lat`, `lon`, `locator`; epoch 5                                                                                           |
+| Host           | up 10 d 6 h, no reboot                                                                                                                                                                             |
+
+**Verdict: green, zero findings.** Run about 2 min after the deploy, so rates and stalls cover a
+very short window.
+
+- Services: `mcapp`, `mcapp-ble`, `caddy`, `lighttpd` active; `NRestarts` 0 on both McApp units
+  (unchanged after a further 45 s). Journal warnings since the deploy: 0 (`-- No entries --`).
+- Production tarball shape: 0 `*_tests.py`/`*.json` under `src/mcapp`, no
+  `run_startup_tests.py`, and **no `mypy` in the slot's venv** (the `--no-dev` deploy fix in this
+  release; §38 dismissed mypy in every slot). `latlon_to_locator` present in `geo.py`/`meteo.py`.
+- `/health` healthy; `/api/status`: `version` v2.1.14, `udp_target_kind` `first_seen` at 95 s
+  uptime (W11), `udp_multiple_sources` false, `udp_untrusted_source_ips` empty,
+  `udp_suppressed_target_changes` 0.
+- DB: messages 28722, newest 8 s old; the startup prune trimmed to 28715 (retention msgs 30 d,
+  pos/ack 8 d; oldest msg 2026-09-17 15:12, oldest pos 2026-10-09 15:11), which is why the total
+  is below §39's 28930. WAL 2.9 MB. 0 unclassified in the last hour, 0 `{CET}` rows.
+- Rates (1 h window ending 15:11): msg 34, pos 86, signal_log 265.
+- Gateway uptime: last `{CET}` 552 s old (cadence 606 s), heartbeat 29 s, no new gap or dark row
+  (restart inside the tolerance).
+- Stalls since the restart (non-sample): `loop_lag` 2 critical (max 1270 ms) / 5 stall (max
+  296 ms); `http` 1 stall (`/api/classifier/templates` 1445 ms, first load); `client_http` 3 stall
+  (`/api/send`, `node-admin/targets`, `classifier/templates`, max 1554 ms). No `handler`,
+  `pool_wait`, `sse_*` or `client_error` row.
+- Host: disk 10 % (51 G free), 185 MB RAM available, ~23 MB swapped (SwapFree 439 of 473 MB),
+  load 0.48, 46.2 C.
+
+**Absent signals.** No restarts, no journal warnings, no UDP provenance anomaly, no unclassified
+messages, no `{CET}` rows stored, no new uptime gap or dark row, no `handler`/`pool_wait` stalls.
+
+**Dismissed.** Startup `loop_lag` criticals and first-load `http` stalls (W19). `first_seen`
+target kind right after a restart (W11). The message-total drop (startup retention prune).
+
+**Watch points.** W19: one more deploy (15:09). W11: re-check `identified` after a few minutes.
+The six commits promoted without a field soak (§39) are now live; outgoing translation runs in the
+browser and is not observable from the Pi. No new W, no F.

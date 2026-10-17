@@ -48,7 +48,6 @@ from . import main as main_module
 from . import remote_cmd
 from .main import MessageRouter
 from .node_admin_service import NodeAdminService
-from .node_admin_types import NodeAdminBusyError
 from .secret_box import SecretBox
 from .sqlite_storage import SQLiteStorage, create_sqlite_storage
 from .sse_handler import SSEManager
@@ -575,21 +574,13 @@ async def case_w5_loopback(record: Record) -> None:
             )
             record(f"W5 {label}: last_hwm raised to the verified counter", info["last_hwm"] == 501)
 
-            busy = False
-            try:
-                await loop.svc.send(TARGET, "status", "", "auto")
-            except NodeAdminBusyError:
-                busy = True
-            record(f"W5 {label}: a second command right after the reply is refused (Busy)", busy)
-            loop.time.now += 9_999
-            busy = False
-            try:
-                await loop.svc.send(TARGET, "status", "", "auto")
-            except NodeAdminBusyError:
-                busy = True
-            record(f"W5 {label}: ...still Busy at 9 999 ms", busy)
+            # Operator decision 2026-10-17: a VERIFIED reply releases the 10 s spacing at once.
             loop.time.now += 1
             second = await loop.svc.send(TARGET, "display", "off", "auto")
+            record(
+                f"W5 {label}: a second command 1 ms after the verified reply is accepted",
+                second.get("ctr") == 502,
+            )
             await loop.svc.drain()
             _t, _s, text2, reply2 = await _round(loop, node)
             record(

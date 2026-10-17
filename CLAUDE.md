@@ -919,6 +919,13 @@ firmware side: `MeshCom-Firmware-DEV-Main` (`src/remote_cmd.cpp`, `docs/adr-remo
   lock RM1 for 5 min, silencing even a valid sync, reachable by anyone on air). Every one of these is SILENT: wrong
   password, rate limit, lockout, RM off and "never heard over LoRa" are indistinguishable on air. The service therefore
   enforces ONE command in flight per target, 10 s spacing and a "possible lockout" refusal itself; do not loosen them.
+  **One deliberate exception (operator decision 2026-10-17): a VERIFIED reply releases the 10 s spacing at
+  once**, including the held-behind-sync path. The firmware anchors `RM_RATE_MS` at acceptance, just before
+  the reply; a rate reject is silent and NOT a strike; the limiter (and the sync's own 60 s one) is armed
+  only with `node_rmstrict` on, which is off by default. Residual risk, accepted: on a strict node a fast
+  reply plus an immediate next command can be dropped silently (120 s no-reply + cool-down). Unverified
+  replies and unanswered hand-offs still anchor 10 s (`_last_frame_ms`, webapp `lastFrameMs`). Asked of
+  the firmware: report `rs=` in status, or defer instead of drop.
 - **Counter = `MAX(ctr + 1, last_hwm + 1, unix_seconds)`**, the firmware sender's own rule (`rm_runtime.cpp`), allocated
   in ONE `db_write` transaction in `to_thread` (`allocate_node_admin_command`). `_mutate` returns a rowcount and `_query`
   never commits, so `UPDATE ... RETURNING` through them silently rolls back and every send reuses the counter. Refusals
@@ -972,6 +979,16 @@ firmware side: `MeshCom-Firmware-DEV-Main` (`src/remote_cmd.cpp`, `docs/adr-remo
   command leaves before a verified sync learns the node's mark. Remove is REFUSED while a command is in flight, a
   cool-down or a possible lockout runs: those windows are derived from the log it deletes, so removing and re-adding
   inside one would silently drop the protection.
+- **`net` and `upd` are sendable since the firmware reply of 2026-10-17**
+  (`MeshCom-Firmware-DEV-Main/docs/mcapp-rm1-net-update-reply-20261017.md`; corpus copied, sha256
+  re-pinned). Grammar differs from the draft: error tokens are `stale aubusy nowifi current noasset
+  notready safeboot unsupported`; `upd` carries `g=` (a remote go is armed, RAM only) and `ck=`; `-`
+  means none for `a`, `st`, `ck`, `e` and must never read as a value (`_tag`, `err`). "Update now" is
+  offered on `st=<tag>` or `n=1`+`a=<tag>`, only with `b=0` and `g=0`; `upd go` takes `st` when set
+  (staging marks the tag installed, so a check afterwards reads `n=0`). Tag charset
+  `[A-Za-z0-9._-]`, 1..23. The webapp's `FIRMWARE_PENDING_COMMANDS` is empty. `upd go <tag>` is an
+  install: never re-asked (service guard) and never offered by history Run again / Ask again
+  (`isUpdateInstall`). `status` now ends in `rs=<0|1>` (node strict mode); not parsed yet.
 - **Feature flag to the webapp is `/api/status` `features`** (`"node_admin"`), not the mc-chat flag: `requiresAdminBackend` means
   "mc-chat only". The webapp uses `adminStatus.nodeAdminAvailable` and a three-state view (no router guard: the backend flag is `null`
   at first paint). `useProxyAPI` tolerates a body-less 204 and carries the backend `detail` on `ProxyAPIError.detail`.

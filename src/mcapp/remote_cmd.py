@@ -92,6 +92,8 @@ ALLOWLIST: Final[dict[str, str]] = {
     "atxt": "atxt",
     "pos": "pos",
     "mh": "mh",
+    "net": "none",
+    "upd": "upd",
 }
 
 _ONOFF: Final = frozenset({"on", "off"})
@@ -102,10 +104,12 @@ _POS_RE: Final = re.compile(r"-?[0-9]{1,3}(\.[0-9]{1,6})? -?[0-9]{1,3}(\.[0-9]{1
 _ROW_RE: Final = re.compile(r"[0-9]{1,3}")
 _MH_CALL_RE: Final = re.compile(r"[A-Za-z0-9]{3,9}|[A-Za-z0-9]{2,7}-[0-9]{1,2}")
 # Args specs that may carry capitals on the wire (firmware: "only where a shape allows them").
-_CAPS_SPECS: Final = frozenset({"name", "atxt", "mh"})
+_CAPS_SPECS: Final = frozenset({"name", "atxt", "mh", "upd"})
 _TXPOWER_RE: Final = re.compile(r"(0|[1-9][0-9]{0,2})")
 _SETOUT_RE: Final = re.compile(r"[ab][0-7] (on|off)")
 _CMD_RE: Final = re.compile(r"[a-z]+")
+# Firmware `upd` argument: `check` or `go <tag>`, tag [A-Za-z0-9._-] 1..23 (char[24] buffers).
+_UPD_ARGS_RE: Final = re.compile(r"check|go [A-Za-z0-9._-]{1,23}")
 _TAG_RE: Final = re.compile(r"[0-9a-f]{16}")
 
 # Firmware checkRegexCall(): ^[0-9A-Z]?[A-Z]?[0-9]+[A-Z][A-Z]?[A-Z]?[%-]?[0-9]?[0-9]?$.
@@ -328,6 +332,7 @@ def _args_match(spec: str, args: str, tx_max: int) -> bool:
         "atxt": lambda: args == "" or _is_free_text(args, ATXT_MAX),
         "pos": lambda: args == "" or _POS_RE.fullmatch(args) is not None,
         "mh": lambda: _mh_match(args),
+        "upd": lambda: args == "" or _UPD_ARGS_RE.fullmatch(args) is not None,
         "setout": lambda: _SETOUT_RE.fullmatch(args) is not None,
     }
     matcher = matchers.get(spec)

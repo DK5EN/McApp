@@ -82,7 +82,7 @@ _BP: Final = frozenset({"quiet", "qrs", "qrt", "?"})
 _MBOX_MODES: Final = frozenset({"off", "own", "list", "heard"})
 _POS_SRC: Final = frozenset({"gps", "nofix", "set"})
 _READ_COMMANDS: Final = frozenset(
-    {"radio", "sens", "name", "atxt", "pos", "txq", "mbox", "maxhop", "chgled", "mh"}
+    {"radio", "sens", "name", "atxt", "pos", "txq", "mbox", "maxhop", "chgled", "mh", "net", "upd"}
 )
 _UNSUPPORTED: Final[dict[str, JsonValue]] = {"unsupported": True}
 _HIDDEN: Final[dict[str, JsonValue]] = {"hidden": True}
@@ -391,6 +391,63 @@ def _parse_maxhop(body: str) -> dict[str, JsonValue] | None:
     return None if t is None or p is None else {"t": t, "p": p}
 
 
+_NET_MTU: Final = (576, 9000)
+_NET_MODES: Final = frozenset({"auto", "inet", "hamnet"})
+_NET_EFF: Final = frozenset({"inet", "hamnet"})
+_SRV_RE: Final = re.compile(r"[A-Z]{2}")
+_TAG_RE: Final = re.compile(r"[A-Za-z0-9._-]{1,23}")
+_UPD_ERR_RE: Final = re.compile(r"[^ ]{1,40}")
+_UPD_MODES: Final = frozenset({"off", "notify", "auto"})
+_UPD_CHANS: Final = frozenset({"prod", "dev"})
+
+
+def _parse_net(body: str) -> dict[str, JsonValue] | None:
+    """`mtu=<int> srv=<2 letters> net=<mode> eff=<inet|hamnet>`; an invalid key reads as None."""
+    kv = tokenize(body)
+    mtu = _int(kv.get("mtu"))
+    if mtu is not None and not _NET_MTU[0] <= mtu <= _NET_MTU[1]:
+        mtu = None
+    srv = kv.get("srv")
+    net, eff = kv.get("net"), kv.get("eff")
+    out: dict[str, JsonValue] = {
+        "mtu": mtu,
+        "srv": srv if srv is not None and _SRV_RE.fullmatch(srv) else None,
+        "net": net if net in _NET_MODES else None,
+        "eff": eff if eff in _NET_EFF else None,
+    }
+    return out if any(v is not None for v in out.values()) else None
+
+
+def _flag(value: str | None) -> bool | None:
+    return {"0": False, "1": True}.get(value) if value is not None else None
+
+
+def _tag(value: str | None) -> str | None:
+    """A release tag, or None for the firmware's `-` (none) and anything off-charset."""
+    return value if value is not None and value != "-" and _TAG_RE.fullmatch(value) else None
+
+
+def _parse_upd(body: str) -> dict[str, JsonValue] | None:
+    """The READ form of `upd`: `m= c= n= a= st= b= g= ck= e=`; an invalid key reads as None.
+
+    `-` is the firmware's "none" for `a`, `st`, `ck` and `e`; it reads as None, never as a value.
+    """
+    kv = tokenize(body)
+    mode, chan, err = kv.get("m"), kv.get("c"), kv.get("e")
+    out: dict[str, JsonValue] = {
+        "mode": mode if mode in _UPD_MODES else None,
+        "chan": chan if chan in _UPD_CHANS else None,
+        "newer": _flag(kv.get("n")),
+        "avail": _tag(kv.get("a")),
+        "staged": _tag(kv.get("st")),
+        "busy": _flag(kv.get("b")),
+        "go": _flag(kv.get("g")),
+        "err": err if err is not None and err != "-" and _UPD_ERR_RE.fullmatch(err) else None,
+        "check_min": _int(kv.get("ck")),
+    }
+    return out if any(v is not None for v in out.values()) else None
+
+
 def _parse_mh_page(body: str) -> tuple[int, int | None, list[dict[str, JsonValue]]] | None:
     parts = body.split(" ")
     if len(parts) < _MH_HEAD or (len(parts) - _MH_HEAD) % 2:
@@ -455,6 +512,8 @@ _SIMPLE_PARSERS: Final[dict[str, Callable[[str], dict[str, JsonValue] | None]]] 
     "txq": _parse_txq,
     "mbox": _parse_mbox,
     "maxhop": _parse_maxhop,
+    "net": _parse_net,
+    "upd": _parse_upd,
 }
 
 
@@ -611,7 +670,9 @@ class _Folder:
             if call and not call.isdigit():
                 self._mh_call(row, call, {"kind": "unknown"})
             return
-        if not result.startswith("ok "):
+        # `upd check` / `upd go <tag>` acknowledge an action, they are not a state read
+        action = cmd == "upd" and bool(str(row.get("args") or "").strip())
+        if not result.startswith("ok ") or action:
             return
         body = result[3:]
         if cmd == "radio":
