@@ -685,13 +685,13 @@ download_webapp() {
 }
 
 #──────────────────────────────────────────────────────────────────
-# PYTHON ENVIRONMENT (uv sync --all-packages)
+# PYTHON ENVIRONMENT (uv sync --all-packages --no-dev)
 #──────────────────────────────────────────────────────────────────
 
 setup_python_env() {
   local deploy_target="${1:-$INSTALL_DIR}"
 
-  log_info "Setting up Python environment with uv sync --all-packages..."
+  log_info "Setting up Python environment with uv sync --all-packages --no-dev..."
 
   if [[ ! -f "${deploy_target}/pyproject.toml" ]]; then
     log_error "  No pyproject.toml found in ${deploy_target}"
@@ -737,6 +737,11 @@ setup_python_env() {
 
   # Run uv sync --all-packages as the real user (not root).
   #
+  # --no-dev: the default `dev` group (mypy and its helpers) is never imported
+  # at runtime, so a slot carrying it only spends SD-card space and sync time.
+  # The on-box gate of a dev pre-release (run_startup_tests.py) does not need
+  # it either. Pinned by scripts/bootstrap_venv_tests.py.
+  #
   # The `|| sync_ok=false` is load-bearing twice over. (1) mcapp.sh runs under
   # `set -eo pipefail`, and a bare failing command in an if-BRANCH is fatal
   # (only the if-CONDITION is exempt) — so a failed sync used to abort the
@@ -747,16 +752,16 @@ setup_python_env() {
   # inserts so much as a log line above it.
   local sync_ok=true
   if [[ "$run_user" != "root" ]]; then
-    sudo -u "$run_user" bash -c "cd '${deploy_target}' && '${uv_bin}' sync --all-packages" \
+    sudo -u "$run_user" bash -c "cd '${deploy_target}' && '${uv_bin}' sync --all-packages --no-dev" \
       || sync_ok=false
   else
-    (cd "$deploy_target" && "$uv_bin" sync --all-packages) || sync_ok=false
+    (cd "$deploy_target" && "$uv_bin" sync --all-packages --no-dev) || sync_ok=false
   fi
 
   if [[ "$sync_ok" == "true" ]]; then
     log_ok "  Python environment ready (including workspace members)"
   else
-    log_error "  uv sync --all-packages failed"
+    log_error "  uv sync --all-packages --no-dev failed"
     return 1
   fi
 }

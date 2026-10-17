@@ -141,12 +141,19 @@ class ClassifierApiMixin(StorageBase):
         await self._mutate("DELETE FROM classifier_rules WHERE id = ?", (rule_id,))
 
     async def list_beacon_templates(
-        self, min_count: int = 0, auto_only: bool = False, limit: int = 100
+        self,
+        min_count: int = 0,
+        auto_only: bool = False,
+        limit: int = 100,
+        user_action_only: bool = False,
     ) -> list[dict[str, Any]]:
         """List beacon templates, optionally filtered by min count / auto-beacon flag."""
         where: list[str] = []
         params: list[Any] = []
-        if min_count > 0:
+        if user_action_only:
+            # Every override, regardless of count: min_count is ignored on purpose.
+            where.append("user_action IS NOT NULL")
+        elif min_count > 0:
             where.append("count >= ?")
             params.append(min_count)
         if auto_only:

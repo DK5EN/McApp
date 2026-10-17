@@ -27,6 +27,7 @@ from ble_service_tests import run_ble_service_tests
 from bootstrap_network_safety_tests import run_bootstrap_network_safety_tests
 from bootstrap_pinning_tests import run_bootstrap_pinning_tests
 from bootstrap_tmpdir_tests import run_bootstrap_tmpdir_tests
+from bootstrap_venv_tests import run_bootstrap_venv_tests
 from caddy_config_tests import run_caddy_config_tests
 from config_migration_tests import run_config_migration_tests
 from health_probe_tests import run_health_probe_tests
@@ -103,6 +104,7 @@ from mcapp.storage.telemetry_reconcile_tests import run_telemetry_reconcile_test
 from mcapp.storage.unread_suppression_tests import run_unread_suppression_tests
 from mcapp.storage.uptime_tests import run_uptime_tests
 from mcapp.storage.www_ingest_tests import run_www_ingest_tests
+from mcapp.template_override_tests import run_template_override_tests
 from mcapp.udp_handler import run_startup_tests as run_udp_handler_tests
 from mcapp.udp_parsing_tests import run_udp_parsing_tests
 from mcapp.wire_monitor_tests import run_wire_monitor_tests
@@ -294,6 +296,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     unread_suppression_ok = await run_unread_suppression_tests()
     print(f"unread_suppression: {'PASS' if unread_suppression_ok else 'FAIL'}")
 
+    template_override_ok = await run_template_override_tests()
+    print(f"template_override: {'PASS' if template_override_ok else 'FAIL'}")
+
     conv_dedup_ok = await run_conv_dedup_tests()
     print(f"conv_dedup: {'PASS' if conv_dedup_ok else 'FAIL'}")
 
@@ -344,6 +349,10 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     bootstrap_tmpdir_ok = run_bootstrap_tmpdir_tests()
     print(f"bootstrap_tmpdir: {'PASS' if bootstrap_tmpdir_ok else 'FAIL'}")
+
+    bootstrap_venv_ok = run_bootstrap_venv_tests()
+    print(f"bootstrap_venv: {'PASS' if bootstrap_venv_ok else 'FAIL'}")
+
     release_notes_ok = run_release_notes_tests()
     print(f"release_notes: {'PASS' if release_notes_ok else 'FAIL'}")
 
@@ -430,6 +439,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and read_cursor_ok
         and suppression_predicate_ok
         and unread_suppression_ok
+        and template_override_ok
         and conv_dedup_ok
         and live_classification_ok
         and ingest_dedup_ok
@@ -448,6 +458,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and bootstrap_network_safety_ok
         and release_prep_ok
         and bootstrap_tmpdir_ok
+        and bootstrap_venv_ok
         and release_notes_ok
         and webapp_deploy_ok
         and config_migration_ok

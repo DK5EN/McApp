@@ -8,6 +8,7 @@ doc/2026-10-04_0848-qrz-callsign-lookup-plan.md §3.
 
 from __future__ import annotations
 
+import math
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -82,6 +83,36 @@ def qth_from_addr2(addr2: str | None) -> str | None:
     text = _LEADING_POSTCODE_RE.sub("", text)
     text = _TRAILING_POSTCODE_RE.sub("", text)
     return text or None
+
+
+_GRID_RE = re.compile(r"^([A-R]{2})([0-9]{2})(?:([A-X]{2}))?$", re.IGNORECASE)
+_MAX_LAT = 90.0
+_MAX_LON = 180.0
+
+
+def _float_or_none(value: str | None) -> float | None:
+    try:
+        number = float(value) if value is not None else None
+    except ValueError:
+        return None
+    return number if number is not None and math.isfinite(number) else None
+
+
+def parse_latlon(lat: str | None, lon: str | None) -> tuple[float | None, float | None]:
+    """Validated coordinate pair: both in range or both None."""
+    la, lo = _float_or_none(lat), _float_or_none(lon)
+    if la is None or lo is None or abs(la) > _MAX_LAT or abs(lo) > _MAX_LON:
+        return None, None
+    return la, lo
+
+
+def validate_grid(grid: str | None) -> str | None:
+    """Canonical 4- or 6-char form of a QRZ `grid` (JN59 / JN59il), else None."""
+    match = _GRID_RE.match((grid or "").strip())
+    if not match:
+        return None
+    field_, square, sub = match.groups()
+    return field_.upper() + square + (sub.lower() if sub else "")
 
 
 def _int_or_none(value: str | None) -> int | None:

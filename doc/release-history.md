@@ -1,64 +1,68 @@
 # Release History
 
-## v2.1.13 (2026-10-16)
+## v2.1.14 (2026-10-17)
 
-The webapp can now run an AI model in your own browser. Once you switch it on in Settings > AI
-and download a model, it annotates incoming messages (language, tone, translation), marks
-emergencies, and summarises what you missed in a conversation. Everything runs on your device:
-no message leaves the browser, and the Pi never serves or runs the model. Off by default.
-Schema stays at 36 and `SYSTEM_EPOCH` stays at 5.
+The on-device AI can now translate what you send: pick French, Italian, Spanish or Polish in the
+compose box and the translation is what goes on air. QRZ.com subscriber lookups now carry the
+station's position, so the QTH links to the map, and the `!wx` reply names the weather station's
+locator. Schema 36 → 37 (runs automatically); `SYSTEM_EPOCH` stays at 5.
 
 ### Highlights
 
-- **On-device AI (opt-in).** Settings > AI offers Gemma 4 E2B (about 2.0 GB) or E4B (about
-  3.0 GB). The model is downloaded once from Hugging Face into the browser's own storage and
-  runs on the GPU (WebGPU). Without a capable GPU or browser the tab says so and nothing changes.
-- **Message annotations.** A small row under a chat bubble shows the language with a
-  translation, and a tone chip (humorous, urgent, question, help, testing). Positions and
-  telemetry are skipped; an `@CALL` mention counts as chat.
-- **Emergency chip.** With AI switched on, a red chip marks any received message that says
-  MAYDAY, SOS, NOTFALL or EMERGENCY (HILFE when written in capitals). The keyword check does not
-  wait for the model; the model can flag further emergencies.
-- **Catch-up summary.** A Summary button in the conversation filter bar summarises the messages
-  that were unread when you opened the conversation (or the newest 40). The summary is shown in
-  place and is never sent or stored.
-- **Q-codes and locators in chat, no AI needed.** Q-codes and common abbreviations (QTH, 73, ...)
-  explain themselves on hover. A Maidenhead locator such as `JO40nu` is underlined as a link,
-  shows its hint at once on hover, and opens the map centred on it.
+- **Outgoing translation (opt-in, needs the on-device AI).** With Browser AI switched on and a
+  model downloaded, a language picker appears below Dest. Choose fr, it, es or pl and the message
+  box splits: you type in your language, the translation appears next to it (stacked on a phone)
+  and that is what is sent. Callsigns, numbers, locators, Q-codes and 73/55 are kept as written;
+  you can edit the translation before sending, and a stale translation is never sent. The choice
+  is remembered per conversation. If the AI is not ready, a notice says the original will be sent.
+- **QTH on the map.** A QRZ.com subscriber lookup now stores the station's coordinates and
+  6-character locator; the QTH in the station card opens the map at that point. On a free
+  account the locator in the QTH text is linked instead.
+- **Locator in `!wx`.** The weather reply reads `WX <station> <LOCATOR>:`, e.g.
+  `WX Leonding JN78dg: 12.0C ...`, using the node's GPS position or the configured one. When the
+  reply is too long the locator is the last thing dropped.
 
 ### Backend (MCProxy)
 
-- Node Admin: the per-node "Max TX" ceiling is gone. TX power is now bounded by the node's own
-  board range from its latest status, or 30 dBm when that is not known yet. Older webapps that
-  still send `tx_max` are accepted and the value is ignored.
-- The installer unpacks releases on disk (`/var/tmp`) instead of the 150 MB `/tmp` RAM disk,
-  which a release with the AI runtime no longer fits into on the manual install path.
-- Dependencies refreshed (fastapi 0.143.3, py-vapid 1.9.6).
+- Schema 37: `callsign_info` gains `lat`, `lon` and `locator`, filled from QRZ.com subscriber
+  records and carried on `proxy:callsign_info` and `GET /api/callsign_info`. Coordinates are
+  never logged.
+- Beacon-template promote/demote overrides: `GET /api/classifier/templates?user_action_only=true`
+  lists exactly the overridden templates, and every change is broadcast as
+  `proxy:template_override`.
+- Deploys install the runtime environment without the development tools (mypy and helpers are no
+  longer in every slot).
+- Command contract synced with mc-chat (locator cases for `!wx`).
+- Dependencies refreshed.
 
 ### Frontend (webapp)
 
-- Settings > AI: model download with progress, storage status, and delete. Safari downloads now
-  complete, and the browser is asked to keep the model so it is not evicted.
-- Node Admin: the Max TX field is gone; the TX power control follows the node's board maximum.
-- Gateway Availability cards name their gateway in the title.
-- Feed Deliveries flags a path that has never received anything.
-- Loading chat history: a slow page request for one conversation no longer blocks another, and
-  a page answer that arrives after the 10 s timeout is still shown.
+- Template overrides apply to the spam filter from the first connect, not only after opening the
+  Beacon Templates card; this fixes unread badges that disagreed with the server after a reload.
+- Gateway Availability: hover, tap or focus a segment to see its state, exact from/to times and
+  duration.
+- Locators are recognised when glued to an emoji, written in lower case or followed by a slash
+  suffix.
+- RF Monitor: the message text no longer collapses into a one-character column next to a long
+  relay path; long paths are shortened to first ··· +N ··· last.
 - Dependencies refreshed.
 
 ### Upgrade notes
 
-- No migration, no system converge. Nothing to do on the Pi.
-- The release tarball grew to about 35 MB because it carries the AI runtime (WebAssembly). The
-  Update button handles it; the first update from v2.1.12 takes a little longer to download.
-- The AI model itself (2-3 GB) is never part of the release. It is downloaded by each browser
-  that enables AI, directly from Hugging Face.
+- Migration 37 runs on the first start (adds three columns, no data rewrite). No system converge.
+- Outgoing translation sends the translated text only; the original stays on your screen.
 - Reload the app once (the "Update available" banner) to pick up the new bundle.
 
 ## Earlier releases, in brief
 
 One entry per release. The full notes as published are in
 [`doc/archive/release-history-full.md`](https://github.com/DK5EN/McApp/blob/development/doc/archive/release-history-full.md).
+
+### v2.1.13 (2026-10-16)
+
+- On-device Browser AI (opt-in, Settings > AI): annotations, emergency chip, catch-up summary;
+  Q-codes and locators link in chat. Node Admin Max TX ceiling removed. Schema 36,
+  `SYSTEM_EPOCH` 5.
 
 ### v2.1.12 (2026-10-13)
 

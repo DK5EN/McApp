@@ -16,10 +16,13 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
+from .geo import latlon_to_locator
 from .logging_setup import get_logger
 
 _RAIN_REPORT_MIN_MM = 0.1
 _MAX_LORA_MSG_LEN = 149
+_MAX_LAT_DEG = 90.0
+_MAX_LON_DEG = 180.0
 
 HTTP_TIMEOUT_S = 10
 MAX_RETRIES = 2
@@ -951,18 +954,37 @@ class WeatherService:
         # Personal text prefix
         prefix = f"{prefix_text} " if prefix_text else ""
 
-        lora_msg = (
-            f"{prefix}🌤️ WX {self.stat_name}: {temp:.1f}C {humid}% rF,"
-            f" {press:.1f}hPa, {wind_info}, {cloud_desc}{rain_info}"
+        locator = ""
+        lat, lon = self.lat, self.lon
+        if (
+            lat is not None
+            and lon is not None
+            and is_valid_position(lat, lon)
+            and math.isfinite(lat)
+            and math.isfinite(lon)
+            and abs(lat) <= _MAX_LAT_DEG
+            and abs(lon) <= _MAX_LON_DEG
+        ):
+            locator = latlon_to_locator(lat, lon)
+        body_full = (
+            f": {temp:.1f}C {humid}% rF, {press:.1f}hPa, {wind_info}, {cloud_desc}{rain_info}"
+        )
+        body_compact = (
+            f": {temp:.1f}C {humid}%rF {press:.1f}hPa {wind_info} {cloud_desc}{rain_info}"
         )
 
-        if len(lora_msg) > _MAX_LORA_MSG_LEN:
-            lora_msg = (
-                f"{prefix}WX {self.stat_name}: {temp:.1f}C {humid}%rF"
-                f" {press:.1f}hPa {wind_info} {cloud_desc}{rain_info}"
-            )
+        def _name(with_locator: bool) -> str:
+            return " ".join(p for p in (self.stat_name, locator if with_locator else "") if p)
 
-        return lora_msg
+        # Ladder: full+locator, compact+locator, compact without locator (always returned)
+        candidates = [f"{prefix}🌤️ WX {_name(True)}{body_full}"]
+        if locator:
+            candidates.append(f"{prefix}WX {_name(True)}{body_compact}")
+        for lora_msg in candidates:
+            if len(lora_msg) <= _MAX_LORA_MSG_LEN:
+                return lora_msg
+
+        return f"{prefix}WX {_name(False)}{body_compact}"
 
     def _wind_direction_to_compass(self, degrees: int | None) -> str:
         """

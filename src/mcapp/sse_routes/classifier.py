@@ -125,12 +125,14 @@ def build_classifier_router(manager: SSEManager) -> APIRouter:  # noqa: PLR0915 
     async def get_classifier_templates(
         min_count: int = 0,
         auto_only: bool = False,
+        user_action_only: bool = False,
         limit: int = 100,
     ) -> Any:
         storage = manager.require_storage()
         return await storage.list_beacon_templates(
             min_count=min_count,
             auto_only=auto_only,
+            user_action_only=user_action_only,
             limit=max(1, min(limit, TEMPLATE_LIST_MAX)),
         )
 
@@ -143,6 +145,10 @@ def build_classifier_router(manager: SSEManager) -> APIRouter:  # noqa: PLR0915 
         if not await storage.beacon_template_exists(template_hash):
             raise HTTPException(status_code=404, detail="Template not found")
         await storage.set_beacon_template_user_action(template_hash, action)
+        await manager.broadcast_event(
+            "proxy:template_override",
+            {"template_hash": template_hash, "user_action": action},
+        )
         return {"status": "ok", "user_action": action}
 
     @router.post("/api/classifier/templates/{template_hash}/preview")
