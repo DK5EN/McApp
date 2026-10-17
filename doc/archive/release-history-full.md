@@ -5,6 +5,61 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.1.13 (2026-10-16)
+
+The webapp can now run an AI model in your own browser. Once you switch it on in Settings > AI
+and download a model, it annotates incoming messages (language, tone, translation), marks
+emergencies, and summarises what you missed in a conversation. Everything runs on your device:
+no message leaves the browser, and the Pi never serves or runs the model. Off by default.
+Schema stays at 36 and `SYSTEM_EPOCH` stays at 5.
+
+### Highlights
+
+- **On-device AI (opt-in).** Settings > AI offers Gemma 4 E2B (about 2.0 GB) or E4B (about
+  3.0 GB). The model is downloaded once from Hugging Face into the browser's own storage and
+  runs on the GPU (WebGPU). Without a capable GPU or browser the tab says so and nothing changes.
+- **Message annotations.** A small row under a chat bubble shows the language with a
+  translation, and a tone chip (humorous, urgent, question, help, testing). Positions and
+  telemetry are skipped; an `@CALL` mention counts as chat.
+- **Emergency chip.** With AI switched on, a red chip marks any received message that says
+  MAYDAY, SOS, NOTFALL or EMERGENCY (HILFE when written in capitals). The keyword check does not
+  wait for the model; the model can flag further emergencies.
+- **Catch-up summary.** A Summary button in the conversation filter bar summarises the messages
+  that were unread when you opened the conversation (or the newest 40). The summary is shown in
+  place and is never sent or stored.
+- **Q-codes and locators in chat, no AI needed.** Q-codes and common abbreviations (QTH, 73, ...)
+  explain themselves on hover. A Maidenhead locator such as `JO40nu` is underlined as a link,
+  shows its hint at once on hover, and opens the map centred on it.
+
+### Backend (MCProxy)
+
+- Node Admin: the per-node "Max TX" ceiling is gone. TX power is now bounded by the node's own
+  board range from its latest status, or 30 dBm when that is not known yet. Older webapps that
+  still send `tx_max` are accepted and the value is ignored.
+- The installer unpacks releases on disk (`/var/tmp`) instead of the 150 MB `/tmp` RAM disk,
+  which a release with the AI runtime no longer fits into on the manual install path.
+- Dependencies refreshed (fastapi 0.143.3, py-vapid 1.9.6).
+
+### Frontend (webapp)
+
+- Settings > AI: model download with progress, storage status, and delete. Safari downloads now
+  complete, and the browser is asked to keep the model so it is not evicted.
+- Node Admin: the Max TX field is gone; the TX power control follows the node's board maximum.
+- Gateway Availability cards name their gateway in the title.
+- Feed Deliveries flags a path that has never received anything.
+- Loading chat history: a slow page request for one conversation no longer blocks another, and
+  a page answer that arrives after the 10 s timeout is still shown.
+- Dependencies refreshed.
+
+### Upgrade notes
+
+- No migration, no system converge. Nothing to do on the Pi.
+- The release tarball grew to about 35 MB because it carries the AI runtime (WebAssembly). The
+  Update button handles it; the first update from v2.1.12 takes a little longer to download.
+- The AI model itself (2-3 GB) is never part of the release. It is downloaded by each browser
+  that enables AI, directly from Hugging Face.
+- Reload the app once (the "Update available" banner) to pick up the new bundle.
+
 ## v2.1.12 (2026-10-13)
 
 The Monitor's DBG view now reads the node's console. Console lines from an ESP32 node used to
