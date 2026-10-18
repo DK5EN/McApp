@@ -1,51 +1,41 @@
 # Release History
 
-## v2.1.15 (2026-10-17)
+## v2.1.16 (2026-10-18)
 
-Node Admin can now read a remote node's network and firmware-update state and install an update,
-and the remote view is tidier. `net` and `upd` are live against firmware that implements the RM1
-reply of 2026-10-17 (DK5EN-1 on 4.40a). No schema change (stays at 37); `SYSTEM_EPOCH` stays at 5.
+Phone layout fixes across the app: clipped diagrams, chips and command rows now fit. Backend change
+is limited to the blocklist and refreshed dependencies. No schema change (stays at 37);
+`SYSTEM_EPOCH` stays at 5.
 
 ### Highlights
 
-- **Network and Firmware update cards work.** Read shows MTU, MeshCom server and network mode
-  (Internet or HAMNET); Firmware update shows mode, channel, the release the node found, a staged
-  release, busy and "go armed", and the last check. Check asks the node to look now. Update now
-  installs the staged release, or the newer one the node found, only while the node is idle.
-  Boards without auto-update (RAK4631) answer that the feature is not available.
-- **Plain-language update errors.** The node's refusals read as sentences: no internet, no valid
-  clock or phone connected, release changed, already current, no firmware file for the board.
-- **Faster follow-up commands.** A verified reply from the node releases the 10 s spacing at once
-  instead of making you wait it out.
-- **Tidier remote view.** The node picker, key and transport block now sits in a card like Node
-  control; the Sync button shows its state, and Max hop is in the Radio card.
+- **No more clipping on phones.** The diagram, Settings chips, the BLE command row and the system
+  cards in Settings > General fit the screen width, and the bottom tab bar no longer covers the
+  last row of content.
+- **Blocklist:** NF0JN, NF0JN-11 and NF0JN-12 (unlicensed callsign) are blocked.
 
 ### Backend (MCProxy)
 
-- RM1 `net` and `upd` (`check`, `go <tag>`) are on the allowlist; the firmware vector corpus is
-  adopted. `-` means "none" in the replies and never reads as a release tag or an error.
-- `upd go` is an install: never re-asked and never offered by history Run again.
-- Dependencies refreshed.
+- `sperrliste.json`: three NF0JN entries added.
+- Dependencies refreshed (FastAPI 0.145.0).
 
 ### Frontend (webapp)
 
-- Network and Firmware update cards enabled; Update now offered only when a release is ready and
-  the node is neither busy nor waiting on an armed update.
-- Positions keeps the map camera, style, selection and filters across route changes.
-- Node Admin: Telemetry tab hidden (not working yet).
-- Sidebar, setup checklist, search, update-version and status-panel polish from the UX campaign.
+- Mobile overflow fixes: diagram, settings chips, BLE command row, system cards, tab-bar clearance.
 - Dependencies refreshed.
 
 ### Upgrade notes
 
 - No migration, no system converge. Reload the app once to pick up the new bundle.
-- Update now starts a real firmware install on the remote node and restarts it. The download path
-  (a node that must fetch the release first) has not been tested on air; staged installs have.
 
 ## Earlier releases, in brief
 
 One entry per release. The full notes as published are in
 [`doc/archive/release-history-full.md`](https://github.com/DK5EN/McApp/blob/development/doc/archive/release-history-full.md).
+
+### v2.1.15 (2026-10-17)
+
+- Node Admin `net` and `upd` live (Network and Firmware update cards, install via Update now);
+  verified replies release the 10 s spacing. Schema 37, `SYSTEM_EPOCH` 5.
 
 ### v2.1.14 (2026-10-17)
 

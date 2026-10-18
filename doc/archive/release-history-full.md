@@ -5,6 +5,48 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.1.15 (2026-10-17)
+
+Node Admin can now read a remote node's network and firmware-update state and install an update,
+and the remote view is tidier. `net` and `upd` are live against firmware that implements the RM1
+reply of 2026-10-17 (DK5EN-1 on 4.40a). No schema change (stays at 37); `SYSTEM_EPOCH` stays at 5.
+
+### Highlights
+
+- **Network and Firmware update cards work.** Read shows MTU, MeshCom server and network mode
+  (Internet or HAMNET); Firmware update shows mode, channel, the release the node found, a staged
+  release, busy and "go armed", and the last check. Check asks the node to look now. Update now
+  installs the staged release, or the newer one the node found, only while the node is idle.
+  Boards without auto-update (RAK4631) answer that the feature is not available.
+- **Plain-language update errors.** The node's refusals read as sentences: no internet, no valid
+  clock or phone connected, release changed, already current, no firmware file for the board.
+- **Faster follow-up commands.** A verified reply from the node releases the 10 s spacing at once
+  instead of making you wait it out.
+- **Tidier remote view.** The node picker, key and transport block now sits in a card like Node
+  control; the Sync button shows its state, and Max hop is in the Radio card.
+
+### Backend (MCProxy)
+
+- RM1 `net` and `upd` (`check`, `go <tag>`) are on the allowlist; the firmware vector corpus is
+  adopted. `-` means "none" in the replies and never reads as a release tag or an error.
+- `upd go` is an install: never re-asked and never offered by history Run again.
+- Dependencies refreshed.
+
+### Frontend (webapp)
+
+- Network and Firmware update cards enabled; Update now offered only when a release is ready and
+  the node is neither busy nor waiting on an armed update.
+- Positions keeps the map camera, style, selection and filters across route changes.
+- Node Admin: Telemetry tab hidden (not working yet).
+- Sidebar, setup checklist, search, update-version and status-panel polish from the UX campaign.
+- Dependencies refreshed.
+
+### Upgrade notes
+
+- No migration, no system converge. Reload the app once to pick up the new bundle.
+- Update now starts a real firmware install on the remote node and restarts it. The download path
+  (a node that must fetch the release first) has not been tested on air; staged installs have.
+
 ## v2.1.14 (2026-10-17)
 
 The on-device AI can now translate what you send: pick French, Italian, Spanish or Polish in the
