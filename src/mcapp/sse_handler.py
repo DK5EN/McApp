@@ -19,6 +19,8 @@ import contextlib
 import json
 import logging
 import pathlib
+import re
+import sqlite3
 import tempfile
 import time
 from collections.abc import AsyncIterator
@@ -30,6 +32,7 @@ from .ble_client import ConnectionState
 from .classifier import Classifier
 from .command_echo import is_expected_command_echo
 from .commands.parsing import SPAM_GROUP
+from .config_loader import StorageConfig
 from .internet_feed_types import POSITIONS_EVENT, STATUS_EVENT, WWW_MESSAGE_TOPIC
 from .linkcheck import is_link_check_payload
 from .logging_setup import get_logger
@@ -63,6 +66,7 @@ SSE_CLIENT_QUEUE_SIZE = 256
 # its reconnect lookback is 15 min; one hour matches the storage dedup window.
 WWW_SEEN_TTL_MS = 60 * 60 * 1000
 WWW_SEEN_MAX = 2000
+_SLOT_SCHEMA_RE = re.compile(r"^LATEST_SCHEMA_VERSION\s*(?::\s*\w+)?\s*=\s*(\d+)", re.MULTILINE)
 SLOT_COUNT = 3  # ⚠ must match scripts/update-runner.py's NUM_SLOTS
 SERVER_SHUTDOWN_TIMEOUT = 5.0
 DEFAULT_SSE_PORT = 2981
@@ -740,17 +744,65 @@ class SSEManager:
             "status_url": f"http://{host}:{UPDATE_RUNNER_PORT}/status",
         }
 
-    def read_slot_info(self) -> dict[str, Any]:
-        """Read slot metadata from filesystem."""
+    @staticmethod
+    def _read_db_schema_version(db_path: pathlib.Path) -> int | None:
+        """Live DB schema version, read-only; None on any error."""
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
+            try:
+                row = conn.execute("SELECT version FROM schema_version").fetchone()
+            finally:
+                conn.close()
+            return int(row[0]) if row else None
+        except (sqlite3.Error, TypeError, ValueError):
+            return None
 
-        slots_dir = pathlib.Path.home() / "mcapp-slots"
+    @staticmethod
+    def _read_slot_schema_version(slot_dir: pathlib.Path) -> int | None:
+        """LATEST_SCHEMA_VERSION of a slot's code; None if missing/unparseable."""
+        try:
+            text = (slot_dir / "src" / "mcapp" / "storage" / "constants.py").read_text()
+        except (OSError, UnicodeDecodeError):
+            return None
+        m = _SLOT_SCHEMA_RE.search(text)
+        return int(m.group(1)) if m else None
+
+    @staticmethod
+    def _slot_blocked_reason(n: int, schema: int | None, db_schema: int | None) -> str | None:
+        """Why activating slot ``n`` would crash-loop on the live DB, else None."""
+        if schema is None:
+            return f"slot-{n} schema version unreadable"
+        if db_schema is not None and schema < db_schema:
+            return f"slot-{n} schema {schema} is older than the database schema {db_schema}"
+        return None
+
+    def read_slot_info(
+        self,
+        slots_dir: pathlib.Path | None = None,
+        db_path: pathlib.Path | None = None,
+    ) -> dict[str, Any]:
+        """Read slot metadata from filesystem.
+
+        Each slot carries ``schema_version`` and ``blocked_reason``: a slot whose
+        code has an older schema than the live DB crash-loops when activated, so
+        it is blocked (and never offered as rollback target). Same rule as
+        scripts/update-runner.py.
+        """
+
+        if slots_dir is None:
+            slots_dir = pathlib.Path.home() / "mcapp-slots"
+        if db_path is None:
+            storage = self._get_storage_or_none()
+            db_path = storage.db_path if storage else pathlib.Path(StorageConfig().db_path)
         meta_dir = slots_dir / "meta"
+        db_schema = self._read_db_schema_version(db_path)
 
         if not slots_dir.exists():
             return {
                 "slots": [],
                 "active_slot": None,
                 "can_rollback": False,
+                "db_schema_version": db_schema,
                 "system_epoch": {
                     "installed": read_installed_epoch(),
                     "required": REQUIRED_SYSTEM_EPOCH,
@@ -780,11 +832,22 @@ class SSEManager:
                 meta["status"] = "available"
             else:
                 meta["status"] = "empty"
+            schema = self._read_slot_schema_version(slots_dir / f"slot-{i}")
+            meta["schema_version"] = schema
+            meta["blocked_reason"] = (
+                self._slot_blocked_reason(i, schema, db_schema)
+                if meta["status"] == "available"
+                else None
+            )
             slots.append(meta)
 
         # Find rollback target
         rollback_target = None
-        candidates = [s for s in slots if s["slot"] != active_slot and s.get("version")]
+        candidates = [
+            s
+            for s in slots
+            if s["slot"] != active_slot and s.get("version") and not s["blocked_reason"]
+        ]
         if candidates:
             candidates.sort(key=lambda x: x.get("deployed_at", ""), reverse=True)
             rollback_target = candidates[0]["slot"]
@@ -794,6 +857,7 @@ class SSEManager:
             "active_slot": active_slot,
             "can_rollback": rollback_target is not None,
             "rollback_target": rollback_target,
+            "db_schema_version": db_schema,
             "system_epoch": {
                 "installed": read_installed_epoch(),
                 "required": REQUIRED_SYSTEM_EPOCH,

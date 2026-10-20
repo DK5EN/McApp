@@ -264,6 +264,14 @@ transition-mode AP. Design: `doc/2026-09-18_2330-bootstrap-network-safety-plan.m
   `/var/log/journal`** while `/var/log` stays tmpfs (`configure_journald`, fstab line inside the
   McApp tmpfs block). Before this the box had no on-disk evidence at all; the only record of the
   outage was rpizero's shipped copy, which ended at the second the link dropped.
+- **Except on boards with `armbian-ramlog` / `orangepi-ramlog` (epoch 6).** Those boards mount
+  zram over `/var/log` and restore it from `/var/log.hdd`, which shadowed our tmpfs AND the journal
+  bind (field report 2026-10-20, Orange Pi Zero 2W: journal lost every boot, lighttpd log dir
+  ownership mangled). There the bootstrap writes neither line and strips both from our fstab
+  block; the ramlog's own `syncToDisk` persists the journal to `/var/log.hdd/journal` and links it
+  back. Never bind-mount onto `/var/log/journal` on such a board: `syncToDisk` `mv`s a real
+  `journal` directory across filesystems. Detection: `systemctl is-enabled` plus `ENABLED` in
+  `/etc/default/<name>` (`detect_ramlog_service`, `bootstrap/lib/system.sh`).
 - **Symptom to cause:** ssh drops during a bootstrap run and the box never comes back on WiFi
   means a network-critical package was replaced. Read rpizero's peer journal first
   (`sudo -n journalctl -D /run/journalxship`), then `/var/lib/mcapp/bootstrap.log` on the box.

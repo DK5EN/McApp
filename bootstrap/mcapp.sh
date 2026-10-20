@@ -38,7 +38,9 @@ readonly SCRIPT_VERSION="2.6.0"
 # Epoch 4: Caddy GOMEMLIMIT/GOGC drop-in (the distro unit ignores the template).
 # Epoch 5: wpasupplicant pin (WPA3-SAE regression, raspberrypi/linux#7634),
 # persistent 16M journal on a /var/log/journal bind mount.
-readonly SYSTEM_EPOCH=5
+# Epoch 6: ramlog boards (Armbian/Orange Pi) drop the McApp /var/log tmpfs and
+# journal bind; the board's ramlog owns /var/log and its native journal persistence.
+readonly SYSTEM_EPOCH=6
 
 # Detect piped mode (curl | bash) — BASH_SOURCE is empty when piped
 # SCRIPT_DIR is intentionally NOT readonly: source_libs() overwrites it with
