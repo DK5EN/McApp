@@ -1,6 +1,6 @@
 # McApp production health log — mcapp.local
 
-> **Status:** Current — newest section: §43 (2026-10-20 21:12 CEST, pre-release sweep of `v2.1.18-dev.5` before the v2.1.18 promotion, ~18 min soak at the operator's decision, green, zero findings; records the 19:54-20:26 `classifier_rules` crash loop that dev.5's schema guard addresses). Before that: §42 (2026-10-20 08:38 CEST, post-release sweep of production `v2.1.17`, 8 min after the deploy, green, zero findings, W24 reset by the restart, W11 still open). Before that: §41 (2026-10-20 08:12 CEST, pre-release sweep of production `v2.1.16` before the unsoaked v2.1.17 promotion, green, one watch point W24). Before that: §40 (2026-10-17 15:11 CEST, post-release sweep of production `v2.1.14`, 2 min after the deploy, green, zero findings, schema 37, no mypy in the slot). Before that: §39 (2026-10-17 14:56 CEST, pre-release sweep of `v2.1.14-dev.3` before the v2.1.14 promotion, green, zero findings, 2 h 46 min soak; the operator promoted HEAD, 6 commits past the tag, unsoaked). Before that: §38 (2026-10-16 20:29 CEST, post-release sweep of production `v2.1.13`, 2 min after the deploy, green, zero findings, `NRestarts` 0, schema 36). Before that: §37 (2026-10-16 20:23 CEST, pre-release sweep of `v2.1.13-dev.4` (on-device Browser AI, Q-code/locator links, Node Admin TX ceiling dropped, bootstrap TMPDIR) before the v2.1.13 promotion, green, zero findings, ~21 min soak at the operator's decision). Before that: §36 (2026-10-13 16:34 CEST, pre-release sweep of `v2.1.12-dev.1` (parsed DBG console lines, setlog as third flag, live `flags`/`node` in the console status) before the v2.1.12 promotion, green, zero findings, ~8 min soak at the operator's decision; new watch point W26). Before that: §35 (2026-10-11 20:53 CEST, post-release sweep of production `v2.1.11`, 3 min after the deploy, green, zero release findings; internet feed found disabled by a settings save between 20:42 and 20:49, not by the release). Before that: §34 (2026-10-11 20:41 CEST, pre-release sweep of `v2.1.11-dev.2` (Node Admin remote parity) before the v2.1.11 promotion, green, zero findings, ~9 min soak at the operator's decision). Before that: §33 (2026-10-11 15:05 CEST, pre-release sweep of `v2.1.10-dev.3` (meshmap internet feed, RM1 out of chat) before the v2.1.10 promotion, green, zero findings, ~13 min soak at the operator's decision; W20 recurred before the deploy). Before that: §32 (2026-10-10 15:35 CEST, pre-release sweep of `v2.1.7-dev.1` (Internet feed removed) before the v2.1.7 promotion, green, zero findings, ~15 min soak). Before that: §31 (2026-10-06, v2.1.6-dev.6 short soak). Before that: §30 (2026-10-05 19:08 CEST, sweep of `v2.1.5-dev.2` node time zone, green, zero findings). Before that: §26 (2026-10-04 09:36 CEST, pre-release sweep of
+> **Status:** Current — newest section: §44 (2026-10-20 21:22 CEST, post-release sweep of production `v2.1.18`, 2 min after the deploy, green, zero findings, schema 38, epoch 6). Before that: §43 (2026-10-20 21:12 CEST, pre-release sweep of `v2.1.18-dev.5` before the v2.1.18 promotion, ~18 min soak at the operator's decision, green, zero findings; records the 19:54-20:26 `classifier_rules` crash loop that dev.5's schema guard addresses). Before that: §42 (2026-10-20 08:38 CEST, post-release sweep of production `v2.1.17`, 8 min after the deploy, green, zero findings, W24 reset by the restart, W11 still open). Before that: §41 (2026-10-20 08:12 CEST, pre-release sweep of production `v2.1.16` before the unsoaked v2.1.17 promotion, green, one watch point W24). Before that: §40 (2026-10-17 15:11 CEST, post-release sweep of production `v2.1.14`, 2 min after the deploy, green, zero findings, schema 37, no mypy in the slot). Before that: §39 (2026-10-17 14:56 CEST, pre-release sweep of `v2.1.14-dev.3` before the v2.1.14 promotion, green, zero findings, 2 h 46 min soak; the operator promoted HEAD, 6 commits past the tag, unsoaked). Before that: §38 (2026-10-16 20:29 CEST, post-release sweep of production `v2.1.13`, 2 min after the deploy, green, zero findings, `NRestarts` 0, schema 36). Before that: §37 (2026-10-16 20:23 CEST, pre-release sweep of `v2.1.13-dev.4` (on-device Browser AI, Q-code/locator links, Node Admin TX ceiling dropped, bootstrap TMPDIR) before the v2.1.13 promotion, green, zero findings, ~21 min soak at the operator's decision). Before that: §36 (2026-10-13 16:34 CEST, pre-release sweep of `v2.1.12-dev.1` (parsed DBG console lines, setlog as third flag, live `flags`/`node` in the console status) before the v2.1.12 promotion, green, zero findings, ~8 min soak at the operator's decision; new watch point W26). Before that: §35 (2026-10-11 20:53 CEST, post-release sweep of production `v2.1.11`, 3 min after the deploy, green, zero release findings; internet feed found disabled by a settings save between 20:42 and 20:49, not by the release). Before that: §34 (2026-10-11 20:41 CEST, pre-release sweep of `v2.1.11-dev.2` (Node Admin remote parity) before the v2.1.11 promotion, green, zero findings, ~9 min soak at the operator's decision). Before that: §33 (2026-10-11 15:05 CEST, pre-release sweep of `v2.1.10-dev.3` (meshmap internet feed, RM1 out of chat) before the v2.1.10 promotion, green, zero findings, ~13 min soak at the operator's decision; W20 recurred before the deploy). Before that: §32 (2026-10-10 15:35 CEST, pre-release sweep of `v2.1.7-dev.1` (Internet feed removed) before the v2.1.7 promotion, green, zero findings, ~15 min soak). Before that: §31 (2026-10-06, v2.1.6-dev.6 short soak). Before that: §30 (2026-10-05 19:08 CEST, sweep of `v2.1.5-dev.2` node time zone, green, zero findings). Before that: §26 (2026-10-04 09:36 CEST, pre-release sweep of
 > `v2.1.1-dev.2` before the v2.1.1 promotion) — green, zero findings, **~3 min soak at the operator's
 > decision**; new watch point **W23** (QRZ lookup budget). Before that: §25 (2026-10-02, no-soak
 > sign-off of v2.0.19, re-released as v2.1.0). Before that: §24 (2026-09-29 10:03 CEST, post-release sweep of
@@ -2860,3 +2860,41 @@ accounts for the coverage drop to 97.74 %; the tracebacks are not logged at warn
 
 **Watch points.** W24: `udp_multiple_sources` false. W11: `identified`, closed for this run. No new
 W, no F.
+
+## 44. 2026-10-20 21:22 CEST — post-release sweep of production v2.1.18 (2 min after the deploy)
+
+| Anchor         | Value                                                                                         |
+| -------------- | --------------------------------------------------------------------------------------------- |
+| Active slot    | slot-0, `v2.1.18` (`webapp/version.html`), `mcapp` up since 21:20:04, `mcapp-ble` 21:19:56    |
+| Other slots    | slot-1 `v2.1.18-dev.5`, slot-2 `v2.1.18-dev.4`                                                |
+| Schema / epoch | 38 = `LATEST_SCHEMA_VERSION` = DB `schema_version`; epoch 6 = `REQUIRED_SYSTEM_EPOCH`         |
+| Host           | up 13 d 13 h, load 0.58, disk 10 % (51 G free), MemAvailable 184 MB, SwapFree 433 MB, 44.5 °C |
+
+**Verdict: green, zero findings.** Deployed from the Update page (production mode), dev.5 → v2.1.18.
+
+- Services: `mcapp`, `mcapp-ble`, `caddy`, `lighttpd` active; `NRestarts` 0 on both McApp units.
+  Journal `-p warning` 24 h: 0 lines for `mcapp`, 0 for `mcapp-ble`; no traceback/error line since
+  the 21:20 start. No `/var/lib/mcapp/reboot-required` marker.
+- Startup: signal, APRS-escape and classifier v7 backfill markers present and skipped;
+  "Auto-beacon backfill promoted 2 templates". No reclassify (contract id unchanged from dev.5).
+- `/health` healthy. `/api/status` at 143 s: `version` v2.1.18, `udp_target_kind` `first_seen`
+  (expected this soon after a restart, see W11), `udp_multiple_sources` false,
+  `udp_untrusted_source_ips` empty, `udp_suppressed_target_changes` 0.
+- DB: 61 MB, WAL 1 MB; messages 28790, 439 stations; `classifier_version` 7, `backfill_done:v7`
+  present, contract id `6:968a01f6…`. `tags IS NULL`: 0 overall, 0 in the last hour. `{CET}` rows: 0. No `classifier_rules*` table. No `classifier_rules_retired.json`: migration 38 writes it only
+  when user-made rules existed, and it logs a WARNING when it does; none in 24 h, so this box had none.
+- Live flow, hourly over the last 6 h (msg / pos): 57/58, 6/64, 49/60, 12/77, 15/76, 17/76;
+  `signal_log` 251 rows in the last hour. `{CET}` last beacon 539 s old (inside the 606.5 s
+  cadence), heartbeat tick 19 s old.
+- Gateway uptime 24 h: 94.82 %, coverage 97.74 %, longest outage 1520 s, state `active`, unchanged
+  from §43. The 21:20 deploy restart and the 20:54 dev.5 restart wrote no `dark` row, which is
+  correct: both stayed under `DARK_THRESHOLD_MS` (90 s). Newest `dark` rows are still the
+  19:55-20:26 crash loop recorded in §43.
+- Secrets: `vapid.json` 600 (raw JSON key, not PEM), `config.json` 640.
+
+**Instrument note.** A first query used `type="msg"` inside the python heredoc; SQLite resolves a
+double-quoted name to the `msg` COLUMN when one exists, so it compared `type` to the message text
+and read 0 messages for the hour. Re-run with the hourly split above. Use single-quoted SQL literals.
+
+**Watch points.** W11: `first_seen` at 143 s uptime; re-check `identified` at the next sweep. W24:
+`udp_multiple_sources` false. No new W, no F.
