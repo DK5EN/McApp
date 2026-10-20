@@ -1,7 +1,7 @@
 {
-  "description": "Canonical corpus for the message-suppression predicate (is_suppressed / is_spam_by_classifier / is_text_blocked). Mirrors the webapp's isSpamByClassifier (decision order: disabled -> promoted hash -> demoted hash -> hidden tags -> hide_auto_beacons -> min_info_score) combined with the unconditional isTextBlocked half of passesBaseGuards. Hide semantics over multi-label tags (classifier unification, Q1): a message carrying `qso` is hidden iff `qso` is hidden; a message without `qso` is hidden iff any of its tags is hidden; `auto_beacon` is an ordinary hideable tag. A policy without a `hiddenTags` key falls back to the default [time, bot]; an explicit empty list hides nothing. Field names in `policies` and `message` are the webapp's wire names (camelCase). Canonical home is mc-chat contract/ (subtree-shared to MCProxy); `category` is no longer part of a message.",
+  "description": "Canonical corpus for the message-suppression predicate (is_suppressed / is_spam_by_classifier / is_text_blocked). Mirrors the webapp's isSpamByClassifier (decision order: disabled -> promoted hash -> demoted hash -> hidden tags -> hide_auto_beacons -> min_info_score) combined with the unconditional isTextBlocked half of passesBaseGuards. Hide semantics over multi-label tags (mcmap's ANY rule): a message is hidden iff ANY of its tags is in hiddenTags; `qso` and `auto_beacon` are ordinary hideable tags; an untagged message is never hidden by tags (no pseudo-tag). A policy without a `hiddenTags` key falls back to the default [time, bot]; an explicit empty list hides nothing. Field names in `policies` and `message` are the webapp's wire names (camelCase). Canonical home is mc-chat contract/ (subtree-shared to MCProxy); `category` is no longer part of a message.",
   "canonical": "mc-chat/contract/suppression_vectors.json",
-  "version": 2,
+  "version": 3,
   "policies": {
     "disabled_hides_category": {
       "enabled": false,
@@ -168,6 +168,15 @@
     "hide_qso": {
       "enabled": true,
       "hiddenTags": ["qso"],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "hide_question": {
+      "enabled": true,
+      "hiddenTags": ["question"],
       "minInfoScore": null,
       "hideAutoBeacons": false,
       "promotedHashes": [],
@@ -445,7 +454,7 @@
       "suppressed": true
     },
     {
-      "name": "issue #17: human greeting {greeting, qso} stays visible when greeting is hidden",
+      "name": "ANY rule: greeting {greeting, qso} is hidden when greeting is hidden",
       "policy": "hide_greeting",
       "message": {
         "msg": "Hallo, wie geht's?",
@@ -453,7 +462,7 @@
         "info_score": 1.0,
         "template_hash": ""
       },
-      "suppressed": false
+      "suppressed": true
     },
     {
       "name": "qso hidden: a human greeting {greeting, qso} is hidden",
@@ -489,7 +498,7 @@
       "suppressed": true
     },
     {
-      "name": "qso present: qso toggle governs even when another tag is hidden ({time, qso} with time hidden)",
+      "name": "ANY rule: {time, qso} is hidden when time is hidden",
       "policy": "hide_time",
       "message": {
         "msg": "hello",
@@ -497,7 +506,7 @@
         "info_score": 1.0,
         "template_hash": ""
       },
-      "suppressed": false
+      "suppressed": true
     },
     {
       "name": "auto_beacon is a hideable tag",
@@ -579,6 +588,39 @@
     {
       "name": "untagged message is never hidden by tags",
       "policy": "hide_greeting",
+      "message": {
+        "msg": "hello",
+        "tags": [],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "ANY rule: {question, qso} is hidden when question is hidden",
+      "policy": "hide_question",
+      "message": {
+        "msg": "Wer kennt sich mit DMR aus?",
+        "tags": ["question", "qso"],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": true
+    },
+    {
+      "name": "ANY rule: qso-only message stays visible when only greeting is hidden",
+      "policy": "hide_greeting",
+      "message": {
+        "msg": "hello",
+        "tags": ["qso"],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "ANY rule: untagged message stays visible when qso is hidden",
+      "policy": "hide_qso",
       "message": {
         "msg": "hello",
         "tags": [],
