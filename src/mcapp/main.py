@@ -65,8 +65,8 @@ except ImportError:
 
 from . import __version__
 from .classifier import Classifier
-from .classifier.seed import seed_defaults
 from .classifier.types import SSEEvent
+from .classifier_contract import contract_id, load_engine
 from .internet_feed import IdentityInputs, InternetFeedService
 from .internet_feed_types import POSITIONS_EVENT, WWW_MESSAGE_TOPIC
 from .internet_positions import InternetPositionCache
@@ -2719,25 +2719,12 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
         prune_hours_ack=cfg.storage.prune_hours_ack,
     )
 
-    # Classifier — seeds builtin rules, loads + compiles them, and is wired to
-    # storage so store_message() annotates new rows inline.
+    # Classifier — mcmap's exported rule set (contract/classifier_contract.json),
+    # wired to storage so store_message() annotates new rows inline. A changed
+    # contract changes the version, which makes the startup backfill reclassify.
     logger.info("Initializing classifier...")
-    classifier = Classifier(storage_handler)
-    inserted, updated = await seed_defaults(storage_handler)
-    if inserted or updated:
-        logger.info("Seeded classifier rules: %d inserted, %d updated", inserted, updated)
-        # A seed edit reaches STORED rows only through a version bump.
-        # seed_defaults() matches a builtin rule by name and updates its
-        # pattern/category/priority in place, but leaves classifier_version
-        # alone -- so without this bump a changed rule would apply to new
-        # messages only and every row already in the DB would keep its stale
-        # category (the 2026-09-19 "URL advert" -> other change is exactly
-        # that case). Bumping here makes _maybe_backfill_classifier() find no
-        # backfill_done:v{N} marker for the new version and reclassify every
-        # row below it as a batched background job. Same postlude
-        # sse_handler.after_rule_mutation() already uses for UI rule edits,
-        # and idempotent: the next start sees updated == 0 and does not bump.
-        await storage_handler.bump_classifier_version()
+    engine = load_engine()
+    classifier = Classifier(storage_handler, engine, contract_id(engine))
     await classifier.load()
     storage_handler.set_classifier(classifier)
 
@@ -3173,6 +3160,22 @@ async def _nightly_prune(
             logger.exception("Nightly prune failed")
 
 
+async def run_classifier_startup(
+    classifier: Classifier, storage_handler: SQLiteStorage, sse_manager: Any
+) -> None:
+    """Startup classifier catch-up: auto-beacon promotion first, then reclassify.
+
+    The order is load-bearing: ``reclassify`` reads the *stored* ``auto_beacon``
+    flag of each template to strip ``qso``, so templates the promotion backfill
+    would flag must be flagged before the sweep, or the rows keep ``qso`` until
+    the next version bump. (Mirrors mc-chat's ``run_classifier_startup``.)
+    """
+    promoted = await storage_handler.backfill_auto_beacon_templates()
+    if promoted:
+        logger.info("Auto-beacon backfill promoted %d templates", promoted)
+    await _maybe_backfill_classifier(classifier, storage_handler, sse_manager)
+
+
 async def _maybe_backfill_classifier(
     classifier: Classifier, storage_handler: SQLiteStorage, sse_manager: Any
 ) -> None:
@@ -3180,7 +3183,7 @@ async def _maybe_backfill_classifier(
 
     Auto-trigger semantics: "ON but only once per release slot" — the marker
     lives in classifier_meta keyed by the current version, so a restart of
-    the same slot is a no-op and a rule edit (which bumps the version)
+    the same slot is a no-op and a contract change (which bumps the version)
     triggers a fresh backfill.
     """
     marker_key = f"backfill_done:v{classifier.version}"
@@ -3335,7 +3338,7 @@ def _start_background_tasks(
     prune_task = asyncio.create_task(_nightly_prune(ctx.storage_handler, cfg, stop_event))
     # Reference lives for the app's lifetime (run() awaits until shutdown)
     backfill_task = asyncio.create_task(
-        _maybe_backfill_classifier(ctx.classifier, ctx.storage_handler, ctx.sse_manager)
+        run_classifier_startup(ctx.classifier, ctx.storage_handler, ctx.sse_manager)
     )
     signal_backfill_task = asyncio.create_task(_maybe_backfill_signal_log(ctx.storage_handler))
     aprs_escape_backfill_task = asyncio.create_task(

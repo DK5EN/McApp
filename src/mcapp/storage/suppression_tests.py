@@ -9,7 +9,7 @@ no TTY, no network, no `/etc/mcapp`. Follows the house pattern used by
 list, a PASS/FAIL line per case, and a bool return.
 
 Coverage:
-  1. `suppression_vectors.json` sha256 drift tripwire (pattern from
+  1. `contract/suppression_vectors.json` (v2, tags) sha256 drift tripwire (pattern from
      `commands.hashtag_dst_tests`) plus every vector in the corpus replayed
      through the real `is_suppressed`.
   2. `load_policy` against a from-scratch ephemeral SQLite DB (schema copied
@@ -50,14 +50,14 @@ from .suppression import (
     view_from_row,
 )
 
-_VECTORS_PATH = Path(__file__).parent / "suppression_vectors.json"
+_VECTORS_PATH = Path(__file__).parent.parent / "contract" / "suppression_vectors.json"
 
 # Captured sha256 of the raw vectors file bytes at the time this suite was
 # written. A change here means the corpus changed -- either update this
 # constant deliberately (and re-check the hand-written cases below still
 # agree with the new corpus) or the change was unintentional and this
 # tripwire just did its job. Mirrors commands/hashtag_dst_tests.py.
-_EXPECTED_SHA256 = "4c9f5dea8c7011e632a9f6e0b59287de26bb291fa009c5d25218b0cb328675d1"
+_EXPECTED_SHA256 = "e3f271d51ebad349c3f47df72bc62eef4d05d601746069be33d98586756fa0ad"
 
 # DDL copied verbatim from storage/migrations.py (migrations v11, v16, v17).
 # Kept as a local copy rather than importing anything from migrations.py: a
@@ -114,12 +114,13 @@ def _policy_from_spec(spec: dict[str, Any]) -> SuppressionPolicy:
     for template_hash in spec.get("demotedHashes", []):
         template_actions[template_hash] = "demote"
 
-    filter_prefs = {
+    filter_prefs: dict[str, Any] = {
         "enabled": spec.get("enabled"),
-        "hiddenCategories": spec.get("hiddenCategories"),
         "minInfoScore": spec.get("minInfoScore"),
         "hideAutoBeacons": spec.get("hideAutoBeacons"),
     }
+    if "hiddenTags" in spec:  # an absent key means the policy's default hidden tags
+        filter_prefs["hiddenTags"] = spec["hiddenTags"]
     return policy_from_parts(filter_prefs, spec.get("blockedTexts", []), template_actions)
 
 
@@ -129,11 +130,13 @@ def _test_corpus_vectors(results: list[tuple[str, bool]]) -> None:
     tripwire."""
     contract, sha_ok = _load_corpus()
     results.append(
-        ("suppression_vectors.json sha256 matches captured hash (drift tripwire)", sha_ok)
+        ("contract/suppression_vectors.json sha256 matches captured hash (drift tripwire)", sha_ok)
     )
 
     version = contract.get("version")
-    results.append((f"suppression_vectors.json version == 1 (got {version!r})", version == 1))
+    results.append(
+        (f"contract/suppression_vectors.json version == 2 (got {version!r})", version == 2)
+    )
 
     policies = {name: _policy_from_spec(spec) for name, spec in contract["policies"].items()}
 
@@ -215,7 +218,7 @@ def _test_load_policy(results: list[tuple[str, bool]]) -> None:
         prefs = json.dumps(
             {
                 "enabled": True,
-                "hiddenCategories": ["node_advert"],
+                "hiddenTags": ["node"],
                 "minInfoScore": 0.5,
                 "hideAutoBeacons": True,
             }
@@ -231,8 +234,8 @@ def _test_load_policy(results: list[tuple[str, bool]]) -> None:
         results.append(("load_policy: enabled reflects stored prefs", policy.enabled is True))
         results.append(
             (
-                "load_policy: hiddenCategories reflects stored prefs",
-                policy.hidden_categories == frozenset({"node_advert"}),
+                "load_policy: hiddenTags reflects stored prefs",
+                policy.hidden_tags == frozenset({"node"}),
             )
         )
         results.append(
@@ -275,9 +278,7 @@ def _test_load_policy(results: list[tuple[str, bool]]) -> None:
 
 def _test_view_from_row(results: list[tuple[str, bool]]) -> None:
     """view_from_row against every shape `messages.tags` can arrive in."""
-    view = view_from_row(
-        {"msg": "hi", "category": "other", "tags": '["a", "b"]', "info_score": 0.4}
-    )
+    view = view_from_row({"msg": "hi", "tags": '["a", "b"]', "info_score": 0.4})
     results.append(
         ("view_from_row: tags as JSON array string decodes", view.tags == frozenset({"a", "b"}))
     )
@@ -301,9 +302,7 @@ def _test_view_from_row(results: list[tuple[str, bool]]) -> None:
     )
 
     view = view_from_row({})
-    expected_default = MessageView(
-        msg="", category="", tags=frozenset(), info_score=None, template_hash=""
-    )
+    expected_default = MessageView(msg="", tags=frozenset(), info_score=None, template_hash="")
     results.append(
         (
             "view_from_row: row missing every key -> safe defaults, no raise",
@@ -323,9 +322,9 @@ def _test_policy_is_noop(results: list[tuple[str, bool]]) -> None:
     empty = policy_from_parts({}, [], {})
     results.append(("policy_is_noop: {} prefs, no blocked texts -> no-op", policy_is_noop(empty)))
 
-    hidden = policy_from_parts({"enabled": True, "hiddenCategories": ["x"]}, [], {})
+    hidden = policy_from_parts({"enabled": True, "hiddenTags": ["x"]}, [], {})
     results.append(
-        ("policy_is_noop: enabled + a hidden category -> NOT a no-op", not policy_is_noop(hidden))
+        ("policy_is_noop: enabled + a hidden tag -> NOT a no-op", not policy_is_noop(hidden))
     )
 
     blocked_but_disabled = policy_from_parts({"enabled": False}, ["bad"], {})
@@ -341,12 +340,83 @@ def _test_policy_is_noop(results: list[tuple[str, bool]]) -> None:
         ("policy_is_noop: enabled + a promoted hash -> NOT a no-op", not policy_is_noop(promoted))
     )
 
-    demoted_only = policy_from_parts({"enabled": True}, [], {"h1": "demote"})
+    demoted_only = policy_from_parts({"enabled": True, "hiddenTags": []}, [], {"h1": "demote"})
     demoted_only_label = (
         "policy_is_noop: enabled + ONLY a demoted hash -> still a no-op"
         " (demoting can only prevent suppression)"
     )
     results.append((demoted_only_label, policy_is_noop(demoted_only)))
+
+
+def _test_hidden_tags_semantics(results: list[tuple[str, bool]]) -> None:
+    """Q1 (classifier unification): default hidden tags, allowlist for user
+    tag ids, the qso rule, and a legacy hiddenCategories key being inert."""
+    default = policy_from_parts({"enabled": True}, [], {})
+    results.append(
+        (
+            "hiddenTags absent + enabled -> default {time, bot}",
+            default.hidden_tags == frozenset({"time", "bot"}),
+        )
+    )
+    results.append(
+        (
+            "hiddenTags absent + disabled -> hides nothing (== NOOP_POLICY)",
+            policy_from_parts({}, [], {}) == NOOP_POLICY,
+        )
+    )
+    explicit_empty = policy_from_parts({"enabled": True, "hiddenTags": []}, [], {})
+    results.append(("hiddenTags [] -> hides nothing", explicit_empty.hidden_tags == frozenset()))
+    not_a_list = policy_from_parts({"enabled": True, "hiddenTags": "x"}, [], {})
+    results.append(("hiddenTags non-list -> hides nothing", not_a_list.hidden_tags == frozenset()))
+    filtered = policy_from_parts(
+        {"enabled": True, "hiddenTags": ["ok-tag_1", "Bad", "x'y", "", 7, "a" * 40, "1x", "time"]},
+        [],
+        {},
+    )
+    results.append(
+        (
+            "hiddenTags: ids outside [a-z][a-z0-9_-]{0,31} are dropped",
+            filtered.hidden_tags == frozenset({"ok-tag_1", "time"}),
+        )
+    )
+    legacy = policy_from_parts({"enabled": True, "hiddenCategories": ["node_advert"]}, [], {})
+    results.append(
+        (
+            "legacy hiddenCategories key is not read (falls to default tags)",
+            legacy.hidden_tags == frozenset({"time", "bot"}),
+        )
+    )
+
+    def hidden(tags: list[str], hidden_tags: list[str]) -> bool:
+        policy = policy_from_parts({"enabled": True, "hiddenTags": hidden_tags}, [], {})
+        return is_suppressed(view_from_row({"msg": "x", "tags": tags}), policy)
+
+    cases: list[tuple[str, list[str], list[str], bool]] = [
+        (
+            "bot greeting (greeting+auto_beacon), greeting hidden",
+            ["greeting", "auto_beacon"],
+            ["greeting"],
+            True,
+        ),
+        (
+            "human greeting (greeting+qso), greeting hidden",
+            ["greeting", "qso"],
+            ["greeting"],
+            False,
+        ),
+        ("qso message, qso hidden", ["greeting", "qso"], ["qso"], True),
+        ("qso message, other tag of it hidden", ["time", "qso"], ["time"], False),
+        ("no qso, any tag hidden", ["weather", "time"], ["time"], True),
+        ("no qso, no tag hidden", ["weather"], ["time"], False),
+        ("untagged message is never tag-hidden", [], ["time", "bot"], False),
+    ]
+    for label, tags, hidden_tags, want in cases:
+        results.append((f"qso rule: {label}", hidden(tags, hidden_tags) == want))
+
+    both = policy_from_parts({"enabled": True, "hiddenTags": ["qso"]}, [], {})
+    results.append(
+        ("policy_is_noop: enabled + hidden qso -> NOT a no-op", not policy_is_noop(both))
+    )
 
 
 async def run_suppression_predicate_tests() -> bool:
@@ -358,6 +428,7 @@ async def run_suppression_predicate_tests() -> bool:
     _test_load_policy(results)
     _test_view_from_row(results)
     _test_policy_is_noop(results)
+    _test_hidden_tags_semantics(results)
 
     for label, ok in results:
         print(f"    {'✅ PASS' if ok else '❌ FAIL'} | {label}")

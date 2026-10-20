@@ -187,10 +187,10 @@ def build_prefs_router(manager: SSEManager) -> APIRouter:  # noqa: PLR0915 - one
 
     @router.post("/api/filter_prefs")
     async def set_filter_prefs(body: dict[str, Any]) -> dict[str, str]:
-        # Pure passthrough: the frontend persists a camelCase settings blob
-        # (enabled, hiddenCategories, minInfoScore, hideAutoBeacons) that is
-        # round-tripped verbatim, so we keep an untyped dict instead of a
-        # model to avoid silently dropping keys.
+        # Near-passthrough: the frontend persists a camelCase settings blob
+        # (enabled, hiddenTags, minInfoScore, hideAutoBeacons) that is stored
+        # as-is, except that storage maps a legacy `hiddenCategories` from a
+        # pre-tag webapp to `hiddenTags`. An untyped dict keeps unknown keys.
         storage = manager.require_storage()
         await storage.set_filter_prefs(body)
         return {"status": "ok"}

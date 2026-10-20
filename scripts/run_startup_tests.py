@@ -43,6 +43,7 @@ from mcapp.ble_protocol_tests import run_ble_protocol_tests
 from mcapp.blocklist_history_tests import run_blocklist_history_tests
 from mcapp.box_feed_contract_tests import run_box_feed_contract_tests
 from mcapp.classifier.tests import run_all_tests as run_classifier_tests
+from mcapp.classifier_routes_tests import run_classifier_routes_tests
 from mcapp.commands.dedup_tests import run_dedup_tests
 from mcapp.commands.handler import create_command_handler
 from mcapp.commands.hashtag_dst_tests import run_hashtag_dst_tests
@@ -84,6 +85,7 @@ from mcapp.stall_http_tests import run_stall_http_tests
 from mcapp.stall_tests import run_stall_tests
 from mcapp.storage.ack_match_vectors_tests import run_ack_match_vector_tests
 from mcapp.storage.ack_status_tests import run_ack_status_tests
+from mcapp.storage.classifier_tags_tests import run_classifier_tags_tests
 from mcapp.storage.connection_lifecycle_tests import run_connection_lifecycle_tests
 from mcapp.storage.conv_dedup_tests import run_conv_dedup_tests
 from mcapp.storage.conversation_key_tests import run_conversation_key_tests
@@ -175,6 +177,12 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     classifier_ok = await run_classifier_tests()
     print(f"classifier: {'PASS' if classifier_ok else 'FAIL'}")
+
+    classifier_routes_ok = await run_classifier_routes_tests()
+    print(f"classifier_routes: {'PASS' if classifier_routes_ok else 'FAIL'}")
+
+    classifier_tags_ok = await run_classifier_tags_tests()
+    print(f"classifier_tags: {'PASS' if classifier_tags_ok else 'FAIL'}")
 
     parsing_ok = run_parsing_tests()
     print(f"parsing: {'PASS' if parsing_ok else 'FAIL'}")
@@ -408,6 +416,8 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and telemetry_reconcile_ok
         and sse_ok
         and classifier_ok
+        and classifier_routes_ok
+        and classifier_tags_ok
         and parsing_ok
         and hashtag_dst_ok
         and dedup_ok

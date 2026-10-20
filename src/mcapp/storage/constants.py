@@ -6,7 +6,7 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from ..commands.parsing import is_group, is_hashtag, resolve_dst_target
 
@@ -20,7 +20,47 @@ from ..commands.parsing import is_group, is_hashtag, resolve_dst_target
 # passing suite for a reason unrelated to the change being made. This is not
 # circular with migrations.py: the step numbers there are independent literals,
 # so forgetting either half fails loudly.
-LATEST_SCHEMA_VERSION = 37
+LATEST_SCHEMA_VERSION = 38
+
+# Legacy filter category -> engine tag (classifier unification, issue #17 / Q2).
+# `directed` and `other` have no tag and are dropped on migration.
+CATEGORY_TO_TAG: dict[str, str] = {
+    "timestamp_beacon": "time",
+    "wx_beacon": "weather",
+    "node_advert": "node",
+    "sw_advert": "software",
+    "bot_command": "bot",
+    "alert": "alert",
+    "test_msg": "test",
+    "greeting": "greeting",
+    "qso": "qso",
+}
+
+
+def legacy_categories_to_tags(prefs: dict[str, Any]) -> list[str]:
+    """Fold a pre-tags ``hiddenCategories`` list into ``hiddenTags``, in place.
+
+    Junk-tolerant (non-list value, non-string or unknown entries are dropped),
+    merges after any existing ``hiddenTags`` and removes the legacy key, so a
+    second call is a no-op. Returns the repr of the dropped entries for logging.
+    Used by the v38 migration and by ``set_filter_prefs`` (an old webapp keeps
+    POSTing the legacy key).
+    """
+    cats = prefs.pop("hiddenCategories", None)
+    tags: list[str] = []
+    dropped: list[str] = []
+    for cat in cats if isinstance(cats, list) else []:
+        tag = CATEGORY_TO_TAG.get(cat) if isinstance(cat, str) else None
+        if tag is None:
+            dropped.append(repr(cat))
+        elif tag not in tags:
+            tags.append(tag)
+    existing = prefs.get("hiddenTags")
+    if isinstance(existing, list):
+        tags = [*existing, *(t for t in tags if t not in existing)]
+    prefs["hiddenTags"] = tags
+    return dropped
+
 
 # Constants matching message_storage.py
 BUCKET_SECONDS = 5 * 60

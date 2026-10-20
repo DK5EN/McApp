@@ -352,7 +352,7 @@ class SSEManager:
         logger.info("SSEManager initialized for %s:%d", host, port)
 
     def set_classifier(self, classifier: Classifier) -> None:
-        """Wire the classifier so REST routes can access rules/templates/reclassify."""
+        """Wire the classifier so REST routes can access templates/reclassify/status."""
         self.classifier = classifier
 
     # ── Storage/classifier accessors shared by every sse_routes module (CO-07) ──
@@ -378,22 +378,6 @@ class SSEManager:
             raise HTTPException(status_code=503, detail="Classifier not available")
         return self.classifier
 
-    async def after_rule_mutation(
-        self, storage: SQLiteStorage, classifier: Classifier
-    ) -> dict[str, int | str]:
-        """Shared postlude for rule create/patch/delete: bump the classifier
-        version, reload it, broadcast the refreshed rule list, and return the
-        standard success response.
-        """
-        new_ver = await storage.bump_classifier_version()
-        await classifier.load()
-        rules = await storage.get_classifier_rules_raw()
-        await self.broadcast_event(
-            "proxy:classifier_rules",
-            {"rules": rules, "classifier_version": new_ver},
-        )
-        return {"status": "ok", "classifier_version": new_ver}
-
     async def register_client(self, client_id: str) -> SSEClient:
         """Create and register a new SSE client under the clients lock."""
         client = SSEClient(client_id)
@@ -404,7 +388,7 @@ class SSEManager:
 
     async def initial_events(self, client_id: str) -> AsyncIterator[str]:  # noqa: PLR0912, PLR0915 - complex handler kept intact
         """Yield the SSE client's startup burst: smart_initial/summary/prefs
-        snapshots, classifier rules+stats, and BLE status.
+        snapshots, classifier stats, and BLE status.
 
         Extracted from `/events`'s `event_generator` (SSE-01); the caller wraps
         this in its own try/except so a failure here degrades to "no initial
@@ -546,19 +530,6 @@ class SSEManager:
                     },
                     SSEManager._RESPONSE_EVENT_MAP["wx_sidebar"],
                 )
-            # Classifier rules snapshot — webapp hydrates its rule editor without
-            # a round-trip.
-            # `storage` is already truthy inside this block — no need to re-test it here
-            # or below.
-            if self.classifier is not None:
-                try:
-                    rule_rows = await storage.get_classifier_rules_raw()
-                    yield self.format_sse_event(
-                        {"rules": rule_rows},
-                        "proxy:classifier_rules",
-                    )
-                except Exception as exc:
-                    logger.warning("classifier rules snapshot failed: %s", exc)
             if self.classifier is not None:
                 try:
                     stats = await self.classifier.collect_stats()
