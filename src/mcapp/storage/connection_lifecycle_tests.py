@@ -238,12 +238,8 @@ async def _drive_every_connect_site(storage: Any) -> None:
         await storage._query("SELECT COUNT(*) AS n FROM messages WHERE type = ?", ("msg",))
 
     # storage/classifier_api.py — all three connect sites
-    await storage.insert_classifier_rule(
-        name="leak-probe",
-        pattern="^leak probe",
-        category="test",
-    )
     await storage.upsert_beacon_template("abc123def456", "leak probe 0", "DK5EN-1", BASE_TS)
+    await storage.backfill_auto_beacon_templates()
     await storage.clear_stale_auto_beacons(frozenset({"test"}), 3)
 
     # storage/prefs.py — _set_identifier_list and delete_messages_by_dst

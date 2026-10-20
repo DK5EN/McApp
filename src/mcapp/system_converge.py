@@ -42,7 +42,9 @@ UPDATE_RUNNER_PORT = 2985  # must match scripts/update-runner.py's listen port
 # Epoch 4: Caddy GOMEMLIMIT/GOGC drop-in (the distro unit ignores the template).
 # Epoch 5: wpasupplicant pin (WPA3-SAE regression, raspberrypi/linux#7634),
 # persistent 16M journal on a /var/log/journal bind mount.
-REQUIRED_SYSTEM_EPOCH = 5
+# Epoch 6: ramlog boards (Armbian/Orange Pi) drop the McApp /var/log tmpfs and
+# journal bind; the board's ramlog owns /var/log and its native journal persistence.
+REQUIRED_SYSTEM_EPOCH = 6
 
 SYSTEM_EPOCH_FILE = Path("/var/lib/mcapp/system-epoch")
 CONVERGE_ATTEMPT_FILE = Path("/var/lib/mcapp/converge-attempt")

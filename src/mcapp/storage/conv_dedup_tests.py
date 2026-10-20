@@ -177,6 +177,7 @@ async def _duplicate_row(  # noqa: PLR0913 - one arg per overridable column, mir
     conversation_key: str | None = None,
     msg: str | None = None,
     category: str | None = None,
+    tags: str | None = None,
     info_score: float | None = None,
 ) -> None:
     """White-box: insert a SECOND physical row for `msg_id`, copying
@@ -200,8 +201,8 @@ async def _duplicate_row(  # noqa: PLR0913 - one arg per overridable column, mir
     base = rows[0]
     await storage._mutate(
         "INSERT INTO messages (msg_id, src, dst, msg, type, timestamp, src_type,"
-        " conversation_key, category, info_score)"
-        " VALUES (?, ?, ?, ?, 'msg', ?, ?, ?, ?, ?)",
+        " conversation_key, category, tags, info_score)"
+        " VALUES (?, ?, ?, ?, 'msg', ?, ?, ?, ?, ?, ?)",
         (
             msg_id,
             base["src"],
@@ -211,6 +212,7 @@ async def _duplicate_row(  # noqa: PLR0913 - one arg per overridable column, mir
             src_type,
             conversation_key if conversation_key is not None else base["conversation_key"],
             category,
+            tags,
             info_score,
         ),
     )
@@ -557,9 +559,10 @@ async def _test_bare_column_tie(results: list[tuple[str, bool]]) -> None:
                 t0,
                 msg="hidden text",
                 category="node_advert",
+                tags='["node"]',
                 info_score=0.3,
             )
-            await storage.set_filter_prefs({"enabled": True, "hiddenCategories": ["node_advert"]})
+            await storage.set_filter_prefs({"enabled": True, "hiddenTags": ["node"]})
 
             # Independent probe of the SAME subquery both internal queries
             # share, at the identical window cutoff.

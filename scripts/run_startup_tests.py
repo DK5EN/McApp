@@ -24,8 +24,10 @@ import asyncio
 import sys
 
 from ble_service_tests import run_ble_service_tests
+from ble_unit_template_tests import run_ble_unit_template_tests
 from bootstrap_network_safety_tests import run_bootstrap_network_safety_tests
 from bootstrap_pinning_tests import run_bootstrap_pinning_tests
+from bootstrap_ramlog_tests import run_bootstrap_ramlog_tests
 from bootstrap_tmpdir_tests import run_bootstrap_tmpdir_tests
 from bootstrap_venv_tests import run_bootstrap_venv_tests
 from caddy_config_tests import run_caddy_config_tests
@@ -33,6 +35,7 @@ from config_migration_tests import run_config_migration_tests
 from health_probe_tests import run_health_probe_tests
 from release_notes_tests import run_release_notes_tests
 from release_prep_tests import run_release_prep_tests
+from slot_info_tests import run_slot_info_tests
 from system_converge_tests import run_system_converge_tests
 from update_runner_tests import run_update_runner_tests
 from webapp_deploy_tests import run_webapp_deploy_tests
@@ -43,6 +46,7 @@ from mcapp.ble_protocol_tests import run_ble_protocol_tests
 from mcapp.blocklist_history_tests import run_blocklist_history_tests
 from mcapp.box_feed_contract_tests import run_box_feed_contract_tests
 from mcapp.classifier.tests import run_all_tests as run_classifier_tests
+from mcapp.classifier_routes_tests import run_classifier_routes_tests
 from mcapp.commands.dedup_tests import run_dedup_tests
 from mcapp.commands.handler import create_command_handler
 from mcapp.commands.hashtag_dst_tests import run_hashtag_dst_tests
@@ -84,6 +88,7 @@ from mcapp.stall_http_tests import run_stall_http_tests
 from mcapp.stall_tests import run_stall_tests
 from mcapp.storage.ack_match_vectors_tests import run_ack_match_vector_tests
 from mcapp.storage.ack_status_tests import run_ack_status_tests
+from mcapp.storage.classifier_tags_tests import run_classifier_tags_tests
 from mcapp.storage.connection_lifecycle_tests import run_connection_lifecycle_tests
 from mcapp.storage.conv_dedup_tests import run_conv_dedup_tests
 from mcapp.storage.conversation_key_tests import run_conversation_key_tests
@@ -175,6 +180,12 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     classifier_ok = await run_classifier_tests()
     print(f"classifier: {'PASS' if classifier_ok else 'FAIL'}")
+
+    classifier_routes_ok = await run_classifier_routes_tests()
+    print(f"classifier_routes: {'PASS' if classifier_routes_ok else 'FAIL'}")
+
+    classifier_tags_ok = await run_classifier_tags_tests()
+    print(f"classifier_tags: {'PASS' if classifier_tags_ok else 'FAIL'}")
 
     parsing_ok = run_parsing_tests()
     print(f"parsing: {'PASS' if parsing_ok else 'FAIL'}")
@@ -359,6 +370,15 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     webapp_deploy_ok = run_webapp_deploy_tests()
     print(f"webapp_deploy: {'PASS' if webapp_deploy_ok else 'FAIL'}")
 
+    bootstrap_ramlog_ok = run_bootstrap_ramlog_tests()
+    print(f"bootstrap_ramlog: {'PASS' if bootstrap_ramlog_ok else 'FAIL'}")
+
+    slot_info_ok = run_slot_info_tests()
+    print(f"slot_info: {'PASS' if slot_info_ok else 'FAIL'}")
+
+    ble_unit_template_ok = run_ble_unit_template_tests()
+    print(f"ble_unit_template: {'PASS' if ble_unit_template_ok else 'FAIL'}")
+
     # The only suite that can be legitimately inapplicable: it drives a
     # bash-4-only installer function and macOS ships bash 3.2. It therefore
     # returns its own status label so a skip is never printed as "PASS".
@@ -408,6 +428,8 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and telemetry_reconcile_ok
         and sse_ok
         and classifier_ok
+        and classifier_routes_ok
+        and classifier_tags_ok
         and parsing_ok
         and hashtag_dst_ok
         and dedup_ok
@@ -433,6 +455,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and node_admin_observed_ok
         and node_admin_hook_ok
         and node_admin_state_ok
+        and bootstrap_ramlog_ok
+        and slot_info_ok
+        and ble_unit_template_ok
         and node_admin_service_ok
         and node_admin_routes_ok
         and node_admin_wiring_ok

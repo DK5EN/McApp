@@ -348,9 +348,12 @@ def _write_minimal_release_fixture(tmp: Path) -> tuple[Path, Path]:
     (project / "src" / "mcapp" / "contract" / "push_contract.json").write_text(
         '{"version": 11}', encoding="utf-8"
     )
+    (project / "src" / "mcapp" / "contract" / "classifier_contract.json").write_text(
+        '{"taxonomy_version": 6}', encoding="utf-8"
+    )
     (project / "src" / "mcapp" / "storage").mkdir(parents=True)
-    (project / "src" / "mcapp" / "storage" / "suppression_vectors.json").write_text(
-        '{"version": 1}', encoding="utf-8"
+    (project / "src" / "mcapp" / "contract" / "suppression_vectors.json").write_text(
+        '{"version": 2}', encoding="utf-8"
     )
     # A decoy: __pycache__ stays excluded, for data as well as for code.
     (project / "src" / "mcapp" / "__pycache__").mkdir(parents=True)
@@ -452,8 +455,8 @@ def _case_build_tarball_excludes_appledouble(record: Recorder) -> None:
             f"(names: {names})",
         )
         record(
-            "package data is shipped from nested packages too (storage/suppression_vectors.json)",
-            any(n.endswith("src/mcapp/storage/suppression_vectors.json") for n in names),
+            "package data is shipped from nested packages too (contract/suppression_vectors.json)",
+            any(n.endswith("src/mcapp/contract/suppression_vectors.json") for n in names),
             f"(names: {names})",
         )
         record(
@@ -549,8 +552,18 @@ def _case_build_tarball_production_is_runtime_only(record: Recorder) -> None:
             f"(names: {names})",
         )
         record(
-            "production tarball ships NO .json package data (only tests read it)",
-            not any(n.endswith(".json") and "/src/" in n for n in names),
+            "production tarball ships NO .json package data except the classifier contract",
+            not any(
+                n.endswith(".json")
+                and "/src/" in n
+                and not n.endswith("src/mcapp/contract/classifier_contract.json")
+                for n in names
+            ),
+            f"(names: {names})",
+        )
+        record(
+            "production tarball ships contract/classifier_contract.json (runtime reads it at boot)",
+            any(n.endswith("src/mcapp/contract/classifier_contract.json") for n in names),
             f"(names: {names})",
         )
         record(

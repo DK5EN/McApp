@@ -1,7 +1,7 @@
 """Shared types for the classifier package.
 
 This module has no runtime dependencies on the rest of ``meshcom_mock``
-so rules/template/score modules can import it without cycles.
+so template/score modules can import it without cycles.
 It also defines the Protocols that allow the classifier to live as a
 git subtree in other packages without importing meshcom_mock directly.
 """
@@ -9,6 +9,7 @@ git subtree in other packages without importing meshcom_mock directly.
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol, get_args, runtime_checkable
@@ -72,12 +73,43 @@ MessageCategory = Literal[
     "alert",
     "directed",
     "bot_command",
-    # Test/probe messages ("test", "prova", "probe", "essai", ...). Emitted by
-    # seed.py's "Test message" rule and consumed as automated-noise by
-    # profile/corpus.py's DROP_CATEGORIES -- it must be a first-class category.
+    # Test/probe messages ("test", "prova", "probe", "essai", ...); derived from
+    # the `test` tag for one release (see derive_category).
     "test_msg",
     "other",
 ]
+
+# The one tag outside the mcmap taxonomy: Layer 2 adds it when a template is
+# auto-flagged or user-promoted, removes it on demote. Counts as automated.
+AUTO_BEACON_TAG: str = "auto_beacon"
+
+# Fixed tag -> category map, first match wins (doc/2026-10-20_classifier-unification.md,
+# "Category derivation"). ``category`` is a derived, read-only column for one
+# release; tags are the source of truth.
+_TAG_CATEGORY_ORDER: tuple[tuple[str, str], ...] = (
+    ("time", "timestamp_beacon"),
+    ("weather", "wx_beacon"),
+    ("node", "node_advert"),
+    ("software", "sw_advert"),
+    ("bot", "bot_command"),
+    ("alert", "alert"),
+    ("test", "test_msg"),
+)
+
+
+def derive_category(tags: Collection[str], directed: bool) -> str:
+    """Derive the legacy single-valued category from tags and the directed flag."""
+    for tag, category in _TAG_CATEGORY_ORDER:
+        if tag in tags:
+            return category
+    if directed:
+        return "directed"
+    if "greeting" in tags:
+        return "greeting"
+    if "qso" in tags:
+        return "qso"
+    return "other"
+
 
 # CLS-05: derived from MessageCategory instead of duplicating the same 10
 # strings in a second literal tuple that could silently drift out of sync.
@@ -134,24 +166,6 @@ class EventBusProtocol(Protocol):
 
 
 class StorageProtocol(Protocol):
-    # Rules
-    async def get_classifier_rules(self, enabled_only: bool = False) -> list[dict[str, Any]]: ...
-    async def insert_classifier_rule(  # noqa: PLR0913 - signature fixed by call sites
-        self,
-        *,
-        name: str,
-        pattern: str,
-        category: str,
-        scope: str = "msg",
-        extra_tags: list[str] | None = None,
-        priority: int = 100,
-        enabled: bool = True,
-        builtin: bool = False,
-    ) -> dict[str, Any]: ...
-    async def update_classifier_rule(
-        self, rule_id: int, **updates: object
-    ) -> dict[str, Any] | None: ...
-
     # Templates
     async def get_beacon_template(self, template_hash: str) -> dict[str, Any] | None: ...
     async def upsert_beacon_template(
@@ -193,11 +207,13 @@ class StorageProtocol(Protocol):
     ) -> None: ...
 
     # Meta / versioning
+    async def get_meta(self, key: str) -> str | None: ...
     async def set_meta(self, key: str, value: str) -> None: ...
     async def bump_classifier_version(self) -> int: ...
 
     # Stats (used by collect_stats)
     async def count_messages_by_category(self, since_ms: int) -> dict[str, int]: ...
+    async def count_messages_by_tag(self, since_ms: int) -> dict[str, int]: ...
     async def get_top_beacon_templates(
         self, since_ms: int, limit: int = 10
     ) -> list[dict[str, Any]]: ...

@@ -11,9 +11,12 @@ Environment="PATH={{HOME}}/.local/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="BLE_SERVICE_API_KEY={{BLE_API_KEY}}"
 Environment="PYTHONUNBUFFERED=1"
 Environment="MALLOC_ARENA_MAX=2"
-ExecStartPre=+/usr/sbin/rfkill unblock bluetooth
+# Bounded and non-fatal ("-"): a hung BlueZ stack made `rfkill unblock` block
+# start-up indefinitely (Orange Pi Zero 2W, 2026-10-19), which failed the
+# update runner's health check. The service itself retries the adapter.
+ExecStartPre=-+/usr/bin/timeout 10 /usr/sbin/rfkill unblock bluetooth
 ExecStartPre=/bin/sleep 2
-ExecStartPre=+/usr/bin/bluetoothctl power on
+ExecStartPre=-+/usr/bin/timeout 10 /usr/bin/bluetoothctl power on
 # uv run is not used at exec time: deploy.sh runs uv sync; the wrapper cost
 # ~10 MB virtual per service and a resolver step per restart. WorkingDirectory
 # above is what makes `ble_service.src.main:app` resolve -- uvicorn's CLI

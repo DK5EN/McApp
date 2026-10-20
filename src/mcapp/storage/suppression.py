@@ -17,7 +17,7 @@ Mirrors, verbatim in decision order, two independent webapp functions
 (webapp `src/stores/messages/predicates.ts`):
 
   * `isSpamByClassifier` (lines ~93-117) — gated entirely behind
-    `prefs.enabled`; template-hash overrides beat category/tag/score rules;
+    `prefs.enabled`; template-hash overrides beat tag/score rules;
     an explicit "not enabled" or "no match" is NOT-spam, never an error.
   * the `isTextBlocked` call inside `passesBaseGuards` (~line 143) — this is
     UNCONDITIONAL, evaluated independently of the spam prefs. A disabled spam
@@ -44,6 +44,7 @@ predicate FUNCTIONS below, not the client's call-site policy around them.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -59,7 +60,7 @@ class SuppressionPolicy:
     and to pass across an `asyncio.to_thread` boundary without aliasing."""
 
     enabled: bool
-    hidden_categories: frozenset[str]
+    hidden_tags: frozenset[str]
     min_info_score: float | None
     hide_auto_beacons: bool
     promoted_hashes: frozenset[str]
@@ -76,7 +77,6 @@ class MessageView:
     via `view_from_row` rather than passing a raw DB row (or dict) around."""
 
     msg: str
-    category: str
     tags: frozenset[str]
     info_score: float | None
     template_hash: str
@@ -91,7 +91,7 @@ class MessageView:
 # hides real traffic.
 NOOP_POLICY = SuppressionPolicy(
     enabled=False,
-    hidden_categories=frozenset(),
+    hidden_tags=frozenset(),
     min_info_score=None,
     hide_auto_beacons=False,
     promoted_hashes=frozenset(),
@@ -122,7 +122,7 @@ def policy_is_noop(policy: SuppressionPolicy) -> bool:
         return True
     return not (
         policy.promoted_hashes
-        or policy.hidden_categories
+        or policy.hidden_tags
         or policy.hide_auto_beacons
         or policy.min_info_score is not None
     )
@@ -144,6 +144,14 @@ def _as_optional_float(value: object) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
+
+
+# Hidden tags when the stored prefs carry no `hiddenTags` key at all (and the
+# policy is enabled). An explicit empty list hides nothing.
+DEFAULT_HIDDEN_TAGS: frozenset[str] = frozenset({"time", "bot"})
+# Tag ids are lowercase words with `-`/`_` (`pota-sota`, `auto_beacon`). Stored
+# prefs are client-controlled, so user-supplied ids are held to this shape.
+_TAG_ID_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 
 
 def _as_str_frozenset(value: object) -> frozenset[str]:
@@ -177,7 +185,18 @@ def policy_from_parts(
     neither set.
     """
     enabled = _as_bool(filter_prefs.get("enabled"), default=False)
-    hidden_categories = _as_str_frozenset(filter_prefs.get("hiddenCategories"))
+    # A disabled policy hides no tags, so "no prefs row" equals NOOP_POLICY.
+    hidden_tags: frozenset[str] = frozenset()
+    if enabled:
+        hidden_tags = (
+            frozenset(
+                t
+                for t in _as_str_frozenset(filter_prefs.get("hiddenTags"))
+                if _TAG_ID_RE.fullmatch(t)
+            )
+            if "hiddenTags" in filter_prefs
+            else DEFAULT_HIDDEN_TAGS
+        )
     min_info_score = _as_optional_float(filter_prefs.get("minInfoScore"))
     hide_auto_beacons = _as_bool(filter_prefs.get("hideAutoBeacons"), default=False)
 
@@ -196,7 +215,7 @@ def policy_from_parts(
 
     return SuppressionPolicy(
         enabled=enabled,
-        hidden_categories=hidden_categories,
+        hidden_tags=hidden_tags,
         min_info_score=min_info_score,
         hide_auto_beacons=hide_auto_beacons,
         promoted_hashes=promoted,
@@ -287,12 +306,10 @@ def view_from_row(row: Mapping[str, Any]) -> MessageView:
     must never be the reason a summary query raises.
     """
     msg = row.get("msg")
-    category = row.get("category")
     template_hash = row.get("template_hash")
 
     return MessageView(
         msg=msg if isinstance(msg, str) else "",
-        category=category if isinstance(category, str) else "",
         tags=_parse_tags(row.get("tags")),
         info_score=_as_optional_float(row.get("info_score")),
         template_hash=template_hash if isinstance(template_hash, str) else "",
@@ -309,6 +326,13 @@ def is_text_blocked(msg: str, policy: SuppressionPolicy) -> bool:
     return any(pattern in lower_msg for pattern in policy.blocked_texts)
 
 
+def _tag_hidden(tags: frozenset[str], hidden: frozenset[str]) -> bool:
+    """ANY rule (mcmap's): a message is hidden when any of its tags is hidden.
+    `qso` and `auto_beacon` are ordinary hideable tags; an untagged message is
+    never hidden by tags."""
+    return not tags.isdisjoint(hidden)
+
+
 def is_spam_by_classifier(view: MessageView, policy: SuppressionPolicy) -> bool:
     """Mirrors the webapp's `isSpamByClassifier` in its exact decision
     order — do not reorder these clauses, the order itself is the contract:
@@ -316,7 +340,7 @@ def is_spam_by_classifier(view: MessageView, policy: SuppressionPolicy) -> bool:
       1. disabled                        -> False (stop)
       2. template_hash in promoted       -> True  (stop)
       3. template_hash in demoted        -> False (stop)
-      4. category in hidden_categories   -> True  (stop)
+      4. hidden tag (see `_tag_hidden`)  -> True  (stop)
       5. hide_auto_beacons + auto_beacon -> True  (stop)
       6. info_score below min_info_score -> True
       7. otherwise                       -> False
@@ -330,7 +354,7 @@ def is_spam_by_classifier(view: MessageView, policy: SuppressionPolicy) -> bool:
     if template_hash and template_hash in policy.demoted_hashes:
         return False
 
-    if view.category and view.category in policy.hidden_categories:
+    if _tag_hidden(view.tags, policy.hidden_tags):
         return True
     if policy.hide_auto_beacons and "auto_beacon" in view.tags:
         return True

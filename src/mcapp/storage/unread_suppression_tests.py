@@ -138,7 +138,7 @@ async def _test_group20_regression(results: list[tuple[str, bool]]) -> None:
 
             # The newest message: a bare URL classified as node_advert,
             # exactly the live row (HB9VQQ-1 -> 20, category=node_advert,
-            # info_score=0.3, tags=["has_url"]).
+            # info_score=0.3, tags=["node"]).
             advert_ts = t0 + 10
             await _store_msg(
                 storage,
@@ -151,11 +151,13 @@ async def _test_group20_regression(results: list[tuple[str, bool]]) -> None:
                 storage,
                 "HB9VQQ-1",
                 advert_ts,
-                {"category": "node_advert", "tags": ["has_url"], "info_score": 0.3},
+                {"category": "node_advert", "tags": ["node"], "info_score": 0.3},
             )
 
             await storage.set_read_cursor(group_key, t0)  # cursor on the visible message
 
+            # A LEGACY hiddenCategories POST (old webapp): the storage maps it
+            # to hiddenTags on write, so this also pins that path end to end.
             await storage.set_filter_prefs(
                 {
                     "enabled": True,
@@ -311,12 +313,14 @@ async def _test_own_message_exclusion_unaffected(results: list[tuple[str, bool]]
             await _store_msg(storage, "DK5EN-14", dm_dst, "hello from -14", t0 + 10)
             reply_ts = t0 + 20
             await _store_msg(storage, dm_dst, "DK5EN-98", "reply from partner", reply_ts)
-            await _classify(storage, dm_dst, reply_ts, {"category": "node_advert"})
+            await _classify(
+                storage, dm_dst, reply_ts, {"category": "node_advert", "tags": ["node"]}
+            )
 
             # Active, non-noop policy: hides node_advert, which is the
             # partner's reply — but the own-message rule is evaluated first
             # for count/unread purposes and must not be disturbed by it.
-            await storage.set_filter_prefs({"enabled": True, "hiddenCategories": ["node_advert"]})
+            await storage.set_filter_prefs({"enabled": True, "hiddenTags": ["node"]})
 
             summary = await storage.get_conversation_summary(MY_CALLSIGN)
             entry = summary.get(key, {})
@@ -377,7 +381,8 @@ async def _test_transport_duplicates_suppressed(results: list[tuple[str, bool]])
             # depend on which physical row the earliest-copy aggregation
             # happens to read from.
             await storage._mutate(
-                "UPDATE messages SET category = 'node_advert' WHERE msg_id = 'E686400E'"
+                "UPDATE messages SET category = 'node_advert', tags = '[\"node\"]'"
+                " WHERE msg_id = 'E686400E'"
             )
 
             # A second, DISTINCT, VISIBLE foreign message in the same key,
@@ -387,7 +392,7 @@ async def _test_transport_duplicates_suppressed(results: list[tuple[str, bool]])
             visible_ts = t0 + 1_000
             await _store_msg(storage, "OE1REAL-1", "*", "real chat", visible_ts)
 
-            await storage.set_filter_prefs({"enabled": True, "hiddenCategories": ["node_advert"]})
+            await storage.set_filter_prefs({"enabled": True, "hiddenTags": ["node"]})
 
             summary = await storage.get_conversation_summary(MY_CALLSIGN)
             entry = summary.get("*", {})
@@ -432,9 +437,11 @@ async def _test_spam_group_rebucket_subtraction(results: list[tuple[str, bool]])
             await _store_msg(storage, "OE1REAL-1", group_key, "real chat", t0)
             spam_ts = t0 + 10
             await _store_msg(storage, spam_src, group_key, "buy now", spam_ts)
-            await _classify(storage, spam_src, spam_ts, {"category": "node_advert"})
+            await _classify(
+                storage, spam_src, spam_ts, {"category": "node_advert", "tags": ["node"]}
+            )
 
-            await storage.set_filter_prefs({"enabled": True, "hiddenCategories": ["node_advert"]})
+            await storage.set_filter_prefs({"enabled": True, "hiddenTags": ["node"]})
 
             def _filter(data: dict[str, Any]) -> dict[str, Any] | None:
                 if data.get("src") == spam_src:
@@ -489,7 +496,9 @@ async def _test_key_narrowing_matches_full_scan(results: list[tuple[str, bool]])
             await _store_msg(storage, "OE1ABC-1", group_key, "g1", t0)
             advert_ts = t0 + 10
             await _store_msg(storage, "OE1ABC-1", group_key, "advert", advert_ts)
-            await _classify(storage, "OE1ABC-1", advert_ts, {"category": "node_advert"})
+            await _classify(
+                storage, "OE1ABC-1", advert_ts, {"category": "node_advert", "tags": ["node"]}
+            )
 
             # Unrelated second conversation, so the full scan has more than
             # one key to prove the narrowing actually narrows.
@@ -500,7 +509,7 @@ async def _test_key_narrowing_matches_full_scan(results: list[tuple[str, bool]])
             # unread deterministically 0, the same shape as the group-20
             # regression above.
             await storage.set_read_cursor(group_key, t0)
-            await storage.set_filter_prefs({"enabled": True, "hiddenCategories": ["node_advert"]})
+            await storage.set_filter_prefs({"enabled": True, "hiddenTags": ["node"]})
 
             full_summary = await storage.get_conversation_summary(MY_CALLSIGN)
             narrowed_summary = await storage.get_conversation_summary(MY_CALLSIGN, key=group_key)
@@ -548,13 +557,13 @@ async def _test_own_suppressed_message_does_not_cancel_foreign_unread(
             # The operator's own weather-bot command: hidden, and a
             # candidate row (newer than the unset -> 0 cursor).
             await _store_msg(storage, MY_CALLSIGN, dm_dst, "!wx", t0)
-            await _classify(storage, MY_CALLSIGN, t0, {"category": "bot_command"})
+            await _classify(storage, MY_CALLSIGN, t0, {"category": "bot_command", "tags": ["bot"]})
 
             # The partner's reply: foreign, visible, newer still.
             reply_ts = t0 + 10
             await _store_msg(storage, dm_dst, MY_CALLSIGN, "sunny today", reply_ts)
 
-            await storage.set_filter_prefs({"enabled": True, "hiddenCategories": ["bot_command"]})
+            await storage.set_filter_prefs({"enabled": True, "hiddenTags": ["bot"]})
 
             summary = await storage.get_conversation_summary(MY_CALLSIGN)
             entry = summary.get(key, {})
@@ -603,7 +612,9 @@ async def _test_spam_group_subtract_uses_rebucketed_cursor(
             newer_ts = t0 + 100
 
             await _store_msg(storage, spam_src, group_key, "buy now (old)", older_ts)
-            await _classify(storage, spam_src, older_ts, {"category": "node_advert"})
+            await _classify(
+                storage, spam_src, older_ts, {"category": "node_advert", "tags": ["node"]}
+            )
             # The newer row is left unclassified (visible) on purpose — see
             # the docstring above: only the OLDER row's mis-handling can
             # move `unread` here.
@@ -615,7 +626,7 @@ async def _test_spam_group_subtract_uses_rebucketed_cursor(
             # of the SPAM_GROUP cursor.
             await storage.set_read_cursor(SPAM_GROUP, spam_cursor_ts)
 
-            await storage.set_filter_prefs({"enabled": True, "hiddenCategories": ["node_advert"]})
+            await storage.set_filter_prefs({"enabled": True, "hiddenTags": ["node"]})
 
             def _filter(data: dict[str, Any]) -> dict[str, Any] | None:
                 if data.get("src") == spam_src:

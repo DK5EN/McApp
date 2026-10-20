@@ -5,6 +5,31 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.1.17 (2026-10-20)
+
+Maintenance release: a webapp fix so form controls and scrollbars follow the theme you picked, plus
+refreshed dependencies in both repos. No schema change (stays at 37); `SYSTEM_EPOCH` stays at 5.
+
+### Highlights
+
+- **Theme-correct controls.** The browser's built-in controls and scrollbars now follow the
+  resolved app theme instead of the operating-system setting, so a dark app on a light OS (or the
+  reverse) no longer shows mismatched inputs.
+
+### Backend (MCProxy)
+
+- Dependencies refreshed (FastAPI 0.150.0, Starlette 1.9.0, certifi), including the standalone
+  `ble_service` lock; CI action `setup-uv` 10.3.0.
+
+### Frontend (webapp)
+
+- `color-scheme` follows the resolved theme, not the OS.
+- Dependencies refreshed (typescript-eslint 8.72).
+
+### Upgrade notes
+
+- No migration, no system converge. Reload the app once to pick up the new bundle.
+
 ## v2.1.16 (2026-10-18)
 
 Phone layout fixes across the app: clipped diagrams, chips and command rows now fit. Backend change

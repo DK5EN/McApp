@@ -1,4 +1,4 @@
-"""ClassifierApiMixin: classifier_rules/beacon_templates CRUD and classification bookkeeping.
+"""ClassifierApiMixin: beacon_templates CRUD and classification bookkeeping.
 
 Moved out of sqlite_storage.py (ST-04). Backs the classifier subtree's
 StorageProtocol (`classifier/types.py`) so mc-chat's classifier package can run
@@ -20,125 +20,6 @@ class ClassifierApiMixin(StorageBase):
     # These methods satisfy the StorageProtocol defined in
     # classifier/types.py, allowing the shared classifier subtree to run
     # in MCProxy without any meshcom_mock imports.
-
-    @staticmethod
-    def _normalize_rule_row(row: dict[str, Any]) -> dict[str, Any]:
-        """Normalize a classifier_rules row: JSON-decode extra_tags, coerce enabled/builtin
-        to bool. Mutates and returns the same dict.
-        """
-        try:
-            row["extra_tags"] = json.loads(row["extra_tags"]) if row.get("extra_tags") else []
-        except (json.JSONDecodeError, TypeError):
-            row["extra_tags"] = []
-        row["enabled"] = bool(row["enabled"])
-        row["builtin"] = bool(row["builtin"])
-        return row
-
-    async def get_classifier_rules(self, enabled_only: bool = False) -> list[dict[str, Any]]:
-        where = "WHERE enabled = 1" if enabled_only else ""
-        rows = await self._query(
-            f"SELECT * FROM classifier_rules {where} ORDER BY priority ASC, id ASC"  # noqa: S608 - identifiers from fixed set; values parameterized
-        )
-        return [self._normalize_rule_row(r) for r in rows]
-
-    async def insert_classifier_rule(  # noqa: PLR0913 - signature fixed by call sites
-        self,
-        *,
-        name: str,
-        pattern: str,
-        category: str,
-        scope: str = "msg",
-        extra_tags: list[str] | None = None,
-        priority: int = 100,
-        enabled: bool = True,
-        builtin: bool = False,
-    ) -> dict[str, Any]:
-        now_zulu = ms_to_zulu(now_ms())
-        tags_json = json.dumps(extra_tags) if extra_tags else None
-
-        def _run() -> int:
-            with db_write(self.db_path) as conn:
-                cursor = conn.execute(
-                    "INSERT INTO classifier_rules "
-                    "(name, pattern, scope, category, extra_tags, priority, "
-                    " enabled, builtin, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        name,
-                        pattern,
-                        scope,
-                        category,
-                        tags_json,
-                        priority,
-                        int(enabled),
-                        int(builtin),
-                        now_zulu,
-                        now_zulu,
-                    ),
-                )
-                conn.commit()
-                return cursor.lastrowid  # type: ignore[return-value]
-
-        rule_id = await asyncio.to_thread(_run)
-        rows = await self._query("SELECT * FROM classifier_rules WHERE id = ?", (rule_id,))
-        return self._normalize_rule_row(rows[0])
-
-    async def update_classifier_rule(
-        self, rule_id: int, **updates: object
-    ) -> dict[str, Any] | None:
-        allowed = {"name", "pattern", "scope", "category", "extra_tags", "priority", "enabled"}
-        set_parts: list[str] = []
-        params: list[object] = []
-        for key, value in updates.items():
-            if key not in allowed:
-                continue
-            if key == "extra_tags":
-                params.append(json.dumps(value) if value else None)
-            elif key == "enabled":
-                params.append(int(bool(value)))
-            else:
-                params.append(value)
-            set_parts.append(f"{key} = ?")
-        if not set_parts:
-            rows = await self._query("SELECT * FROM classifier_rules WHERE id = ?", (rule_id,))
-            return rows[0] if rows else None
-        now_zulu = ms_to_zulu(now_ms())
-        set_parts.append("updated_at = ?")
-        params.extend([now_zulu, rule_id])
-        await self._mutate(
-            f"UPDATE classifier_rules SET {', '.join(set_parts)} WHERE id = ?",  # noqa: S608 - identifiers from fixed set; values parameterized
-            tuple(params),
-        )
-        rows = await self._query("SELECT * FROM classifier_rules WHERE id = ?", (rule_id,))
-        if not rows:
-            return None
-        return self._normalize_rule_row(rows[0])
-
-    async def get_classifier_rules_raw(self) -> list[dict[str, Any]]:
-        """All classifier rules, unnormalized (extra_tags as raw JSON string,
-        enabled/builtin as raw 0/1 ints) — the wire shape the SSE/REST classifier-rules
-        endpoints have always emitted (SSE-02). Prefer get_classifier_rules() for
-        internal Python consumers that want decoded/coerced values.
-        """
-        return await self._query(
-            "SELECT id, name, pattern, scope, category, extra_tags, priority, "
-            "enabled, builtin, created_at, updated_at "
-            "FROM classifier_rules ORDER BY priority ASC, id ASC"
-        )
-
-    async def classifier_rule_exists(self, rule_id: int) -> bool:
-        """Check whether a classifier_rules row with this id exists."""
-        rows = await self._query("SELECT id FROM classifier_rules WHERE id = ?", (rule_id,))
-        return bool(rows)
-
-    async def get_classifier_rule_builtin_flag(self, rule_id: int) -> bool | None:
-        """Return the `builtin` flag for a rule, or None if the rule doesn't exist."""
-        rows = await self._query("SELECT builtin FROM classifier_rules WHERE id = ?", (rule_id,))
-        return bool(rows[0]["builtin"]) if rows else None
-
-    async def delete_classifier_rule(self, rule_id: int) -> None:
-        """Delete a classifier rule by id (caller is responsible for the builtin check)."""
-        await self._mutate("DELETE FROM classifier_rules WHERE id = ?", (rule_id,))
 
     async def list_beacon_templates(
         self,
@@ -181,14 +62,6 @@ class ClassifierApiMixin(StorageBase):
         await self._mutate(
             "UPDATE beacon_templates SET user_action = ? WHERE template_hash = ?",
             (action, template_hash),
-        )
-
-    async def get_recent_messages_for_rule_test(self, limit: int) -> list[dict[str, Any]]:
-        """Recent messages for classifier rule dry-run testing (SSE-02)."""
-        return await self._query(
-            "SELECT id, msg_id, src, dst, msg, type, timestamp FROM messages "
-            "ORDER BY id DESC LIMIT ?",
-            (limit,),
         )
 
     async def get_messages_by_template_hash(
@@ -295,7 +168,11 @@ class ClassifierApiMixin(StorageBase):
                     f"AND EXISTS ("
                     f"  SELECT 1 FROM messages m "
                     f"  WHERE m.template_hash = beacon_templates.template_hash "
-                    f"  AND m.category IN ({placeholders}) LIMIT 1"
+                    f"  AND (m.category IN ({placeholders}) OR EXISTS ("
+                    f"    SELECT 1 FROM json_each("
+                    f"      CASE WHEN json_valid(m.tags) THEN m.tags ELSE '[]' END"
+                    f"    ) j WHERE j.value = 'alert'"
+                    f"  )) LIMIT 1"
                     f")",
                     tuple(human_categories),
                 )
@@ -403,6 +280,46 @@ class ClassifierApiMixin(StorageBase):
             (since_ms,),
         )
         return {r["category"]: r["n"] for r in rows}
+
+    async def count_messages_by_tag(self, since_ms: int) -> dict[str, int]:
+        """Per-tag message counts since ``since_ms`` (INTEGER ms timestamps).
+
+        A multi-tag message counts once per tag, so values do not sum to the
+        message count. Malformed ``tags`` JSON is skipped, never raised: the
+        ``json_valid`` guard sits inside the ``json_each`` argument.
+        """
+        rows = await self._query(
+            "SELECT j.value AS tag, COUNT(*) AS n FROM messages m,"
+            " json_each(CASE WHEN json_valid(m.tags) THEN m.tags ELSE '[]' END) j"
+            " WHERE m.timestamp >= ? AND j.type = 'text' GROUP BY j.value",
+            (since_ms,),
+        )
+        return {r["tag"]: r["n"] for r in rows}
+
+    async def backfill_auto_beacon_templates(self) -> int:
+        """Flag templates that now cross the AUTO_BEACON_RULES thresholds.
+
+        Mirrors (8, any window) / (5, 24h) / (3, 72h). The live path counts the
+        24h/72h rules per sender and the lifetime rule only for single-sender
+        templates; the template row has no per-sender counts, so every arm
+        requires a single sender here -- three people greeting each other must
+        not become a beacon on the next startup. Rows with a user override
+        (promote/demote) are left alone. Returns the number newly flagged.
+        """
+        now = now_ms()
+        c24, c72 = ms_to_zulu(now - 24 * 3600 * 1000), ms_to_zulu(now - 72 * 3600 * 1000)
+        where = (
+            "auto_beacon = 0"
+            " AND (user_action IS NULL OR user_action NOT IN ('promote','demote'))"
+            " AND json_array_length(CASE WHEN json_valid(srcs) THEN srcs ELSE '[]' END) = 1"
+            " AND (count >= 8"
+            " OR (count >= 5 AND last_seen >= ?)"
+            " OR (count >= 3 AND last_seen >= ?))"
+        )
+        return await self._mutate(
+            f"UPDATE beacon_templates SET auto_beacon = 1 WHERE {where}",  # noqa: S608 - fixed text; values bound
+            (c24, c72),
+        )
 
     async def count_blocked_text_hits_24h(self) -> dict[str, int]:
         """Per blocked-text substring-match count over the last 24h.

@@ -162,14 +162,83 @@ remove_bloat_packages() {
 # TMPFS CONFIGURATION (SD Card Protection)
 #──────────────────────────────────────────────────────────────────
 
+# Overridable for the offline test suite (scripts/bootstrap_ramlog_tests.py).
+MCAPP_FSTAB="${MCAPP_FSTAB:-/etc/fstab}"
+MCAPP_TMPFILES_DIR="${MCAPP_TMPFILES_DIR:-/etc/tmpfiles.d}"
+MCAPP_SYSTEMD_UNIT_DIR="${MCAPP_SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
+MCAPP_REBOOT_MARKER="${MCAPP_REBOOT_MARKER:-/var/lib/mcapp/reboot-required}"
+
+MCAPP_DEFAULTS_DIR="${MCAPP_DEFAULTS_DIR:-/etc/default}"
+
+# True when the unit's defaults file (/etc/default/<name>) sets ENABLED=false.
+# Upstream ramlog scripts exit early on that, so the unit is enabled in systemd
+# but mounts nothing. A missing file means enabled (the upstream default). The
+# last assignment wins; quotes, whitespace and a trailing comment are tolerated.
+_mcapp_ramlog_defaults_disabled() {
+  local file="${MCAPP_DEFAULTS_DIR}/${1%.service}" value
+  [[ -f "$file" ]] || return 1
+  value="$(grep -E '^[[:space:]]*ENABLED[[:space:]]*=' "$file" 2>/dev/null | tail -n 1)" || return 1
+  [[ -n "$value" ]] || return 1
+  value="${value#*=}"
+  value="${value%%#*}"
+  value="$(printf '%s' "$value" | tr -d "[:space:]\"'" | tr '[:upper:]' '[:lower:]')"
+  [[ "$value" == "false" ]]
+}
+
+# Prints the ramlog unit (armbian-ramlog.service or orangepi-ramlog.service)
+# when one is installed, enabled AND not switched off in its defaults file,
+# else nothing. Such a unit mounts a zram ext4 over /var/log and restores it
+# from /var/log.hdd, which shadows a tmpfs /var/log fstab line. It also keeps
+# its own persistent journal in /var/log.hdd/journal, so no bind is needed.
+detect_ramlog_service() {
+  local unit state
+  for unit in armbian-ramlog.service orangepi-ramlog.service; do
+    state="$(systemctl is-enabled "$unit" 2>/dev/null)" || continue
+    if [[ "$state" == "enabled" ]] && ! _mcapp_ramlog_defaults_disabled "$unit"; then
+      printf '%s\n' "$unit"
+      return 0
+    fi
+  done
+  return 0
+}
+
+_mcapp_mark_reboot_required() {
+  mkdir -p "$(dirname "$MCAPP_REBOOT_MARKER")"
+  touch "$MCAPP_REBOOT_MARKER"
+}
+
 configure_tmpfs() {
   log_info "Configuring tmpfs for SD card longevity..."
 
-  local fstab="/etc/fstab"
+  local fstab="$MCAPP_FSTAB"
   local marker="# McApp tmpfs"
+  local ramlog
+  ramlog="$(detect_ramlog_service)"
 
+  if [[ -n "$ramlog" ]]; then
+    # The ramlog unit owns /var/log; our tmpfs line would be mounted over or
+    # under it. Keep /tmp, drop only the /var/log line from our block.
+    local tmpfs_log_re='^tmpfs /var/log tmpfs'
+    local in_block='/# McApp tmpfs - begin/ { inb = 1 } /# McApp tmpfs - end/ { inb = 0 }'
+    if awk -v re="$tmpfs_log_re" "$in_block"' inb && $0 ~ re { found = 1 } END { exit !found }' "$fstab" 2>/dev/null; then
+      awk -v re="$tmpfs_log_re" "$in_block"' !(inb && $0 ~ re) { print }' \
+        "$fstab" > "${fstab}.mcapp-tmp" && mv -f "${fstab}.mcapp-tmp" "$fstab"
+      _mcapp_mark_reboot_required
+      log_ok "  ${ramlog} owns /var/log: removed the /var/log tmpfs line from fstab (reboot required)"
+    elif grep -qE "(McApp tmpfs|MCProxy tmpfs|pi-harden)" "$fstab" 2>/dev/null; then
+      log_info "  ${ramlog} owns /var/log: no /var/log tmpfs line to remove"
+    else
+      cp "$fstab" "${fstab}.bak.$(date +%Y%m%d)"
+      cat >> "$fstab" << EOF
+
+${marker} - begin
+tmpfs /tmp tmpfs defaults,noatime,nosuid,mode=1777,size=150M 0 0
+${marker} - end
+EOF
+      log_ok "  tmpfs entry for /tmp added to fstab (/var/log is managed by ${ramlog})"
+    fi
   # Check if already configured (also accept pi-harden marker or legacy MCProxy marker)
-  if grep -qE "(McApp tmpfs|MCProxy tmpfs|pi-harden)" "$fstab" 2>/dev/null; then
+  elif grep -qE "(McApp tmpfs|MCProxy tmpfs|pi-harden)" "$fstab" 2>/dev/null; then
     log_info "  tmpfs already configured in fstab"
   else
     # Backup fstab
@@ -188,8 +257,8 @@ EOF
   fi
 
   # Create log directory structure in tmpfs after mount
-  mkdir -p /etc/tmpfiles.d
-  cat > /etc/tmpfiles.d/mcapp.conf << 'EOF'
+  mkdir -p "$MCAPP_TMPFILES_DIR"
+  cat > "${MCAPP_TMPFILES_DIR}/mcapp.conf" << 'EOF'
 # McApp + system log directories (recreated on every boot in tmpfs)
 d /var/log/mcapp     0755 root     root     -
 d /var/log/lighttpd  0755 www-data www-data -
@@ -202,12 +271,15 @@ f /var/log/wtmp                0664 root utmp -
 f /var/log/btmp                0600 root utmp -
 EOF
 
-  # Try to mount /var/log now if not already tmpfs
-  if findmnt -n /var/log 2>/dev/null | grep -q tmpfs; then
+  # Try to mount /var/log now if not already tmpfs (never on a ramlog board:
+  # the ramlog unit owns that mount)
+  if [[ -n "$ramlog" ]]; then
+    log_info "  /var/log left to ${ramlog}"
+  elif findmnt -n /var/log 2>/dev/null | grep -q tmpfs; then
     log_info "  /var/log already mounted as tmpfs"
   else
     # Create dirs before mount so services don't break
-    systemd-tmpfiles --create /etc/tmpfiles.d/mcapp.conf 2>/dev/null || true
+    systemd-tmpfiles --create "${MCAPP_TMPFILES_DIR}/mcapp.conf" 2>/dev/null || true
     if mount /var/log 2>/dev/null; then
       log_ok "  Mounted /var/log tmpfs"
     else
@@ -400,6 +472,37 @@ _mcapp_fstab_ensure_line() {
   grep -qxF "$line" "$fstab"
 }
 
+# Ramlog boards keep a native persistent journal (armbian-ramlog links
+# /var/log/journal to /var/log.hdd/journal and syncToDisk() mv's a REAL
+# /var/log/journal dir across filesystems), so we bind nothing there. Drops
+# what earlier runs left behind: the epoch-5 fstab bind line and a
+# var-log-journal.mount unit. Idempotent; reboot-required on change.
+_mcapp_journal_ramlog_cleanup() {
+  local ramlog="$1"
+  local unit_file="${MCAPP_SYSTEMD_UNIT_DIR}/var-log-journal.mount"
+  local changed=false
+
+  if grep -qxF "$MCAPP_JOURNAL_BIND_LINE" "$MCAPP_FSTAB" 2>/dev/null; then
+    grep -vxF "$MCAPP_JOURNAL_BIND_LINE" "$MCAPP_FSTAB" > "${MCAPP_FSTAB}.mcapp-tmp" || true
+    mv -f "${MCAPP_FSTAB}.mcapp-tmp" "$MCAPP_FSTAB"
+    changed=true
+  fi
+
+  if [[ -e "$unit_file" ]]; then
+    systemctl disable var-log-journal.mount >/dev/null 2>&1 || true
+    rm -f "$unit_file"
+    systemctl daemon-reload 2>/dev/null || true
+    changed=true
+  fi
+
+  if [[ "$changed" == "true" ]]; then
+    _mcapp_mark_reboot_required
+    log_ok "  ${ramlog} keeps its own journal: removed the McApp journal bind (reboot required)"
+  else
+    log_info "  ${ramlog} keeps its own journal: no McApp bind to remove"
+  fi
+}
+
 # Persistent journal, capped small. /var/log is tmpfs (configure_tmpfs), so
 # /var/log/journal is a bind mount of /var/lib/mcapp/journal on the root
 # filesystem: a reboot or power cut keeps the last boots' logs. Before
@@ -415,14 +518,21 @@ configure_journald() {
   local conf_file="${conf_dir}/mcapp-journal.conf"
   local legacy_file="${conf_dir}/mcapp-volatile.conf"
 
-  mkdir -p "$conf_dir" "$MCAPP_JOURNAL_DIR"
-  # journald's own layout: root:systemd-journal, setgid, so journal files
-  # inherit the group and `journalctl` works for that group's members.
-  chown root:systemd-journal "$MCAPP_JOURNAL_DIR" 2>/dev/null || true
-  chmod 2755 "$MCAPP_JOURNAL_DIR" 2>/dev/null || true
+  mkdir -p "$conf_dir"
 
-  _mcapp_fstab_ensure_line "$MCAPP_FSTAB" "$MCAPP_JOURNAL_BIND_LINE" '^tmpfs /var/log tmpfs' \
-    || log_warn "  could not add the journal bind mount to ${MCAPP_FSTAB}"
+  local ramlog
+  ramlog="$(detect_ramlog_service)"
+  if [[ -n "$ramlog" ]]; then
+    _mcapp_journal_ramlog_cleanup "$ramlog"
+  else
+    mkdir -p "$MCAPP_JOURNAL_DIR"
+    # journald's own layout: root:systemd-journal, setgid, so journal files
+    # inherit the group and `journalctl` works for that group's members.
+    chown root:systemd-journal "$MCAPP_JOURNAL_DIR" 2>/dev/null || true
+    chmod 2755 "$MCAPP_JOURNAL_DIR" 2>/dev/null || true
+    _mcapp_fstab_ensure_line "$MCAPP_FSTAB" "$MCAPP_JOURNAL_BIND_LINE" '^tmpfs /var/log tmpfs' \
+      || log_warn "  could not add the journal bind mount to ${MCAPP_FSTAB}"
+  fi
 
   # Idempotent by content, not by file-exists: an install carrying the
   # pre-epoch-5 volatile drop-in must actually converge.
@@ -432,9 +542,10 @@ configure_journald() {
   fi
 
   cat > "$conf_file" << 'EOF'
-# McApp: persistent journal, capped small. /var/log/journal is a bind mount of
-# /var/lib/mcapp/journal (see /etc/fstab, McApp tmpfs block), so the last
-# boots' logs survive a reboot or a power cut while /var/log stays tmpfs.
+# McApp: persistent journal, capped small. On a tmpfs /var/log, /var/log/journal
+# is a bind mount of /var/lib/mcapp/journal (see /etc/fstab, McApp tmpfs block);
+# on an Armbian/Orange Pi ramlog board the ramlog persists it itself. Either
+# way the last boots' logs survive a reboot or a power cut.
 [Journal]
 Storage=persistent
 SystemMaxUse=16M
@@ -448,7 +559,7 @@ EOF
   rm -f "$legacy_file"
 
   # Mount now when we are on the live box; a test run has no mount to make.
-  if [[ -d /var/log/journal ]] && ! mountpoint -q /var/log/journal 2>/dev/null; then
+  if [[ -z "$ramlog" && -d /var/log/journal ]] && ! mountpoint -q /var/log/journal 2>/dev/null; then
     mount /var/log/journal 2>/dev/null || log_warn "  /var/log/journal bind mount deferred to next reboot"
   fi
 

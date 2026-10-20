@@ -343,16 +343,24 @@ class UptimeMixin(StorageBase):
                 if last_tick_ms is None or now_ms_ - last_tick_ms <= DARK_THRESHOLD_MS:
                     return
 
+                # Upsert, and advance last_tick_ms: a process that crashes after
+                # this point but before its first heartbeat tick used to leave
+                # last_tick_ms behind, so every later start re-inserted the same
+                # start_ms and died on the PRIMARY KEY (2026-10-20, mcapp.local,
+                # permanent crash loop). The ON CONFLICT also heals a DB already
+                # in that state by extending the existing dark row.
                 conn.execute(
                     "INSERT INTO link_uptime_segments (start_ms, end_ms, kind)"
-                    " VALUES (?, ?, 'dark')",
+                    " VALUES (?, ?, 'dark')"
+                    " ON CONFLICT(start_ms) DO UPDATE SET end_ms = MAX(end_ms, excluded.end_ms)"
+                    " WHERE kind = 'dark'",
                     (last_tick_ms, now_ms_),
                 )
                 conn.execute(
                     "UPDATE link_uptime_state"
-                    " SET last_beacon_ms = ?, open_up_start_ms = ?"
+                    " SET last_beacon_ms = ?, open_up_start_ms = ?, last_tick_ms = ?"
                     " WHERE id = 1",
-                    (now_ms_, now_ms_),
+                    (now_ms_, now_ms_, now_ms_),
                 )
 
         await asyncio.to_thread(_run)

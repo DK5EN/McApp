@@ -19,6 +19,7 @@ from .constants import (
     compute_conversation_key,
     db_write,
     escape_like,
+    legacy_categories_to_tags,
 )
 
 logger = get_logger(__name__)
@@ -605,7 +606,17 @@ class PrefsMixin(StorageBase):
         return cast(dict[str, Any], json.loads(rows[0]["prefs"]))
 
     async def set_filter_prefs(self, prefs: dict[str, Any]) -> None:
-        """Upsert spam filter preferences."""
+        """Upsert spam filter preferences.
+
+        A legacy ``hiddenCategories`` (old webapp) is mapped to ``hiddenTags``.
+        """
+        if "hiddenCategories" in prefs:
+            prefs = dict(prefs)
+            dropped = legacy_categories_to_tags(prefs)
+            if dropped:
+                logger.info(
+                    "filter_prefs: categories without a tag dropped: %s", ", ".join(dropped)
+                )
         await self._mutate(
             """INSERT INTO filter_prefs (id, prefs, updated_at)
                VALUES (1, ?, CURRENT_TIMESTAMP)

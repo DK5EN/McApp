@@ -9,7 +9,7 @@ Uses Python's built-in sqlite3 with asyncio.to_thread() for async operations.
 concern: `MigrationsMixin` (schema + versioned migrations), `IngestMixin`
 (store_message/store_telemetry + signal-bucket accumulation), `QueryMixin`
 (reporting/chart/dump reads), `PrefsMixin` (small UI-preference tables),
-`ClassifierApiMixin` (classifier_rules/beacon_templates CRUD), and `UptimeMixin`
+`ClassifierApiMixin` (beacon_templates CRUD), and `UptimeMixin`
 (the gateway-uptime segment ledger). This module keeps
 only the core DB-access primitives (`_query`/`_mutate`/`_execute_many`),
 construction/teardown, and the module-level regression test suite.
@@ -1585,17 +1585,13 @@ async def run_startup_tests() -> bool:  # noqa: PLR0915 - test suite lists one c
             # D4(a): store_message()'s inline classifier-annotation path with a REAL
             # Classifier — every classifier column on the stored row must be populated.
             from .classifier.classify import Classifier  # noqa: PLC0415 - local subtree import
-
-            await storage.bump_classifier_version()  # 0 → 1 so classifier_ver is meaningful
-            await storage.insert_classifier_rule(
-                name="test-weather",
-                pattern=r"wetter",
-                category="weather",
-                scope="msg",
-                extra_tags=["wx"],
-                priority=10,
+            from .classifier_contract import (  # noqa: PLC0415 - local import
+                contract_id,
+                load_engine,
             )
-            real_classifier = Classifier(storage)
+
+            engine = load_engine()
+            real_classifier = Classifier(storage, engine, contract_id(engine))
             await real_classifier.load()
             storage.set_classifier(real_classifier)
 
@@ -1603,7 +1599,7 @@ async def run_startup_tests() -> bool:  # noqa: PLR0915 - test suite lists one c
                 "msg_id": "D4A00001",
                 "src": "OE1XYZ-20",
                 "dst": "20",
-                "msg": "wetter aktuell sonnig",
+                "msg": "hej, 12 °C und 1013 hPa",
                 "type": "msg",
                 "src_type": "node",
                 "timestamp": now_ms(),
@@ -1618,14 +1614,14 @@ async def run_startup_tests() -> bool:  # noqa: PLR0915 - test suite lists one c
             d4a_tags = json.loads(d4a["tags"]) if d4a.get("tags") else []
             results.append(
                 (
-                    "store_message + real classifier: category populated from a matching rule",
-                    d4a.get("category") == "weather",
+                    "store_message + real classifier: category derived from the engine tags",
+                    d4a.get("category") == "wx_beacon",
                 )
             )
             results.append(
                 (
                     "store_message + real classifier: tags populated (non-empty JSON array)",
-                    bool(d4a_tags) and "wx" in d4a_tags,
+                    bool(d4a_tags) and "weather" in d4a_tags,
                 )
             )
             results.append(
@@ -1637,7 +1633,7 @@ async def run_startup_tests() -> bool:  # noqa: PLR0915 - test suite lists one c
                     d4a.get("info_score") is not None
                     and d4a.get("template_hash") is not None
                     and len(d4a["template_hash"]) == template_hash_len
-                    and d4a.get("classifier_ver") == 1,
+                    and d4a.get("classifier_ver") == real_classifier.version,
                 )
             )
 

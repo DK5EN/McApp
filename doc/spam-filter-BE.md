@@ -1,5 +1,11 @@
 # Spam Filter — Backend Handoff
 
+> **Superseded 2026-10-20** for the rule layer: L1 rules now come from mcmap's exported contract
+> (`contract/classifier_contract.json`), messages carry multi-label `tags` with `category` only
+> derived, and custom DB rules (`classifier_rules`, rule CRUD, tester, `proxy:classifier_rules`)
+> are retired. Current design: mc-chat `doc/2026-10-20_classifier-unification.md`. The L2/L3
+> sections below still describe how templates and the score work, with the tag changes noted there.
+
 Audience: backend developer working on the `meshcom_mock` Python package
 (`/Users/martinwerner/WebDev/mc-chat`). This document is the execution
 plan for the server-side classification + spam-filter system that the

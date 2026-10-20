@@ -5,7 +5,10 @@ is historical record and must never be rewritten, only relocated.
 """
 
 import asyncio
+import json
 import sqlite3
+from datetime import UTC, datetime
+from pathlib import Path
 
 from ..logging_setup import get_logger
 from ..util import ACK_SUFFIX_RE, PLACEHOLDER_CALLSIGN_BASES
@@ -18,6 +21,7 @@ from .constants import (
     VALID_SNR_RANGE,
     compute_conversation_key,
     db_write,
+    legacy_categories_to_tags,
 )
 
 logger = get_logger(__name__)
@@ -902,6 +906,19 @@ class MigrationsMixin(StorageBase):
                     )
                     _set_schema_version(conn, 37)
 
+                if current_version < 38:  # noqa: PLR2004 - schema migration step
+                    # Classifier unification: custom rules are retired (the rule
+                    # set ships with the engine) and filter prefs move from
+                    # categories to tags. Nothing is lost silently: custom rules
+                    # are saved next to the DB first.
+                    self._retire_classifier_rules(conn)
+                    self._migrate_filter_prefs_to_tags(conn)
+                    logger.info(
+                        "Migration v%d → v38: classifier_rules retired, hiddenTags prefs",
+                        current_version,
+                    )
+                    _set_schema_version(conn, 38)
+
         await asyncio.to_thread(_init_db)
 
         # Initialize bucket accumulators from existing signal_log
@@ -909,6 +926,65 @@ class MigrationsMixin(StorageBase):
 
         self._initialized: bool = True
         logger.info("SQLite database initialized")
+
+    def _retire_classifier_rules(self, conn: sqlite3.Connection) -> None:
+        """V37 → V38: drop `classifier_rules`, saving custom (builtin = 0) rows first.
+
+        Builtin rows are discarded (the engine owns those now). Custom rows go to
+        `classifier_rules_retired.json` next to the DB, never over an existing
+        backup (a UTC timestamp suffix is used instead); a WARNING names the
+        count. Idempotent: no table, no work.
+        """
+        if (
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'classifier_rules'"
+            ).fetchone()
+            is None
+        ):
+            return
+        cursor = conn.execute("SELECT * FROM classifier_rules WHERE builtin = 0")
+        cols = [d[0] for d in cursor.description]
+        custom = [dict(zip(cols, row, strict=True)) for row in cursor.fetchall()]
+        if custom:
+            target = Path(self.db_path).parent / "classifier_rules_retired.json"
+            if target.exists():
+                stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+                target = target.with_name(f"classifier_rules_retired.{stamp}.json")
+            target.write_text(json.dumps(custom, indent=2, ensure_ascii=False))
+            logger.warning("retired %d custom classifier rules -> %s", len(custom), target)
+        conn.execute("DROP TABLE classifier_rules")
+        conn.commit()
+
+    @staticmethod
+    def _migrate_filter_prefs_to_tags(conn: sqlite3.Connection) -> None:
+        """V37 → V38: rewrite stored `hiddenCategories` as `hiddenTags` (once).
+
+        Tolerates a missing table, malformed JSON and non-dict blobs.
+        """
+        if (
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'filter_prefs'"
+            ).fetchone()
+            is None
+        ):
+            return
+        row = conn.execute("SELECT prefs FROM filter_prefs WHERE id = 1").fetchone()
+        if not row:
+            return
+        try:
+            prefs = json.loads(row[0])
+        except (ValueError, TypeError):
+            return
+        if not isinstance(prefs, dict) or "hiddenCategories" not in prefs:
+            return
+        dropped = legacy_categories_to_tags(prefs)
+        if dropped:
+            logger.info("filter_prefs: categories without a tag dropped: %s", ", ".join(dropped))
+        conn.execute(
+            "UPDATE filter_prefs SET prefs = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
+            (json.dumps(prefs),),
+        )
+        conn.commit()
 
     @staticmethod
     def _scrub_placeholder_stations(conn: sqlite3.Connection) -> None:

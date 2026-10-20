@@ -32,6 +32,7 @@ reimplementation of their logic.
 All timestamps are milliseconds (project-wide DB convention).
 """
 
+import sqlite3
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -306,6 +307,75 @@ async def _test_startup_reconciliation(results: list[tuple[str, bool]]) -> None:
                     seg_count == 0
                     and state["first_observed_ms"] == t0
                     and state["last_beacon_ms"] is None,
+                )
+            )
+        finally:
+            await storage.close()
+
+
+async def _test_reconcile_crash_loop(results: list[tuple[str, bool]]) -> None:
+    """Case 4b: a startup that dies after reconciliation but before its first
+    tick must not wedge every later start on the dark row's PRIMARY KEY."""
+
+    # -- crash before the first tick, twice: no PRIMARY KEY crash loop --
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = Path(tmp_dir) / "uptime_reconcile_crashloop_test.db"
+        storage = await create_sqlite_storage(db_path)
+        try:
+            t0 = _BASE_TS
+            await storage.link_uptime_tick(t0)
+            t1 = t0 + DARK_THRESHOLD_MS + 1000
+            await storage.reconcile_link_uptime_startup(t1)
+            # The process dies here, before link_uptime_tick ever runs again.
+            t2 = t1 + DARK_THRESHOLD_MS + 1000
+            raised = False
+            try:
+                await storage.reconcile_link_uptime_startup(t2)
+            except sqlite3.IntegrityError:
+                raised = True
+            dark_segs = await storage._query(
+                "SELECT start_ms, end_ms FROM link_uptime_segments"
+                " WHERE kind = 'dark' ORDER BY start_ms"
+            )
+            results.append(
+                (
+                    (
+                        "second reconcile without a tick in between (startup crash):"
+                        " no IntegrityError, two contiguous dark rows"
+                    ),
+                    not raised
+                    and [(s["start_ms"], s["end_ms"]) for s in dark_segs] == [(t0, t1), (t1, t2)],
+                )
+            )
+        finally:
+            await storage.close()
+
+    # -- a DB already left in the crash-loop state heals on the next start --
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = Path(tmp_dir) / "uptime_reconcile_heal_test.db"
+        storage = await create_sqlite_storage(db_path)
+        try:
+            t0 = _BASE_TS
+            await storage.link_uptime_tick(t0)
+            t1 = t0 + DARK_THRESHOLD_MS + 1000
+            # What the pre-fix code left behind: dark row written, last_tick_ms not advanced.
+            await storage._mutate(
+                "INSERT INTO link_uptime_segments (start_ms, end_ms, kind) VALUES (?, ?, 'dark')",
+                (t0, t1),
+            )
+            t2 = t1 + DARK_THRESHOLD_MS + 1000
+            raised = False
+            try:
+                await storage.reconcile_link_uptime_startup(t2)
+            except sqlite3.IntegrityError:
+                raised = True
+            dark_segs = await storage._query(
+                "SELECT start_ms, end_ms FROM link_uptime_segments WHERE kind = 'dark'"
+            )
+            results.append(
+                (
+                    "pre-fix crash-loop state: dark row extended to now, no IntegrityError",
+                    not raised and [(s["start_ms"], s["end_ms"]) for s in dark_segs] == [(t0, t2)],
                 )
             )
         finally:
@@ -626,6 +696,7 @@ async def run_uptime_tests() -> bool:
     await _test_hook_ordering(results)
     await _test_gap_open_close(results)
     await _test_startup_reconciliation(results)
+    await _test_reconcile_crash_loop(results)
     await _test_stats_maths(results)
     await _test_window_clipping(results)
     await _test_fresh_ledger_no_beacon(results)

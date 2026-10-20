@@ -1,14 +1,14 @@
 """Orchestrator for the message classification pipeline (Layers 1-3).
 
 Public surface:
-    Classifier  -- load rules, classify a message, run background reclassify.
+    Classifier  -- load the engine, classify a message, run background reclassify.
     ReclassifyJob -- lightweight progress token returned by reclassify().
 
 Usage::
 
     storage = Storage(":memory:")
     await storage.initialize()
-    classifier = Classifier(storage)
+    classifier = Classifier(storage, engine, contract_id)
     await classifier.load()
     storage.attach_classifier(classifier)
 
@@ -31,7 +31,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from .rules import CompiledRule, load_rules, match_rules
+from .engine import Engine
 from .score import compute as score_compute
 from .template import (
     _AUTO_BEACON_MIN_TOKENS,
@@ -41,12 +41,18 @@ from .template import (
     update_and_check,
 )
 from .types import (
+    AUTO_BEACON_TAG,
+    DIRECTED_DST_RE,
     TEMPLATE_HASH_LEN,
     Classification,
     EventBusProtocol,
     SSEEvent,
     StorageProtocol,
+    derive_category,
 )
+
+CONTRACT_ID_META_KEY = "classifier_contract_id"
+_QSO_TAG = "qso"
 
 logger = logging.getLogger(__name__)
 
@@ -73,14 +79,17 @@ class Classifier:
     """Orchestrator for Layers 1-3.
 
     Caller is responsible for calling ``load()`` once after Storage is
-    initialised, and again any time rules change.  Attach to a Storage
+    initialised.  The L1 rule set ships with the engine (``contract_id``
+    identifies it); a changed id bumps the classifier version on load so
+    the outdated-row backfill reclassifies.  Attach to a Storage
     instance via ``storage.attach_classifier(classifier)`` so
     ``store_message`` enriches rows automatically.
     """
 
-    def __init__(self, storage: StorageProtocol) -> None:
+    def __init__(self, storage: StorageProtocol, engine: Engine, contract_id: str) -> None:
         self.storage = storage
-        self.rules: list[CompiledRule] = []
+        self.engine = engine
+        self.contract_id = contract_id
         self.version: int = 0
         self._jobs: dict[str, ReclassifyJob] = {}
         self.event_bus: EventBusProtocol | None = None
@@ -90,10 +99,20 @@ class Classifier:
         self.event_bus = bus
 
     async def load(self) -> None:
-        """Fetch rules + current version from the DB and cache them."""
-        self.version = await self.storage.get_classifier_version()
-        self.rules = await load_rules(self.storage)
-        logger.debug("Classifier loaded: version=%d, rules=%d", self.version, len(self.rules))
+        """Fetch the current version; bump it once when the contract id changed."""
+        stored = await self.storage.get_meta(CONTRACT_ID_META_KEY)
+        if stored != self.contract_id:
+            self.version = await self.storage.bump_classifier_version()
+            await self.storage.set_meta(CONTRACT_ID_META_KEY, self.contract_id)
+            logger.info(
+                "Classifier contract %r -> %r: version bumped to %d",
+                stored,
+                self.contract_id,
+                self.version,
+            )
+        else:
+            self.version = await self.storage.get_classifier_version()
+        logger.debug("Classifier loaded: version=%d, contract=%s", self.version, self.contract_id)
 
     async def classify(  # noqa: PLR0912 - complex handler kept intact
         self,
@@ -117,17 +136,22 @@ class Classifier:
             now_ms = int(time.time() * 1000)
 
         try:
-            # Layer 1: deterministic regex rules
-            category, tag_list = match_rules(msg, self.rules)
-            tag_set: set[str] = set(tag_list)
+            # Layer 1: the contract engine
+            text: str = msg.get("msg") or ""
+            dst: str = msg.get("dst") or ""
+            l1 = self.engine.classify(text, msg.get("src") or "", dst)
+            tag_set: set[str] = set(l1.tags)
+            directed = l1.directed or DIRECTED_DST_RE.search(dst) is not None
+            auto_beacon = False
 
             if update_stats:
                 # Layer 2 (live path): upsert stats, decide auto-beacon
-                beacon = await update_and_check(self.storage, msg, now_ms, category=category)
+                beacon = await update_and_check(
+                    self.storage, msg, now_ms, tags=l1.tags, directed=directed
+                )
                 template_hash = beacon.template_hash
                 template_count = beacon.count
-                if beacon.is_beacon:
-                    tag_set.add("auto_beacon")
+                auto_beacon = beacon.is_beacon
                 # Emit SSE event when a template transitions to auto_beacon
                 if beacon.transitioned and self.event_bus is not None:
                     tpl = await self.storage.get_beacon_template(beacon.template_hash)
@@ -155,14 +179,26 @@ class Classifier:
                         # now also checks directedness, which this reclassify
                         # branch's old private-import reimplementation missed).
                         if is_beacon and not user_action:
-                            is_beacon = not check_only(msg, category)
-                    if is_beacon:
-                        tag_set.add("auto_beacon")
+                            is_beacon = not check_only(msg, l1.tags, directed)
+                    auto_beacon = is_beacon
                 else:
                     template_count = 0
 
+            if auto_beacon:
+                # mcmap derives qso at L1 without knowing L2: an auto-flagged
+                # template is automated, so it is no conversation.
+                tag_set.add(AUTO_BEACON_TAG)
+                tag_set.discard(_QSO_TAG)
+            category = derive_category(tag_set, directed)
+
             # Layer 3: info score
-            info_score = score_compute(msg, category, tag_set, template_count)
+            info_score = score_compute(
+                msg,
+                tag_set,
+                template_count,
+                directed=directed,
+                automated_tags=self.engine.automated_tags,
+            )
 
         except Exception:
             logger.exception(
@@ -334,6 +370,7 @@ class Classifier:
             {
                 "counts": {category: int, ...},       # last 30 days
                 "recent_24h": {category: int, ...},
+                "by_tag": {tag: int, ...},            # last 30 days
                 "top_templates": [
                     {"template_hash", "example_msg", "count", "auto_beacon"},
                     ...                                # top 10 by count, last 7 days
@@ -343,6 +380,7 @@ class Classifier:
         """
         now_ms = int(time.time() * 1000)
         counts = await self.storage.count_messages_by_category(now_ms - 30 * 24 * 3600 * 1000)
+        by_tag = await self.storage.count_messages_by_tag(now_ms - 30 * 24 * 3600 * 1000)
         recent_24h = await self.storage.count_messages_by_category(now_ms - 24 * 3600 * 1000)
 
         # timestamp_beacon is not persisted (drop-on-classify); surface the
@@ -357,6 +395,7 @@ class Classifier:
         return {
             "counts": counts,
             "recent_24h": recent_24h,
+            "by_tag": by_tag,
             "top_templates": top_templates,
             "auto_beacon_total": auto_beacon_total,
         }

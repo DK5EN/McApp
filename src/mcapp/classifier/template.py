@@ -3,8 +3,8 @@
 Public API:
     URL_RE, EMOJI_RE      -- compiled patterns (importable by sibling modules)
     fingerprint(text)     -- 12-hex-char SHA-1 of the normalised text
-    is_exempt(tokens, category, dst)  -- auto-beacon exemption from precomputed parts
-    check_only(msg, category)         -- convenience: tokenizes msg and checks exemption
+    is_exempt(tokens, tags, dst, directed)  -- auto-beacon exemption from precomputed parts
+    check_only(msg, tags, directed)         -- convenience: tokenizes msg and checks exemption
     is_short_token_exempt(text, min_tokens) -- short-token-only check on raw text
     update_and_check(storage, msg, now_ms) -> BeaconResult
 """
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Any
 
@@ -25,9 +26,16 @@ from .types import StorageProtocol as Storage
 # hit.  ``window_hours=None`` means "no time constraint — total count only".
 # Evaluated cheapest-first (count-only → shortest window → longest window)
 # so each recent-message SQL query only runs when the cheaper branch missed.
+#
+# The lifetime rule counts the template's posts across ALL senders, so it only
+# applies to a SINGLE-SENDER template (``len(srcs) == 1``): eight different
+# people writing "Guten Morgen zusammen" are a conversation, not a beacon, and
+# auto_beacon would strip their ``qso`` tag (McApp issue #17).  The windowed
+# rules are per-(src, template) already and need no such guard.  The same
+# predicate lives in storage.backfill_auto_beacon_templates().
 
 AUTO_BEACON_RULES: tuple[tuple[int, int | None], ...] = (
-    (8, None),  # any template seen >= 8 times, lifetime
+    (8, None),  # single-sender template seen >= 8 times, lifetime
     (5, 24),  # fast beacons: >= 5 in 24 h
     (3, 72),  # slow beacons: >= 3 in 72 h (hourly / 3x daily)
 )
@@ -45,8 +53,14 @@ _AUTO_BEACON_MIN_TOKENS: int = 2
 # compile its own `^[A-Z0-9]+-\d+$`, a third definition of "directed" that
 # missed SSID-less and via-routed DMs (directed_dst_vectors.json).
 
-# Human-oriented categories that should not auto-promote to beacons.
-_HUMAN_CATEGORIES: frozenset[str] = frozenset({"greeting", "directed", "alert"})
+# Tag that exempts a message from auto-promotion (besides being directed).
+# ``greeting`` is deliberately NOT exempt: daily greeting bots must be flaggable
+# (McApp issue #17).
+EXEMPT_TAG: str = "alert"
+
+# Derived categories storage.clear_stale_auto_beacons() treats as exempt when it
+# sweeps stored rows (it still joins on the derived ``category`` column).
+_HUMAN_CATEGORIES: frozenset[str] = frozenset({"directed", "alert"})
 
 # ── Public compiled patterns ─────────────────────────────────────────────
 # CLS-05: now defined once in types.py and re-exported here -- this
@@ -100,12 +114,13 @@ def fingerprint(text: str) -> str:
 # ── Auto-beacon exemption (CLS-02: one public API, not three reimplementations) ──
 
 
-def is_exempt(tokens: list[str], category: str, dst: str) -> bool:
+def is_exempt(tokens: list[str], tags: Collection[str], dst: str, directed: bool = False) -> bool:
     """True if a message is exempt from auto-beacon promotion:
       - too short (<= _AUTO_BEACON_MIN_TOKENS tokens): conversational fillers
         whose hashes collide across unrelated QSOs
-      - a human-oriented category (greeting/directed/alert): never auto-promote
-      - directed (dst resolves to a personal callsign): beacons are broadcast
+      - carries the ``alert`` tag: never auto-promote
+      - directed (L1 ``directed`` flag, or dst resolves to a personal
+        callsign): beacons are broadcast
 
     Public Layer-2 API — the single source of truth for this decision, used
     by update_and_check() (live-ingest path) and classify.py's reclassify
@@ -114,12 +129,12 @@ def is_exempt(tokens: list[str], category: str, dst: str) -> bool:
     that reimplementation had drifted: it never checked directedness.
     """
     is_short = len(tokens) <= _AUTO_BEACON_MIN_TOKENS
-    is_human_category = category in _HUMAN_CATEGORIES
+    is_alert = EXEMPT_TAG in tags
     # .search (not .match): the pattern carries its own `(?:^|,)` anchor so
     # it lands on the last comma component of a via-routed dst, and its own
     # `(?i)` so the caller must not pre-upper the value.
-    is_directed = DIRECTED_DST_RE.search(dst) is not None
-    return is_short or is_human_category or is_directed
+    is_directed = directed or DIRECTED_DST_RE.search(dst) is not None
+    return is_short or is_alert or is_directed
 
 
 def is_short_token_exempt(text: str, min_tokens: int) -> bool:
@@ -134,7 +149,7 @@ def is_short_token_exempt(text: str, min_tokens: int) -> bool:
     return len(_tokenize_normalized(text)) <= min_tokens
 
 
-def check_only(msg: dict[str, Any], category: str = "") -> bool:
+def check_only(msg: dict[str, Any], tags: Collection[str] = (), directed: bool = False) -> bool:
     """Convenience wrapper: tokenizes msg["msg"] and checks is_exempt().
 
     For callers that have a full message dict but no precomputed tokens —
@@ -142,7 +157,7 @@ def check_only(msg: dict[str, Any], category: str = "") -> bool:
     doesn't already have a normalized-token list lying around.
     """
     tokens = _tokenize_normalized(msg.get("msg") or "")
-    return is_exempt(tokens, category, msg.get("dst") or "")
+    return is_exempt(tokens, tags, msg.get("dst") or "", directed)
 
 
 # ── Result type ──────────────────────────────────────────────────────────
@@ -164,7 +179,8 @@ async def update_and_check(  # noqa: PLR0911 - complex handler kept intact
     storage: Storage,
     msg: dict[str, Any],
     now_ms: int,
-    category: str = "",
+    tags: Collection[str] = (),
+    directed: bool = False,
 ) -> BeaconResult:
     """Compute fingerprint, update storage stats, decide auto-beacon state.
 
@@ -172,12 +188,13 @@ async def update_and_check(  # noqa: PLR0911 - complex handler kept intact
       1. If user_action == 'promote'  → is_beacon=True,  no auto-transition
       2. If user_action == 'demote'   → is_beacon=False, no auto-transition
       3. Exemption check: if auto_beacon is currently True but the message is
-         exempt (too short OR in human category), clear the flag and return
+         exempt (too short, directed or alert), clear the flag and return
          is_beacon=False (self-healing).
       4. Else if template.auto_beacon already True → is_beacon=True
       5. Else evaluate ``AUTO_BEACON_RULES`` in order (cheapest first).
          A rule ``(min_count, None)`` checks the template's lifetime
-         count; ``(min_count, window_hours)`` counts recent per-(src,
+         count, but only when a single sender has used the template
+         (``len(srcs) == 1``); ``(min_count, window_hours)`` counts recent per-(src,
          template) rows in the window and adds 1 for the current
          message.  On first hit, set auto_beacon=True and return
          ``transitioned=True, is_beacon=True``; otherwise is_beacon=False.
@@ -226,7 +243,7 @@ async def update_and_check(  # noqa: PLR0911 - complex handler kept intact
     # 3. Exemption check: if auto_beacon is True but message is exempt,
     #    self-heal by clearing the flag.
     dst: str = msg.get("dst") or ""
-    exempt = is_exempt(tokens, category, dst)
+    exempt = is_exempt(tokens, tags, dst, directed)
 
     if tpl["auto_beacon"] and user_action is None and exempt:
         # Self-heal: clear the auto_beacon flag
@@ -250,7 +267,7 @@ async def update_and_check(  # noqa: PLR0911 - complex handler kept intact
         )
 
     # 5. Skip auto-beacon promotion for messages that can't be beacons
-    #    (see is_exempt(): directed, too short, or a human category).
+    #    (see is_exempt(): directed, too short, or alert).
     #    Counts still increment for stats; we just don't promote.
     if exempt:
         return BeaconResult(
@@ -266,8 +283,9 @@ async def update_and_check(  # noqa: PLR0911 - complex handler kept intact
     triggered = False
     for min_count, window_hours in AUTO_BEACON_RULES:
         if window_hours is None:
-            # Lifetime count is tracked directly on the template row.
-            if count >= min_count:
+            # Lifetime count is tracked directly on the template row; it
+            # mixes senders, so it only speaks for single-sender templates.
+            if count >= min_count and len(tpl["srcs"]) == 1:
                 triggered = True
                 break
             continue

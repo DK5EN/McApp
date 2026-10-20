@@ -6,7 +6,7 @@ returned by FastAPI as HTTP 422.
 """
 
 import re
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import (
     BaseModel,
@@ -358,49 +358,6 @@ class UpdateActivateRequest(BaseModel):
     """POST /api/update/activate — activate an already-deployed slot."""
 
     slot: int = Field(ge=0)
-
-
-class ClassifierRuleCreate(BaseModel):
-    """POST /api/classifier/rules — create a classifier rule."""
-
-    name: str = Field(min_length=1)
-    pattern: str = Field(min_length=1)
-    category: str = Field(min_length=1)
-    scope: str = "msg"
-    extra_tags: list[str] = []
-    priority: int = 100
-    enabled: bool = True
-
-    @field_validator("scope", mode="before")
-    @classmethod
-    def _coalesce_scope(cls, v: Any) -> str:
-        # Mirror the legacy ``str(body.get("scope") or "msg")`` coalescing:
-        # null/empty falls back to the default scope.
-        return str(v) if v else "msg"
-
-
-class ClassifierRulePatch(BaseModel):
-    """PATCH /api/classifier/rules/{id} — partial update.
-
-    Only fields present in the request body are applied; consume via
-    ``model_dump(exclude_unset=True)`` to preserve partial-update semantics.
-    """
-
-    name: str | None = None
-    pattern: str | None = None
-    scope: str | None = None
-    category: str | None = None
-    priority: int | None = None
-    enabled: bool | None = None
-    extra_tags: list[str] | None = None
-
-
-class ClassifierRuleTest(BaseModel):
-    """POST /api/classifier/rules/test — try a pattern against recent messages."""
-
-    pattern: str = Field(min_length=1)
-    scope: str = "msg"
-    sample_msg: str | None = None
 
 
 class TemplateActionRequest(BaseModel):

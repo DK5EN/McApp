@@ -76,7 +76,11 @@ def run_update_runner_tests() -> bool:
     failures.extend(_test_activate_without_webapp_dir(runner))
     failures.extend(_test_activate_health_failure(runner))
     failures.extend(_test_run_update_health_failure_calls_activate(runner))
+    failures.extend(_test_schema_guard(runner))
+    failures.extend(_test_rollback_refused_when_previous_blocked(runner))
+    failures.extend(_test_lighttpd_log_prep(runner))
     failures.extend(_test_rollback_no_candidate(runner))
+    failures.extend(_test_rollback_skips_blocked(runner))
     failures.extend(_test_restore_helpers_removed(runner))
 
     for line in failures:
@@ -197,13 +201,14 @@ class _FakeSubprocess:
         return _FakeCompletedProcess()
 
 
-def _write_slot(
+def _write_slot(  # noqa: PLR0913 - keyword-only fixture knobs
     slots_dir: Path,
     slot_id: int,
     version: str,
     *,
     webapp: bool = True,
     pyproject: bool = True,
+    schema: int | None = 38,
 ) -> None:
     """Lay down a slot directory shaped well enough to pass activation
     validation (and, if `webapp` is set, to prove which slot's bundle got
@@ -211,6 +216,10 @@ def _write_slot(
     """
     slot_dir = slots_dir / f"slot-{slot_id}"
     slot_dir.mkdir(parents=True, exist_ok=True)
+    if schema is not None:
+        consts = slot_dir / "src" / "mcapp" / "storage" / "constants.py"
+        consts.parent.mkdir(parents=True, exist_ok=True)
+        consts.write_text(f"LATEST_SCHEMA_VERSION: int = {schema}\n", encoding="utf-8")
     if pyproject:
         (slot_dir / "pyproject.toml").write_text('[project]\nname = "mcapp"\n', encoding="utf-8")
     if webapp:
@@ -725,8 +734,9 @@ def _test_activate_without_webapp_dir(runner: Any) -> list[str]:
 
 
 def _test_activate_health_failure(runner: Any) -> list[str]:
-    """A health-check failure after activation reports status warning /
-    health_ok False, and the symlink is only ever swapped once (no retry).
+    """A health-check failure after activation rolls back to the previously
+    active slot (status rolled_back); the symlink swaps 1 then back to 0.
+    With no previous active slot it stays status warning / health_ok False.
     """
     failures: list[str] = []
     originals = {
@@ -752,7 +762,8 @@ def _test_activate_health_failure(runner: Any) -> list[str]:
         (webapp_dir / "version.html").write_text("boot", encoding="utf-8")
 
         runner.subprocess = _FakeSubprocess()
-        runner.run_health_checks = lambda bus: False
+        health_results = iter([False, True])
+        runner.run_health_checks = lambda bus: next(health_results)
 
         swap_calls: list[int] = []
         original_swap = runner.swap_symlink
@@ -765,21 +776,30 @@ def _test_activate_health_failure(runner: Any) -> list[str]:
 
         try:
             result = runner.run_activate(runner.EventBus(), 1)
-            if result.get("status") != "warning":
-                failures.append(f"activate health failure: expected status warning, got {result!r}")
-            if result.get("health_ok") is not False:
-                failures.append(
-                    f"activate health failure: expected health_ok False, got {result!r}"
-                )
+            if result.get("status") != "rolled_back":
+                failures.append(f"activate health failure: expected rolled_back, got {result!r}")
+            if result.get("reason") != "health_check_failed":
+                failures.append(f"activate rollback: unexpected reason in {result!r}")
+            if not result.get("message"):
+                failures.append(f"activate rollback: message missing in {result!r}")
+            if result.get("restored_version") != "v0" or result.get("slot") != 0:
+                failures.append(f"activate rollback: restored slot/version wrong in {result!r}")
+            if result.get("failed_slot") != 1 or result.get("health_ok") is not True:
+                failures.append(f"activate rollback: failed_slot/health_ok wrong in {result!r}")
+            if swap_calls != [1, 0]:
+                failures.append(f"activate rollback: swaps must be [1, 0], got {swap_calls!r}")
+            if runner.get_active_slot() != 0:
+                failures.append("activate rollback: previous slot must be active again")
+
+            # No previous active slot: nothing to roll back to -> warning as before.
+            (slots_dir / "current").unlink()
+            swap_calls.clear()
+            runner.run_health_checks = lambda bus: False
+            result = runner.run_activate(runner.EventBus(), 1)
+            if result.get("status") != "warning" or result.get("health_ok") is not False:
+                failures.append(f"activate health failure, no previous: got {result!r}")
             if swap_calls != [1]:
-                failures.append(
-                    f"activate health failure: symlink must swap exactly once, got {swap_calls!r}"
-                )
-            if runner.get_active_slot() != 1:
-                failures.append(
-                    "activate health failure: the (failed-health) activation still took "
-                    "effect, symlink must reflect it"
-                )
+                failures.append(f"activate no-previous: swap exactly once, got {swap_calls!r}")
         finally:
             for name, value in originals.items():
                 setattr(runner, name, value)
@@ -805,6 +825,7 @@ def _test_run_update_health_failure_calls_activate(runner: Any) -> list[str]:
         "_run_bootstrap_streaming": runner._run_bootstrap_streaming,
         "_activate_slot": runner._activate_slot,
         "get_slot_meta": runner.get_slot_meta,
+        "DB_PATH": runner.DB_PATH,
     }
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
@@ -812,11 +833,13 @@ def _test_run_update_health_failure_calls_activate(runner: Any) -> list[str]:
         meta_dir = slots_dir / "meta"
         active_bootstrap = slots_dir / "slot-0" / "bootstrap" / "mcapp.sh"
         _write_dummy_bootstrap(active_bootstrap)
+        _write_slot(slots_dir, 0, "v-active", webapp=False, pyproject=False)
         meta_dir.mkdir(parents=True, exist_ok=True)
 
         runner.SLOTS_DIR = slots_dir
         runner.META_DIR = meta_dir
         runner.home = Path("/home/testuser")
+        runner.DB_PATH = tmp / "absent.db"
         runner.get_active_slot = lambda: 0
         runner.get_oldest_slot = lambda: 1
         runner.snapshot_etc = lambda slot_id: None
@@ -851,6 +874,252 @@ def _test_run_update_health_failure_calls_activate(runner: Any) -> list[str]:
     return failures
 
 
+def _make_db(db_path: Path, version: int) -> None:
+    import sqlite3
+
+    db_path.unlink(missing_ok=True)
+    con = sqlite3.connect(db_path)
+    con.execute("CREATE TABLE schema_version (version INTEGER)")
+    con.execute("INSERT INTO schema_version VALUES (?)", (version,))
+    con.commit()
+    con.close()
+
+
+def _test_schema_guard(runner: Any) -> list[str]:  # noqa: PLR0912, PLR0915 - linear scenario
+    """Older or unreadable slot schemas are refused before anything is stopped;
+    equal/newer pass; a missing DB only enforces the unreadable rule.
+    """
+    failures: list[str] = []
+    originals = {
+        "SLOTS_DIR": runner.SLOTS_DIR,
+        "META_DIR": runner.META_DIR,
+        "home": runner.home,
+        "WEBAPP_DIR": runner.WEBAPP_DIR,
+        "DB_PATH": runner.DB_PATH,
+        "subprocess": runner.subprocess,
+        "run_health_checks": runner.run_health_checks,
+    }
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        slots_dir, webapp_dir, db_path = _set_activation_globals(runner, tmp)
+        _write_slot(slots_dir, 0, "v0", schema=38)
+        (slots_dir / "current").symlink_to("slot-0")
+        _write_slot(slots_dir, 1, "v1", schema=37)
+        _write_slot(slots_dir, 2, "v2", schema=None)
+        for i in (0, 1, 2):
+            _write_meta(runner.META_DIR, i, f"v{i}")
+        webapp_dir.mkdir(parents=True, exist_ok=True)
+        fake = _FakeSubprocess()
+        runner.subprocess = fake
+        runner.run_health_checks = lambda bus: True
+        try:
+            if runner.slot_schema_version(0) != 38 or runner.slot_schema_version(2) is not None:
+                failures.append("slot_schema_version: wrong parse / missing file must be None")
+            (slots_dir / "slot-2" / "src" / "mcapp" / "storage").mkdir(parents=True)
+            (slots_dir / "slot-2" / "src" / "mcapp" / "storage" / "constants.py").write_text(
+                "LATEST_SCHEMA_VERSION = nope\n", encoding="utf-8"
+            )
+            if runner.slot_schema_version(2) is not None:
+                failures.append("slot_schema_version: unparseable must be None")
+            if runner.db_schema_version() is not None:
+                failures.append("db_schema_version: garbage DB file must be None")
+            _make_db(db_path, 38)
+            if runner.db_schema_version() != 38:
+                failures.append("db_schema_version: expected 38")
+
+            # Older slot refused, nothing stopped or swapped.
+            result = runner.run_activate(runner.EventBus(), 1)
+            want = "slot-1 schema 37 is older than the database schema 38"
+            if result.get("message") != want:
+                failures.append(f"guard older: message must carry the reason, got {result!r}")
+            if result.get("status") != "failed" or result.get("detail") != want:
+                failures.append(f"guard older: expected refusal {want!r}, got {result!r}")
+            if fake.calls or runner.get_active_slot() != 0:
+                failures.append("guard older: must not stop services or swap the symlink")
+            # Unreadable slot refused.
+            result = runner.run_activate(runner.EventBus(), 2)
+            if result.get("detail") != "slot-2 schema version unreadable":
+                failures.append(f"guard unreadable: unexpected result {result!r}")
+            # Equal and newer allowed.
+            for slot_schema in (38, 39):
+                _write_slot(slots_dir, 1, "v1", schema=slot_schema)
+                result = runner.run_activate(runner.EventBus(), 1)
+                if result.get("status") != "success":
+                    failures.append(f"guard schema {slot_schema} vs db 38: got {result!r}")
+                (slots_dir / "current").unlink()
+                (slots_dir / "current").symlink_to("slot-0")
+            # Missing DB: only the unreadable rule applies.
+            db_path.unlink()
+            if runner.db_schema_version() is not None:
+                failures.append("db_schema_version: missing DB must be None")
+            _write_slot(slots_dir, 1, "v1", schema=1)
+            if runner.slot_block_reason(1) is not None:
+                failures.append("guard missing DB: readable older slot must be allowed")
+            if runner.slot_block_reason(2) != "slot-2 schema version unreadable":
+                failures.append("guard missing DB: unreadable slot must still be blocked")
+        finally:
+            for name, value in originals.items():
+                setattr(runner, name, value)
+    return failures
+
+
+def _test_rollback_refused_when_previous_blocked(runner: Any) -> list[str]:
+    """If the DB moved past the previous slot while the failed target ran,
+    neither update-mode nor activate-mode rollback may switch back.
+    """
+    failures: list[str] = []
+    originals = {
+        "SLOTS_DIR": runner.SLOTS_DIR,
+        "META_DIR": runner.META_DIR,
+        "home": runner.home,
+        "WEBAPP_DIR": runner.WEBAPP_DIR,
+        "DB_PATH": runner.DB_PATH,
+        "subprocess": runner.subprocess,
+        "run_health_checks": runner.run_health_checks,
+        "_activate_slot": runner._activate_slot,
+        "get_active_slot": runner.get_active_slot,
+        "get_oldest_slot": runner.get_oldest_slot,
+        "snapshot_etc": runner.snapshot_etc,
+        "_read_version": runner._read_version,
+        "swap_symlink": runner.swap_symlink,
+        "_run_bootstrap_streaming": runner._run_bootstrap_streaming,
+    }
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        slots_dir, webapp_dir, db_path = _set_activation_globals(runner, tmp)
+        _write_slot(slots_dir, 0, "v0", schema=37)
+        _write_slot(slots_dir, 1, "v1", schema=38)
+        _write_dummy_bootstrap(slots_dir / "slot-0" / "bootstrap" / "mcapp.sh")
+        for i in (0, 1):
+            _write_meta(runner.META_DIR, i, f"v{i}")
+        (slots_dir / "current").symlink_to("slot-0")
+        webapp_dir.mkdir(parents=True, exist_ok=True)
+        _make_db(db_path, 37)  # slot-0 is fine for activation of nothing yet
+        runner.subprocess = _FakeSubprocess()
+        runner.run_health_checks = lambda bus: False
+        want = (
+            "health check failed; rollback to slot-0 refused: "
+            "slot-0 schema 37 is older than the database schema 38"
+        )
+        try:
+            # Activate mode: the target "migrates" the DB up while it runs.
+            activate_calls: list[int] = []
+
+            def migrating_activate(target_slot: int, bus: Any) -> None:
+                activate_calls.append(target_slot)
+                if target_slot == 1:
+                    _make_db(db_path, 38)
+
+            runner._activate_slot = migrating_activate
+            result = runner.run_activate(runner.EventBus(), 1)
+            if result.get("message") != want:
+                failures.append(f"activate rollback refused: message missing in {result!r}")
+            if result.get("status") != "failed" or result.get("reason") != want:
+                failures.append(f"activate rollback refused: unexpected result {result!r}")
+            if activate_calls != [1]:
+                failures.append(
+                    f"activate rollback refused: must not re-activate, got {activate_calls!r}"
+                )
+
+            # Update mode.
+            _make_db(db_path, 38)
+            activate_calls.clear()
+            runner._activate_slot = lambda t, b: activate_calls.append(t)
+            runner.get_active_slot = lambda: 0
+            runner.get_oldest_slot = lambda: 1
+            runner.snapshot_etc = lambda s: None
+            runner._read_version = lambda s: "vtest"
+            runner.swap_symlink = lambda s, d, name="current": None
+            runner._run_bootstrap_streaming = lambda cmd, env, bus: True
+            result = runner.run_update(runner.EventBus(), dev_mode=False)
+            if result.get("status") != "failed" or result.get("reason") != want:
+                failures.append(f"update rollback refused: unexpected result {result!r}")
+            if activate_calls:
+                failures.append(
+                    f"update rollback refused: must not re-activate, got {activate_calls!r}"
+                )
+        finally:
+            for name, value in originals.items():
+                setattr(runner, name, value)
+    return failures
+
+
+def _test_lighttpd_log_prep(runner: Any) -> list[str]:
+    """The lighttpd log dir is prepared BEFORE the lighttpd restart, and the
+    preparation can never raise.
+    """
+    failures: list[str] = []
+    originals = {
+        "SLOTS_DIR": runner.SLOTS_DIR,
+        "META_DIR": runner.META_DIR,
+        "home": runner.home,
+        "WEBAPP_DIR": runner.WEBAPP_DIR,
+        "DB_PATH": runner.DB_PATH,
+        "subprocess": runner.subprocess,
+        "run_health_checks": runner.run_health_checks,
+        "LIGHTTPD_LOG_DIR": runner.LIGHTTPD_LOG_DIR,
+        "TMPFILES_CONF": runner.TMPFILES_CONF,
+        "_prepare_lighttpd_log_dir": runner._prepare_lighttpd_log_dir,
+    }
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        slots_dir, webapp_dir, _db = _set_activation_globals(runner, tmp)
+        _write_slot(slots_dir, 0, "v0")
+        _write_slot(slots_dir, 1, "v1")
+        for i in (0, 1):
+            _write_meta(runner.META_DIR, i, f"v{i}")
+        (slots_dir / "current").symlink_to("slot-0")
+        webapp_dir.mkdir(parents=True, exist_ok=True)
+        fake = _FakeSubprocess()
+        runner.subprocess = fake
+        runner.run_health_checks = lambda bus: True
+        runner.LIGHTTPD_LOG_DIR = tmp / "log-lighttpd"
+        conf = tmp / "mcapp.conf"
+        conf.write_text("d /var/log/lighttpd 0750 www-data www-data -\n", encoding="utf-8")
+        runner.TMPFILES_CONF = conf
+        try:
+            real_prep = runner._prepare_lighttpd_log_dir
+            runner._prepare_lighttpd_log_dir = lambda: (
+                fake.calls.append(["PREP"]),
+                real_prep(),
+            )[1]
+            runner.run_activate(runner.EventBus(), 1)
+            flat = [" ".join(c) for c in fake.calls]
+            if "PREP" not in flat or "systemctl restart lighttpd" not in flat:
+                failures.append(f"lighttpd prep: missing prep/restart in {flat!r}")
+            elif flat.index("PREP") > flat.index("systemctl restart lighttpd"):
+                failures.append(f"lighttpd prep must precede the restart: {flat!r}")
+            if not any(c.startswith("systemd-tmpfiles --create") for c in flat):
+                failures.append(f"lighttpd prep: tmpfiles not invoked: {flat!r}")
+            if not any(c.startswith("chown -R www-data:www-data") for c in flat):
+                failures.append(f"lighttpd prep: chown not invoked: {flat!r}")
+            if not runner.LIGHTTPD_LOG_DIR.is_dir():
+                failures.append("lighttpd prep: log dir must be created")
+
+            # Never raises, whatever subprocess does.
+            class _Boom:
+                def run(self, *_a: Any, **_k: Any) -> None:
+                    raise OSError("boom")
+
+            runner._prepare_lighttpd_log_dir = real_prep
+            runner.subprocess = _Boom()
+            try:
+                real_prep()
+            except Exception as exc:
+                failures.append(f"lighttpd prep must swallow errors, raised {exc!r}")
+            runner.LIGHTTPD_LOG_DIR = tmp / "file"
+            (tmp / "file").write_text("x", encoding="utf-8")
+            runner.LIGHTTPD_LOG_DIR = tmp / "file" / "sub"  # mkdir fails (ENOTDIR)
+            try:
+                real_prep()
+            except Exception as exc:
+                failures.append(f"lighttpd prep must swallow mkdir errors, raised {exc!r}")
+        finally:
+            for name, value in originals.items():
+                setattr(runner, name, value)
+    return failures
+
+
 def _test_rollback_no_candidate(runner: Any) -> list[str]:
     """`run_rollback` with nothing to roll back to must fail via the same
     invalid_slot shape as an invalid `--mode activate` call.
@@ -872,6 +1141,39 @@ def _test_rollback_no_candidate(runner: Any) -> list[str]:
                 failures.append(f"run_rollback with no candidate: unexpected result {result!r}")
         finally:
             runner.SLOTS_DIR, runner.META_DIR, runner.home = originals
+    return failures
+
+
+def _test_rollback_skips_blocked(runner: Any) -> list[str]:
+    """`get_rollback_slot` must skip a slot the schema guard blocks and fall
+    to the next candidate, like `/api/update/slots` does: otherwise the
+    newest non-active slot, if blocked, is offered and then refused.
+    """
+    failures: list[str] = []
+    originals = (runner.SLOTS_DIR, runner.META_DIR, runner.home, runner.WEBAPP_DIR, runner.DB_PATH)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        slots_dir, _webapp_dir, db_path = _set_activation_globals(runner, tmp)
+        _write_slot(slots_dir, 0, "v0", schema=38)
+        (slots_dir / "current").symlink_to("slot-0")
+        _write_slot(slots_dir, 1, "v1", schema=37)  # newest, but blocked
+        _write_slot(slots_dir, 2, "v2", schema=38)
+        _write_meta(runner.META_DIR, 0, "v0", "2026-01-03T00:00:00+00:00")
+        _write_meta(runner.META_DIR, 1, "v1", "2026-01-02T00:00:00+00:00")
+        _write_meta(runner.META_DIR, 2, "v2", "2026-01-01T00:00:00+00:00")
+        _make_db(db_path, 38)
+        try:
+            got = runner.get_rollback_slot()
+            if got != 2:
+                failures.append(f"get_rollback_slot offered {got!r}, expected 2 (slot-1 blocked)")
+            _make_db(db_path, 39)  # now every candidate is blocked
+            got = runner.get_rollback_slot()
+            if got is not None:
+                failures.append(f"get_rollback_slot offered {got!r} with every candidate blocked")
+        finally:
+            (runner.SLOTS_DIR, runner.META_DIR, runner.home, runner.WEBAPP_DIR, runner.DB_PATH) = (
+                originals
+            )
     return failures
 
 

@@ -19,6 +19,8 @@ import hashlib
 import json
 import pathlib
 
+from .classifier.engine import conformance_failures
+from .classifier_contract import DEFAULT_CONTRACT_PATH, load_engine
 from .commands.constants import has_console
 from .commands.parsing import extract_target_callsign, is_group
 from .meteo import WeatherService
@@ -44,6 +46,10 @@ _CORPUS_PATH = pathlib.Path(__file__).parent / "contract" / "command_contract.js
 # hash in the same commit as the pull.
 _EXPECTED_SHA256 = "5ace37afdedee7016cccef4b81d2254568bef6a7fb5f2ffd067857ccec2660fc"
 
+# mcmap's exported classifier rule set (mc-chat contract/ subtree). Same drift
+# tripwire as above: re-capture only in the commit that pulls a new export.
+_CLASSIFIER_EXPECTED_SHA256 = "01cfa5eacfe5d2f21d32d7e7bb6bf2a952fe3c9565cf2606338a68c614bf673c"
+
 
 def run_contract_parity_tests() -> bool:
     """Return True iff production matches every case in the shared contract."""
@@ -63,6 +69,18 @@ def run_contract_parity_tests() -> bool:
             print(f"{'✅ PASS' if ok else '❌ FAIL'} | {label}")
 
     _record("command_contract.json sha256 matches captured hash (drift tripwire)", sha_ok)
+
+    # Classifier contract: pinned bytes + the engine's own conformance corpus.
+    classifier_raw = DEFAULT_CONTRACT_PATH.read_bytes()
+    _record(
+        "classifier_contract.json sha256 matches captured hash (drift tripwire)",
+        hashlib.sha256(classifier_raw).hexdigest() == _CLASSIFIER_EXPECTED_SHA256,
+    )
+    failures = conformance_failures(load_engine(), json.loads(classifier_raw))
+    _record(
+        f"classifier engine passes the contract's conformance vectors ({len(failures)} failures)",
+        failures == [],
+    )
 
     # Target extraction
     for case in corpus["target_extraction"]:

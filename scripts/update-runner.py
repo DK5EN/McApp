@@ -41,6 +41,7 @@ import pwd
 import queue
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -81,6 +82,9 @@ META_DIR = None  # ~/mcapp-slots/meta
 home = None  # User home directory (inferred from script location)
 DB_PATH = Path("/var/lib/mcapp/messages.db")
 WEBAPP_DIR = Path("/var/www/html/webapp")  # served bundle; a COPIED dir, not a symlink
+LIGHTTPD_LOG_DIR = Path("/var/log/lighttpd")  # ownership gets mangled by some boards' ramlog
+TMPFILES_CONF = Path("/etc/tmpfiles.d/mcapp.conf")
+_SCHEMA_RE = re.compile(r"^LATEST_SCHEMA_VERSION\s*(?::\s*\w+)?\s*=\s*(\d+)", re.MULTILINE)
 UPDATE_TRIGGER_FILE = Path("/var/lib/mcapp/update-trigger")  # must match sse_handler.py's copy
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")  # all ANSI escape sequences
 _DECORATIVE_LINE_RE = re.compile(r"^[\s╔╗╚╝═─┌┐└┘│┤├]+$")  # pure box-drawing decoration
@@ -199,14 +203,16 @@ def get_active_slot() -> int | None:
 
 
 def get_rollback_slot() -> int | None:
-    """Find the most recent non-active slot with a valid version."""
+    """Find the most recent non-active slot with a valid version that the
+    schema guard does not block (the same rule `/api/update/slots` applies).
+    """
     active = get_active_slot()
     candidates = []
     for i in range(3):
         if i == active:
             continue
         meta = get_slot_meta(i)
-        if meta.get("version") and meta.get("deployed_at"):
+        if meta.get("version") and meta.get("deployed_at") and slot_block_reason(i) is None:
             candidates.append((meta["deployed_at"], i))
     if candidates:
         candidates.sort(reverse=True)
@@ -596,10 +602,22 @@ def run_update(bus: EventBus, dev_mode: bool = False) -> dict:  # noqa: PLR0912,
         )
 
         if active_slot is not None:
+            # The failed target may have migrated the DB up: re-check the guard.
+            blocked = slot_block_reason(active_slot)
+            if blocked is not None:
+                reason = f"health check failed; rollback to slot-{active_slot} refused: {blocked}"
+                bus.publish("log", {"line": reason, "phase": "rollback"})
+                return {
+                    "status": "failed",
+                    "reason": reason,
+                    "message": reason,
+                    "duration_s": int(time.time() - start_time),
+                }
             _activate_slot(active_slot, bus)
             return {
                 "status": "rolled_back",
                 "reason": "health_check_failed",
+                "message": f"health check failed; rolled back to slot-{active_slot}",
                 "restored_version": get_slot_meta(active_slot).get("version"),
                 "duration_s": int(time.time() - start_time),
             }
@@ -631,6 +649,68 @@ def run_rollback(bus: EventBus) -> dict:
     return run_activate(bus, get_rollback_slot())
 
 
+def slot_schema_version(slot_id: int) -> int | None:
+    """LATEST_SCHEMA_VERSION of a slot's code, or None if missing/unparseable."""
+    try:
+        text = (SLOTS_DIR / f"slot-{slot_id}" / "src/mcapp/storage/constants.py").read_text(
+            encoding="utf-8"
+        )
+    except (OSError, ValueError):
+        return None
+    match = _SCHEMA_RE.search(text)
+    return int(match.group(1)) if match else None
+
+
+def db_schema_version() -> int | None:
+    """Schema version recorded in the live DB (read-only), None on any error."""
+    try:
+        con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        try:
+            row = con.execute("SELECT version FROM schema_version").fetchone()
+        finally:
+            con.close()
+        return int(row[0]) if row and row[0] is not None else None
+    except Exception:  # any failure means "unknown", never fatal
+        return None
+
+
+def slot_block_reason(slot_id: int) -> str | None:
+    """Why `slot_id` must not run against the live DB, or None if it may.
+
+    Older code on a newer schema is not safe (2026-10-20: a v2.1.16 slot on a
+    schema-38 DB crash-looped on a dropped table).
+    """
+    slot_schema = slot_schema_version(slot_id)
+    if slot_schema is None:
+        return f"slot-{slot_id} schema version unreadable"
+    db_schema = db_schema_version()
+    if db_schema is not None and slot_schema < db_schema:
+        return f"slot-{slot_id} schema {slot_schema} is older than the database schema {db_schema}"
+    return None
+
+
+def _prepare_lighttpd_log_dir() -> None:
+    """Best-effort: make /var/log/lighttpd writable for www-data before a restart.
+
+    Never raises and never fails an activation.
+    """
+    try:
+        if TMPFILES_CONF.exists():
+            subprocess.run(  # noqa: S603 - fixed internal command
+                ["systemd-tmpfiles", "--create", str(TMPFILES_CONF)],  # noqa: S607 - fixed internal command
+                capture_output=True,
+                check=False,
+            )
+        LIGHTTPD_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        subprocess.run(  # noqa: S603 - fixed internal command
+            ["chown", "-R", "www-data:www-data", str(LIGHTTPD_LOG_DIR)],  # noqa: S607 - fixed internal command
+            capture_output=True,
+            check=False,
+        )
+    except Exception as e:  # best effort by contract
+        print(f"[UPDATE-RUNNER] lighttpd log dir prep failed (ignored): {e}", flush=True)
+
+
 def _validate_activation_target(slot: int, active_slot: int | None) -> str | None:
     """Return why `slot` cannot be activated, or None if it can."""
     if not (0 <= slot < 3):  # noqa: PLR2004 - fixed 3-slot layout
@@ -642,7 +722,7 @@ def _validate_activation_target(slot: int, active_slot: int | None) -> str | Non
         return f"slot-{slot} has no deployed version"
     if not (SLOTS_DIR / f"slot-{slot}" / "pyproject.toml").exists():
         return f"slot-{slot} is missing pyproject.toml"
-    return None
+    return slot_block_reason(slot)
 
 
 def run_activate(bus: EventBus, slot: int | None) -> dict:
@@ -661,6 +741,7 @@ def run_activate(bus: EventBus, slot: int | None) -> dict:
             "status": "failed",
             "reason": "invalid_slot",
             "detail": detail,
+            "message": detail,
             "duration_s": 0,
         }
 
@@ -679,6 +760,7 @@ def run_activate(bus: EventBus, slot: int | None) -> dict:
             "status": "failed",
             "reason": "invalid_slot",
             "detail": detail,
+            "message": detail,
             "duration_s": 0,
         }
 
@@ -696,6 +778,41 @@ def run_activate(bus: EventBus, slot: int | None) -> dict:
     )
 
     health_ok = run_health_checks(bus)
+
+    if not health_ok and active_slot is not None:
+        bus.publish(
+            "phase",
+            {
+                "phase": "rollback",
+                "progress": 90,
+                "message": "Health checks failed, rolling back...",
+            },
+        )
+        # The failed target may have migrated the DB up: re-check the guard.
+        blocked = slot_block_reason(active_slot)
+        if blocked is not None:
+            reason = f"health check failed; rollback to slot-{active_slot} refused: {blocked}"
+            bus.publish("log", {"line": reason, "phase": "rollback"})
+            return {
+                "status": "failed",
+                "reason": reason,
+                "message": reason,
+                "slot": slot,
+                "health_ok": False,
+                "duration_s": int(time.time() - start_time),
+            }
+        _activate_slot(active_slot, bus)
+        restored_ok = run_health_checks(bus)
+        return {
+            "status": "rolled_back",
+            "reason": "health_check_failed",
+            "message": f"health check failed; rolled back to slot-{active_slot}",
+            "restored_version": get_slot_meta(active_slot).get("version"),
+            "slot": active_slot,
+            "failed_slot": slot,
+            "health_ok": restored_ok,
+            "duration_s": int(time.time() - start_time),
+        }
 
     version = get_slot_meta(slot).get("version") or version
     return {
@@ -839,6 +956,8 @@ def _activate_slot(target_slot: int, bus: EventBus) -> None:
         check=False,
     )
     for svc in ["lighttpd", "mcapp", "mcapp-ble"]:
+        if svc == "lighttpd":
+            _prepare_lighttpd_log_dir()
         subprocess.run(  # noqa: S603 - fixed internal command
             ["systemctl", "restart", svc],  # noqa: S607 - fixed internal command
             capture_output=True,

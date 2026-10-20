@@ -204,7 +204,7 @@ async def _test_tags_shape_live_vs_column(results: list[tuple[str, bool]]) -> No
             _FakeClassifier(
                 _FakeClassification(
                     category="info",
-                    tags=("weather", "beacon"),
+                    tags=("weather", "auto_beacon"),
                     info_score=0.9,
                     template_hash="0123456789ab",
                     classifier_version=1,
@@ -224,7 +224,7 @@ async def _test_tags_shape_live_vs_column(results: list[tuple[str, bool]]) -> No
         results.append(
             (
                 "stored tags COLUMN decodes to the same values",
-                json.loads(row["tags"]) == ["weather", "beacon"],
+                json.loads(row["tags"]) == ["weather", "auto_beacon"],
             )
         )
     finally:
