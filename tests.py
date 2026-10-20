@@ -2,7 +2,7 @@
 
 Ephemeral tempfile-SQLite, mirroring the storage/sse startup-test pattern
 already used elsewhere (never touches a live/persisted DB). Exercises the
-package's public entry points end-to-end: Layer 1 (rules), Layer 2
+package's public entry points end-to-end: Layer 1 (contract engine conformance), Layer 2
 (template fingerprint/exemption/auto-beacon threshold), Layer 3 (score),
 and the Classifier orchestrator (live classify + reclassify paths).
 
@@ -30,11 +30,26 @@ from pathlib import Path
 from typing import Any, cast
 
 from .classify import Classifier
-from .rules import load_rules, match_rules
+from .engine import Engine, conformance_failures, load_contract
 from .score import compute as score_compute
-from .seed import DEFAULT_RULES, seed_defaults
 from .template import check_only, fingerprint, is_exempt, update_and_check
-from .types import CATEGORIES, DIRECTED_DST_PATTERN, DIRECTED_DST_RE, StorageProtocol
+from .types import (
+    AUTO_BEACON_TAG,
+    CATEGORIES,
+    DIRECTED_DST_RE,
+    StorageProtocol,
+    derive_category,
+)
+
+# Host layout: <pkg>/classifier/tests.py next to <pkg>/contract/ (MCProxy:
+# src/mcapp/contract). The subtree stays path-agnostic otherwise.
+CONTRACT_PATH = Path(__file__).resolve().parent.parent / "contract" / "classifier_contract.json"
+
+
+def _load_contract() -> tuple[Engine, dict[str, Any], str]:
+    data: dict[str, Any] = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
+    engine = load_contract(data)
+    return engine, data, f"{engine.taxonomy_version}:{engine.source_commit}"
 
 
 async def _make_storage(db_path: str) -> StorageProtocol:
@@ -156,7 +171,7 @@ async def _run_suite(storage: StorageProtocol, results: list[tuple[str, bool]]) 
     Split into per-layer coroutines so each stays within the statement-count
     lint budget; they all share the single tempfile-backed ``storage``.
     """
-    await _suite_rules(storage, results)
+    await _suite_engine(results)
     await _suite_directed_dst(results)
     await _suite_template(storage, results)
     await _suite_score(results)
@@ -166,7 +181,7 @@ async def _run_suite(storage: StorageProtocol, results: list[tuple[str, bool]]) 
 async def _suite_directed_dst(results: list[tuple[str, bool]]) -> None:
     """Replay directed_dst_vectors.json — the cross-repo DIRECTED contract.
 
-    Storage-free on purpose: it pins the PREDICATE and the seed rule that
+    Storage-free on purpose: it pins the PREDICATE and the engine rule that
     carries it, so it can run identically in every host repo. The webapp
     replays the same vectors against its own isDirectedDst().
     """
@@ -189,28 +204,21 @@ async def _suite_directed_dst(results: list[tuple[str, bool]]) -> None:
         )
     )
 
-    # The rule stored in the DB and the predicate compiled in types.py must
-    # be the same string, or the live SSE path and is_exempt() drift apart.
-    seed_rule = next((r for r in DEFAULT_RULES if r["name"] == "Direct callsign"), None)
+    # The engine's own 'directed' rule must agree with the predicate compiled in
+    # types.py, or the L1 flag and is_exempt() drift apart.
+    engine, _data, _cid = _load_contract()
+    engine_mismatches = [
+        v["name"]
+        for v in vectors
+        if v["dst"] and engine.classify("x", "XX1ABC-1", v["dst"]).directed != v["is_directed"]
+    ]
     results.append(
-        ("directed: seed.py still defines the 'Direct callsign' rule", seed_rule is not None)
+        (
+            "directed: contract engine agrees with the vectors on every dst"
+            + (f" (failed: {engine_mismatches})" if engine_mismatches else ""),
+            engine_mismatches == [],
+        )
     )
-    if seed_rule is not None:
-        results.append(
-            (
-                "directed: seed rule pattern IS types.DIRECTED_DST_PATTERN",
-                seed_rule["pattern"] == DIRECTED_DST_PATTERN,
-            )
-        )
-        results.append(
-            (
-                (
-                    "directed: seed rule emits the 'directed' extra_tag "
-                    "(survives the single-valued category slot)"
-                ),
-                "directed" in (seed_rule["extra_tags"] or ()),
-            )
-        )
 
     # template.is_exempt must read the same predicate: a long, non-human
     # message is exempt from auto-beacon promotion iff its dst is directed.
@@ -218,7 +226,7 @@ async def _suite_directed_dst(results: list[tuple[str, bool]]) -> None:
     exempt_mismatches = [
         v["name"]
         for v in vectors
-        if v["dst"] and is_exempt(long_tokens, category="qso", dst=v["dst"]) != v["is_directed"]
+        if v["dst"] and is_exempt(long_tokens, {"qso"}, v["dst"]) != v["is_directed"]
     ]
     results.append(
         (
@@ -229,139 +237,38 @@ async def _suite_directed_dst(results: list[tuple[str, bool]]) -> None:
     )
 
 
-async def _suite_rules(storage: StorageProtocol, results: list[tuple[str, bool]]) -> None:
-    """Layer 1 rule matching, invalid-regex skip path, and seed consistency."""
-    # ── Layer 1: rules ────────────────────────────────────────────────────
-    await storage.insert_classifier_rule(
-        name="test-greeting",
-        pattern=r"\b(hi|hello)\b",
-        category="greeting",
-        scope="msg",
-        extra_tags=["friendly"],
-        priority=10,
-    )
-    await storage.insert_classifier_rule(
-        name="test-directed-tag",
-        pattern=r".*",
-        category="other",
-        scope="dst",
-        extra_tags=["has_dst"],
-        priority=90,
-    )
-    rules = await load_rules(storage)
-
-    category, tags = match_rules(_msg(text="hello there"), rules)
-    results.append(("rules: first matching rule sets category", category == "greeting"))
-    results.append(("rules: all matching rules contribute tags", set(tags) >= {"friendly"}))
-
-    category_nomatch, _ = match_rules(_msg(text="xyz nonmatching"), rules)
-    results.append(("rules: no match falls back to 'other'", category_nomatch == "other"))
-
-    # ── Layer 1: invalid-regex skip path (load_rules must not crash) ───────
-    await storage.insert_classifier_rule(
-        name="test-broken-regex",
-        pattern=r"(unclosed[a-z",  # invalid: unterminated group + class
-        category="other",
-        scope="msg",
-        priority=15,
-    )
-    await storage.insert_classifier_rule(
-        name="test-valid-after-broken",
-        pattern=r"validmarkerword",
-        category="alert",
-        scope="msg",
-        priority=16,
-    )
-    rules_mixed = await load_rules(storage)
-    loaded_names = {r.name for r in rules_mixed}
+async def _suite_engine(results: list[tuple[str, bool]]) -> None:
+    """Layer 1: the contract engine replays the exported conformance vectors."""
+    engine, data, cid = _load_contract()
+    failures = conformance_failures(engine, data)
     results.append(
         (
-            "rules: invalid-regex rule is skipped by load_rules (no crash)",
-            "test-broken-regex" not in loaded_names,
+            f"engine: conformance over {len(data.get('vectors', []))} vectors"
+            + (f" (first failure: {failures[0]})" if failures else ""),
+            failures == [],
         )
     )
+    results.append(("engine: contract id is <taxonomy_version>:<commit>", ":" in cid))
+    results.append(("engine: 'qso' is a taxonomy tag", "qso" in engine.tag_ids))
     results.append(
         (
-            "rules: valid rules still load alongside a skipped invalid one",
-            "test-valid-after-broken" in loaded_names,
+            "engine: plain greeting is greeting + qso",
+            engine.classify("Hallo zusammen", "XX1ABC-1", "20").tags >= {"greeting", "qso"},
         )
     )
-    cat_valid, _ = match_rules(_msg(text="a validmarkerword appears here"), rules_mixed)
-    results.append(
-        ("rules: valid rule loaded past a skipped invalid one still matches", cat_valid == "alert")
-    )
-
-    # ── Seed consistency: every seeded category must be a known CATEGORY ────
-    seed_categories = {rule["category"] for rule in DEFAULT_RULES}
-    unknown_categories = sorted(seed_categories - set(CATEGORIES))
+    derived = {
+        "wx": derive_category({"weather"}, False),
+        "dm": derive_category({"greeting", "qso"}, True),
+        "plain": derive_category(set(), False),
+        "known": all(c in CATEGORIES for c in ("timestamp_beacon", "qso", "other")),
+    }
     results.append(
         (
-            "seed: every seed.py rule category is a member of types.CATEGORIES",
-            unknown_categories == [],
-        )
-    )
-
-    # ── "URL advert" regression: a bare link is 'other', not 'node_advert' ──
-    # (mcapp.local, HB9VQQ-1's plain URL in group 20 was hidden as a node
-    # advert, while his URL-plus-text message in the same thread scored 1.0).
-    # Seeds the real DEFAULT_RULES so this exercises the shipped priorities,
-    # not a hand-picked subset.
-    await seed_defaults(storage)
-    default_rules = await load_rules(storage)
-
-    bare_url = "https://www.varac-hamradio.com/group/varac-hf-discussion-forum/discussion/f20f80cc"
-    category_bare_url, tags_bare_url = match_rules(_msg(text=bare_url), default_rules)
-    results.append(
-        (
-            "seed: a bare URL classifies as 'other', not 'node_advert'",
-            category_bare_url == "other",
-        )
-    )
-    results.append(
-        (
-            "seed: a bare URL still carries the 'has_url' tag",
-            "has_url" in tags_bare_url,
-        )
-    )
-
-    bare_www_url = "www.varac-hamradio.com/group/varac-hf-discussion-forum/discussion/f20f80cc"
-    category_bare_www, tags_bare_www = match_rules(_msg(text=bare_www_url), default_rules)
-    results.append(
-        (
-            "seed: a bare www.-prefixed URL behaves identically ('other' + has_url)",
-            category_bare_www == "other" and "has_url" in tags_bare_www,
-        )
-    )
-
-    embedded_url = (
-        "VARA HF gab ja immer wieder Anlass zu Diskussionen --> closed source "
-        "https://rosmodem.wordpress.com/"
-    )
-    url_advert_rule = next(r for r in default_rules if r.name == "URL advert")
-    results.append(
-        (
-            "seed: 'URL advert' does not match a URL embedded in real text",
-            url_advert_rule.regex.search(embedded_url) is None,
-        )
-    )
-
-    html_advert_category, _ = match_rules(
-        _msg(text="<div>Check out my new node!</div>"), default_rules
-    )
-    results.append(
-        (
-            "seed: decorated 'HTML advert' still claims 'node_advert'",
-            html_advert_category == "node_advert",
-        )
-    )
-
-    emoji_url_advert_category, _ = match_rules(
-        _msg(text="🚀 check out my new node at https://example.com"), default_rules
-    )
-    results.append(
-        (
-            "seed: decorated 'Emoji URL advert' still claims 'node_advert'",
-            emoji_url_advert_category == "node_advert",
+            "category: derive_category follows the fixed table",
+            derived["wx"] == "wx_beacon"
+            and derived["dm"] == "directed"
+            and derived["plain"] == "other"
+            and bool(derived["known"]),
         )
     )
 
@@ -382,32 +289,33 @@ async def _suite_template(storage: StorageProtocol, results: list[tuple[str, boo
     results.append(
         (
             "template: is_exempt — short token list is exempt",
-            is_exempt(["hi"], category="qso", dst="20"),
+            is_exempt(["hi"], {"qso"}, "20"),
         )
     )
     results.append(
         (
-            "template: is_exempt — human category is exempt",
-            is_exempt(["a", "longer", "message", "body"], category="greeting", dst="20"),
+            "template: is_exempt — alert tag is exempt, greeting tag is not (issue #17)",
+            is_exempt(["a", "longer", "message", "body"], {"alert"}, "20")
+            and not is_exempt(["a", "longer", "message", "body"], {"greeting"}, "20"),
         )
     )
     results.append(
         (
             "template: is_exempt — directed dst (callsign-SSID) is exempt",
-            is_exempt(["a", "longer", "message", "body"], category="qso", dst="OE5HWN-12"),
+            is_exempt(["a", "longer", "message", "body"], {"qso"}, "OE5HWN-12"),
         )
     )
     results.append(
         (
             "template: is_exempt — long, non-human, non-directed is NOT exempt",
-            not is_exempt(["a", "longer", "conversational", "message"], "qso", "20"),
+            not is_exempt(["a", "longer", "conversational", "message"], {"qso"}, "20"),
         )
     )
     results.append(
         (
             "template: check_only matches is_exempt on the same inputs",
-            check_only(_msg(text="a longer conversational message", dst="20"), "qso")
-            == is_exempt(["a", "longer", "conversational", "message"], "qso", "20"),
+            check_only(_msg(text="a longer conversational message", dst="20"), {"qso"})
+            == is_exempt(["a", "longer", "conversational", "message"], {"qso"}, "20"),
         )
     )
 
@@ -419,7 +327,7 @@ async def _suite_template(storage: StorageProtocol, results: list[tuple[str, boo
     now_ms = 1_770_000_000_000
     for i in range(8):
         result = await update_and_check(
-            storage, _msg(text=beacon_text, msg_id=f"BEACON{i:03d}"), now_ms + i, category="qso"
+            storage, _msg(text=beacon_text, msg_id=f"BEACON{i:03d}"), now_ms + i, tags={"qso"}
         )
         if result.transitioned:
             transitioned_at = i
@@ -431,7 +339,7 @@ async def _suite_template(storage: StorageProtocol, results: list[tuple[str, boo
     )
 
     final_check = await update_and_check(
-        storage, _msg(text=beacon_text, msg_id="BEACON999"), now_ms + 100, category="qso"
+        storage, _msg(text=beacon_text, msg_id="BEACON999"), now_ms + 100, tags={"qso"}
     )
     results.append(
         ("template: template stays flagged as beacon after transitioning", final_check.is_beacon)
@@ -453,7 +361,7 @@ async def _suite_template(storage: StorageProtocol, results: list[tuple[str, boo
         _OccurrenceStorage(storage, occ_24h),
         _msg(src="OE24H-1", dst="20", text=text_24h, msg_id="W24H0001"),
         now_24h,
-        category="other",
+        tags={"qso"},
     )
     results.append(
         (
@@ -472,7 +380,7 @@ async def _suite_template(storage: StorageProtocol, results: list[tuple[str, boo
         _OccurrenceStorage(storage, occ_72h),
         _msg(src="OE72H-1", dst="20", text=text_72h, msg_id="W72H0001"),
         now_72h,
-        category="other",
+        tags={"qso"},
     )
     results.append(
         (
@@ -488,7 +396,7 @@ async def _suite_template(storage: StorageProtocol, results: list[tuple[str, boo
         _OccurrenceStorage(storage, [(fp_below, "OEBLW-1", now_72h - 10 * 3600 * 1000)]),
         _msg(src="OEBLW-1", dst="20", text=text_below, msg_id="WBLW0001"),
         now_72h,
-        category="other",
+        tags={"qso"},
     )
     results.append(
         (
@@ -504,7 +412,7 @@ async def _suite_template(storage: StorageProtocol, results: list[tuple[str, boo
         _UserActionStorage(storage, "promote"),
         _msg(src="OEPRM-1", dst="20", text=promo_text, msg_id="PRM00001"),
         now_24h,
-        category="other",
+        tags={"qso"},
     )
     results.append(
         (
@@ -522,7 +430,7 @@ async def _suite_template(storage: StorageProtocol, results: list[tuple[str, boo
         _UserActionStorage(storage, "demote"),
         _msg(src="OEDEM-1", dst="20", text=demo_text, msg_id="DEM00001"),
         now_24h,
-        category="other",
+        tags={"qso"},
     )
     results.append(
         (
@@ -535,24 +443,21 @@ async def _suite_template(storage: StorageProtocol, results: list[tuple[str, boo
 async def _suite_score(results: list[tuple[str, bool]]) -> None:
     """Layer 3 info-score value range, low-content clamp, and ordering."""
     # ── Layer 3: score ──────────────────────────────────────────────────────
-    score = score_compute(_msg(text="a normal conversational reply here"), "qso", set(), 0)
+    score = score_compute(_msg(text="a normal conversational reply here"), {"qso"}, 0)
     results.append(("score: compute() returns a value in [0, 1]", 0.0 <= score <= 1.0))
 
-    bot_score = score_compute(_msg(text="!wx"), "bot_command", set(), 0)
-    results.append(("score: bot_command is clamped low", bot_score <= 0.25))
+    bot_score = score_compute(_msg(text="!wx"), {"bot"}, 0, automated_tags={"bot"})
+    results.append(("score: bot tag is clamped low", bot_score <= 0.25))
 
     # Ordering property: an informative multi-token sentence must outscore a
     # low-information emoji-only or URL-only body.
     informative_score = score_compute(
         _msg(text="the repeater on the hill is back online after maintenance today"),
-        "qso",
-        set(),
+        {"qso"},
         0,
     )
-    emoji_only_score = score_compute(_msg(text="😀😀😀😀😀😀"), "other", set(), 0)
-    url_only_score = score_compute(
-        _msg(text="https://example.com/a/very/long/path"), "other", {"has_url"}, 0
-    )
+    emoji_only_score = score_compute(_msg(text="😀😀😀😀😀😀"), {"qso"}, 0)
+    url_only_score = score_compute(_msg(text="https://example.com/a/very/long/path"), {"qso"}, 0)
     results.append(
         (
             "score: informative sentence outscores an emoji-only body",
@@ -570,11 +475,18 @@ async def _suite_score(results: list[tuple[str, bool]]) -> None:
 async def _suite_orchestrator(storage: StorageProtocol, results: list[tuple[str, bool]]) -> None:
     """Orchestrator classify() live/reclassify paths and reclassify jobs."""
     # ── Orchestrator: Classifier.classify() ──────────────────────────────────
-    classifier = Classifier(storage)
+    engine, _data, cid = _load_contract()
+    classifier = Classifier(storage, engine, cid)
     await classifier.load()
 
     cls_live = await classifier.classify(_msg(text="hello there", msg_id="LIVE0001"))
     results.append(("classify: live path tags a greeting", cls_live.category == "greeting"))
+    results.append(
+        (
+            "classify: a human greeting is not auto_beacon and keeps qso",
+            AUTO_BEACON_TAG not in cls_live.tags and "qso" in cls_live.tags,
+        )
+    )
     results.append(
         ("classify: live path returns a 12-char template_hash", len(cls_live.template_hash) == 12)
     )
