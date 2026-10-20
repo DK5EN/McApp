@@ -652,7 +652,7 @@ wheels = [
 
 [[package]]
 name = "mcapp"
-version = "2.1.18"
+version = "2.1.19"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
@@ -699,7 +699,7 @@ dev = [
 
 [[package]]
 name = "mcapp-ble-service"
-version = "2.1.18"
+version = "2.1.19"
 source = { editable = "ble_service" }
 dependencies = [
     { name = "dbus-next" },
