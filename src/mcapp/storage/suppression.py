@@ -327,12 +327,9 @@ def is_text_blocked(msg: str, policy: SuppressionPolicy) -> bool:
 
 
 def _tag_hidden(tags: frozenset[str], hidden: frozenset[str]) -> bool:
-    """Multi-tag hide rule: a message carrying `qso` is governed only by the
-    `qso` toggle (so hiding `greeting` hides greeting bots, never a human
-    greeting that also carries `qso`); a message without `qso` is hidden when
-    any of its tags is hidden. `auto_beacon` is an ordinary hideable tag."""
-    if "qso" in tags:
-        return "qso" in hidden
+    """ANY rule (mcmap's): a message is hidden when any of its tags is hidden.
+    `qso` and `auto_beacon` are ordinary hideable tags; an untagged message is
+    never hidden by tags."""
     return not tags.isdisjoint(hidden)
 
 

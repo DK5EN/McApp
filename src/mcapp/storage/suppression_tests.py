@@ -9,7 +9,7 @@ no TTY, no network, no `/etc/mcapp`. Follows the house pattern used by
 list, a PASS/FAIL line per case, and a bool return.
 
 Coverage:
-  1. `contract/suppression_vectors.json` (v2, tags) sha256 drift tripwire (pattern from
+  1. `contract/suppression_vectors.json` (v3, tags, ANY rule) sha256 drift tripwire (pattern from
      `commands.hashtag_dst_tests`) plus every vector in the corpus replayed
      through the real `is_suppressed`.
   2. `load_policy` against a from-scratch ephemeral SQLite DB (schema copied
@@ -57,7 +57,7 @@ _VECTORS_PATH = Path(__file__).parent.parent / "contract" / "suppression_vectors
 # constant deliberately (and re-check the hand-written cases below still
 # agree with the new corpus) or the change was unintentional and this
 # tripwire just did its job. Mirrors commands/hashtag_dst_tests.py.
-_EXPECTED_SHA256 = "e3f271d51ebad349c3f47df72bc62eef4d05d601746069be33d98586756fa0ad"
+_EXPECTED_SHA256 = "ea9bf85752179700d9b94d89b777d6f41efd59fe3f9b8a537237ed0127de056e"
 
 # DDL copied verbatim from storage/migrations.py (migrations v11, v16, v17).
 # Kept as a local copy rather than importing anything from migrations.py: a
@@ -135,7 +135,7 @@ def _test_corpus_vectors(results: list[tuple[str, bool]]) -> None:
 
     version = contract.get("version")
     results.append(
-        (f"contract/suppression_vectors.json version == 2 (got {version!r})", version == 2)
+        (f"contract/suppression_vectors.json version == 3 (got {version!r})", version == 3)
     )
 
     policies = {name: _policy_from_spec(spec) for name, spec in contract["policies"].items()}
@@ -350,7 +350,8 @@ def _test_policy_is_noop(results: list[tuple[str, bool]]) -> None:
 
 def _test_hidden_tags_semantics(results: list[tuple[str, bool]]) -> None:
     """Q1 (classifier unification): default hidden tags, allowlist for user
-    tag ids, the qso rule, and a legacy hiddenCategories key being inert."""
+    tag ids, the ANY rule (mcmap's; qso is an ordinary tag), and a legacy
+    hiddenCategories key being inert."""
     default = policy_from_parts({"enabled": True}, [], {})
     results.append(
         (
@@ -402,16 +403,17 @@ def _test_hidden_tags_semantics(results: list[tuple[str, bool]]) -> None:
             "human greeting (greeting+qso), greeting hidden",
             ["greeting", "qso"],
             ["greeting"],
-            False,
+            True,
         ),
         ("qso message, qso hidden", ["greeting", "qso"], ["qso"], True),
-        ("qso message, other tag of it hidden", ["time", "qso"], ["time"], False),
-        ("no qso, any tag hidden", ["weather", "time"], ["time"], True),
-        ("no qso, no tag hidden", ["weather"], ["time"], False),
+        ("qso message, other tag of it hidden", ["time", "qso"], ["time"], True),
+        ("qso-only message, greeting hidden", ["qso"], ["greeting"], False),
+        ("any tag hidden", ["weather", "time"], ["time"], True),
+        ("no tag hidden", ["weather"], ["time"], False),
         ("untagged message is never tag-hidden", [], ["time", "bot"], False),
     ]
     for label, tags, hidden_tags, want in cases:
-        results.append((f"qso rule: {label}", hidden(tags, hidden_tags) == want))
+        results.append((f"ANY rule: {label}", hidden(tags, hidden_tags) == want))
 
     both = policy_from_parts({"enabled": True, "hiddenTags": ["qso"]}, [], {})
     results.append(
