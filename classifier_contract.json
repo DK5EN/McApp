@@ -1,0 +1,4040 @@
+{
+  "schema": 1,
+  "taxonomy_version": 6,
+  "source": {
+    "repo": "mcmap",
+    "commit": "898ca313e1d99dad57f75347aee9e1c12a737aee"
+  },
+  "tags": [
+    {
+      "id": "greeting",
+      "label": "Greeting",
+      "definition": "The message opens with a greeting or sign-off phrase ('Guten Morgen', 'gm', 'hallo zusammen', '73', 'cześć'), whatever else it says."
+    },
+    {
+      "id": "weather",
+      "label": "Weather",
+      "definition": "Contains a weather or environment report: temperature, humidity, pressure, wind, rain, pollen, water level, nowcast or telemetry values."
+    },
+    {
+      "id": "qsl",
+      "label": "QSL",
+      "definition": "Mentions a QSL card or contact confirmation: a request for a QSL, sending or confirming one, QSL bot/event-station exchanges ('pse QSL', 'QSL via bureau', 'QSL received, tnx')."
+    },
+    {
+      "id": "test",
+      "label": "Test",
+      "definition": "A short message that tests reach or equipment: 'test', 'Test 1 2 3', 'Testnachricht', 'reichweitentest', radio check."
+    },
+    {
+      "id": "question",
+      "label": "Question",
+      "definition": "Any interrogative message: a question to the network, including setup and help questions, requests for a contact or frequency, radio checks and small talk ('hat jemand ...?', 'hoert mich jemand?', 'wie geht's?')."
+    },
+    {
+      "id": "qso",
+      "label": "QSO",
+      "definition": "Human conversation: replies, statements, reports, chit-chat, thanks. Derived, not matched: a message with none of the automated tags (bot, weather, node, software, bulletin, pota-sota, alert, time) is qso, alongside any greeting, question, test or qsl. Weather blocks qso unless there is conversation evidence (leading @CALL addressee, 1:1 DM, or a question); a weather report with only a greeting is not qso."
+    },
+    {
+      "id": "bulletin",
+      "label": "Bulletin",
+      "definition": "News or bulletin for many readers: contest calendars, club-evening and net reminders, event announcements, newsletters -- informational rather than urgent."
+    },
+    {
+      "id": "pota-sota",
+      "label": "POTA/SOTA",
+      "definition": "Automated activator/award spot feed: '[POTA] SP9NLI @ Park | 18.089 MHz CW', '[SOTA] SP0KE @ Summit | 14.330 MHz SSB', '[DYPLOM] ... | 7.074 MHz FT8'. A human sentence that merely mentions POTA, SOTA or an award is not a spot."
+    },
+    {
+      "id": "alert",
+      "label": "Alert",
+      "definition": "Emergency, warning or urgent safety-relevant information: Notfall, SOS, earthquake, storm/flood warning, outage alert. A routine reminder with a warning emoji is a bulletin, not an alert."
+    },
+    {
+      "id": "bot",
+      "label": "Bot",
+      "definition": "Command to a node or bot, a bot's reply, or a machine protocol frame: '--setowngw ...', '>ping', 'pong', 'MH(3): ...', 'Route: ...', 'unbekannter Befehl:', command help output, file-transfer/MCF payloads ('MCF1|...', 'FTS|...')."
+    },
+    {
+      "id": "software",
+      "label": "Software",
+      "definition": "Announces a program, firmware version, web tool or software URL: 'MeshcomWebDesk V1.12.2 - https://...', version banners, firmware download links."
+    },
+    {
+      "id": "node",
+      "label": "Node",
+      "definition": "Automated station or node presence or status announcement: 'X is online', location/locator/QTH banner, BBS/gateway/digipeater availability, battery/supply notice, telemetry counter line, HTML or emoji URL advert. NOT a human message that merely mentions a callsign or locator."
+    },
+    {
+      "id": "time",
+      "label": "Time",
+      "definition": "Automated clock/time announcement, e.g. '{CET}2026-10-16 22:00:00'."
+    }
+  ],
+  "automated_tags": [
+    "bot",
+    "weather",
+    "node",
+    "software",
+    "bulletin",
+    "pota-sota",
+    "alert",
+    "time"
+  ],
+  "qso": {
+    "tag": "qso",
+    "weather_tag": "weather",
+    "exempt_evidence": [
+      "directed",
+      "question",
+      "addressee"
+    ]
+  },
+  "addressee_pattern": "^[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*@[A-Za-z0-9/-]{3,12}(?::|[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*",
+  "addressee_flags": "",
+  "rules": [
+    {
+      "priority": 5,
+      "name": "Bot command dash",
+      "scope": "msg",
+      "pattern": "^[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(—|–|--)[a-z][a-zA-Z0-9_-]{0,30}([\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000][^\\n]*)?(?=\\n?(?![\\s\\S]))",
+      "flags": "",
+      "tag": "bot"
+    },
+    {
+      "priority": 6,
+      "name": "Bot command help response",
+      "scope": "msg",
+      "pattern": "^(befehle|commands)[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*:[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*--[a-z]",
+      "flags": "i",
+      "tag": "bot"
+    },
+    {
+      "priority": 7,
+      "name": "Bot error response",
+      "scope": "msg",
+      "pattern": "^unbekannter befehl:",
+      "flags": "i",
+      "tag": "bot"
+    },
+    {
+      "priority": 8,
+      "name": "Ping command",
+      "scope": "msg",
+      "pattern": "^[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*ping[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?=\\n?(?![\\s\\S]))",
+      "flags": "i",
+      "tag": "bot"
+    },
+    {
+      "priority": 8.5,
+      "name": "Bot command prefix",
+      "scope": "msg",
+      "pattern": "^[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[>!][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?:ping|pong|mh|mheard|route|stats|wx|version|ver|info|help|h|userinfo|dice|echo|time|topic|pos)(?:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]{1,30}){0,2}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?![\\s\\S])",
+      "flags": "i",
+      "tag": "bot"
+    },
+    {
+      "priority": 10,
+      "name": "CET timestamp",
+      "scope": "msg",
+      "pattern": "^\\{CET\\}[\\p{Nd}]{4}-[\\p{Nd}]{2}-[\\p{Nd}]{2} [\\p{Nd}]{2}:[\\p{Nd}]{2}:[\\p{Nd}]{2}",
+      "flags": "",
+      "tag": "time"
+    },
+    {
+      "priority": 10.5,
+      "name": "Time bot reply",
+      "scope": "msg",
+      "pattern": "^(?:(?:Time|Zeit):[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[0-9]{1,2}[./][0-9]{2}[./][0-9]{4}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[0-9]{2}:[0-9]{2}|🕐[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[0-9]{2}:[0-9]{2}(?::[0-9]{2})?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+Uhr,)",
+      "flags": "",
+      "tag": "time"
+    },
+    {
+      "priority": 18.5,
+      "name": "ALERT nowcast bot",
+      "scope": "msg",
+      "pattern": "^ALERT(?:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*\\[[^\\n\\]]{1,40}\\]:|:(?=[^\\n]*\\[[^\\n\\]]{1,40}\\]))",
+      "flags": "",
+      "tag": "weather"
+    },
+    {
+      "priority": 19,
+      "name": "Alert bot",
+      "scope": "msg",
+      "pattern": "^(?:(?:Toscana[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?ALLERTA[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:METEO|GIALLA|ARANCIONE|ROSSA|REGIONALE)(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|(?:ALARM|WARNUNG|ENTWARNUNG|BEENDET|ALERTE|FIN D'ALERTE)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[A-Z]{2}:|[^\\n]*\\|[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*alert\\.swiss[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?![\\s\\S]))",
+      "flags": "",
+      "tag": "alert"
+    },
+    {
+      "priority": 19.5,
+      "name": "Alert bot Italian",
+      "scope": "msg",
+      "pattern": "^ALLERTA[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+Reg\\.|^SISMA[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+M[0-9]|(?<![\\p{L}\\p{N}_])terremoto[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+di[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+magnitudo|(?<![\\p{L}\\p{N}_])scossa[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+di[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+terremoto",
+      "flags": "i",
+      "tag": "alert"
+    },
+    {
+      "priority": 20,
+      "name": "WX emoji block",
+      "scope": "msg",
+      "pattern": "🌡[^\\n]*(📊|💧)",
+      "flags": "",
+      "tag": "weather"
+    },
+    {
+      "priority": 21,
+      "name": "WX text",
+      "scope": "msg",
+      "pattern": "(WX[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]|Temp[:= ])[\\s\\S]*(QNH|hPa|mbar)",
+      "flags": "is",
+      "tag": "weather"
+    },
+    {
+      "priority": 22,
+      "name": "WX short emoji",
+      "scope": "msg",
+      "pattern": "🌡️[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[\\p{Nd}]+",
+      "flags": "",
+      "tag": "weather"
+    },
+    {
+      "priority": 23,
+      "name": "WX pipe-delimited",
+      "scope": "msg",
+      "pattern": "(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))T:[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*-?[\\p{Nd}]+[^\\n]*\\|[^\\n]*(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))P:[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[\\p{Nd}]+(\\.[\\p{Nd}]+)?[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(mb|hpa)(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))",
+      "flags": "i",
+      "tag": "weather"
+    },
+    {
+      "priority": 24,
+      "name": "WX Italian",
+      "scope": "msg",
+      "pattern": "(?=[\\s\\S]*\\p{Nd})(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))(meteo|temp(?:eratura)?)(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))[\\s\\S]*(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))(umid(?:it[àa])?|pioggia|pressione|vento)(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))",
+      "flags": "is",
+      "tag": "weather"
+    },
+    {
+      "priority": 24.5,
+      "name": "WX temperature value",
+      "scope": "msg",
+      "pattern": "^(?![\\s\\S]*(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))(?:antenne|antenna|richtung|azimut|drehen?|dreh|neigung|winkel|elevation|tilt)(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_])))[\\s\\S]*?(?<![0-9.,/:-])[+-]?[0-9]{1,2}(?:[.,][0-9])?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?(?:°[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?C(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|°(?![\\p{L}\\p{N}])|Grad(?![\\p{L}])|degrees(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|C°)",
+      "flags": "i",
+      "tag": "weather"
+    },
+    {
+      "priority": 24.6,
+      "name": "WX bot templates",
+      "scope": "msg",
+      "pattern": "^Meteo[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*-[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*T:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*-?[0-9]|^Telemetry[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+V[0-9]+(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))[^\\n]*(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))T:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*-?[0-9]+(?:[.,][0-9]+)?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*C(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))[^\\n]*(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))H:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[0-9]+[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*%|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))(?:Tagesregenmenge|Taupunkt|B[öo]engeschwindigkeit)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*=[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*-?[0-9]|^WX[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[A-R]{2}[0-9]{2}[a-x]{2}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*:|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))Vento:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[0-9]+(?:\\.[0-9]+)?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*km/h|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))temperature[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+in[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[^\\n]{1,40}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+is[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+-?[0-9]+(?:\\.[0-9]+)?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+degrees(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))",
+      "flags": "i",
+      "tag": "weather"
+    },
+    {
+      "priority": 25,
+      "name": "WX key=value",
+      "scope": "msg",
+      "pattern": "(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))T[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*=[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*-?[\\p{Nd}]+(\\.[\\p{Nd}]+)?[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*C?(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))[^\\n]*(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))H[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*=[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[\\p{Nd}]+%?(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))[^\\n]*(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))P[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*=[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[\\p{Nd}]+(\\.[\\p{Nd}]+)?[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(hpa|mb)(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))",
+      "flags": "i",
+      "tag": "weather"
+    },
+    {
+      "priority": 26,
+      "name": "WX APRS/CWOP",
+      "scope": "msg",
+      "pattern": "(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))(APRS|CWOP)[ -/]?wetter(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))|(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))CWOP(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))[^\\n]*(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))(temperatur|luftdruck|feuchtigkeit)(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))",
+      "flags": "i",
+      "tag": "weather"
+    },
+    {
+      "priority": 27,
+      "name": "WX pollen",
+      "scope": "msg",
+      "pattern": "(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))pollen(wetter|vorhersage)(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))",
+      "flags": "i",
+      "tag": "weather"
+    },
+    {
+      "priority": 27,
+      "name": "WX pollen species",
+      "scope": "msg",
+      "pattern": "(?:^|[^\\p{L}\\p{N}_])(Roggen|Gr(ä|ae)ser|Beifu(ß|ss)|Ambrosia|Birke|Erle|Esche|Hasel|Ulme|Pappel|Weide|Eiche|Linde)[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*:[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(keine|gering|mittel|hoch)",
+      "flags": "i",
+      "tag": "weather"
+    },
+    {
+      "priority": 28,
+      "name": "WX German no-hPa",
+      "scope": "msg",
+      "pattern": "(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))WX(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))[^\\n]*(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))Temp\\.?:[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*-?[\\p{Nd}]+[^\\n]*(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))(Feuchte|Regen|Wind|Solar)(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))",
+      "flags": "i",
+      "tag": "weather"
+    },
+    {
+      "priority": 29,
+      "name": "WX Grad hPa",
+      "scope": "msg",
+      "pattern": "(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))[\\p{Nd}]+[,.]?[\\p{Nd}]*[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*Grad[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[CF](?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))[^\\n]*(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))hPa(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))",
+      "flags": "i",
+      "tag": "weather"
+    },
+    {
+      "priority": 29,
+      "name": "WX Beaufort",
+      "scope": "msg",
+      "pattern": "(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))BFT(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))",
+      "flags": "i",
+      "tag": "weather"
+    },
+    {
+      "priority": 29,
+      "name": "WX Daten",
+      "scope": "msg",
+      "pattern": "(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))WX[_-]?Daten(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))",
+      "flags": "i",
+      "tag": "weather"
+    },
+    {
+      "priority": 29.5,
+      "name": "WX measurements",
+      "scope": "msg",
+      "pattern": "^(?=[\\s\\S]*(?:-?[0-9]+(?:[.,][0-9]+)?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*°?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*C(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|-?[0-9]+(?:[.,][0-9]+)?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*°[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*C?|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))[Tt]emp(?:eratur|\\.|erature)?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[:=]?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*-?[0-9]))(?=[\\s\\S]*(?:(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))(?:hPa|hpa)(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))QNH(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))QFE(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|Luftfeucht|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))Hum\\.?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[:=]|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))rF(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))H[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*=[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[0-9]|Luftdruck|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))[Kk]m/h|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))m/s(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))UR[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[0-9]))",
+      "flags": "",
+      "tag": "weather"
+    },
+    {
+      "priority": 29.8,
+      "name": "Version banner",
+      "scope": "msg",
+      "pattern": "^(?=[^\\n]*(?<![\\p{L}\\p{N}_.])[Vv]?1\\.[0-9]{1,2}\\.[0-9]{1,2}(?![\\p{L}\\p{N}_.]))(?=[^\\n]*(?:(?<![\\p{L}\\p{N}_.])[Vv]?4\\.[0-9]{2}[a-z](?![\\p{L}\\p{N}_])|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))[A-R]{2}[0-9]{2}[A-Xa-x]{2}(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))))[^\\n?]{0,160}(?![\\s\\S])",
+      "flags": "",
+      "tag": "software"
+    },
+    {
+      "priority": 30,
+      "name": "MeshCom WebDesk version",
+      "scope": "msg",
+      "pattern": "(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))meshcom[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*webdesk[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+v?[\\p{Nd}]+\\.[\\p{Nd}]",
+      "flags": "i",
+      "tag": "software"
+    },
+    {
+      "priority": 31,
+      "name": "MeshCom WebDesk banner",
+      "scope": "msg",
+      "pattern": "(\\*{2,}|-{2,}=|={2,}|-=\\()[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*meshcom[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*webdesk",
+      "flags": "i",
+      "tag": "software"
+    },
+    {
+      "priority": 32,
+      "name": "MeshCom/WebDesk mention",
+      "scope": "msg",
+      "pattern": "(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))(meshcom[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*webdesk|webdesk)(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))[^\\n]*\\|[^\\n]*\\|",
+      "flags": "i",
+      "tag": "software"
+    },
+    {
+      "priority": 33,
+      "name": "FW version 73",
+      "scope": "msg",
+      "pattern": "^[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[\\p{Nd}]+\\.[\\p{Nd}]+(\\.[\\p{Nd}]+)?[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+73[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+de[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+[a-z0-9]+",
+      "flags": "i",
+      "tag": "software"
+    },
+    {
+      "priority": 34,
+      "name": "Telemetry CNT/INT",
+      "scope": "msg",
+      "pattern": "^[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*\\[CNT:[\\p{Nd}]+/[\\p{Nd}]+\\][\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*\\[INT:[\\p{Nd}]+\\]",
+      "flags": "",
+      "tag": "node"
+    },
+    {
+      "priority": 34,
+      "name": "MeshDash startup",
+      "scope": "msg",
+      "pattern": "^[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*meshdash[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+v[0-9]+\\.[0-9]+\\.[0-9]+[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+startup",
+      "flags": "i",
+      "tag": "software"
+    },
+    {
+      "priority": 34.5,
+      "name": "Bulletin calendar bots",
+      "scope": "msg",
+      "pattern": "(?:^Contest:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff][^\\n]*\\([0-9]{4}Z-[0-9]{4}Z,|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))AFU[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+Termine(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))(?:Uhr|MESZ|MEZ)(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))[^\\n]*\\[[0-9]+/[0-9]+\\][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?![\\s\\S])|[0-9]{1,2}[:.][0-9]{2}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?:Uhr|MESZ|MEZ)(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))[^\\n]*\\[[0-9]+/[0-9]+\\][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?![\\s\\S])|^\\[Temp\\]:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*\\([0-9]+(?:\\.[0-9]+)?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[<>][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[0-9]+(?:\\.[0-9]+)?\\))",
+      "flags": "",
+      "tag": "bulletin"
+    },
+    {
+      "priority": 35,
+      "name": "Contest termine",
+      "scope": "msg",
+      "pattern": "(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))contest[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*termine(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))",
+      "flags": "i",
+      "tag": "bulletin"
+    },
+    {
+      "priority": 35.5,
+      "name": "Bulletin OV-Abend with Uhr",
+      "scope": "msg",
+      "pattern": "^[^\\n]{0,16}?(?:(?<![\\p{L}\\p{N}_])(?:OV[- ]?(?:abend|runde)|clubabend)(?![\\p{L}\\p{N}_])[^\\n]{0,80}?(?<![0-9.:])[0-9]{1,2}[:.]?[0-9]{0,2}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?Uhr|(?<![0-9.:])[0-9]{1,2}(?:[:.][0-9]{2})?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?Uhr[^\\n]{0,60}?(?<![\\p{L}\\p{N}_])(?:OV[- ]?(?:abend|runde)|clubabend)(?![\\p{L}\\p{N}_]))",
+      "flags": "i",
+      "tag": "bulletin"
+    },
+    {
+      "priority": 35.5,
+      "name": "Bulletin OV-Abend with time",
+      "scope": "msg",
+      "pattern": "^[^\\n]{0,16}?(?<![\\p{L}\\p{N}_])(?:OV[- ]?(?:abend|runde)|clubabend)(?![\\p{L}\\p{N}_])[^\\n]{0,80}?(?<![0-9.:])[0-9]{1,2}[:.][0-9]{2}(?![0-9])",
+      "flags": "i",
+      "tag": "bulletin"
+    },
+    {
+      "priority": 35.6,
+      "name": "Spot feed (POTA/SOTA)",
+      "scope": "msg",
+      "pattern": "^[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*\\[(?:POTA|SOTA|DYPLOM)\\]",
+      "flags": "i",
+      "tag": "pota-sota"
+    },
+    {
+      "priority": 36,
+      "name": "HTML advert",
+      "scope": "msg",
+      "pattern": "<(div|a|span|p|br)(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))[^>]*>",
+      "flags": "",
+      "tag": "node"
+    },
+    {
+      "priority": 37,
+      "name": "Emoji URL advert",
+      "scope": "msg",
+      "pattern": "^(?![\\s\\S]*ALLERTA)[\\s\\S]*?[🌀-🫿☀-➿⌀-⏿][\\s\\S]*(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))(https?://|www\\.)[^\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+",
+      "flags": "s",
+      "tag": "node"
+    },
+    {
+      "priority": 38,
+      "name": "Pong reply",
+      "scope": "msg",
+      "pattern": "(^pong[!.\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]|↩️[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*pong(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_])))",
+      "flags": "i",
+      "tag": "bot"
+    },
+    {
+      "priority": 39,
+      "name": "MH heard list",
+      "scope": "msg",
+      "pattern": "^[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*MH\\([\\p{Nd}]+\\):[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[A-Z0-9]+-[\\p{Nd}]+",
+      "flags": "",
+      "tag": "bot"
+    },
+    {
+      "priority": 39.5,
+      "name": "Bot reply templates",
+      "scope": "msg",
+      "pattern": "^⏳[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*Command throttled|^Cmds:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*>|^\\([0-9]+/[0-9]+\\)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?:📋|📻[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*MH:|📍|![A-Za-z0-9_]|[A-Z0-9]{3,}-[0-9]{1,3}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*@[0-9]{2}:[0-9]{2})|^Node[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[^|\\n]{0,30}\\|[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*QTH:[^|\\n]*\\|[^\\n]*Bot active[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*\\(--help\\)|^\\[[0-9]+/[0-9]+\\][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[A-Z0-9]{3,}-[0-9]{1,2}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[0-9]{4}-[0-9]{2}-[0-9]{2}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[0-9]{2}:[0-9]{2}:[0-9]{2}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+R:-?[0-9]+dBm|^📊[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*Stats[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*\\(last|^(?:\\[CTC\\][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*)?(?:🏓[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*)?Ping test(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|^[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[−‒–—―-]{1,2}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?(?:set[a-z]+|info|ping|help|mheard|mh|sendpos|reboot|pos|track|symcd|nbrrelay)(?![\\p{L}\\p{N}_])",
+      "flags": "i",
+      "tag": "bot"
+    },
+    {
+      "priority": 39.6,
+      "name": "File-transfer frames",
+      "scope": "msg",
+      "pattern": "^(?:MCF1|FTS|FTA)\\|",
+      "flags": "",
+      "tag": "bot"
+    },
+    {
+      "priority": 40,
+      "name": "QTH beacon",
+      "scope": "msg",
+      "pattern": "^[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*QTH:[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]",
+      "flags": "i",
+      "tag": "node"
+    },
+    {
+      "priority": 40,
+      "name": "Route beacon",
+      "scope": "msg",
+      "pattern": "^[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*Route:[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[A-Z0-9]+-[\\p{Nd}]+",
+      "flags": "i",
+      "tag": "bot"
+    },
+    {
+      "priority": 40.5,
+      "name": "Node status lines",
+      "scope": "msg",
+      "pattern": "^Battery protection armed|^[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*📍[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*QTH(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|^\\[[0-9]+/[0-9]+\\][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*Info[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[0-9]{4}-[0-9]{2}-[0-9]{2}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[0-9]{2}:[0-9]{2}:[0-9]{2}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+BAT:|^Telemetry[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+V[0-9]+(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))[^\\n]*(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))[VIW][0-9]:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*-?[0-9]|^Supply moved[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[0-9]|(?<![\\p{L}\\p{N}_])(?:BBS|digipeater|mailbox)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+online(?![\\p{L}\\p{N}_])|^[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[A-Z0-9]{2,3}[0-9][A-Z0-9]{1,4}(?:-[0-9]{1,2})?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+up:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*power on",
+      "flags": "i",
+      "tag": "node"
+    },
+    {
+      "priority": 41,
+      "name": "Banner advert",
+      "scope": "msg",
+      "pattern": "^[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*-{2,}=+[^\\n]*=+-{2,}[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?=\\n?(?![\\s\\S]))",
+      "flags": "",
+      "tag": "node"
+    },
+    {
+      "priority": 41.5,
+      "name": "Software URL",
+      "scope": "msg",
+      "pattern": "^[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*https?://(?:[A-Za-z0-9_.-]+\\.)?(?:angonikro\\.github\\.io/MeshCom-Guru|dg9sr\\.github\\.io/Adifanalyzer|github\\.com/(?:icssw-org|DH1FR)/|mc-dash\\.dig-italia\\.it|meshcom\\.dig-italia\\.it|dig-italia\\.it/out_|icssw\\.org/(?:en/|it/)?(?:meshcom-versionen|opensource-meshcom-clients|meshcom-ota-update))[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?![\\s\\S])|^[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*https?://(?:github\\.com/[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+|[A-Za-z0-9_-]+\\.github\\.io[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*|meshmap\\.oevsv\\.at(?:[/?#][^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*)?|dig-italia\\.it/docs_meshcom/[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*|icssw\\.org/[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?:update|firmware|software|download|client|versionen)[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?![\\s\\S])",
+      "flags": "i",
+      "tag": "software"
+    },
+    {
+      "priority": 42,
+      "name": "URL advert",
+      "scope": "msg",
+      "pattern": "^[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(https?://|www\\.)[^\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?=\\n?(?![\\s\\S]))",
+      "flags": "",
+      "tag": null
+    },
+    {
+      "priority": 47,
+      "name": "QSL",
+      "scope": "msg",
+      "pattern": "^(?:[^\\p{L}\\p{N}_]*qsl[?!.\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?![\\s\\S])|[^\\p{L}\\p{N}_]*qsl(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|@[A-Za-z0-9/-]+:?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+qsl(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|[A-Za-z0-9/]{3,}(?:-[0-9]{1,2})?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*:QSL[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[0-9]|Danke fuer die Teilnahme am Meshday\\. Deine QSL:)|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))qsl[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+bitte(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))pse[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+qsl(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|(?<![\\p{L}\\p{N}_])qsl(?![\\p{L}\\p{N}_])",
+      "flags": "i",
+      "tag": "qsl"
+    },
+    {
+      "priority": 47.5,
+      "name": "Test short",
+      "scope": "msg",
+      "pattern": "^(?![\\s\\S]{41})[\\s\\S]*(?:(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))tests?(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))|(?:verbindungs|strecken|reichweiten|funktions|selbst|probe)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?test|(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))testnachricht|(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))testmessage|messaggio[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:di[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?test|radio[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+check|(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))probebetrieb)",
+      "flags": "i",
+      "tag": "test"
+    },
+    {
+      "priority": 47.6,
+      "name": "Test word early",
+      "scope": "msg",
+      "pattern": "^(?![\\s\\S]*(?:contest|mini-test|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))CWT(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|>test|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))Cmds:))(?!FTS\\|)(?=[\\s\\S]{41,160}(?![\\s\\S]))[^\\n]{0,28}?(?<![\\p{L}\\p{N}_-])(?:test|testnachricht|testmail|testmessage|testbetrieb|reichweitentest|funktionstest|verbindungstest)(?![\\p{L}\\p{N}_])(?![\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?:erfolgreich|ok|durchgeführt))",
+      "flags": "i",
+      "tag": "test"
+    },
+    {
+      "priority": 47.7,
+      "name": "Test typed strings",
+      "scope": "msg",
+      "pattern": "^[^A-Za-z0-9_]*(?:1234?5?6?7?8?9?|qwert[zy]|asdf[A-Za-z0-9_]{0,4}|testbake|messaggio[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+di[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+prova|sendeprobe)[^A-Za-z0-9_]*(?![\\s\\S])",
+      "flags": "i",
+      "tag": "test"
+    },
+    {
+      "priority": 47.8,
+      "name": "Test beacon",
+      "scope": "msg",
+      "pattern": "(?<![\\p{L}\\p{N}_])testbake(?![\\p{L}\\p{N}_])",
+      "flags": "i",
+      "tag": "test"
+    },
+    {
+      "priority": 48,
+      "name": "Test message",
+      "scope": "msg",
+      "pattern": "^[^\\p{L}\\p{N}_]*(test|prova|probe|proberuf|versuch|essai|prueba)([^\\p{L}\\p{N}_]|(?=\\n?(?![\\s\\S])))",
+      "flags": "i",
+      "tag": "test"
+    },
+    {
+      "priority": 49,
+      "name": "Question mark",
+      "scope": "msg",
+      "pattern": "^(?![\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*https?://)(?![\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[>!][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[A-Za-z0-9_])(?=[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)[^\\n]*\\?{1,3}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff\\p{Extended_Pictographic}\\uFE0F)]*(?![\\s\\S])",
+      "flags": "",
+      "tag": "question"
+    },
+    {
+      "priority": 50,
+      "name": "Greeting DE/EN",
+      "scope": "msg",
+      "pattern": "^(?:[^\\p{L}\\p{N}_]*(73|hallo|servus|moin|nabend|ahoi|guten[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morgen|abend|tag)|gute[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(nacht|reise)|good[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morning|evening|night|afternoon|day)|buon ?giorno|buona? ?s?era|buona ?notte|buonanotte|buon ?pomeriggio|ciao|hello|hi(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))|(?:salut|bonjour|bonsoir|bonne[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:nuit|soir[ée]e|journ[ée]e)|witam|hej|hey|huhu|mahlzeit|cze[sś][cć]|dzie[nń][\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+dobry|dobry[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:wiecz[oó]r|dzie[nń])|dobranoc|ol[aá]|slt|gm|gn|(?:einen[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+|ein[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+)?(?:sch[oö]nen?|sch[oö]nes|guten?|gute)[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:morgen|abend|tag|nacht|wochenstart|wochenende|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag|start)|buona?[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:sera|serata|giornata|notte|mattina|domenica)|buon[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:giorno|pomeriggio|inizio|weekend|fine)|saluti|salve|gr[uü](?:ß|ss|[ßs]e))(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_])))|[^\\p{L}\\p{N}_]*(?:(?:ein[A-Za-z0-9_]*[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?(?:sch[oö]n[A-Za-z0-9_]*|sonnig[A-Za-z0-9_]*|guten?|frohe?|gesegnete?|angenehme?|erholsame?|ruhige?)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:(?:guten?|sch[oö]n[A-Za-z0-9_]*)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?(?:morgen|tag|abend|nachmittag|vormittag|mittag|nacht|woche|wochenende|wochenstart|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag|start|feierabend|feiertag)|gude|tach|pfiat(?:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+di)?|gr[uü](?:ß|ss)e?|buenos[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+d[ií]as|buenas[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:tardes|noches)|hola|alo|dzie[nń][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+dobry|witaj|mi[lł]ego|dobrej[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+nocy|godmorgen|god[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+morgen|buon[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+pranzo|happy[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+meshday)(?![\\p{L}\\p{N}_])|@[A-Za-z0-9/-]{3,12}(?::|[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[^\\p{L}\\p{N}_]*(73|hallo|servus|moin|nabend|ahoi|guten[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morgen|abend|tag)|gute[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(nacht|reise)|good[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morning|evening|night|afternoon|day)|buon ?giorno|buona? ?s?era|buona ?notte|buonanotte|buon ?pomeriggio|ciao|hello|hi(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))|(?:salut|bonjour|bonsoir|bonne[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:nuit|soir[ée]e|journ[ée]e)|witam|hej|hey|huhu|mahlzeit|cze[sś][cć]|dzie[nń][\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+dobry|dobry[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:wiecz[oó]r|dzie[nń])|dobranoc|ol[aá]|slt|gm|gn|(?:einen[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+|ein[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+)?(?:sch[oö]nen?|sch[oö]nes|guten?|gute)[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:morgen|abend|tag|nacht|wochenstart|wochenende|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag|start)|buona?[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:sera|serata|giornata|notte|mattina|domenica)|buon[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:giorno|pomeriggio|inizio|weekend|fine)|saluti|salve|gr[uü](?:ß|ss|[ßs]e))(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))))",
+      "flags": "i",
+      "tag": "greeting"
+    },
+    {
+      "priority": 50,
+      "name": "Greeting colloquial openers",
+      "scope": "msg",
+      "pattern": "^(?:@[A-Za-z0-9/-]{3,12}(?::|[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*)?[^\\p{L}\\p{N}_]*(?:n['’]abend|hejka|hejo|siema|witajcie)(?![\\p{L}\\p{N}_])",
+      "flags": "i",
+      "tag": "greeting"
+    },
+    {
+      "priority": 55,
+      "name": "Alert reminder",
+      "scope": "msg",
+      "pattern": "⚠️?[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*erinnerung|erinnerung[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*⚠",
+      "flags": "i",
+      "tag": "bulletin"
+    },
+    {
+      "priority": 60,
+      "name": "Earthquake alert",
+      "scope": "msg",
+      "pattern": "(erdbeben|earthquake|magnitude[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+[\\p{Nd}]+)",
+      "flags": "i",
+      "tag": "alert"
+    },
+    {
+      "priority": 90,
+      "name": "Direct callsign",
+      "scope": "dst",
+      "pattern": "(?:^|,)[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?!(?:ALL|TEST|TIME)[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?=\\n?(?![\\s\\S])))(?=[^,]*[A-Z])[A-Z0-9./-]+[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?=\\n?(?![\\s\\S]))",
+      "flags": "i",
+      "tag": "directed"
+    }
+  ],
+  "vectors": [
+    {
+      "text": "Guten Morgen",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "bonjour tout le monde",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Cześć wszystkim",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "hej från Musterstadt",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "hej, 12 °C und 1013 hPa",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "weather"
+      ],
+      "rules": [
+        "WX temperature value",
+        "WX measurements",
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Schönen Tag zusammen",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "gm",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "gn all",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "gnss antenna test",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "test"
+      ],
+      "rules": [
+        "Test short"
+      ],
+      "directed": false
+    },
+    {
+      "text": "heyday of radio",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "gmail is down",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "Buona sera a tutti",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Hallo XX1ABC, ich habe heute das Update auf die neue Version gemacht",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Hallo XX1ABC, kommt das an?",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso",
+        "question"
+      ],
+      "rules": [
+        "Question mark",
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Guten Morgen aus Musterstadt, 12 Grad und Regen",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "weather"
+      ],
+      "rules": [
+        "WX temperature value",
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Guten Morgen aus Musterstadt, 15 °C, 991 hPa",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "weather"
+      ],
+      "rules": [
+        "WX temperature value",
+        "WX measurements",
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Hallo Test aus Musterstadt",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso",
+        "test"
+      ],
+      "rules": [
+        "Test short",
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Hallo, qsl bitte",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qsl",
+        "qso"
+      ],
+      "rules": [
+        "QSL",
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Moin, v1.2.3 auf 4.35t JN00aa",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "software"
+      ],
+      "rules": [
+        "Version banner",
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "qsl",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qsl",
+        "qso"
+      ],
+      "rules": [
+        "QSL"
+      ],
+      "directed": false
+    },
+    {
+      "text": "I said hallo yesterday",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "XX00aa: Temperatur 12.3 C, Luftfeuchte 55%, Wind 4 km/h",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX measurements"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Station A: 21.4C QNH 1013 hPa",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX measurements"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Guten Morgen aus Musterstadt 14.2 °C, Feuchte 70 %, Wind 5 km/h",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "weather"
+      ],
+      "rules": [
+        "WX temperature value",
+        "WX measurements",
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Heute 12°C und Sonne",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX temperature value"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Es hat 30 km/h Gegenwind",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "Das Wetter ist schoen, 18 Grad",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX temperature value"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Meshcom Beispiel - V1.15.0, XX1ABC-19, 4.35t JN00aa",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "software"
+      ],
+      "rules": [
+        "Version banner"
+      ],
+      "directed": false
+    },
+    {
+      "text": "-=( MeshComWebDesk 1.15.0 | Docker | Multi-Node | 4.35t | JN00aa )=-",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "software"
+      ],
+      "rules": [
+        "Version banner",
+        "MeshCom WebDesk version",
+        "MeshCom WebDesk banner",
+        "MeshCom/WebDesk mention"
+      ],
+      "directed": false
+    },
+    {
+      "text": "WebDesk V1.15.3 * Node X * JN00aa *",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "software"
+      ],
+      "rules": [
+        "Version banner"
+      ],
+      "directed": false
+    },
+    {
+      "text": "MeshcomWebDesk V1.15.0 - https://example.org/webdesk",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "software"
+      ],
+      "rules": [
+        "MeshCom WebDesk version"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Neue Version 1.2.3 ist da, bitte updaten",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "noch ein Test",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "test"
+      ],
+      "rules": [
+        "Test short"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Reichweitentest",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "test"
+      ],
+      "rules": [
+        "Test short"
+      ],
+      "directed": false
+    },
+    {
+      "text": "radio check",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "test"
+      ],
+      "rules": [
+        "Test short"
+      ],
+      "directed": false
+    },
+    {
+      "text": "hallo test",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso",
+        "test"
+      ],
+      "rules": [
+        "Test short",
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Wie war der Contest gestern?",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "question"
+      ],
+      "rules": [
+        "Question mark"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Ist das ein Test?",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "question",
+        "test"
+      ],
+      "rules": [
+        "Test short",
+        "Question mark"
+      ],
+      "directed": false
+    },
+    {
+      "text": "QSL?",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qsl",
+        "qso"
+      ],
+      "rules": [
+        "QSL"
+      ],
+      "directed": false
+    },
+    {
+      "text": "qsl 73 aus Musterstadt",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qsl",
+        "qso"
+      ],
+      "rules": [
+        "QSL"
+      ],
+      "directed": false
+    },
+    {
+      "text": "QSL. Bestätige hiermit den Empfang, beste Grüße und 73 de XX1ABC aus JN00AA",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qsl",
+        "qso"
+      ],
+      "rules": [
+        "QSL"
+      ],
+      "directed": false
+    },
+    {
+      "text": "qslkarten mache ich nicht",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "XX1ABC-1:QSL 47.0000N 8.0000E 500m",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qsl",
+        "qso"
+      ],
+      "rules": [
+        "QSL"
+      ],
+      "directed": false
+    },
+    {
+      "text": "@XX1ABC pse qsl",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qsl",
+        "qso"
+      ],
+      "rules": [
+        "QSL"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Danke für das QSL-Foto gestern, schöne Grüße",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qsl",
+        "qso"
+      ],
+      "rules": [
+        "QSL"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Hallo, qsl und viele Grüße",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qsl",
+        "qso"
+      ],
+      "rules": [
+        "QSL",
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": ">ping",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Bot command prefix"
+      ],
+      "directed": false
+    },
+    {
+      "text": "!stats XX1ABC-1",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Bot command prefix"
+      ],
+      "directed": false
+    },
+    {
+      "text": ">mh",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Bot command prefix"
+      ],
+      "directed": false
+    },
+    {
+      "text": "!wx",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Bot command prefix"
+      ],
+      "directed": false
+    },
+    {
+      "text": "> das ist ein zitat",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "!!!",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "https://github.com/icssw-org/example-repo/",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "software"
+      ],
+      "rules": [
+        "Software URL",
+        "URL advert"
+      ],
+      "directed": false
+    },
+    {
+      "text": "https://mc-dash.dig-italia.it/",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "software"
+      ],
+      "rules": [
+        "Software URL",
+        "URL advert"
+      ],
+      "directed": false
+    },
+    {
+      "text": "https://ibb.co/AbCd123",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [
+        "URL advert"
+      ],
+      "directed": false
+    },
+    {
+      "text": "https://example.org/foto.png",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [
+        "URL advert"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Contest: Beispiel Sprint (1800Z-1900Z, Oct 1)",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bulletin"
+      ],
+      "rules": [
+        "Bulletin calendar bots"
+      ],
+      "directed": false
+    },
+    {
+      "text": "📅 Heutige AFU Termine (MESZ)ab 19:00 bis 21:00Uhr: Runde; [1/1]",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bulletin"
+      ],
+      "rules": [
+        "Bulletin calendar bots"
+      ],
+      "directed": false
+    },
+    {
+      "text": "[Temp]: (21.0 > 20.0) Netz jeden Mittwoch um 20 Uhr",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bulletin"
+      ],
+      "rules": [
+        "Bulletin calendar bots"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Das war ein toller Contest",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "Hasel: keineRoggen: keine [2/2]",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX pollen species"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Eiche: hoch Linde: mittel",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX pollen species"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Gras: wir sehen uns",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "MH(12): XX1ABC-1, XX2DEF-2, XX3GHI-3, ... (+9)",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "MH heard list"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Route: XX1ABC-1 → XX2DEF-2; Hops: 1",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Route beacon"
+      ],
+      "directed": false
+    },
+    {
+      "text": "QTH: JN00aa; HW: Board, 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "node"
+      ],
+      "rules": [
+        "QTH beacon"
+      ],
+      "directed": false
+    },
+    {
+      "text": "qth ist Musterstadt, JN00aa, k",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "📅🏆 Heutige Contest Termine (MESZ)Keine Termine für heute. [1/1]",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bulletin"
+      ],
+      "rules": [
+        "Bulletin calendar bots",
+        "Contest termine"
+      ],
+      "directed": false
+    },
+    {
+      "text": "[POTA] SP9NLI @ Segiet Nature Reserve | 18.089 MHz CW - CW",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "pota-sota"
+      ],
+      "rules": [
+        "Spot feed (POTA/SOTA)"
+      ],
+      "directed": false
+    },
+    {
+      "text": "[SOTA] SP0KE @ Ślęża [4pt] | 14.330 MHz SSB by APRS2SOTA - [APRS2SOTA] 2op with {de 3Z6MA}",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "pota-sota"
+      ],
+      "rules": [
+        "Spot feed (POTA/SOTA)"
+      ],
+      "directed": false
+    },
+    {
+      "text": "⚠️ Erinnerung ⚠️ - 19:00 Uhr bis 21:00 Uhr - Clubabend - MESZ [1/1]",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bulletin"
+      ],
+      "rules": [
+        "Bulletin calendar bots",
+        "Alert reminder"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Meteo Musterstadt - Temp: 21.0C Umid: 50% Vento: 3Km/h",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX Italian",
+        "WX bot templates"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Oggi il meteo parla di temperatura e vento forte",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "ALERT: PIOGGIA tra 10m (50%) [Ort]",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "ALERT nowcast bot"
+      ],
+      "directed": false
+    },
+    {
+      "text": "ALERT [Ort]: 🌧 PIOGGIA: ORA",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "ALERT nowcast bot"
+      ],
+      "directed": false
+    },
+    {
+      "text": "ALERT: BURZA za 5km (80%) [Ort] | Quelle",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "ALERT nowcast bot"
+      ],
+      "directed": false
+    },
+    {
+      "text": "ALERT: Hochwasser in Musterstadt",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "WARNUNG ZH: Hochwasser (Musterort) | alert.swiss",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "alert"
+      ],
+      "rules": [
+        "Alert bot"
+      ],
+      "directed": false
+    },
+    {
+      "text": "ALLERTA GIALLA per temporali su zone: Nord",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "alert"
+      ],
+      "rules": [
+        "Alert bot"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Toscana ALLERTA METEO ARANCIONE Rischio: Vento",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "alert"
+      ],
+      "rules": [
+        "Alert bot"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Alert wurde ausgelöst",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "ALARM bei XX1ABC",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "Einen schönen guten Morgen aus XX1ABC",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Gude zusammen",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Happy Meshday an alle",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Buenos días a todos",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Grüsse aus Zürich",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Die Grüsse kamen nicht an, wiederholen",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "@XX1ABC-12 Guten Morgen Max",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "@XX1ABC: moin",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "@XX1ABC ciao Paolo, tutto bene",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "@XX1ABC das Gateway läuft wieder",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "Guten Morgen @XX1ABC",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Danke für die Info, 73 de XX1ABC",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "alles klar vy73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "bitte um QSL",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qsl",
+        "qso"
+      ],
+      "rules": [
+        "QSL"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Danke für die QSL-Karte, 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qsl",
+        "qso"
+      ],
+      "rules": [
+        "QSL"
+      ],
+      "directed": false
+    },
+    {
+      "text": "ok, qsl",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qsl",
+        "qso"
+      ],
+      "rules": [
+        "QSL"
+      ],
+      "directed": false
+    },
+    {
+      "text": "das Qslot war voll",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "Hier aktuell 12°C und Nebel",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX temperature value"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Moin, bei uns 8 Grad",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "weather"
+      ],
+      "rules": [
+        "WX temperature value",
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Wasser 18,4°C",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX temperature value"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Antenne bitte um 30 Grad drehen",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "Wind aus 231°",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "Meteo - T: 12.3C H: 80% P: 0.0mm W: 1.2km/h",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX bot templates"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Telemetry V2 Station T:20.1C H:55% P:1013.2hPa EXT:19.8C",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX bot templates"
+      ],
+      "directed": false
+    },
+    {
+      "text": "XX1ABC/2: Tagesregenmenge=0.0% Taupunkt=8.1°C",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX temperature value",
+        "WX bot templates"
+      ],
+      "directed": false
+    },
+    {
+      "text": "The temperature in Springfield is 14.2 degrees.",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX temperature value",
+        "WX bot templates"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Meteo war gestern schlecht",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "https://github.com/example/MeshTool",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "software"
+      ],
+      "rules": [
+        "Software URL",
+        "URL advert"
+      ],
+      "directed": false
+    },
+    {
+      "text": "https://meshmap.oevsv.at/?focus=XX1ABC-1",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "software"
+      ],
+      "rules": [
+        "Software URL",
+        "URL advert"
+      ],
+      "directed": false
+    },
+    {
+      "text": "https://example.github.io/MeshCom-Firmware/flash/",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "software"
+      ],
+      "rules": [
+        "Software URL",
+        "URL advert"
+      ],
+      "directed": false
+    },
+    {
+      "text": "https://dig-italia.it/docs_meshcom/guide",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "software"
+      ],
+      "rules": [
+        "Software URL",
+        "URL advert"
+      ],
+      "directed": false
+    },
+    {
+      "text": "https://icssw.org/en/meshcom-ota-update",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "software"
+      ],
+      "rules": [
+        "Software URL",
+        "URL advert"
+      ],
+      "directed": false
+    },
+    {
+      "text": "https://icssw.org/2026/10/04/meshcom-update-v4-40a-bitte-updaten/",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "software"
+      ],
+      "rules": [
+        "Software URL",
+        "URL advert"
+      ],
+      "directed": false
+    },
+    {
+      "text": "https://picrd.com/abc123",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [
+        "URL advert"
+      ],
+      "directed": false
+    },
+    {
+      "text": "https://icssw.org/news/aktuelles",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [
+        "URL advert"
+      ],
+      "directed": false
+    },
+    {
+      "text": "siehe https://github.com/example/MeshTool",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "Hallo XX1ABC, Test vom neuen Node aus dem Garten, kommt das an",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso",
+        "test"
+      ],
+      "rules": [
+        "Test word early",
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Das ist ein Test der Antenne auf dem Dach heute",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "test"
+      ],
+      "rules": [
+        "Test word early"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Der Contest startet morgen um 18 Uhr auf 80m und ist lang",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "Wir haben ein langes Gespräch geführt und am Ende gab es noch einen Test",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "123",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "test"
+      ],
+      "rules": [
+        "Test typed strings"
+      ],
+      "directed": false
+    },
+    {
+      "text": "qwerty",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "test"
+      ],
+      "rules": [
+        "Test typed strings"
+      ],
+      "directed": false
+    },
+    {
+      "text": "12345",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "test"
+      ],
+      "rules": [
+        "Test typed strings"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Sendeprobe",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "test"
+      ],
+      "rules": [
+        "Test typed strings"
+      ],
+      "directed": false
+    },
+    {
+      "text": "123 Nodes",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "[CNT:1/10][INT:5] TESTBAKE bitte QRM beachten",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "node",
+        "test"
+      ],
+      "rules": [
+        "Telemetry CNT/INT",
+        "Test beacon"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Testbake aktiv",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "test"
+      ],
+      "rules": [
+        "Test beacon"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Die Bake läuft stabil",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "10.10. 12:00 bis 11.10. 11:59Uhr: Beispiel Contest; [1/2]",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bulletin"
+      ],
+      "rules": [
+        "Bulletin calendar bots"
+      ],
+      "directed": false
+    },
+    {
+      "text": "ab 19:00 bis 20:00Uhr: Beispiel Runde; [2/2]",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bulletin"
+      ],
+      "rules": [
+        "Bulletin calendar bots"
+      ],
+      "directed": false
+    },
+    {
+      "text": "ab 19:00 bis 20:00 Uhr: Beispiel Runde; [2/2]",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bulletin"
+      ],
+      "rules": [
+        "Bulletin calendar bots"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Treffen um 19:00 Uhr",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "OV-Abend am Donnerstag 18:30 im Vereinsheim",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bulletin"
+      ],
+      "rules": [
+        "Bulletin OV-Abend with time"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Clubabend 14.10. 19:00 Gasthaus Beispiel",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bulletin"
+      ],
+      "rules": [
+        "Bulletin OV-Abend with time"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Heute OV Abend bei XX1ABC im Vereinsheim",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "kommt ihr zum OV Abend am Freitag?",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "question"
+      ],
+      "rules": [
+        "Question mark"
+      ],
+      "directed": false
+    },
+    {
+      "text": "SISMA M2.7 14:10 Beispielmeer prof 20km",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "alert"
+      ],
+      "rules": [
+        "Alert bot Italian"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Allerta Reg.Beispiel 10/10 13:40: VERDE intera regione",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "alert"
+      ],
+      "rules": [
+        "Alert bot Italian"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Terremoto di magnitudo 3.1 ore 12:37 zona Beispiel",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "alert"
+      ],
+      "rules": [
+        "Alert bot Italian"
+      ],
+      "directed": false
+    },
+    {
+      "text": "sisma",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "⏳ Command throttled. Try the same command again shortly.",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Bot reply templates"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Cmds: >help, >ping, >mh",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Bot reply templates"
+      ],
+      "directed": false
+    },
+    {
+      "text": "(1/2) 📻 MH: 💬 XX1ABC-1 @12:00 (5) | XX2DEF-2 @11:58 (3)",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Bot reply templates"
+      ],
+      "directed": false
+    },
+    {
+      "text": "[2/5] XX1ABC-12 2026-01-01 12:00:00 R:-110dBm S:-10dB D:5.0km",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Bot reply templates"
+      ],
+      "directed": false
+    },
+    {
+      "text": "📊 Stats (last 24h): Messages: 10, Positions: 20",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Bot reply templates"
+      ],
+      "directed": false
+    },
+    {
+      "text": "🏓 Ping test to XX1ABC-1 started: 1 ping(s)",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot",
+        "test"
+      ],
+      "rules": [
+        "Bot reply templates",
+        "Test word early"
+      ],
+      "directed": false
+    },
+    {
+      "text": "--Info",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Bot reply templates"
+      ],
+      "directed": false
+    },
+    {
+      "text": "MCF1|S|0A1B2C3D|ZmlsZS50eHQ=|10|1|1|abc|1|0",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "File-transfer frames"
+      ],
+      "directed": false
+    },
+    {
+      "text": "MCF1|D|0A1B2C3D|1|QUJD",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "File-transfer frames"
+      ],
+      "directed": false
+    },
+    {
+      "text": "FTA|ABC123|START",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "File-transfer frames"
+      ],
+      "directed": false
+    },
+    {
+      "text": "FTS|ABC123|a longer frame body that is more than forty characters long test",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "File-transfer frames"
+      ],
+      "directed": false
+    },
+    {
+      "text": "MCF1 ist ein Protokoll",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "--setowngw",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Bot command dash",
+        "Bot reply templates"
+      ],
+      "directed": false
+    },
+    {
+      "text": "—Extreme",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "—info",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Bot command dash",
+        "Bot reply templates"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Battery protection armed (charging at 13.1V)",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "node"
+      ],
+      "rules": [
+        "Node status lines"
+      ],
+      "directed": false
+    },
+    {
+      "text": "📍 QTH JN00AA, gesendet von der Uhr, 73 55",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "node"
+      ],
+      "rules": [
+        "Node status lines"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Supply moved 12.1V to 13.4V - off the air for 5s",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "node"
+      ],
+      "rules": [
+        "Node status lines"
+      ],
+      "directed": false
+    },
+    {
+      "text": "XX1ABC-8 up: power on",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "node"
+      ],
+      "rules": [
+        "Node status lines"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Mailbox online",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "node"
+      ],
+      "rules": [
+        "Node status lines"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Mein Akku ist leer",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "Weiß jemand, wie man das Display abschaltet?",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "question"
+      ],
+      "rules": [
+        "Question mark"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Hat jemand ein Gateway in der Nähe?",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "question"
+      ],
+      "rules": [
+        "Question mark"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Hört mich jemand??",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "question"
+      ],
+      "rules": [
+        "Question mark"
+      ],
+      "directed": false
+    },
+    {
+      "text": "ok?",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "https://example.org/page?x=1",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [
+        "URL advert"
+      ],
+      "directed": false
+    },
+    {
+      "text": ">echo hallo?",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Bot command prefix"
+      ],
+      "directed": false
+    },
+    {
+      "text": "beacon: HELTEC-STICK v4.35t MCWD v1.15.0 Testrechner",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "software"
+      ],
+      "rules": [
+        "Version banner"
+      ],
+      "directed": false
+    },
+    {
+      "text": "MCWD v1.15.0 / 4.40a JN00AA",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "software"
+      ],
+      "rules": [
+        "Version banner"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Hallo, v1.15.0 ist draußen und wie läuft es?",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso",
+        "question"
+      ],
+      "rules": [
+        "Question mark",
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Time: 17/09/2026 22:01",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "time"
+      ],
+      "rules": [
+        "Time bot reply"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Zeit: 06.10.2026 21:25",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "time"
+      ],
+      "rules": [
+        "Time bot reply"
+      ],
+      "directed": false
+    },
+    {
+      "text": "🕐 14:20:13 Uhr, Sonntag, 27.09.2026",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "time"
+      ],
+      "rules": [
+        "Time bot reply"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Zeit für ein Treffen",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "MeshDash V1.11.04 startup",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "software"
+      ],
+      "rules": [
+        "MeshDash startup"
+      ],
+      "directed": false
+    },
+    {
+      "text": "meshdash test",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "test"
+      ],
+      "rules": [
+        "Test short"
+      ],
+      "directed": false
+    },
+    {
+      "text": "MeshDash, Beispielbeacon",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "meshdash beacon online",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "Toscana ALLERTA METEO 🟡 GIALLO Rischio Beispiel https://example.org/",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "alert"
+      ],
+      "rules": [
+        "Alert bot"
+      ],
+      "directed": false
+    },
+    {
+      "text": "👉 Beispiel-Cam 📺 http://example.org/cam.htm",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "node"
+      ],
+      "rules": [
+        "Emoji URL advert"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Update auf 4.40a erledigt",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "Bitte alle auf Version 4.35t updaten",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "--info",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Bot command dash",
+        "Bot reply templates"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Befehle: --help --info",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Bot command help response"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Unbekannter Befehl: foo",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Bot error response"
+      ],
+      "directed": false
+    },
+    {
+      "text": " ping ",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Ping command"
+      ],
+      "directed": false
+    },
+    {
+      "text": "{CET}2026-01-02 03:04:05",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "time"
+      ],
+      "rules": [
+        "CET timestamp"
+      ],
+      "directed": false
+    },
+    {
+      "text": "🌡 12C 📊 1013",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX emoji block"
+      ],
+      "directed": false
+    },
+    {
+      "text": "WX station Temp: 12 C QNH 1013",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX text",
+        "WX measurements"
+      ],
+      "directed": false
+    },
+    {
+      "text": "🌡️ 12",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX short emoji"
+      ],
+      "directed": false
+    },
+    {
+      "text": "T: 12 C | H: 50 | P: 1013 hPa",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX pipe-delimited",
+        "WX measurements"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Meteo: temperatura 12, pressione 1013",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX Italian"
+      ],
+      "directed": false
+    },
+    {
+      "text": "T=12.5C H=55% P=1013 hpa",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX key=value",
+        "WX measurements"
+      ],
+      "directed": false
+    },
+    {
+      "text": "APRS-Wetter station",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX APRS/CWOP"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Pollenwetter heute",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX pollen"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Birke: mittel bis hoch",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX pollen species"
+      ],
+      "directed": false
+    },
+    {
+      "text": "WX Station Temp.: 12 Feuchte 50",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX German no-hPa"
+      ],
+      "directed": false
+    },
+    {
+      "text": "es sind 12,5 Grad C bei 1013 hPa",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX temperature value",
+        "WX Grad hPa"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Wind 4 BFT",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX Beaufort"
+      ],
+      "directed": false
+    },
+    {
+      "text": "WX-Daten aktuell",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX Daten"
+      ],
+      "directed": false
+    },
+    {
+      "text": "MeshCom WebDesk v1.2",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "software"
+      ],
+      "rules": [
+        "MeshCom WebDesk version"
+      ],
+      "directed": false
+    },
+    {
+      "text": "*** MeshCom WebDesk",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "software"
+      ],
+      "rules": [
+        "MeshCom WebDesk banner"
+      ],
+      "directed": false
+    },
+    {
+      "text": "WebDesk | foo | bar",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "software"
+      ],
+      "rules": [
+        "MeshCom/WebDesk mention"
+      ],
+      "directed": false
+    },
+    {
+      "text": "4.35 73 de XX1ABC",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "software"
+      ],
+      "rules": [
+        "FW version 73"
+      ],
+      "directed": false
+    },
+    {
+      "text": "[CNT:12/34] [INT:5]",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "node"
+      ],
+      "rules": [
+        "Telemetry CNT/INT"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Contest Termine diese Woche",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bulletin"
+      ],
+      "rules": [
+        "Contest termine"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Pong! 12 ms",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Pong reply"
+      ],
+      "directed": false
+    },
+    {
+      "text": "MH(3): XX1ABC-1 XX2DEF-2",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "MH heard list"
+      ],
+      "directed": false
+    },
+    {
+      "text": "visit <a href=\"x\">here</a>",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "node"
+      ],
+      "rules": [
+        "HTML advert"
+      ],
+      "directed": false
+    },
+    {
+      "text": "📡 see https://example.org/page",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "node"
+      ],
+      "rules": [
+        "Emoji URL advert"
+      ],
+      "directed": false
+    },
+    {
+      "text": "QTH: Vienna",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "node"
+      ],
+      "rules": [
+        "QTH beacon"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Route: XX1ABC-1 XX2DEF-2",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Route beacon"
+      ],
+      "directed": false
+    },
+    {
+      "text": "--=== Welcome ===--",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "node"
+      ],
+      "rules": [
+        "Banner advert"
+      ],
+      "directed": false
+    },
+    {
+      "text": " https://example.org/a ",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [
+        "URL advert"
+      ],
+      "directed": false
+    },
+    {
+      "text": "test 123 with a message that is longer than forty characters",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "test"
+      ],
+      "rules": [
+        "Test word early",
+        "Test message"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Guten Morgen zusammen",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "n'Abend zusammen",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting colloquial openers"
+      ],
+      "directed": false
+    },
+    {
+      "text": "OV-Abend jeden Donnerstag ab 19 Uhr",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bulletin"
+      ],
+      "rules": [
+        "Bulletin OV-Abend with Uhr"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Erdbeben bei Wien",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "alert"
+      ],
+      "rules": [
+        "Earthquake alert"
+      ],
+      "directed": false
+    },
+    {
+      "text": "⚠️ Erinnerung: Termin",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bulletin"
+      ],
+      "rules": [
+        "Alert reminder"
+      ],
+      "directed": false
+    },
+    {
+      "text": "[POTA] SP9NLI @ Park | 18.089 MHz CW - CW",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "pota-sota"
+      ],
+      "rules": [
+        "Spot feed (POTA/SOTA)"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Das Gateway läuft seit gestern wieder stabil",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "Guten Morgen aus Musterstadt bei 11°",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "weather"
+      ],
+      "rules": [
+        "WX temperature value",
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "@XX2DEF GM, hier auch 11°",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso",
+        "weather"
+      ],
+      "rules": [
+        "WX temperature value",
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "  @XX2DEF-5: hier auch 11°",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "weather"
+      ],
+      "rules": [
+        "WX temperature value"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Bei mir sind es 11°",
+      "from": "XX1ABC-1",
+      "to": "XX2DEF-5",
+      "tags": [
+        "qso",
+        "weather"
+      ],
+      "rules": [
+        "WX temperature value"
+      ],
+      "directed": true
+    },
+    {
+      "text": "Habt ihr auch 11°?",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "question",
+        "weather"
+      ],
+      "rules": [
+        "WX temperature value",
+        "Question mark"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Wie ist das Wetter bei euch, hier 12 °C und 1013 hPa?",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "question",
+        "weather"
+      ],
+      "rules": [
+        "WX temperature value",
+        "WX measurements",
+        "Question mark"
+      ],
+      "directed": false
+    },
+    {
+      "text": "🌡 12.4°C 💧 71% 🌬 3 km/h 1013 hPa",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX emoji block",
+        "WX temperature value",
+        "WX measurements"
+      ],
+      "directed": false
+    },
+    {
+      "text": "WX Temp: 12 QNH 1013",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX text",
+        "WX measurements"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Cmds: >help, kennt das jemand?",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot",
+        "question"
+      ],
+      "rules": [
+        "Bot reply templates",
+        "Question mark"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Danke dir, bis später",
+      "from": "XX1ABC-1",
+      "to": "XX2DEF-5",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": true
+    },
+    {
+      "text": "",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "   ",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "[DYPLOM] XX1ABC @ Example Award Programme | 7.074 MHz FT8",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "pota-sota"
+      ],
+      "rules": [
+        "Spot feed (POTA/SOTA)"
+      ],
+      "directed": false
+    },
+    {
+      "text": "[DYPLOM] XX1ABC @ Example Award Programme | 3.701 MHz SSB ?",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "pota-sota",
+        "question"
+      ],
+      "rules": [
+        "Spot feed (POTA/SOTA)",
+        "Question mark"
+      ],
+      "directed": false
+    },
+    {
+      "text": "  [dyplom] XX1ABC @ Example Award | 430.2 MHz FM",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "pota-sota"
+      ],
+      "rules": [
+        "Spot feed (POTA/SOTA)"
+      ],
+      "directed": false
+    },
+    {
+      "text": "[POTA] XX1ABC @ Example Park | 14.061 MHz CW",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "pota-sota"
+      ],
+      "rules": [
+        "Spot feed (POTA/SOTA)"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Neues Dyplom [DYPLOM] ist jetzt aktiv, viel Spass",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "Hejka, jestes tam?",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso",
+        "question"
+      ],
+      "rules": [
+        "Question mark",
+        "Greeting colloquial openers"
+      ],
+      "directed": false
+    },
+    {
+      "text": "@XX1ABC siema",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting colloquial openers"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Witajcie, miłego dnia",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting colloquial openers"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Das ist n'Abendessen",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "Ich sage hejka",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "Morgen 18Uhr ist Clubabend im Vereinsheim. Kommt vorbei?",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bulletin",
+        "question"
+      ],
+      "rules": [
+        "Bulletin OV-Abend with Uhr",
+        "Question mark"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Um 19:30 Uhr findet wieder die OV-Runde statt auf 145.500 MHz",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bulletin"
+      ],
+      "rules": [
+        "Bulletin OV-Abend with Uhr"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Clubabend verschoben, Beginn 20 Uhr",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bulletin"
+      ],
+      "rules": [
+        "Bulletin OV-Abend with Uhr"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Ich war gestern beim Clubabend, war nett",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "Danke fuer den schoenen OV-Abend gestern, bin um 23 Uhr heim",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "Hallo Peter, schaffst du es heute um 19 Uhr zum OV-Abend",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "plain chat text",
+      "from": "XX1ABC-1",
+      "to": "XX2DEF-5",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": true
+    },
+    {
+      "text": "plain chat text",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "plain chat text",
+      "from": "XX1ABC-1",
+      "to": "TEST",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "plain chat text",
+      "from": "XX1ABC-1",
+      "to": "TIME",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "plain chat text",
+      "from": "XX1ABC-1",
+      "to": "ALL\n",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "plain chat text",
+      "from": "XX1ABC-1",
+      "to": "20,XX2DEF-5",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": true
+    },
+    {
+      "text": "plain chat text",
+      "from": "XX1ABC-1",
+      "to": "xx2def",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": true
+    },
+    {
+      "text": "plain chat text",
+      "from": "XX1ABC-1",
+      "to": "*",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "plain chat text",
+      "from": "XX1ABC-1",
+      "to": "",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "plain chat text",
+      "from": "",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "ping\n",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Ping command"
+      ],
+      "directed": false
+    },
+    {
+      "text": "ping\n\n",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Ping command"
+      ],
+      "directed": false
+    },
+    {
+      "text": "ping\r",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Ping command"
+      ],
+      "directed": false
+    },
+    {
+      "text": " ping ",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Ping command"
+      ],
+      "directed": false
+    },
+    {
+      "text": "--info\n",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Bot command dash",
+        "Bot reply templates"
+      ],
+      "directed": false
+    },
+    {
+      "text": "--info extra text",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Bot command dash",
+        "Bot reply templates"
+      ],
+      "directed": false
+    },
+    {
+      "text": "--info\nsecond line",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Bot command dash",
+        "Bot reply templates"
+      ],
+      "directed": false
+    },
+    {
+      "text": "https://example.org/\n",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [
+        "URL advert"
+      ],
+      "directed": false
+    },
+    {
+      "text": "https://example.org/x ",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [
+        "URL advert"
+      ],
+      "directed": false
+    },
+    {
+      "text": "﻿ping",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "WX Temp: 12\nQNH 1013",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX text",
+        "WX measurements"
+      ],
+      "directed": false
+    },
+    {
+      "text": "　ping　",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bot"
+      ],
+      "rules": [
+        "Ping command"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Temp: 12 hPa\r\nmore",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX text",
+        "WX measurements"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Hallo Welt",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "gruß aus Wien",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN"
+      ],
+      "directed": false
+    },
+    {
+      "text": "٣٤ Zahl x y",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false
+    },
+    {
+      "text": "Test ſ K ä",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "test"
+      ],
+      "rules": [
+        "Test short",
+        "Test message"
+      ],
+      "directed": false
+    }
+  ],
+  "fingerprint_vectors": [
+    {
+      "text": "  Temp 21.5 C see https://example.org/x?a=1 now ",
+      "fingerprint": "cb4a7c771916"
+    },
+    {
+      "text": "Hallo 🌡️ 12,5 Grad   OE1ABC-1",
+      "fingerprint": "3cf55be08527"
+    },
+    {
+      "text": "Größe ÄÖ 73 de OE1ABC",
+      "fingerprint": "5fb0c8fc36af"
+    },
+    {
+      "text": "٣٤ Zahl x y",
+      "fingerprint": "a8a27507713f"
+    },
+    {
+      "text": "",
+      "fingerprint": "da39a3ee5e6b"
+    },
+    {
+      "text": "   ",
+      "fingerprint": "da39a3ee5e6b"
+    },
+    {
+      "text": "Hallo Welt",
+      "fingerprint": "8c047d9ed3a6"
+    },
+    {
+      "text": "HALLO   WELT\t\n",
+      "fingerprint": "8c047d9ed3a6"
+    },
+    {
+      "text": "Temp 1.5 http://a.b/c  x",
+      "fingerprint": "b317fe2cbb0e"
+    },
+    {
+      "text": "temp 99,25 https://z.y  x",
+      "fingerprint": "b317fe2cbb0e"
+    },
+    {
+      "text": "Wetter 🌡️ 12,5 Grad ☀ 💧",
+      "fingerprint": "117d9ea339cb"
+    },
+    {
+      "text": "Zahl 1,2,3 und 4.5.6 und 7",
+      "fingerprint": "d7a4fd51cf50"
+    },
+    {
+      "text": "A B　C D",
+      "fingerprint": "30a47d966e96"
+    },
+    {
+      "text": "﻿BOM am Anfang",
+      "fingerprint": "f20892708580"
+    },
+    {
+      "text": "Straße ſ K İ ǅ",
+      "fingerprint": "3ecfe30963d1"
+    },
+    {
+      "text": "Ziffern ٣٤ ١٢,٥ 12",
+      "fingerprint": "e7a21fc82735"
+    },
+    {
+      "text": "www.example.org und https://example.org/pfad?x=1#y",
+      "fingerprint": "954340291cf7"
+    }
+  ]
+}

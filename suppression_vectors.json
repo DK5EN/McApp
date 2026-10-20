@@ -1,0 +1,591 @@
+{
+  "description": "Canonical corpus for the message-suppression predicate (is_suppressed / is_spam_by_classifier / is_text_blocked). Mirrors the webapp's isSpamByClassifier (decision order: disabled -> promoted hash -> demoted hash -> hidden tags -> hide_auto_beacons -> min_info_score) combined with the unconditional isTextBlocked half of passesBaseGuards. Hide semantics over multi-label tags (classifier unification, Q1): a message carrying `qso` is hidden iff `qso` is hidden; a message without `qso` is hidden iff any of its tags is hidden; `auto_beacon` is an ordinary hideable tag. A policy without a `hiddenTags` key falls back to the default [time, bot]; an explicit empty list hides nothing. Field names in `policies` and `message` are the webapp's wire names (camelCase). Canonical home is mc-chat contract/ (subtree-shared to MCProxy); `category` is no longer part of a message.",
+  "canonical": "mc-chat/contract/suppression_vectors.json",
+  "version": 2,
+  "policies": {
+    "disabled_hides_category": {
+      "enabled": false,
+      "hiddenTags": ["node"],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "disabled_with_blocked_text": {
+      "enabled": false,
+      "hiddenTags": [],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": ["spamword"]
+    },
+    "promoted_only": {
+      "enabled": true,
+      "hiddenTags": [],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": ["promo123abc1"],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "promoted_but_disabled": {
+      "enabled": false,
+      "hiddenTags": [],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": ["promo123abc1"],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "demoted_beats_category": {
+      "enabled": true,
+      "hiddenTags": ["bot"],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": ["demo456def12"],
+      "blockedTexts": []
+    },
+    "group20_regression": {
+      "enabled": true,
+      "hiddenTags": ["time", "bot", "node", "software"],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "group20_category_not_hidden": {
+      "enabled": true,
+      "hiddenTags": [],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "auto_beacon_hidden": {
+      "enabled": true,
+      "hiddenTags": [],
+      "minInfoScore": null,
+      "hideAutoBeacons": true,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "auto_beacon_shown": {
+      "enabled": true,
+      "hiddenTags": [],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "info_score_threshold": {
+      "enabled": true,
+      "hiddenTags": [],
+      "minInfoScore": 0.5,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "no_threshold": {
+      "enabled": true,
+      "hiddenTags": [],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "blocked_text_case_insensitive": {
+      "enabled": true,
+      "hiddenTags": [],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": ["BadWord"]
+    },
+    "blocked_text_empty_list": {
+      "enabled": true,
+      "hiddenTags": [],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "degenerate_nonempty_hash_sets": {
+      "enabled": true,
+      "hiddenTags": [],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": ["real123abc12"],
+      "demotedHashes": ["other456def1"],
+      "blockedTexts": []
+    },
+    "empty_hash_in_promoted": {
+      "enabled": true,
+      "hiddenTags": [],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [""],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "empty_hash_in_demoted_with_hidden_category": {
+      "enabled": true,
+      "hiddenTags": ["alert"],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [""],
+      "blockedTexts": []
+    },
+    "populated_hidden_categories": {
+      "enabled": true,
+      "hiddenTags": ["greeting", "alert"],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "hide_greeting": {
+      "enabled": true,
+      "hiddenTags": ["greeting"],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "hide_qso": {
+      "enabled": true,
+      "hiddenTags": ["qso"],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "hide_time": {
+      "enabled": true,
+      "hiddenTags": ["time"],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "hide_auto_beacon_tag": {
+      "enabled": true,
+      "hiddenTags": ["auto_beacon"],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "hidden_tags_absent_defaults": {
+      "enabled": true,
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    }
+  },
+  "vectors": [
+    {
+      "name": "enabled false: hiddenTags match is ignored (clause 1 wins)",
+      "policy": "disabled_hides_category",
+      "message": {
+        "msg": "plain text",
+        "tags": ["node"],
+        "info_score": 1.0,
+        "template_hash": "abc123abc123"
+      },
+      "suppressed": false
+    },
+    {
+      "name": "enabled false: blocked text still suppresses (unconditional, asymmetric with spam prefs)",
+      "policy": "disabled_with_blocked_text",
+      "message": {
+        "msg": "this message contains SPAMWORD in it",
+        "tags": [],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": true
+    },
+    {
+      "name": "promoted hash suppresses even though tag/score/tags would not",
+      "policy": "promoted_only",
+      "message": {
+        "msg": "hello world",
+        "tags": [],
+        "info_score": 1.0,
+        "template_hash": "promo123abc1"
+      },
+      "suppressed": true
+    },
+    {
+      "name": "promoted hash with enabled false is not suppressed (clause 1 wins)",
+      "policy": "promoted_but_disabled",
+      "message": {
+        "msg": "hello world",
+        "tags": [],
+        "info_score": 1.0,
+        "template_hash": "promo123abc1"
+      },
+      "suppressed": false
+    },
+    {
+      "name": "demoted hash beats a hidden tag",
+      "policy": "demoted_beats_category",
+      "message": {
+        "msg": "hello world",
+        "tags": ["bot"],
+        "info_score": 1.0,
+        "template_hash": "demo456def12"
+      },
+      "suppressed": false
+    },
+    {
+      "name": "group 20 regression: node_advert + low info_score + has_url, hidden -> suppressed",
+      "policy": "group20_regression",
+      "message": {
+        "msg": "https://www.varac-hamradio.com/group/varac-hf-discussion-forum/discussion",
+        "tags": ["node"],
+        "info_score": 0.3,
+        "template_hash": ""
+      },
+      "suppressed": true
+    },
+    {
+      "name": "same group 20 message with hiddenTags empty -> not suppressed",
+      "policy": "group20_category_not_hidden",
+      "message": {
+        "msg": "https://www.varac-hamradio.com/group/varac-hf-discussion-forum/discussion",
+        "tags": ["node"],
+        "info_score": 0.3,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "hideAutoBeacons true + auto_beacon tag -> suppressed",
+      "policy": "auto_beacon_hidden",
+      "message": {
+        "msg": "beacon text",
+        "tags": ["auto_beacon"],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": true
+    },
+    {
+      "name": "hideAutoBeacons false + same auto_beacon tag -> not suppressed",
+      "policy": "auto_beacon_shown",
+      "message": {
+        "msg": "beacon text",
+        "tags": ["auto_beacon"],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "info_score strictly below minInfoScore -> suppressed",
+      "policy": "info_score_threshold",
+      "message": {
+        "msg": "low info",
+        "tags": [],
+        "info_score": 0.4,
+        "template_hash": ""
+      },
+      "suppressed": true
+    },
+    {
+      "name": "info_score exactly equal to minInfoScore -> not suppressed",
+      "policy": "info_score_threshold",
+      "message": {
+        "msg": "boundary info",
+        "tags": [],
+        "info_score": 0.5,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "info_score above minInfoScore -> not suppressed",
+      "policy": "info_score_threshold",
+      "message": {
+        "msg": "good info",
+        "tags": [],
+        "info_score": 0.6,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "minInfoScore null -> never suppressed by that clause even at info_score 0.0",
+      "policy": "no_threshold",
+      "message": {
+        "msg": "zero info",
+        "tags": [],
+        "info_score": 0.0,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "info_score null with a threshold set -> not suppressed by that clause",
+      "policy": "info_score_threshold",
+      "message": {
+        "msg": "unscored",
+        "tags": [],
+        "info_score": null,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "blocked text: case-insensitive substring match",
+      "policy": "blocked_text_case_insensitive",
+      "message": {
+        "msg": "this text contains badword right here",
+        "tags": [],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": true
+    },
+    {
+      "name": "blocked text: non-matching list -> not suppressed",
+      "policy": "blocked_text_case_insensitive",
+      "message": {
+        "msg": "totally unrelated text",
+        "tags": [],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "blocked text: empty list -> never suppressed by that clause",
+      "policy": "blocked_text_empty_list",
+      "message": {
+        "msg": "anything at all",
+        "tags": [],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "degenerate: empty tag/template_hash/tags, info_score null -> not suppressed, no raise",
+      "policy": "degenerate_nonempty_hash_sets",
+      "message": {
+        "msg": "",
+        "tags": [],
+        "info_score": null,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "an empty entry in promotedHashes must not match an empty template_hash",
+      "policy": "empty_hash_in_promoted",
+      "message": {
+        "msg": "hello",
+        "tags": [],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "an empty entry in demotedHashes must not match an empty template_hash (hidden tag still applies)",
+      "policy": "empty_hash_in_demoted_with_hidden_category",
+      "message": {
+        "msg": "hello",
+        "tags": ["alert"],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": true
+    },
+    {
+      "name": "degenerate: empty tag never matches a populated hiddenTags list",
+      "policy": "populated_hidden_categories",
+      "message": {
+        "msg": "hello",
+        "tags": [],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "issue #17: greeting bot {greeting, auto_beacon} is hidden when greeting is hidden",
+      "policy": "hide_greeting",
+      "message": {
+        "msg": "Guten Morgen zusammen",
+        "tags": ["greeting", "auto_beacon"],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": true
+    },
+    {
+      "name": "issue #17: human greeting {greeting, qso} stays visible when greeting is hidden",
+      "policy": "hide_greeting",
+      "message": {
+        "msg": "Hallo, wie geht's?",
+        "tags": ["greeting", "qso"],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "qso hidden: a human greeting {greeting, qso} is hidden",
+      "policy": "hide_qso",
+      "message": {
+        "msg": "Hallo, wie geht's?",
+        "tags": ["greeting", "qso"],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": true
+    },
+    {
+      "name": "qso hidden: a message without qso and without a hidden tag stays visible",
+      "policy": "hide_qso",
+      "message": {
+        "msg": "hello",
+        "tags": ["greeting"],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "no qso: any hidden tag among several hides ({time, weather} with time hidden)",
+      "policy": "hide_time",
+      "message": {
+        "msg": "hello",
+        "tags": ["weather", "time"],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": true
+    },
+    {
+      "name": "qso present: qso toggle governs even when another tag is hidden ({time, qso} with time hidden)",
+      "policy": "hide_time",
+      "message": {
+        "msg": "hello",
+        "tags": ["time", "qso"],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "auto_beacon is a hideable tag",
+      "policy": "hide_auto_beacon_tag",
+      "message": {
+        "msg": "hello",
+        "tags": ["greeting", "auto_beacon"],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": true
+    },
+    {
+      "name": "auto_beacon tag not hidden -> visible",
+      "policy": "hide_greeting",
+      "message": {
+        "msg": "hello",
+        "tags": ["auto_beacon"],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "hiddenTags absent: default hides bot",
+      "policy": "hidden_tags_absent_defaults",
+      "message": {
+        "msg": "hello",
+        "tags": ["bot"],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": true
+    },
+    {
+      "name": "hiddenTags absent: default hides time",
+      "policy": "hidden_tags_absent_defaults",
+      "message": {
+        "msg": "hello",
+        "tags": ["time", "weather"],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": true
+    },
+    {
+      "name": "hiddenTags absent: default leaves weather visible",
+      "policy": "hidden_tags_absent_defaults",
+      "message": {
+        "msg": "hello",
+        "tags": ["weather"],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "hiddenTags absent: default leaves qso visible",
+      "policy": "hidden_tags_absent_defaults",
+      "message": {
+        "msg": "hello",
+        "tags": ["qso", "greeting"],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "explicit empty hiddenTags hides nothing (no default fallback)",
+      "policy": "group20_category_not_hidden",
+      "message": {
+        "msg": "hello",
+        "tags": ["bot"],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": false
+    },
+    {
+      "name": "untagged message is never hidden by tags",
+      "policy": "hide_greeting",
+      "message": {
+        "msg": "hello",
+        "tags": [],
+        "info_score": 1.0,
+        "template_hash": ""
+      },
+      "suppressed": false
+    }
+  ]
+}
