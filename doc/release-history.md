@@ -1,27 +1,25 @@
 # Release History
 
-## v2.1.16 (2026-10-18)
+## v2.1.17 (2026-10-20)
 
-Phone layout fixes across the app: clipped diagrams, chips and command rows now fit. Backend change
-is limited to the blocklist and refreshed dependencies. No schema change (stays at 37);
-`SYSTEM_EPOCH` stays at 5.
+Maintenance release: a webapp fix so form controls and scrollbars follow the theme you picked, plus
+refreshed dependencies in both repos. No schema change (stays at 37); `SYSTEM_EPOCH` stays at 5.
 
 ### Highlights
 
-- **No more clipping on phones.** The diagram, Settings chips, the BLE command row and the system
-  cards in Settings > General fit the screen width, and the bottom tab bar no longer covers the
-  last row of content.
-- **Blocklist:** NF0JN, NF0JN-11 and NF0JN-12 (unlicensed callsign) are blocked.
+- **Theme-correct controls.** The browser's built-in controls and scrollbars now follow the
+  resolved app theme instead of the operating-system setting, so a dark app on a light OS (or the
+  reverse) no longer shows mismatched inputs.
 
 ### Backend (MCProxy)
 
-- `sperrliste.json`: three NF0JN entries added.
-- Dependencies refreshed (FastAPI 0.145.0).
+- Dependencies refreshed (FastAPI 0.150.0, Starlette 1.9.0, certifi), including the standalone
+  `ble_service` lock; CI action `setup-uv` 10.3.0.
 
 ### Frontend (webapp)
 
-- Mobile overflow fixes: diagram, settings chips, BLE command row, system cards, tab-bar clearance.
-- Dependencies refreshed.
+- `color-scheme` follows the resolved theme, not the OS.
+- Dependencies refreshed (typescript-eslint 8.72).
 
 ### Upgrade notes
 
@@ -31,6 +29,11 @@ is limited to the blocklist and refreshed dependencies. No schema change (stays 
 
 One entry per release. The full notes as published are in
 [`doc/archive/release-history-full.md`](https://github.com/DK5EN/McApp/blob/development/doc/archive/release-history-full.md).
+
+### v2.1.16 (2026-10-18)
+
+- Phone layout fixes (diagram, Settings chips, BLE command row, system cards, tab-bar clearance);
+  NF0JN, NF0JN-11 and NF0JN-12 added to the blocklist. Schema 37, `SYSTEM_EPOCH` 5.
 
 ### v2.1.15 (2026-10-17)
 

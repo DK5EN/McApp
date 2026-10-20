@@ -5,6 +5,33 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.1.16 (2026-10-18)
+
+Phone layout fixes across the app: clipped diagrams, chips and command rows now fit. Backend change
+is limited to the blocklist and refreshed dependencies. No schema change (stays at 37);
+`SYSTEM_EPOCH` stays at 5.
+
+### Highlights
+
+- **No more clipping on phones.** The diagram, Settings chips, the BLE command row and the system
+  cards in Settings > General fit the screen width, and the bottom tab bar no longer covers the
+  last row of content.
+- **Blocklist:** NF0JN, NF0JN-11 and NF0JN-12 (unlicensed callsign) are blocked.
+
+### Backend (MCProxy)
+
+- `sperrliste.json`: three NF0JN entries added.
+- Dependencies refreshed (FastAPI 0.145.0).
+
+### Frontend (webapp)
+
+- Mobile overflow fixes: diagram, settings chips, BLE command row, system cards, tab-bar clearance.
+- Dependencies refreshed.
+
+### Upgrade notes
+
+- No migration, no system converge. Reload the app once to pick up the new bundle.
+
 ## v2.1.15 (2026-10-17)
 
 Node Admin can now read a remote node's network and firmware-update state and install an update,
