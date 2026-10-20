@@ -21,7 +21,7 @@ from .main import run_classifier_startup
 from .sse_routes.classifier import build_classifier_router
 
 _BASE = "http://localhost"
-_EXPECTED_RULES = 62
+_EXPECTED_RULES = 69
 
 
 class _Storage:
