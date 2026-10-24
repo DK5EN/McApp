@@ -1,0 +1,799 @@
+{
+  "version": 1,
+  "about": "RM1 blockcall contract (firmware BLK-01, fork-dev 1635ba56). Canonical in MCProxy, hand-copied to the webapp with a sha256 pin on both sides. normalize/parse/match mirror firmware blocked_calls.cpp and its host tests (test/test_blocked_calls); reply mirrors rm_format.h rmFmtBlock and test/test_rm_format; build and guard are McApp's own sender rules (operator decisions 2026-10-24). build: normalize each entry (firmware rule), drop duplicates keeping the first, then check in order invalid (entry = raw input) -> self (entry matches an own call, firmware match rule; own calls that do not normalize are ignored; entry = normalized) -> target (same, against the target) -> too_long (joined length > args_max). An empty list builds \"none\". guard: a write other than \"none\" needs a known list (the last verified blockcall reply) that is complete (omitted 0) and whose joined length is <= args_max.",
+  "args_max": 39,
+  "list_max": 16,
+  "normalize": [
+    {
+      "in": "DK5EN",
+      "out": "DK5EN"
+    },
+    {
+      "in": "DK5EN-12",
+      "out": "DK5EN-12"
+    },
+    {
+      "in": "DL1ABC-9",
+      "out": "DL1ABC-9"
+    },
+    {
+      "in": "DE1A",
+      "out": "DE1A"
+    },
+    {
+      "in": "9A1",
+      "out": "9A1"
+    },
+    {
+      "in": "ABCDE1-15",
+      "out": "ABCDE1-15"
+    },
+    {
+      "in": "  DK5EN  ",
+      "out": "DK5EN"
+    },
+    {
+      "in": "dk5en",
+      "out": "DK5EN"
+    },
+    {
+      "in": "dk5en-3",
+      "out": "DK5EN-3"
+    },
+    {
+      "in": "DK5EN-01",
+      "out": "DK5EN-1"
+    },
+    {
+      "in": "DK5EN-0",
+      "out": "DK5EN"
+    },
+    {
+      "in": "DK5EN-00",
+      "out": "DK5EN"
+    },
+    {
+      "in": "DK5EN-10",
+      "out": "DK5EN-10"
+    },
+    {
+      "in": "DK5EN-99",
+      "out": "DK5EN-99"
+    },
+    {
+      "in": "",
+      "out": null
+    },
+    {
+      "in": "AB",
+      "out": null
+    },
+    {
+      "in": "A1",
+      "out": null
+    },
+    {
+      "in": "ABCDEFG1",
+      "out": null
+    },
+    {
+      "in": "ABCDEF",
+      "out": null
+    },
+    {
+      "in": "123456",
+      "out": null
+    },
+    {
+      "in": "DK5EN-",
+      "out": null
+    },
+    {
+      "in": "DK5EN-123",
+      "out": null
+    },
+    {
+      "in": "DK5EN-1A",
+      "out": null
+    },
+    {
+      "in": "DK5EN--1",
+      "out": null
+    },
+    {
+      "in": "DK5EN-A",
+      "out": null
+    },
+    {
+      "in": "DK5 EN",
+      "out": null
+    },
+    {
+      "in": "DK5E*",
+      "out": null
+    },
+    {
+      "in": "-1",
+      "out": null
+    },
+    {
+      "in": "*",
+      "out": null
+    },
+    {
+      "in": "TEST",
+      "out": null
+    },
+    {
+      "in": "WLNK-1",
+      "out": null
+    },
+    {
+      "in": "DK5ÄN",
+      "out": null
+    },
+    {
+      "in": "\rDK5EN",
+      "out": null
+    },
+    {
+      "in": "DK5EN\r\n",
+      "out": "DK5EN"
+    }
+  ],
+  "parse": [
+    {
+      "in": "dk5en, dl1abc-01 ;  DL1AB-2",
+      "ok": true,
+      "csv": "DK5EN,DL1ABC-1,DL1AB-2"
+    },
+    {
+      "in": " DK5EN ",
+      "ok": true,
+      "csv": "DK5EN"
+    },
+    {
+      "in": ",,DK5EN,;, ,DL1ABC,",
+      "ok": true,
+      "csv": "DK5EN,DL1ABC"
+    },
+    {
+      "in": "DK5EN-01,dk5en-1",
+      "ok": true,
+      "csv": "DK5EN-1"
+    },
+    {
+      "in": "DK5EN,DL1ABC,DK5EN-0,DL1ABC",
+      "ok": true,
+      "csv": "DK5EN,DL1ABC"
+    },
+    {
+      "in": "DK5EN,DK5EN-1",
+      "ok": true,
+      "csv": "DK5EN,DK5EN-1"
+    },
+    {
+      "in": "dk5en-92,DL1ABC-01, dl2xyz-0",
+      "ok": true,
+      "csv": "DK5EN-92,DL1ABC-1,DL2XYZ"
+    },
+    {
+      "in": "none",
+      "ok": true,
+      "csv": ""
+    },
+    {
+      "in": "NONE",
+      "ok": true,
+      "csv": ""
+    },
+    {
+      "in": "  None  ",
+      "ok": true,
+      "csv": ""
+    },
+    {
+      "in": "",
+      "ok": true,
+      "csv": ""
+    },
+    {
+      "in": "   ",
+      "ok": true,
+      "csv": ""
+    },
+    {
+      "in": "DK5EN, dk5en-123 ,DL1ABC",
+      "ok": false,
+      "bad": "dk5en-123"
+    },
+    {
+      "in": "DL1AB,XX",
+      "ok": false,
+      "bad": "XX"
+    },
+    {
+      "in": "ABCD00-15,ABCD01-15,ABCD02-15,ABCD03-15,ABCD04-15,ABCD05-15,ABCD06-15,ABCD07-15,ABCD08-15,ABCD09-15,ABCD10-15,ABCD11-15,ABCD12-15,ABCD13-15,ABCD14-15,ABCD15-15,QQ1QQ",
+      "ok": false,
+      "bad": "too many"
+    },
+    {
+      "in": "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "ok": false,
+      "bad": "ABCDEFGHIJKLMNOPQRSTUV?"
+    },
+    {
+      "in": "ABCD00-15,ABCD01-15,ABCD02-15,ABCD03-15,ABCD04-15,ABCD05-15,ABCD06-15,ABCD07-15,ABCD08-15,ABCD09-15,ABCD10-15,ABCD11-15,ABCD12-15,ABCD13-15,ABCD14-15,ABCD15-15,ABCD00-15",
+      "ok": true,
+      "csv": "ABCD00-15,ABCD01-15,ABCD02-15,ABCD03-15,ABCD04-15,ABCD05-15,ABCD06-15,ABCD07-15,ABCD08-15,ABCD09-15,ABCD10-15,ABCD11-15,ABCD12-15,ABCD13-15,ABCD14-15,ABCD15-15"
+    },
+    {
+      "in": "ABCD00-15,ABCD01-15,ABCD02-15,ABCD03-15,ABCD04-15,ABCD05-15,ABCD06-15,ABCD07-15,ABCD08-15,ABCD09-15,ABCD10-15,ABCD11-15,ABCD12-15,ABCD13-15,ABCD14-15,ABCD15-15,XX",
+      "ok": false,
+      "bad": "XX"
+    },
+    {
+      "in": "                    DK5EN",
+      "ok": true,
+      "csv": "DK5EN"
+    },
+    {
+      "in": "none,",
+      "ok": false,
+      "bad": "none"
+    }
+  ],
+  "match": [
+    {
+      "csv": "DK5EN",
+      "call": "DK5EN",
+      "blocked": true
+    },
+    {
+      "csv": "DK5EN",
+      "call": "DK5EN-1",
+      "blocked": true
+    },
+    {
+      "csv": "DK5EN",
+      "call": "DK5EN-12",
+      "blocked": true
+    },
+    {
+      "csv": "DK5EN",
+      "call": "dk5en-12",
+      "blocked": true
+    },
+    {
+      "csv": "DK5EN",
+      "call": "DK5EN-98",
+      "blocked": true
+    },
+    {
+      "csv": "DK5EN-1",
+      "call": "DK5EN-1",
+      "blocked": true
+    },
+    {
+      "csv": "DK5EN-1",
+      "call": "DK5EN-01",
+      "blocked": true
+    },
+    {
+      "csv": "DK5EN-1",
+      "call": "DK5EN",
+      "blocked": false
+    },
+    {
+      "csv": "DK5EN-1",
+      "call": "DK5EN-0",
+      "blocked": false
+    },
+    {
+      "csv": "DK5EN-1",
+      "call": "DK5EN-11",
+      "blocked": false
+    },
+    {
+      "csv": "DK5EN-1",
+      "call": "DK5EN-2",
+      "blocked": false
+    },
+    {
+      "csv": "DK5EN-14",
+      "call": "DK5EN-98",
+      "blocked": false
+    },
+    {
+      "csv": "DK5EN,XX0AAA-1",
+      "call": "DK5ENX",
+      "blocked": false
+    },
+    {
+      "csv": "DK5EN,XX0AAA-1",
+      "call": "DK5E",
+      "blocked": false
+    },
+    {
+      "csv": "DK5EN,XX0AAA-1",
+      "call": "XDK5EN",
+      "blocked": false
+    },
+    {
+      "csv": "DK5EN,XX0AAA-1",
+      "call": "XX0AAA-12",
+      "blocked": false
+    },
+    {
+      "csv": "XX0AAA-1,DL1AB",
+      "call": "XX0AAA-01",
+      "blocked": true
+    },
+    {
+      "csv": "XX0AAA-1,DL1AB",
+      "call": "DL1AB-0",
+      "blocked": true
+    },
+    {
+      "csv": "XX0AAA-1,DL1AB",
+      "call": "XX0AAA-0",
+      "blocked": false
+    },
+    {
+      "csv": "DK5EN,TEST1",
+      "call": "*",
+      "blocked": false
+    },
+    {
+      "csv": "DK5EN,TEST1",
+      "call": "H",
+      "blocked": false
+    },
+    {
+      "csv": "DK5EN,TEST1",
+      "call": "TEST",
+      "blocked": false
+    },
+    {
+      "csv": "DK5EN,TEST1",
+      "call": "WLNK-1",
+      "blocked": false
+    },
+    {
+      "csv": "DK5EN,TEST1",
+      "call": "",
+      "blocked": false
+    },
+    {
+      "csv": "",
+      "call": "DK5EN",
+      "blocked": false
+    }
+  ],
+  "reply": [
+    {
+      "body": "b=-",
+      "calls": [],
+      "omitted": 0
+    },
+    {
+      "body": "b=DL1ABC",
+      "calls": [
+        "DL1ABC"
+      ],
+      "omitted": 0
+    },
+    {
+      "body": "b=DL1ABC,DK5EN-1",
+      "calls": [
+        "DL1ABC",
+        "DK5EN-1"
+      ],
+      "omitted": 0
+    },
+    {
+      "body": "b=DL1ABC-1,DL2XYZ",
+      "calls": [
+        "DL1ABC-1",
+        "DL2XYZ"
+      ],
+      "omitted": 0
+    },
+    {
+      "body": "b=ABCDEFGH-1,ABCDEFGH-1,ABCDEFGH-1,ABCDEFGH-1,ABCDEFGH-1,ABCDEFGH-1,ABCDEFGH-1,ABCDEFGH-1,ABCDEFGH-1,ABCD",
+      "calls": [
+        "ABCDEFGH-1",
+        "ABCDEFGH-1",
+        "ABCDEFGH-1",
+        "ABCDEFGH-1",
+        "ABCDEFGH-1",
+        "ABCDEFGH-1",
+        "ABCDEFGH-1",
+        "ABCDEFGH-1",
+        "ABCDEFGH-1",
+        "ABCD"
+      ],
+      "omitted": 0
+    },
+    {
+      "body": "b=ABCDEFGH-1,ABCDEFGH-1,ABCDEFGH-1,ABCDEFGH-1,ABCDEFGH-1,ABCDEFGH-1,ABCDEFGH-1,ABCDEFGH-1,ABCDEFGH-1,+1",
+      "calls": [
+        "ABCDEFGH-1",
+        "ABCDEFGH-1",
+        "ABCDEFGH-1",
+        "ABCDEFGH-1",
+        "ABCDEFGH-1",
+        "ABCDEFGH-1",
+        "ABCDEFGH-1",
+        "ABCDEFGH-1",
+        "ABCDEFGH-1"
+      ],
+      "omitted": 1
+    },
+    {
+      "body": "b=DK5EN-123,DK5EN-123,DK5EN-123,DK5EN-123,DK5EN-123,DK5EN-123,DK5EN-123,DK5EN-123,DK5EN-123,DK5EN-123,+6",
+      "calls": [
+        "DK5EN-123",
+        "DK5EN-123",
+        "DK5EN-123",
+        "DK5EN-123",
+        "DK5EN-123",
+        "DK5EN-123",
+        "DK5EN-123",
+        "DK5EN-123",
+        "DK5EN-123",
+        "DK5EN-123"
+      ],
+      "omitted": 6
+    },
+    {
+      "body": "b=+12",
+      "calls": [],
+      "omitted": 12
+    },
+    {
+      "body": "b=DL1ABC,+10",
+      "calls": [
+        "DL1ABC"
+      ],
+      "omitted": 10
+    },
+    {
+      "body": "b=",
+      "calls": null
+    },
+    {
+      "body": "",
+      "calls": null
+    },
+    {
+      "body": "a=DL1ABC",
+      "calls": null
+    },
+    {
+      "body": "b=DL1ABC,,DL2XYZ",
+      "calls": null
+    },
+    {
+      "body": "b=DL1ABC,+0",
+      "calls": null
+    },
+    {
+      "body": "b=DL1ABC,+x",
+      "calls": null
+    },
+    {
+      "body": "b=+3,DL1ABC",
+      "calls": null
+    },
+    {
+      "body": "b=DL1ABC DL2XYZ",
+      "calls": null
+    },
+    {
+      "body": "b=-,DL1ABC",
+      "calls": null
+    }
+  ],
+  "build": [
+    {
+      "calls": [],
+      "own": [
+        "DK5EN-98"
+      ],
+      "target": "DK5EN-1",
+      "ok": true,
+      "args": "none"
+    },
+    {
+      "calls": [
+        "dl1abc-01",
+        "DL2XYZ-0"
+      ],
+      "own": [
+        "DK5EN-98"
+      ],
+      "target": "DK5EN-1",
+      "ok": true,
+      "args": "DL1ABC-1,DL2XYZ"
+    },
+    {
+      "calls": [
+        "DL1ABC",
+        "dl1abc",
+        "DL1ABC-0"
+      ],
+      "own": [
+        "DK5EN-98"
+      ],
+      "target": "DK5EN-1",
+      "ok": true,
+      "args": "DL1ABC"
+    },
+    {
+      "calls": [
+        "DK5EN-14"
+      ],
+      "own": [
+        "DK5EN-98"
+      ],
+      "target": "DK5EN-1",
+      "ok": true,
+      "args": "DK5EN-14"
+    },
+    {
+      "calls": [
+        "DL1ABC",
+        "XX"
+      ],
+      "own": [
+        "DK5EN-98"
+      ],
+      "target": "DK5EN-1",
+      "ok": false,
+      "error": "invalid",
+      "entry": "XX"
+    },
+    {
+      "calls": [
+        "DK5EN"
+      ],
+      "own": [
+        "DK5EN-98"
+      ],
+      "target": "OE1ABC-1",
+      "ok": false,
+      "error": "self",
+      "entry": "DK5EN"
+    },
+    {
+      "calls": [
+        "dk5en-98"
+      ],
+      "own": [
+        "DK5EN-98"
+      ],
+      "target": "OE1ABC-1",
+      "ok": false,
+      "error": "self",
+      "entry": "DK5EN-98"
+    },
+    {
+      "calls": [
+        "DL1ABC",
+        "DK5EN-98"
+      ],
+      "own": [
+        "DK5EN-98",
+        "DK5EN"
+      ],
+      "target": "DK5EN-1",
+      "ok": false,
+      "error": "self",
+      "entry": "DK5EN-98"
+    },
+    {
+      "calls": [
+        "DK5EN-1"
+      ],
+      "own": [
+        "DK5EN-98"
+      ],
+      "target": "DK5EN-1",
+      "ok": false,
+      "error": "target",
+      "entry": "DK5EN-1"
+    },
+    {
+      "calls": [
+        "OE1ABC"
+      ],
+      "own": [
+        "DK5EN-98"
+      ],
+      "target": "OE1ABC-1",
+      "ok": false,
+      "error": "target",
+      "entry": "OE1ABC"
+    },
+    {
+      "calls": [
+        "OE1ABC-2"
+      ],
+      "own": [
+        "DK5EN-98"
+      ],
+      "target": "OE1ABC-1",
+      "ok": true,
+      "args": "OE1ABC-2"
+    },
+    {
+      "calls": [
+        "DL1ABC-11",
+        "DL2XYZ-12",
+        "OE3ABC-15",
+        "HB9ABC-10"
+      ],
+      "own": [
+        "DK5EN-98"
+      ],
+      "target": "DK5EN-1",
+      "ok": true,
+      "args": "DL1ABC-11,DL2XYZ-12,OE3ABC-15,HB9ABC-10"
+    },
+    {
+      "calls": [
+        "DL1ABC-11",
+        "DL2XYZ-12",
+        "OE3ABC-15",
+        "HB9ABC",
+        "AB1"
+      ],
+      "own": [
+        "DK5EN-98"
+      ],
+      "target": "DK5EN-1",
+      "ok": false,
+      "error": "too_long",
+      "length": 40
+    },
+    {
+      "calls": [
+        "AB1",
+        "AB2",
+        "AB3",
+        "AB4",
+        "AB5",
+        "AB6",
+        "AB7",
+        "AB8",
+        "AB9",
+        "AB0"
+      ],
+      "own": [
+        "DK5EN-98"
+      ],
+      "target": "DK5EN-1",
+      "ok": true,
+      "args": "AB1,AB2,AB3,AB4,AB5,AB6,AB7,AB8,AB9,AB0"
+    },
+    {
+      "calls": [
+        "DL1ABC"
+      ],
+      "own": [
+        "WLNK-1",
+        "DK5EN-98"
+      ],
+      "target": "DK5EN-1",
+      "ok": true,
+      "args": "DL1ABC"
+    }
+  ],
+  "guard": [
+    {
+      "known": null,
+      "args": "none",
+      "allowed": true
+    },
+    {
+      "known": null,
+      "args": "DL1ABC",
+      "allowed": false,
+      "reason": "unknown"
+    },
+    {
+      "known": {
+        "calls": [],
+        "omitted": 0
+      },
+      "args": "DL1ABC",
+      "allowed": true
+    },
+    {
+      "known": {
+        "calls": [
+          "DL1ABC-1",
+          "DL2XYZ"
+        ],
+        "omitted": 0
+      },
+      "args": "DL1ABC-1",
+      "allowed": true
+    },
+    {
+      "known": {
+        "calls": [
+          "DL1ABC"
+        ],
+        "omitted": 3
+      },
+      "args": "DL1ABC,DL2XYZ",
+      "allowed": false,
+      "reason": "truncated"
+    },
+    {
+      "known": {
+        "calls": [
+          "DL1ABC"
+        ],
+        "omitted": 3
+      },
+      "args": "none",
+      "allowed": true
+    },
+    {
+      "known": {
+        "calls": [
+          "DL1ABC-11",
+          "DL2XYZ-12",
+          "OE3ABC-15",
+          "HB9ABC",
+          "AB1"
+        ],
+        "omitted": 0
+      },
+      "args": "DL1ABC-1",
+      "allowed": false,
+      "reason": "too_long"
+    },
+    {
+      "known": {
+        "calls": [
+          "DL1ABC-11",
+          "DL2XYZ-12",
+          "OE3ABC-15",
+          "HB9ABC",
+          "AB1"
+        ],
+        "omitted": 0
+      },
+      "args": "none",
+      "allowed": true
+    },
+    {
+      "known": {
+        "calls": [
+          "DL1ABC-11",
+          "DL2XYZ-12",
+          "OE3ABC-15",
+          "HB9ABC-10"
+        ],
+        "omitted": 0
+      },
+      "args": "DL1ABC-1",
+      "allowed": true
+    },
+    {
+      "known": null,
+      "args": "NONE",
+      "allowed": true
+    },
+    {
+      "known": null,
+      "args": " none",
+      "allowed": false,
+      "reason": "unknown"
+    }
+  ]
+}
