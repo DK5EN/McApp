@@ -79,6 +79,7 @@ from mcapp.push_tests import run_push_tests
 from mcapp.qrz_tests import run_qrz_tests
 from mcapp.remote_cmd_tests import run_remote_cmd_tests
 from mcapp.rm1_suppression_tests import run_rm1_suppression_tests
+from mcapp.rm_blocklist_tests import run_rm_blocklist_tests
 from mcapp.send_path_tests import run_send_path_tests
 from mcapp.server_imports_tests import run_server_imports_tests
 from mcapp.sqlite_storage import run_startup_tests as run_storage_tests
@@ -255,6 +256,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     remote_cmd_ok = run_remote_cmd_tests()
     print(f"remote_cmd: {'PASS' if remote_cmd_ok else 'FAIL'}")
+
+    rm_blocklist_ok = run_rm_blocklist_tests()
+    print(f"rm_blocklist: {'PASS' if rm_blocklist_ok else 'FAIL'}")
 
     node_admin_storage_ok = await run_node_admin_storage_tests()
     print(f"node_admin_storage: {'PASS' if node_admin_storage_ok else 'FAIL'}")
@@ -444,6 +448,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and connection_lifecycle_ok
         and uptime_ok
         and remote_cmd_ok
+        and rm_blocklist_ok
         and node_admin_storage_ok
         and internet_feed_state_ok
         and www_ingest_ok

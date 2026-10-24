@@ -1601,6 +1601,292 @@ async def case_m_txpower_held(record: Record) -> None:
         )
 
 
+async def _bc_read(env: Env, result: str) -> None:
+    """A verified `blockcall` read answered with `result` (what the node's list looks like)."""
+    r = await env.send_after_cooldown("blockcall", "")
+    await env.svc.drain()
+    call = env.attached or ATTACHED
+    await env.reply(r["ctr"], result, dst=call, src_call=call)
+    await settle()
+    await env.time.advance(10_000)
+
+
+async def case_q_blockcall(record: Record) -> None:
+    async with make_env(attached="DK5EN-98") as env:
+        await env.setup(tx_max=30)
+        ctr0, rows0, tx0 = await env.ctr(), len(await env.rows()), len(env.tx)
+        e1 = await raises(ValueError, env.send("blockcall", "DK5EN"))
+        e2 = await raises(ValueError, env.send("blockcall", "dk5en-90"))
+        e3 = await raises(ValueError, env.send("blockcall", "DL1ABC"))
+        await env.svc.drain()
+        record(
+            "q1. blockcall write of own call / target / before any read: refused, no counter, "
+            "no row, no frame",
+            e1
+            and e2
+            and e3
+            and await env.ctr() == ctr0
+            and len(await env.rows()) == rows0
+            and len(env.tx) == tx0,
+        )
+        msgs: list[str] = []
+        for a in ("DK5EN", "dk5en-90", "DL1ABC"):
+            try:
+                await env.send("blockcall", a)
+            except ValueError as exc:
+                msgs.append(str(exc))
+        record(
+            "q2. refusal messages name the reason",
+            msgs
+            == [
+                "DK5EN would block this station's own call",
+                "DK5EN-90 would block the node itself (DK5EN-90)",
+                "read the node's blocklist first",
+            ],
+        )
+        await _bc_read(env, "ok b=-")
+        sent = await env.send_after_cooldown("blockcall", "dl1abc-01,dl2xyz-0")
+        await env.svc.drain()
+        logged = [r for r in await env.rows() if r["id"] == sent["log_id"]]
+        record(
+            "q3. after a verified read the write goes out canonical (DL1ABC-1,DL2XYZ) on air "
+            "and in the log",
+            sent["text"].split(" ")[2:4] == ["blockcall", "DL1ABC-1,DL2XYZ"]
+            and env.tx[-1][2] == sent["text"]
+            and len(logged) == 1
+            and logged[0]["args"] == "DL1ABC-1,DL2XYZ",
+        )
+        record(
+            "q3b. an invalid entry and an over-long list are refused with their reason",
+            await raises(ValueError, env.send_after_cooldown("blockcall", "dl1abc,xx"))
+            and await raises(ValueError, env.send_after_cooldown("blockcall", "x" * 45)),
+        )
+
+
+async def case_q_blockcall_truncated(record: Record) -> None:
+    async with make_env(attached="DK5EN-98") as env:
+        await env.setup(tx_max=30)
+        await _bc_read(env, "ok b=DL1ABC,+3")
+        refused = await raises(ValueError, env.send_after_cooldown("blockcall", "DL2XYZ"))
+        try:
+            await env.send_after_cooldown("blockcall", "DL2XYZ")
+            why = ""
+        except ValueError as exc:
+            why = str(exc)
+        ctr1 = await env.ctr()
+        cleared = await env.send_after_cooldown("blockcall", "NONE")
+        await env.svc.drain()
+        record(
+            "q4. after a truncated read only 'none' is allowed",
+            refused
+            and "can only be cleared remotely" in why
+            and cleared["text"].split(" ")[2:4] == ["blockcall", "none"]
+            and cleared["ctr"] > ctr1,
+        )
+
+
+async def _bc_effects(env: Env) -> tuple[int, int, int]:
+    """(counter, log rows, frames on air): what a refused write must leave untouched."""
+    return await env.ctr(), len(await env.rows()), len(env.tx)
+
+
+async def _seed_reply_row(
+    env: Env, cmd: str, args: str | None, result: str, *, verified: bool
+) -> int:
+    """A command row with its reply written straight to storage (no frame, no pacing)."""
+    now = env.time.now
+    row = await env.storage.allocate_node_admin_command(
+        TARGET, ATTACHED, cmd, args, "udp", now, 0, lambda c: f"RM1 {c} {cmd} seeded"
+    )
+    await env.storage.mark_node_admin_handed_off(row["id"], now)
+    await env.storage.apply_node_admin_reply(row["id"], "RM1 seeded", now, result, verified)
+    return int(row["id"])
+
+
+async def case_q_blockcall_q8(record: Record) -> None:
+    # q8: the NEWEST verified read wins, not the oldest
+    async with make_env(attached="DK5EN-98") as env:
+        await env.setup(tx_max=30)
+        await _bc_read(env, "ok b=DL1ABC")
+        await _bc_read(env, "ok b=DL1ABC,+3")
+        before = await _bc_effects(env)
+        refused = await raises(ValueError, env.send("blockcall", "DL2XYZ"))
+        record(
+            "q8. an older complete read is superseded by the newer truncated one: write refused, "
+            "nothing consumed",
+            refused and await _bc_effects(env) == before,
+        )
+
+
+async def case_q_blockcall_q9(record: Record) -> None:
+    # q9: a verified `err` for a write changes nothing about the known list
+    async with make_env(attached="DK5EN-98") as env:
+        await env.setup(tx_max=30)
+        await _bc_read(env, "ok b=-")
+        w = await env.send_after_cooldown("blockcall", "DL1ABC")
+        await env.svc.drain()
+        await env.reply(w["ctr"], "err text", dst="DK5EN-98", src_call="DK5EN-98")
+        await settle()
+        await env.time.advance(10_000)
+        try:
+            again = await env.send_after_cooldown("blockcall", "DL2XYZ")
+        except ValueError:
+            again = {}
+        record(
+            "q9. a verified 'err text' write reply leaves the known list: next write allowed",
+            bool(again) and again["text"].split(" ")[2:4] == ["blockcall", "DL2XYZ"],
+        )
+
+
+async def case_q_blockcall_q10(record: Record) -> None:
+    # q10: an UNVERIFIED newer reply is ignored
+    async with make_env(attached="DK5EN-98") as env:
+        await env.setup(tx_max=30)
+        await _bc_read(env, "ok b=-")
+        r = await env.send_after_cooldown("blockcall", "")
+        await env.svc.drain()
+        await env.reply(r["ctr"], "ok b=DL1ABC,+3", dst="DK5EN-98", src_call="DK5EN-98", bad=True)
+        await settle()
+        await env.time.advance(10_000)
+        try:
+            again = await env.send_after_cooldown("blockcall", "DL2XYZ")
+        except ValueError:
+            again = {}
+        record(
+            "q10. an unverified newer 'ok b=...,+3' reply is ignored: the verified list stands",
+            bool(again) and again["text"].split(" ")[2:4] == ["blockcall", "DL2XYZ"],
+        )
+
+
+async def case_q_blockcall_q11(record: Record) -> None:
+    # q11: a src_call from the log of ANOTHER target counts as our own call
+    async with make_env(attached="DK5EN-98") as env:
+        await env.setup(tx_max=30)
+        await env.setup(target="DL7OTH-1")
+        await env.storage.allocate_node_admin_command(
+            "DL7OTH-1", "DL9OWN-3", "status", None, "udp", env.time.now, 0, lambda c: f"RM1 {c} s x"
+        )
+        await _bc_read(env, "ok b=-")
+        before = await _bc_effects(env)
+        try:
+            await env.send("blockcall", "dl9own-3")
+            why = ""
+        except ValueError as exc:
+            why = str(exc)
+        record(
+            "q11. a logged src_call of another target is refused as this station's own call, "
+            "nothing consumed",
+            why == "DL9OWN-3 would block this station's own call"
+            and await _bc_effects(env) == before,
+        )
+
+
+async def case_q_blockcall_q12(record: Record) -> None:
+    # q12: a complete known list that cannot be written back whole: only 'none'
+    async with make_env(attached="DK5EN-98") as env:
+        await env.setup(tx_max=30)
+        known = "DL1ABC-11,DL2XYZ-12,OE3ABC-15,HB9ABC,AB1"
+        await _bc_read(env, "ok b=" + known)
+        before = await _bc_effects(env)
+        try:
+            await env.send("blockcall", "DL4ABC")
+            why = ""
+        except ValueError as exc:
+            why = str(exc)
+        unchanged = await _bc_effects(env) == before
+        cleared = await env.send_after_cooldown("blockcall", "none")
+        record(
+            "q12. a complete known list over 39 chars allows only 'none'",
+            len(known) == 40
+            and "longer than one remote write can carry" in why
+            and unchanged
+            and cleared["text"].split(" ")[2:4] == ["blockcall", "none"],
+        )
+
+
+async def case_q_blockcall_q13(record: Record) -> None:
+    # q13: too_long with VALID calls, at the service
+    async with make_env(attached="DK5EN-98") as env:
+        await env.setup(tx_max=30)
+        await _bc_read(env, "ok b=-")
+        before = await _bc_effects(env)
+        try:
+            await env.send("blockcall", "DL1ABC-11,DL2XYZ-12,OE3ABC-15,DL4ABC-16,DL5ABC-17")
+            why = ""
+        except ValueError as exc:
+            why = str(exc)
+        record(
+            "q13. five valid 9-char calls are refused as too long (at most 39), nothing consumed",
+            "at most 39" in why and await _bc_effects(env) == before,
+        )
+
+
+async def case_q_blockcall_q14(record: Record) -> None:
+    # q14: the known list survives more than STATE_ROWS_RECENT later rows (the per-command half
+    # of node_admin_state_rows, not the recent window, keeps the read in view)
+    async with make_env(attached="DK5EN-98") as env:
+        await env.setup(tx_max=30)
+        await _bc_read(env, "ok b=-")
+        for _ in range(nas.STATE_ROWS_RECENT + 5):
+            await _seed_reply_row(env, "status", None, "ok status", verified=True)
+        await env.time.advance(10_000)
+        try:
+            again = await env.send("blockcall", "DL2XYZ")
+        except ValueError as exc:
+            again = {"err": str(exc)}
+        record(
+            "q14. a verified read stays known after more than STATE_ROWS_RECENT later rows",
+            again.get("text", "").split(" ")[2:4] == ["blockcall", "DL2XYZ"],
+        )
+
+
+async def case_q_blockcall_unsynced(record: Record) -> None:
+    # Not yet synced: the direct gate is the only one before the auto-sync goes on air.
+    async with make_env(attached="DK5EN-98") as env:
+        await env.setup(tx_max=30, synced=False)
+        refused = await raises(ValueError, env.send("blockcall", "DK5EN"))
+        await env.svc.drain()
+        record(
+            "q7. an unsynced blockcall self-block is refused up front: no sync frame, no row",
+            refused and not env.tx and not await env.rows(),
+        )
+
+
+async def case_q_blockcall_read_held(record: Record) -> None:
+    async with make_env(attached="DK5EN-98") as env:
+        await env.setup(tx_max=30)
+        read = await env.send("blockcall", "")
+        await env.svc.drain()
+        record(
+            "q5. a blockcall read (no args) is never gated",
+            read["log_id"] > 0 and env.tx[-1][2] == read["text"],
+        )
+
+    # Held behind the auto-sync: the gate runs again at release, before the counter.
+    async with make_env(attached="DK5EN-98") as env:
+        await env.setup(tx_max=30)
+        await _bc_read(env, "ok b=-")
+        env.svc._synced.discard(TARGET)
+        info = (await env.state())["cooldown_until"]
+        if info is not None:
+            await env.time.advance(int(info) - env.time.now)
+        held = await env.send("blockcall", "DL1ABC")  # passes the direct gate
+        await settle()
+        env.attached = "DL1ABC-5"  # the attached call changes while the command waits
+        ctr_before = await env.ctr()
+        await env.reply(0, "ok ctr=5 v=4.40a", src_call="DK5EN-98", dst="DK5EN-98")
+        await until(lambda: 10_000 in env.time.pending_deltas())
+        await env.time.advance(10_000)
+        await env.svc.drain()
+        record(
+            "q6. a blockcall held behind the sync is re-gated at release: self-block refused, "
+            "no blockcall frame, no counter",
+            held.get("pending") is True
+            and not any(m.split(" ")[2:3] == ["blockcall"] and "DL1ABC" in m for _, _, m in env.tx)
+            and await env.ctr() == ctr_before,
+        )
+
+
 async def case_m_synced_and_broadcast(record: Record) -> None:
     async with make_env() as env:
         await env.setup()
@@ -2618,6 +2904,17 @@ async def run_node_admin_service_tests() -> bool:
         case_o_race_send,
         case_p_foreign_same_call,
         case_p4_observed_after_raise,
+        case_q_blockcall,
+        case_q_blockcall_truncated,
+        case_q_blockcall_q8,
+        case_q_blockcall_q9,
+        case_q_blockcall_q10,
+        case_q_blockcall_q11,
+        case_q_blockcall_q12,
+        case_q_blockcall_q13,
+        case_q_blockcall_q14,
+        case_q_blockcall_unsynced,
+        case_q_blockcall_read_held,
     ]
     for case in cases:
         try:

@@ -29,6 +29,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Final, TypedDict, cast
 
+from . import rm_blocklist
 from .remote_cmd import parse_sync_hwm
 
 # Firmware order of the `s=` letters and of the switch tiles.
@@ -82,7 +83,21 @@ _BP: Final = frozenset({"quiet", "qrs", "qrt", "?"})
 _MBOX_MODES: Final = frozenset({"off", "own", "list", "heard"})
 _POS_SRC: Final = frozenset({"gps", "nofix", "set"})
 _READ_COMMANDS: Final = frozenset(
-    {"radio", "sens", "name", "atxt", "pos", "txq", "mbox", "maxhop", "chgled", "mh", "net", "upd"}
+    {
+        "radio",
+        "sens",
+        "name",
+        "atxt",
+        "pos",
+        "txq",
+        "mbox",
+        "maxhop",
+        "chgled",
+        "mh",
+        "net",
+        "upd",
+        "blockcall",
+    }
 )
 _UNSUPPORTED: Final[dict[str, JsonValue]] = {"unsupported": True}
 _HIDDEN: Final[dict[str, JsonValue]] = {"hidden": True}
@@ -94,6 +109,7 @@ _ERR_MARKERS: Final[dict[tuple[str, str], dict[str, JsonValue]]] = {
     ("mbox", "err unsupported"): _UNSUPPORTED,
     ("chgled", "err unsupported"): _UNSUPPORTED,
     ("pos", "err hidden"): _HIDDEN,
+    ("blockcall", "err blocked"): _UNSUPPORTED,
 }
 
 
@@ -675,8 +691,11 @@ class _Folder:
         if not result.startswith("ok ") or action:
             return
         body = result[3:]
-        if cmd == "radio":
-            self._radio(row, body)
+        row_reply = {"radio": self._radio, "mh": self._mh_reply, "blockcall": self._blockcall}.get(
+            cmd
+        )
+        if row_reply is not None:
+            row_reply(row, body)
         elif cmd in ("name", "atxt"):
             prefix = "n=" if cmd == "name" else "a="
             if body.startswith(prefix):
@@ -686,12 +705,35 @@ class _Folder:
             mode = tokenize(body).get("chgled")
             if mode in ("auto", "on", "off"):
                 self._set_field("chgled", mode, row)
-        elif cmd == "mh":
-            self._mh_reply(row, body)
         else:
             value = _SIMPLE_PARSERS[cmd](body)
             if value is not None:
                 self._set_field(cmd, value, row)
+
+    def _blockcall(self, row: dict[str, Any], body: str) -> None:
+        """`ok b=...` of a read or a write (a write's ack IS the stored list after the write)."""
+        parsed = rm_blocklist.parse_reply_body(body)
+        if parsed is None:
+            return
+        calls = list(parsed.calls)
+        requested: list[str] | None = None
+        matches: bool | None = None
+        args = str(row.get("args") or "").strip()
+        if args:
+            requested = []
+            if args.lower() != "none":
+                for part in args.split(","):
+                    norm = rm_blocklist.normalize(part)
+                    if norm is not None and norm not in requested:
+                        requested.append(norm)
+            matches = parsed.omitted == 0 and calls == requested
+        value: dict[str, JsonValue] = {
+            "calls": cast(JsonValue, calls),
+            "omitted": parsed.omitted,
+            "requested": cast(JsonValue, requested),
+            "matches": matches,
+        }
+        self._set_field("blockcall", value, row)
 
     def _radio(self, row: dict[str, Any], body: str) -> None:
         parsed = _parse_radio(body)

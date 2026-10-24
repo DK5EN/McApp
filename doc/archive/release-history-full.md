@@ -5,6 +5,63 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.1.18 (2026-10-20)
+
+The classifier now runs the same rule set as MeshMap: every message carries tags (greeting, bot,
+weather, test, node, ...) instead of one category, and you hide traffic by tag. Custom classifier
+rules are retired. Slot activation on the Update page became safe against a newer database, and
+Orange Pi boards with a RAM log are supported. Schema 37 → 38; `SYSTEM_EPOCH` 5 → 6.
+
+### Highlights
+
+- **Hide by tag.** Messages are classified with MeshMap's exported rule set and carry multiple
+  tags. A message is hidden when any of its tags is hidden. Tag chips sit under the All/Filtered
+  row and on every bubble; click one to hide that tag. Daily greeting bots are hidden by hiding
+  **Greetings**.
+- **Custom classifier rules are retired.** Rules you created yourself are no longer applied. They
+  are saved to `classifier_rules_retired.json` next to the database before the table is dropped,
+  and your hidden categories are carried over as hidden tags.
+- **Safe slot activation.** The Update page refuses to activate a slot whose code is older than
+  the database schema (it would crash-loop), shows the reason on the slot row, and rolls back to
+  the previous slot if an activation fails its health check.
+
+### Backend (MCProxy)
+
+- Classifier on the shared mcmap contract (vendored via mc-chat); startup backfills auto-beacon
+  templates, then reclassifies.
+- Migration 38: `classifier_rules` backed up to `classifier_rules_retired.json` and dropped;
+  `hiddenCategories` becomes `hiddenTags`.
+- Update runner: schema guard before anything is stopped, rollback on failed activation, never
+  rolls back into a blocked slot; `/api/update/slots` reports per-slot schema and
+  `blocked_reason`. lighttpd's log directory is recreated before each restart.
+- Gateway uptime: startup reconciliation no longer wedges in a crash loop after a crash between
+  start and the first heartbeat.
+- `mcapp-ble`: `rfkill` / `bluetoothctl` pre-start steps are time-bounded and non-fatal, so a hung
+  BlueZ no longer blocks the unit.
+- Bootstrap (epoch 6): on boards with `armbian-ramlog` / `orangepi-ramlog` McApp writes no
+  `/var/log` tmpfs and no journal bind; the ramlog's own persistence takes over.
+- Dependencies refreshed (FastAPI 0.156.1), including the standalone `ble_service` lock.
+
+### Frontend (webapp)
+
+- Tags replace categories: Settings spam filter shows one toggle per tag with a 30-day count;
+  Node and Software share one toggle; time beacons are no longer offered.
+- Tag filter chips under the All/Filtered row (Alt-click shows only one tag) and clickable chips
+  on each message.
+- Classifier Rules card, Beacon Templates card and the advanced-tools toggle removed.
+- Update page: blocked slots have Activate disabled with the reason, slot badges compare against
+  the active slot, failures show the runner's message.
+- Dependencies refreshed.
+
+### Upgrade notes
+
+- Migration 38 runs on first start, followed by a one-time reclassification of stored messages.
+- After this update, slots holding v2.1.15 to v2.1.17 can no longer be activated: their code does
+  not know schema 38. The Update page shows them as blocked.
+- System converge to epoch 6 runs automatically. On an Orange Pi with a RAM log, reboot once when
+  the box asks for it.
+- Rules you wrote yourself are in `/var/lib/mcapp/classifier_rules_retired.json`.
+
 ## v2.1.17 (2026-10-20)
 
 Maintenance release: a webapp fix so form controls and scrollbars follow the theme you picked, plus

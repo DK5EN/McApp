@@ -38,7 +38,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
-from . import remote_cmd, util
+from . import remote_cmd, rm_blocklist, util
 from .commands.parsing import resolve_dst_target, strip_relay_path
 from .node_admin_observed import build_sessions, pair_rows
 from .node_admin_state import fold, parse_status
@@ -458,6 +458,68 @@ class NodeAdminService:
                 return (info.tx_min if info is not None else None), board_max
         return None, None
 
+    async def _known_blocklist(self, target: str) -> rm_blocklist.BlockReply | None:
+        """The blocklist the `/state` fold knows of `target` (None if it knows none).
+
+        Derived from the SAME fold and the SAME rows as `state()` (newest `STATE_ROWS_RECENT`
+        plus the newest verified row per command), so a write is allowed exactly when the card
+        shows a list: only verified, parsable `ok b=` replies count, in send order, and an
+        `{unsupported}` marker or no reply at all reads as unknown.
+        """
+        rows = await self._storage.node_admin_state_rows(target, STATE_ROWS_RECENT)
+        entry = fold(rows, self._clock(), compute_state)["fields"].get("blockcall")
+        value = entry["value"] if entry is not None else None
+        if not isinstance(value, dict) or "calls" not in value or "omitted" not in value:
+            return None
+        calls = value["calls"]
+        omitted = value["omitted"]
+        if not isinstance(calls, list) or not isinstance(omitted, int):
+            return None
+        return rm_blocklist.BlockReply(tuple(str(c) for c in calls), omitted)
+
+    async def _gate_blockcall(self, target: str, cmd: str, args: str) -> str:
+        """Canonicalise and vet a `blockcall` write; returns the args to send.
+
+        Reads (empty args) and other commands pass through. A write replaces the node's
+        whole list, so it needs a complete known list, and must not block our own call or
+        the node itself. Raises ValueError (422) before any counter is allocated.
+        """
+        if cmd != "blockcall" or not args:
+            return args
+        if args.lower() == "none":
+            canonical = "none"
+        else:
+            try:
+                canonical = rm_blocklist.build_args(
+                    args.split(","), await self._own_calls(), target
+                )
+            except rm_blocklist.BlocklistError as exc:
+                if exc.code == "self":
+                    msg = f"{exc.entry} would block this station's own call"
+                elif exc.code == "target":
+                    msg = f"{exc.entry} would block the node itself ({target})"
+                elif exc.code == "invalid":
+                    msg = f"{exc.entry} is not a valid callsign"
+                else:
+                    msg = (
+                        f"the list is {exc.length} characters; one RM1 frame carries at most "
+                        f"{rm_blocklist.ARGS_MAX}"
+                    )
+                raise ValueError(msg) from exc
+        reason = rm_blocklist.write_refusal(await self._known_blocklist(target), canonical)
+        if reason == "unknown":
+            msg = "read the node's blocklist first"
+        elif reason == "truncated":
+            msg = "the node's list is longer than one reply shows; it can only be cleared remotely"
+        elif reason == "too_long":
+            msg = (
+                "the node's list is longer than one remote write can carry; "
+                "it can only be cleared remotely"
+            )
+        else:
+            return canonical
+        raise ValueError(msg)
+
     async def _check_txpower(self, target: str, cmd: str, args: str) -> None:
         """Refuse `txpower` outside the node's own range (a counted, silent reject there).
 
@@ -545,6 +607,7 @@ class NodeAdminService:
         key = await self._get_key(t)
         tx_max = await self._tx_max(t)
         await self._check_txpower(t, cmd, args)  # first: names the node's own range
+        args = await self._gate_blockcall(t, cmd, args)
         remote_cmd.validate_command(cmd, args, tx_max)
         src_call = self._src_call(t)
         resolved = self._resolve_transport(transport)
@@ -576,6 +639,7 @@ class NodeAdminService:
         # (cool-down, foreign pause) is re-judged here because the held path waited for
         # the sync and skips `_check_busy`.
         await self._check_txpower(target, cmd, args)
+        args = await self._gate_blockcall(target, cmd, args)
         now = self._clock()
         self._check_hold(target, await self._storage.node_admin_history(target, HISTORY_SCAN), now)
 

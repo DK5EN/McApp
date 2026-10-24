@@ -1016,6 +1016,98 @@ def _test_status_keeps_reads(record: Record) -> None:
     )
 
 
+def _test_blockcall(record: Record) -> None:
+    """`blockcall` field: read / write ack shapes, err markers, send-order folding."""
+
+    def val(rows: list[dict[str, Any]]) -> Any:
+        return fld(cast(Any, fold_any(rows, NOW)), "blockcall")
+
+    def one(args: str, result: str) -> Any:
+        return val([vrow(1, "blockcall", args, result)])
+
+    record(
+        "blockcall read: empty list",
+        one("", "ok b=-") == {"calls": [], "omitted": 0, "requested": None, "matches": None},
+    )
+    record(
+        "blockcall read: list",
+        one("", "ok b=DL1ABC,DK5EN-1")
+        == {"calls": ["DL1ABC", "DK5EN-1"], "omitted": 0, "requested": None, "matches": None},
+    )
+    record(
+        "blockcall read: cut list (+N)",
+        one("", "ok b=DL1ABC,+3")
+        == {"calls": ["DL1ABC"], "omitted": 3, "requested": None, "matches": None},
+    )
+    record(
+        "blockcall read: only +N",
+        one("", "ok b=+12") == {"calls": [], "omitted": 12, "requested": None, "matches": None},
+    )
+    w = one("dl1abc, DK5EN-1", "ok b=DL1ABC,DK5EN-1")
+    record(
+        "blockcall write: ack matches the request",
+        w["requested"] == ["DL1ABC", "DK5EN-1"] and w["matches"] is True,
+    )
+    record(
+        "blockcall write: node dropped an entry -> matches False",
+        one("DL1ABC,DK5EN-1", "ok b=DL1ABC")["matches"] is False,
+    )
+    record(
+        "blockcall write: node normalized differently -> matches False",
+        one("DL1ABC-0", "ok b=DL1ABC-1")["matches"] is False,
+    )
+    record(
+        "blockcall write: unnormalizable / duplicate entries dropped from requested",
+        one("dl1abc,DL1ABC,!!", "ok b=DL1ABC")["requested"] == ["DL1ABC"],
+    )
+    n = one("NONE", "ok b=-")
+    record(
+        "blockcall write 'none': requested [] and matches True on `ok b=-`",
+        n["requested"] == [] and n["matches"] is True,
+    )
+    record(
+        "blockcall write: cut ack never matches (omitted > 0)",
+        one("DL1ABC", "ok b=DL1ABC,+1")["matches"] is False,
+    )
+    record(
+        "blockcall: err blocked -> unsupported",
+        one("", "err blocked") == {"unsupported": True},
+    )
+    good = vrow(1, "blockcall", "", "ok b=DL1ABC")
+    for bad in ("err text", "err failed"):
+        v = val([good, vrow(2, "blockcall", "X", bad)])
+        record(f"blockcall: {bad} leaves the earlier value", v["calls"] == ["DL1ABC"])
+    unv = vrow(2, "blockcall", "", "ok b=ZZ9ZZ")
+    unv["verified"] = 0
+    record(
+        "blockcall: unverified row ignored",
+        val([good, unv])["calls"] == ["DL1ABC"] and val([unv]) is None,
+    )
+    old = vrow(1, "blockcall", "", "ok b=OLD", reply_at=NOW - 1000)  # answered last
+    new = vrow(2, "blockcall", "", "ok b=NEW", reply_at=NOW - 5000)
+    record(
+        "blockcall: send order (log id) wins over arrival order",
+        val([old, new])["calls"] == ["NEW"] and val([new, old])["calls"] == ["NEW"],
+    )
+    record(
+        "blockcall: a later read replaces an earlier write's value",
+        val(
+            [vrow(1, "blockcall", "DL1ABC", "ok b=DL1ABC"), vrow(2, "blockcall", "", "ok b=DL1ABC")]
+        )
+        == {"calls": ["DL1ABC"], "omitted": 0, "requested": None, "matches": None},
+    )
+    record(
+        "blockcall: unparsable ok body changes nothing",
+        val([good, vrow(2, "blockcall", "", "ok b=a b")])["calls"] == ["DL1ABC"]
+        and one("", "ok blah") is None
+        and one("", "ok b=") is None,
+    )
+    record(
+        "blockcall: no KeyError via _SIMPLE_PARSERS (ok reply folds)",
+        one("", "ok b=-") is not None,
+    )
+
+
 def _test_net_upd(record: Record) -> None:
     """`net` / `upd` read parsers (firmware grammar, reply of 2026-10-17)."""
 
@@ -1126,6 +1218,7 @@ def run_node_admin_state_tests() -> bool:
         _test_injection,
         _test_read_fields,
         _test_net_upd,
+        _test_blockcall,
         _test_read_markers,
         _test_status_keeps_reads,
     ):

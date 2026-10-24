@@ -381,6 +381,14 @@ section (output pin, Re-sync counter, raw command, history). Design: `2026-10-06
   Remote nodes, which resets McApp's stored mark for that node; Connect then works.
 - **`GET /api/node-admin/targets/{target}/state`** returns the parsed last known state (concept Appendix A), folded in
   send order from verified replies only. Values carry their age; after a verified Restart they are marked stale.
+- **Call blocklist card (2026-10-24).** Needs a fork build with BLK-01 (v4.40a.10.23 or newer); older firmware
+  shows "no call blocklist". `Read` fetches the list; `Save list` REPLACES the node's whole list and the node's answer
+  is the stored list, which the card compares with what was sent ("Node confirmed the new list." or the difference).
+  Refusals, all before anything is sent: an entry that would block this station or the node itself; a list over 39
+  characters (one RM1 frame, about 3-4 calls); a write before the list was read. A list the node holds that is longer
+  than one remote write (set on the node's own web page or console, up to 16 calls) is read-only here; only
+  `Clear all` works. A station on the blocklist is dropped as sender AND as relay, so blocking a relay between McApp
+  and the node makes remote replies vanish silently.
 
 **Secrets and logs.** The password is never logged, broadcast or stored in `stall_events` (the `/api/node-admin/keys`
 body is withheld by path prefix). An RM1 frame in logs, `send_failed` events and failed monitor captures has its tag

@@ -260,13 +260,14 @@ def _test_validate_command(record: Record) -> None:
             "reboot", "status", "sendpos", "sendtrack", "sync",
             "gps", "track", "display", "led", "gateway", "mesh",
             "txpower", "setout", "chgled", "radio", "sens", "txq", "mbox", "maxhop",
-            "name", "atxt", "pos", "mh", "net", "upd",
+            "name", "atxt", "pos", "mh", "net", "upd", "blockcall",
         },
     )  # fmt: skip
     corpus_cmds = {v["cmd"] for v in _load()["commands"]}
     record(
         "allowlist command set equals the firmware corpus command set",
-        set(ALLOWLIST) == corpus_cmds,
+        # blockcall is not in the (sha256-pinned, firmware-canonical) corpus yet.
+        set(ALLOWLIST) - {"blockcall"} == corpus_cmds,
     )
     _test_allowlist_shapes(record)
     record(
@@ -288,6 +289,7 @@ def _test_allowlist_shapes(record: Record) -> None:
         "maxhop": [""],
         "net": [""],
         "upd": ["", "check", "go v4.40a", "go v4.40a.hbserver", "go " + "A" * 23],
+        "blockcall": ["", "none", "DL1ABC,DK5EN-1", "dl1abc", ",".join(["DL1ABC"] * 5 + ["DL1A"])],
     }
     bad = {
         "led": ["auto", "FLASH", ""],
@@ -299,6 +301,12 @@ def _test_allowlist_shapes(record: Record) -> None:
         "mbox": ["1"],
         "net": ["x"],
         "upd": ["go", "go ", "go " + "a" * 24, "go v4 40", "go a/b", "check now", "CHECK", "x"],
+        "blockcall": [
+            ",".join(["DL1ABC"] * 5 + ["DL1AB"]),
+            "DL1ABC DK5EN",
+            "DL1ABC;DK5EN",
+            "DL1ABC{1",
+        ],
     }
     for cmd, vals in ok.items():
         for a in vals:
