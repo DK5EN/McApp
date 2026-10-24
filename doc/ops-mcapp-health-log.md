@@ -2898,3 +2898,26 @@ and read 0 messages for the hour. Re-run with the hourly split above. Use single
 
 **Watch points.** W11: `first_seen` at 143 s uptime; re-check `identified` at the next sweep. W24:
 `udp_multiple_sources` false. No new W, no F.
+
+## 45. 2026-10-24 19:57 CEST — pre-release sweep of v2.1.19-dev.1 before the v2.1.19 promotion (~15 min soak)
+
+Short soak by operator decision: the change is the RM1 `blockcall` feature (Node Admin only, off the
+ingest path), live-verified on air by the operator before the promotion.
+
+- Slot-2 active since 19:42:18, `NRestarts` 0 for `mcapp` and `mcapp-ble`. Journal `-p warning`
+  24 h: 0 lines. `/health` healthy. `/api/status`: `udp_target_kind` `identified`,
+  `udp_multiple_sources` false, features `node_admin`, `internet_feed`.
+- Full gate run ON the box against the active dev slot (`scripts/run_startup_tests.py`): exit 0,
+  every suite PASS, including `rm_blocklist`, `remote_cmd`, `node_admin_state`,
+  `node_admin_service`.
+- DB schema 38 (unchanged). Live flow last hour: 31 msg / 116 pos.
+- Operator bench on DK5EN-1, all three rows tag-verified in `node_admin_log`: read `ok b=-`, write
+  `XX0ABC-3` → `ok b=XX0ABC-3` (echo equals request), clear `none` → `ok b=-`. A read is stored
+  with `args` NULL, not `''`; both the fold and the webapp's `isBlocklistWrite` treat it as a read.
+- CI: the tests workflow is still `disabled_manually` in both repos; only Dependabot graph runs
+  show. The gate for this promotion is the local run plus the on-box run above.
+- Browser: card renders in Remote Management, no console errors. One unexplained renderer freeze
+  in the first Chrome tab (opened from `messages/all#/nodeadmin`) did not reproduce in a fresh tab.
+
+**Watch points.** New W: the first-tab freeze on the Messages → Node Admin switch; re-check if it
+shows up again. No F.

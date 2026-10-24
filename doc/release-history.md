@@ -1,66 +1,65 @@
 # Release History
 
-## v2.1.18 (2026-10-20)
+## v2.1.19 (2026-10-24)
 
-The classifier now runs the same rule set as MeshMap: every message carries tags (greeting, bot,
-weather, test, node, ...) instead of one category, and you hide traffic by tag. Custom classifier
-rules are retired. Slot activation on the Update page became safe against a newer database, and
-Orange Pi boards with a RAM log are supported. Schema 37 → 38; `SYSTEM_EPOCH` 5 → 6.
+Remote management can now read and edit a node's call blocklist. Firmware 4.40a.10.23 (fork) lets a
+node drop every frame from or relayed by the calls on its list; McApp's Remote Management view
+gets a Call blocklist card for it, with guards so you cannot lock yourself out. Dependencies
+refreshed in both repos. No schema change (stays at 38); `SYSTEM_EPOCH` stays at 6.
 
 ### Highlights
 
-- **Hide by tag.** Messages are classified with MeshMap's exported rule set and carry multiple
-  tags. A message is hidden when any of its tags is hidden. Tag chips sit under the All/Filtered
-  row and on every bubble; click one to hide that tag. Daily greeting bots are hidden by hiding
-  **Greetings**.
-- **Custom classifier rules are retired.** Rules you created yourself are no longer applied. They
-  are saved to `classifier_rules_retired.json` next to the database before the table is dropped,
-  and your hidden categories are carried over as hidden tags.
-- **Safe slot activation.** The Update page refuses to activate a slot whose code is older than
-  the database schema (it would crash-loop), shows the reason on the slot row, and rolls back to
-  the previous slot if an activation fails its health check.
+- **Call blocklist over RM1.** Node Admin > Remote Management has a new Call blocklist card:
+  **Read** fetches the node's list, **Save list** replaces it, **Clear all** empties it (with a
+  confirm). The node's answer to a write is the list it actually stored, and the card shows
+  whether that matches what you sent.
+- **You cannot block yourself.** An entry that would block your own station (the attached node or
+  any call McApp sends remote commands from) or the managed node itself is refused before
+  anything goes on air. A bare call counts for every SSID: `DK5EN` is refused when you send from
+  `DK5EN-98`.
+- **Length is checked before sending.** One remote command carries at most 39 characters, about
+  3-4 calls. A longer list, or one the node set locally (up to 16 calls), is shown read-only and
+  can only be cleared remotely, so a remote write never drops entries you cannot see.
 
 ### Backend (MCProxy)
 
-- Classifier on the shared mcmap contract (vendored via mc-chat); startup backfills auto-beacon
-  templates, then reclassifies.
-- Migration 38: `classifier_rules` backed up to `classifier_rules_retired.json` and dropped;
-  `hiddenCategories` becomes `hiddenTags`.
-- Update runner: schema guard before anything is stopped, rollback on failed activation, never
-  rolls back into a blocked slot; `/api/update/slots` reports per-slot schema and
-  `blocked_reason`. lighttpd's log directory is recreated before each restart.
-- Gateway uptime: startup reconciliation no longer wedges in a crash loop after a crash between
-  start and the first heartbeat.
-- `mcapp-ble`: `rfkill` / `bluetoothctl` pre-start steps are time-bounded and non-fatal, so a hung
-  BlueZ no longer blocks the unit.
-- Bootstrap (epoch 6): on boards with `armbian-ramlog` / `orangepi-ramlog` McApp writes no
-  `/var/log` tmpfs and no journal bind; the ramlog's own persistence takes over.
-- Dependencies refreshed (FastAPI 0.156.1), including the standalone `ble_service` lock.
+- RM1 command `blockcall` in the allowlist, with the firmware's argument shape.
+- Server-side guards before any counter value is used: no self- or target-block, 39-character
+  limit, and a write needs a complete, already-read list (otherwise only `none` is allowed).
+  Calls are normalised exactly as the firmware does (`-01` becomes `-1`, `-0` the bare call).
+- Node state `fields.blockcall` with the stored list, entries the reply left out, and whether a
+  write's echo matches the request; firmware without the command is reported as unsupported.
+- New shared test corpus `rm_blocklist_vectors.json`, mirrored by the webapp.
+- Dependencies refreshed: FastAPI 0.162.0, Starlette 1.10.0, timezonefinder 9.2.0 (smaller in
+  memory), including the standalone `ble_service` lock.
 
 ### Frontend (webapp)
 
-- Tags replace categories: Settings spam filter shows one toggle per tag with a 30-day count;
-  Node and Software share one toggle; time beacons are no longer offered.
-- Tag filter chips under the All/Filtered row (Alt-click shows only one tag) and clickable chips
-  on each message.
-- Classifier Rules card, Beacon Templates card and the advanced-tools toggle removed.
-- Update page: blocked slots have Activate disabled with the reason, slot badges compare against
-  the active slot, failures show the runner's message.
+- Call blocklist card in Remote Management: chips per call, add/remove, live `N/39` counter,
+  read-only and unsupported states, and the read-back result after a save.
+- History no longer offers **Run again** for a blocklist write: replaying an old full list would
+  drop entries added since, or clear the list without asking. Reads can still be run again.
 - Dependencies refreshed.
 
 ### Upgrade notes
 
-- Migration 38 runs on first start, followed by a one-time reclassification of stored messages.
-- After this update, slots holding v2.1.15 to v2.1.17 can no longer be activated: their code does
-  not know schema 38. The Update page shows them as blocked.
-- System converge to epoch 6 runs automatically. On an Orange Pi with a RAM log, reboot once when
-  the box asks for it.
-- Rules you wrote yourself are in `/var/lib/mcapp/classifier_rules_retired.json`.
+- The card needs a node on fork firmware 4.40a.10.23 or newer; older firmware shows "no call
+  blocklist".
+- Blocking a station also drops the frames it relays. If it sits between McApp and the managed
+  node, remote replies stop arriving without any error.
+- Nothing to do on the box: no migration, no system converge.
 
 ## Earlier releases, in brief
 
 One entry per release. The full notes as published are in
 [`doc/archive/release-history-full.md`](https://github.com/DK5EN/McApp/blob/development/doc/archive/release-history-full.md).
+
+### v2.1.18 (2026-10-20)
+
+- Classifier on MeshMap's shared rule set: messages carry tags, you hide by tag; custom rules
+  retired (backed up to `classifier_rules_retired.json`). Schema 37 → 38, `SYSTEM_EPOCH` 5 → 6
+  (reboot once on an Orange Pi with a RAM log).
+- Update page refuses to activate a slot whose code is older than the database schema.
 
 ### v2.1.17 (2026-10-20)
 
