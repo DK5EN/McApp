@@ -2921,3 +2921,22 @@ ingest path), live-verified on air by the operator before the promotion.
 
 **Watch points.** New W: the first-tab freeze on the Messages → Node Admin switch; re-check if it
 shows up again. No F.
+
+## 46. 2026-10-24 20:02 CEST — post-release sweep of production v2.1.19 (right after the deploy)
+
+Deployed from the webapp Update page (Production mode), `PREPARE → DEPLOY → ACTIVATE → HEALTH →
+DONE`; the on-box wait loop (tag + new slot + service restart) fired on slot-1.
+
+- `webapp/version.html` v2.1.19; active slot-1 (was slot-2, v2.1.19-dev.1). `mcapp`, `mcapp-ble`,
+  `caddy`, `lighttpd` active; `mcapp` restarted 20:02:02, `NRestarts` 0. Journal `-p warning` since
+  the restart: 0 lines. `/health` healthy.
+- Schema 38 in the DB and `LATEST_SCHEMA_VERSION` 38 in the slot (no migration in this release).
+- Production packaging: the slot holds no `*_tests.py` and exactly one `.json`,
+  `contract/classifier_contract.json`, which `release.sh` ships on purpose (runtime data). The
+  prod-release skill's "0" expectation predates that rule.
+- New code present (`_gate_blockcall` in the slot); venv has fastapi 0.162.0, timezonefinder 9.2.0.
+- Ingest live: 13 messages in the first 5 min. RAM: 281 MB used, 180 MB available.
+- `/api/status` `udp_target_kind` `config` directly after the restart (W11: re-check `identified`
+  at the next sweep), `udp_multiple_sources` false.
+
+**Watch points.** W11 as above. The §45 browser-freeze W stays open. No F.
