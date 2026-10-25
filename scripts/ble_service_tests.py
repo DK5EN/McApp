@@ -1045,6 +1045,86 @@ async def _test_register_cache_caches_is1_and_sn1(record: Any) -> None:
         restore_side_effects()
 
 
+async def _test_register_cache_sn1_app_settings_keys(record: Any) -> None:
+    """Firmware #1237 (fork-main ce4407b3, 2026-10-25) appends MHOP, MTU,
+    VOLT, NCON and KISS to SN1 after TZ, with LEDNF last. The worst case
+    (VIACALL 39 + WSPWD 19 + TZ 39 chars, LEDNF set) is 245 JSON bytes
+    against the 244-char clamp; the firmware drops trailing keys first, but
+    a frame the clamp cuts must still salvage everything up to the cut. Two
+    claims are pinned: the new keys reach the cache verbatim (MCProxy never
+    parses them, the webapp does), and a cut after TZ never turns the node
+    into "old firmware" for node_tz -- an UNSUPPORTED verdict would send
+    `--utcoff`, which CLEARS the node's TZ rule."""
+    restore_side_effects = _snapshot_side_effects()
+    original_cache = dict(ble_main.state.register_cache)
+    try:
+        ble_main.state.register_cache.clear()
+        rule = "CET-1CEST,M3.5.0,M10.5.0/3"
+        sn1 = {
+            "TYP": "SN1",
+            "VIA": True,
+            "VIACALL": "OE1KFR-12",
+            "WSPWD": "",
+            "ASYM": False,
+            "TZ": rule,
+            "MHOP": 4,
+            "MTU": 1500,
+            "VOLT": True,
+            "NCON": True,
+            "KISS": 5,
+            "LEDNF": "BLED,CHGLED",
+        }
+        frame = json.dumps(sn1, separators=(",", ":"))
+        ble_main.notification_callback(b"D" + frame.encode() + b"\x00\x00")
+        record(
+            "register cache: an SN1 with the #1237 app-settings keys is cached verbatim",
+            ble_main.state.register_cache.get("SN1") == sn1,
+        )
+        record(
+            "node_tz: the full #1237 SN1 still classifies as RULE",
+            node_tz.classify(ble_main.state.register_cache).state is node_tz.TzState.RULE,
+        )
+
+        # The firmware's own worst case: every string at its maximum, every
+        # boolean `false`, KISS 15 -- exactly 245 bytes, one over the clamp.
+        worst = dict(
+            sn1,
+            VIA=False,
+            VIACALL="OE1KFR-12,OE3XYZ-11,OE5ABC-12,DK5EN-981",
+            WSPWD="w" * 19,
+            TZ="AAAAAAAAAAAAAAAAA-1BBBBBBBBB,M3.5.0/2,M",
+            VOLT=False,
+            NCON=False,
+            KISS=15,
+        )
+        worst_json = json.dumps(worst, separators=(",", ":"))
+        record(
+            "test setup: the worst-case #1237 SN1 is the firmware's 245 bytes",
+            len(worst["VIACALL"]) == 39 and len(worst["TZ"]) == 39 and len(worst_json) == 245,
+        )
+        # 244 = the clamp itself (only the closing brace lost); the second cut
+        # lands inside KISS, after TZ, which is where a fail-soft miss would hit.
+        for cut in (244, worst_json.index('"KISS"') + 4):
+            ble_main.state.register_cache.clear()
+            ble_main.notification_callback(b"D" + worst_json[:cut].encode())
+            cached = ble_main.state.register_cache.get("SN1") or {}
+            record(
+                f"register cache: an SN1 cut at {cut} chars is salvaged with TZ intact and "
+                "only whole members",
+                cached.get("TZ") == worst["TZ"]
+                and all(cached[k] == worst[k] for k in cached)
+                and (cut == 244) == ("KISS" in cached),
+            )
+            record(
+                f"node_tz: an SN1 cut at {cut} chars that kept TZ is never UNSUPPORTED",
+                node_tz.classify(ble_main.state.register_cache).state is node_tz.TzState.RULE,
+            )
+    finally:
+        ble_main.state.register_cache.clear()
+        ble_main.state.register_cache.update(original_cache)
+        restore_side_effects()
+
+
 async def _test_register_cache_unaffected_by_truncated_or_malformed_frames(record: Any) -> None:
     """An UNSALVAGEABLE truncated frame (cut inside its very first member,
     so `_repair_truncated_json_object` recovers nothing -- the firmware's
@@ -6590,6 +6670,7 @@ async def run_ble_service_tests() -> bool:
         _test_registers_endpoint_contract_shape,
         _test_register_cache_excludes_conffin_and_mh,
         _test_register_cache_caches_is1_and_sn1,
+        _test_register_cache_sn1_app_settings_keys,
         _test_register_cache_unaffected_by_truncated_or_malformed_frames,
         _test_register_cache_receives_salvaged_partial_frame,
         _test_register_cache_cleared_on_target_change,

@@ -5,6 +5,57 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.1.20 (2026-10-25)
+
+Group numbers now have names. McApp ships the ICSSW list of MeshCom groups, so the sidebar, the
+destination picker and the conversation header show what a group is (`DACH · D-A-CH`,
+`DL · Deutschland`) instead of a bare number, and you can set your own labels and your own
+name/QTH for a callsign. The conversation list gets segments: Groups, Direct and Other.
+Dependencies refreshed in both repos. Schema 38 → 39; `SYSTEM_EPOCH` stays at 6.
+
+### Highlights
+
+- **Group labels.** Each group number gets a prefix, a hint and a remark (range), shown compact in
+  the sidebar and the destination picker and in full in the conversation header. Numbers without
+  an exact entry fall back to their range (`2321-2329` = OE1-OE9) or their country prefix.
+- **Your own labels and names.** Settings > Groups edits prefix, hint and remark per field, and
+  adds groups nobody has heard yet. For callsigns you can override the first name and QTH that
+  QRZ.com supplies; a later QRZ refresh never overwrites them. Clearing a field returns to the
+  upstream value.
+- **Conversation segments.** Groups | Direct | Other above the conversation list, with unread
+  counts per segment, remembered per device. Direct rows show the station's first name; unread
+  conversations sort first.
+- **Calmer desktop filter.** The filter bar sits behind a funnel icon in the conversation header,
+  and the mobile drawer lost its category chips.
+
+### Backend (MCProxy)
+
+- ICSSW GRC snapshot shipped as `group_labels_icssw.json` (71 entries), with range expansion; the
+  box never fetches it, every production release refreshes it.
+- Migration 39: `group_label_overrides` and `callsign_info_overrides`, per field, `NULL` = inherit.
+- `GET/PUT/DELETE /api/group_labels` and `PUT/DELETE /api/callsign_info/{call}/override`; a bad
+  request never echoes its input.
+- New bare SSE event `proxy:group_labels` in the connect burst and after every edit;
+  `proxy:callsign_info` carries `manual: true` for an overridden callsign, otherwise unchanged.
+
+### Frontend (webapp)
+
+- Group label store fed by `proxy:group_labels`, with the country-prefix fallback.
+- Labels in sidebar rows, destination picker, desktop conversation header and mobile header.
+- Settings > Groups as full-width Groups, Conversations and Stations tables with in-cell editing,
+  per-field revert and Add for unheard numbers.
+- Segment toggle, collapsible desktop filter, drawer without chips; saved chip preferences no
+  longer light the funnel when no filter is set.
+- Dependencies refreshed.
+
+### Upgrade notes
+
+- The migration to schema 39 runs on its own at startup; nothing to do on the box.
+- mc-chat does not serve group labels yet: on an mc-chat backend the webapp shows bare numbers and
+  label edits fail.
+- Editing one field of a group that only resolves through its country prefix blanks the other
+  fields for that number; set all three if you edit such a group.
+
 ## v2.1.19 (2026-10-24)
 
 Remote management can now read and edit a node's call blocklist. Firmware 4.40a.10.23 (fork) lets a
