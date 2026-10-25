@@ -100,3 +100,12 @@ Until then the webapp on an mc-chat backend shows bare group numbers and the edi
 overlapping PUTs can broadcast the older payload last, leaving live clients on a stale label map
 until the next edit or reconnect. Needs concurrent operator writes, so low risk; an `asyncio.Lock`
 around write + read + broadcast closes it.
+
+## B10 — an override on a country-fallback group should inherit the country entry
+
+Editing one field of a number that only resolves through the country fallback (e.g. `2628` →
+`262`'s `DL · Deutschland`) creates an `own` label for `2628`; the exact key then beats the
+fallback, so the other fields go blank although the editor showed the country values as
+placeholders. Fix in `build_label_payload` (`group_labels.py`): treat the 3-digit country entry as
+the upstream of an override key that has no exact or range entry, and include it in the GET
+`upstream` map so the editor's `mixed` rules apply.

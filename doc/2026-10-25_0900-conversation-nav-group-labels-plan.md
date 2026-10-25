@@ -1,6 +1,6 @@
 # Conversation navigation + group labels — implementation plan
 
-Status: **APPROVED 2026-10-25**. ALL WAVES DONE; live on mcapp.local as v2.1.20-dev.1 (see §7). Repos: MCProxy (backend) and webapp
+Status: **APPROVED 2026-10-25**. Wave 4 (operator feedback) committed; next dev release carries it (see §7). Repos: MCProxy (backend) and webapp
 (frontend), committed independently. Dispatch mechanics: `/orchestrate-waves`.
 
 ## 1. Approved problem statement (v2, with operator answers)
@@ -201,3 +201,26 @@ drawer, drop only the chips; D11 country fallback yes.
   with source badges and the editor opens pinned with upstream placeholders.
 - Not checked live: the desktop `ConversationHeader` (the Chrome window could not be widened past
   883 px), and no write was made against the production DB (route tests cover writes).
+
+### Wave 4 — operator feedback on v2.1.20-dev.1 (2026-10-25)
+
+Decisions: drop the All segment ("No Filter" covers it); segment remembered per device (reverses
+the earlier "not remembered"); segment colours = the active category-chip tokens in both themes;
+Direct rows show the QRZ first name (name only); inside a segment unread rows float to the top,
+the rest is strict: Groups `*` → numbers ascending → `#tags`, Direct/Other newest activity
+first; desktop filter section collapsed behind a funnel in `ConversationHeader`; Settings >
+Groups becomes a full-page-width single-row table with column headers, cell editing with a green
+✓ (save field) and red ✗ (cancel), a separate Stations table (Callsign | Name | QTH) for DM/pair
+callsigns, same sort as the sidebar.
+
+| Agent | Exclusive files                                                                                                                   |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------- |
+| F5    | `ContactsSidebar.vue`, `ConversationSegments.vue` + specs                                                                         |
+| F6    | `ConversationHeader.vue`, `views/MessagesView.vue` + specs                                                                        |
+| F7    | `settings/GroupManager.vue`, `GroupLabelEditor.vue`, `CallsignNameEditor.vue`, `views/SettingsView.vue` (card width only) + specs |
+
+Wave 4 result: implemented as decided, plus a "Conversations" table (★ | Conversation | Msgs |
+eye | trash) restoring hide/favourite/delete for DM and pair conversations, which the first table
+rebuild had dropped (advisor blocker). The funnel lights only for a real filter (search text,
+chips ≠ defaults, or a destination ≠ the open conversation) — orchestrator call, flagged to the
+operator. Country-fallback edit inheritance deferred as backlog B10.
