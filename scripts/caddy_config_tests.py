@@ -213,6 +213,31 @@ def _test_caddy_site() -> None:
             "mcapp.local",
             "a comment is not mistaken for a site address",
         ),
+        # Field report 2026-10-25 (Orange Pi McApp-OP2W): an operator prepended
+        # the LAN IP to the v3 line. Caddy issues an IP-SAN leaf for it, but the
+        # loopback probe sends no SNI for an IP host, so Caddy picks a cert by
+        # the local address 127.0.0.1, finds none and fails the handshake -- a
+        # permanent false WARN naming the IP. A hostname is the probe target.
+        (
+            "10.0.0.236:443, McApp-OP2W.local:443, McApp-OP2W.fritz.box:443 {",
+            "McApp-OP2W.local",
+            "a leading IP literal is skipped in favour of the first hostname",
+        ),
+        (
+            "mcapp.local:443, 10.0.0.236:443 {",
+            "mcapp.local",
+            "a trailing IP literal does not displace the hostname",
+        ),
+        (
+            "10.0.0.236:443, 192.168.1.5:443 {",
+            "",
+            "an IP-only line yields nothing, so caddy_site falls back",
+        ),
+        (
+            "10.0.0.236:443 {\nmcapp.local:443 {",
+            "mcapp.local",
+            "an IP-only block is skipped and the next site line is read",
+        ),
     ]
 
     for source, expected, label in cases:

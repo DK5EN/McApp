@@ -910,9 +910,22 @@ caddy_site() {
   # which silently sent the HTTPS probe and the CA warm-up to the $(hostname).local
   # fallback. First in the list is the .local name, which is the one avahi can
   # actually resolve, so it stays the right probe target.
+  #
+  # IP-literal addresses are skipped (field report 2026-10-25, Orange Pi
+  # McApp-OP2W): an operator had prepended "10.0.0.236:443," to the v3 line so
+  # https by IP works in the browser, which it does -- Caddy issues an IP-SAN
+  # leaf for it. But check_caddy_https() probes over loopback with --resolve,
+  # an IP host sends no SNI, and Caddy then selects the certificate by the
+  # connection's LOCAL address (127.0.0.1), finds none, and fails the
+  # handshake: a permanent false "[WARN] Caddy HTTPS not responding on
+  # 10.0.0.236:443" after every update. The first HOSTNAME on the line is the
+  # probe target; a line that holds only IPs yields nothing and falls through.
   site=$(awk '/:443/ && /\{[[:space:]]*$/ {
-    if (match($0, /[A-Za-z0-9._-]+:443/)) {
-      s = substr($0, RSTART, RLENGTH); sub(/:443$/, "", s); print s; exit
+    line = $0
+    while (match(line, /[A-Za-z0-9._-]+:443/)) {
+      s = substr(line, RSTART, RLENGTH); sub(/:443$/, "", s)
+      line = substr(line, RSTART + RLENGTH)
+      if (s !~ /^[0-9.]+$/) { print s; exit }
     }
   }' /etc/caddy/Caddyfile 2>/dev/null)
   local cfg="${CONFIG_FILE:-/etc/mcapp/config.json}"
