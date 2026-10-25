@@ -1,60 +1,61 @@
 # Release History
 
-## v2.1.20 (2026-10-25)
+## v2.1.21 (2026-10-25)
 
-Group numbers now have names. McApp ships the ICSSW list of MeshCom groups, so the sidebar, the
-destination picker and the conversation header show what a group is (`DACH · D-A-CH`,
-`DL · Deutschland`) instead of a bare number, and you can set your own labels and your own
-name/QTH for a callsign. The conversation list gets segments: Groups, Direct and Other.
-Dependencies refreshed in both repos. Schema 38 → 39; `SYSTEM_EPOCH` stays at 6.
+**Every node setting the new firmware reports is now on the BLE page, and the message details show
+how long each acknowledgement took.** Firmware 4.40a.10.25 (fork) adds Max Hop, MTU, voltage, net
+console, KISS and the fitted LEDs to its settings register; McApp shows and writes all of them.
+Dependencies refreshed in both repos. Schema stays at 39, `SYSTEM_EPOCH` at 6.
 
 ### Highlights
 
-- **Group labels.** Each group number gets a prefix, a hint and a remark (range), shown compact in
-  the sidebar and the destination picker and in full in the conversation header. Numbers without
-  an exact entry fall back to their range (`2321-2329` = OE1-OE9) or their country prefix.
-- **Your own labels and names.** Settings > Groups edits prefix, hint and remark per field, and
-  adds groups nobody has heard yet. For callsigns you can override the first name and QTH that
-  QRZ.com supplies; a later QRZ refresh never overwrites them. Clearing a field returns to the
-  upstream value.
-- **Conversation segments.** Groups | Direct | Other above the conversation list, with unread
-  counts per segment, remembered per device. Direct rows show the station's first name; unread
-  conversations sort first.
-- **Calmer desktop filter.** The filter bar sits behind a funnel icon in the conversation header,
-  and the mobile drawer lost its category chips.
+- **Max Hop on the Radio card.** Same choices as the firmware's own web page (4, 3, 2), plus the
+  node's current value when it is outside that list.
+- **New Network Services card.** MTU with 1280, 1400, 1500 or a custom value, the resulting MSS
+  shown next to it, the net console switch and the four KISS flags.
+- **One Voltage toggle.** It replaces the Show Voltage and Show Percent pair on new firmware; older
+  firmware keeps the pair.
+- **LEDs match the board.** A Charge LED toggle, and LEDs the board does not have appear as disabled
+  "Not fitted on this board" tiles.
+- **INA226 only where fitted.** The INA226 tile and the Sensor card disappear on a build without
+  the current sensor.
+- **Ack latency in the message details.** Each line reads e.g.
+  `Acknowledged by DM3KS-12 via udp · 31.1 s`: seconds below 100 s, minutes or hours above, which
+  covers store-and-forward holds.
 
 ### Backend (MCProxy)
 
-- ICSSW GRC snapshot shipped as `group_labels_icssw.json` (71 entries), with range expansion; the
-  box never fetches it, every production release refreshes it.
-- Migration 39: `group_label_overrides` and `callsign_info_overrides`, per field, `NULL` = inherit.
-- `GET/PUT/DELETE /api/group_labels` and `PUT/DELETE /api/callsign_info/{call}/override`; a bad
-  request never echoes its input.
-- New bare SSE event `proxy:group_labels` in the connect burst and after every edit;
-  `proxy:callsign_info` carries `manual: true` for an overridden callsign, otherwise unchanged.
+- No runtime change. A new test pins the firmware's new settings keys through the register cache
+  and the truncation salvage: a worst-case settings frame is 245 bytes against the 244-character
+  BLE limit, and a cut there must never make McApp treat the node as old firmware and clear its
+  time-zone rule.
+- Dependencies refreshed.
 
 ### Frontend (webapp)
 
-- Group label store fed by `proxy:group_labels`, with the country-prefix fallback.
-- Labels in sidebar rows, destination picker, desktop conversation header and mobile header.
-- Settings > Groups as full-width Groups, Conversations and Stations tables with in-cell editing,
-  per-field revert and Add for unheard numbers.
-- Segment toggle, collapsible desktop filter, drawer without chips; saved chip preferences no
-  longer light the funnel when no filter is set.
+- BLE page: Max Hop, Network Services card, Voltage and Charge LED toggles, not-fitted LED tiles,
+  INA226 hiding, each confirmed by the settings push the node sends after a command.
+- A missing key means the firmware lacks the feature: the control is hidden, never shown as off.
+- Ack latency behind every ack in the details popover; number and unit stay on one line.
 - Dependencies refreshed.
 
 ### Upgrade notes
 
-- The migration to schema 39 runs on its own at startup; nothing to do on the box.
-- mc-chat does not serve group labels yet: on an mc-chat backend the webapp shows bare numbers and
-  label edits fail.
-- Editing one field of a group that only resolves through its country prefix blanks the other
-  fields for that number; set all three if you edit such a group.
+- Nothing to do on the box.
+- The new BLE controls need fork firmware 4.40a.10.25 or later. On older firmware the BLE page
+  looks as before.
+- No ack latency is shown when the ack's timestamp lies before the message's, which happens when a
+  BLE node's clock runs ahead of the Pi.
 
 ## Earlier releases, in brief
 
 One entry per release. The full notes as published are in
 [`doc/archive/release-history-full.md`](https://github.com/DK5EN/McApp/blob/development/doc/archive/release-history-full.md).
+
+### v2.1.20 (2026-10-25)
+
+- Group labels from the ICSSW list in sidebar, picker and header, with your own overrides for
+  groups and callsign names; conversation segments. Schema 38 → 39, `SYSTEM_EPOCH` 6.
 
 ### v2.1.19 (2026-10-24)
 
