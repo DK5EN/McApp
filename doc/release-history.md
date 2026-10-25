@@ -1,58 +1,65 @@
 # Release History
 
-## v2.1.19 (2026-10-24)
+## v2.1.20 (2026-10-25)
 
-Remote management can now read and edit a node's call blocklist. Firmware 4.40a.10.23 (fork) lets a
-node drop every frame from or relayed by the calls on its list; McApp's Remote Management view
-gets a Call blocklist card for it, with guards so you cannot lock yourself out. Dependencies
-refreshed in both repos. No schema change (stays at 38); `SYSTEM_EPOCH` stays at 6.
+Group numbers now have names. McApp ships the ICSSW list of MeshCom groups, so the sidebar, the
+destination picker and the conversation header show what a group is (`DACH · D-A-CH`,
+`DL · Deutschland`) instead of a bare number, and you can set your own labels and your own
+name/QTH for a callsign. The conversation list gets segments: Groups, Direct and Other.
+Dependencies refreshed in both repos. Schema 38 → 39; `SYSTEM_EPOCH` stays at 6.
 
 ### Highlights
 
-- **Call blocklist over RM1.** Node Admin > Remote Management has a new Call blocklist card:
-  **Read** fetches the node's list, **Save list** replaces it, **Clear all** empties it (with a
-  confirm). The node's answer to a write is the list it actually stored, and the card shows
-  whether that matches what you sent.
-- **You cannot block yourself.** An entry that would block your own station (the attached node or
-  any call McApp sends remote commands from) or the managed node itself is refused before
-  anything goes on air. A bare call counts for every SSID: `DK5EN` is refused when you send from
-  `DK5EN-98`.
-- **Length is checked before sending.** One remote command carries at most 39 characters, about
-  3-4 calls. A longer list, or one the node set locally (up to 16 calls), is shown read-only and
-  can only be cleared remotely, so a remote write never drops entries you cannot see.
+- **Group labels.** Each group number gets a prefix, a hint and a remark (range), shown compact in
+  the sidebar and the destination picker and in full in the conversation header. Numbers without
+  an exact entry fall back to their range (`2321-2329` = OE1-OE9) or their country prefix.
+- **Your own labels and names.** Settings > Groups edits prefix, hint and remark per field, and
+  adds groups nobody has heard yet. For callsigns you can override the first name and QTH that
+  QRZ.com supplies; a later QRZ refresh never overwrites them. Clearing a field returns to the
+  upstream value.
+- **Conversation segments.** Groups | Direct | Other above the conversation list, with unread
+  counts per segment, remembered per device. Direct rows show the station's first name; unread
+  conversations sort first.
+- **Calmer desktop filter.** The filter bar sits behind a funnel icon in the conversation header,
+  and the mobile drawer lost its category chips.
 
 ### Backend (MCProxy)
 
-- RM1 command `blockcall` in the allowlist, with the firmware's argument shape.
-- Server-side guards before any counter value is used: no self- or target-block, 39-character
-  limit, and a write needs a complete, already-read list (otherwise only `none` is allowed).
-  Calls are normalised exactly as the firmware does (`-01` becomes `-1`, `-0` the bare call).
-- Node state `fields.blockcall` with the stored list, entries the reply left out, and whether a
-  write's echo matches the request; firmware without the command is reported as unsupported.
-- New shared test corpus `rm_blocklist_vectors.json`, mirrored by the webapp.
-- Dependencies refreshed: FastAPI 0.162.0, Starlette 1.10.0, timezonefinder 9.2.0 (smaller in
-  memory), including the standalone `ble_service` lock.
+- ICSSW GRC snapshot shipped as `group_labels_icssw.json` (71 entries), with range expansion; the
+  box never fetches it, every production release refreshes it.
+- Migration 39: `group_label_overrides` and `callsign_info_overrides`, per field, `NULL` = inherit.
+- `GET/PUT/DELETE /api/group_labels` and `PUT/DELETE /api/callsign_info/{call}/override`; a bad
+  request never echoes its input.
+- New bare SSE event `proxy:group_labels` in the connect burst and after every edit;
+  `proxy:callsign_info` carries `manual: true` for an overridden callsign, otherwise unchanged.
 
 ### Frontend (webapp)
 
-- Call blocklist card in Remote Management: chips per call, add/remove, live `N/39` counter,
-  read-only and unsupported states, and the read-back result after a save.
-- History no longer offers **Run again** for a blocklist write: replaying an old full list would
-  drop entries added since, or clear the list without asking. Reads can still be run again.
+- Group label store fed by `proxy:group_labels`, with the country-prefix fallback.
+- Labels in sidebar rows, destination picker, desktop conversation header and mobile header.
+- Settings > Groups as full-width Groups, Conversations and Stations tables with in-cell editing,
+  per-field revert and Add for unheard numbers.
+- Segment toggle, collapsible desktop filter, drawer without chips; saved chip preferences no
+  longer light the funnel when no filter is set.
 - Dependencies refreshed.
 
 ### Upgrade notes
 
-- The card needs a node on fork firmware 4.40a.10.23 or newer; older firmware shows "no call
-  blocklist".
-- Blocking a station also drops the frames it relays. If it sits between McApp and the managed
-  node, remote replies stop arriving without any error.
-- Nothing to do on the box: no migration, no system converge.
+- The migration to schema 39 runs on its own at startup; nothing to do on the box.
+- mc-chat does not serve group labels yet: on an mc-chat backend the webapp shows bare numbers and
+  label edits fail.
+- Editing one field of a group that only resolves through its country prefix blanks the other
+  fields for that number; set all three if you edit such a group.
 
 ## Earlier releases, in brief
 
 One entry per release. The full notes as published are in
 [`doc/archive/release-history-full.md`](https://github.com/DK5EN/McApp/blob/development/doc/archive/release-history-full.md).
+
+### v2.1.19 (2026-10-24)
+
+- Call blocklist over RM1 in Remote Management (fork firmware 4.40a.10.23+), guarded against
+  self-block, 39-character limit, locally set lists read-only. Schema 38, `SYSTEM_EPOCH` 6.
 
 ### v2.1.18 (2026-10-20)
 
