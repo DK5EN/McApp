@@ -227,6 +227,7 @@ try:
     from .sse_routes.classifier import build_classifier_router
     from .sse_routes.deploy import build_deploy_router
     from .sse_routes.internet_feed import build_internet_feed_router
+    from .sse_routes.labels import build_labels_router, current_label_payload
     from .sse_routes.linkcheck import build_linkcheck_router
     from .sse_routes.monitor import build_monitor_router
     from .sse_routes.node_admin import build_node_admin_router
@@ -554,6 +555,11 @@ class SSEManager:
                 yield self.format_sse_event(info, "proxy:callsign_info")
             except Exception as exc:
                 logger.warning("callsign_info snapshot failed: %s", exc)
+            # Group labels (plan D6): bare event, re-broadcast after every edit.
+            try:
+                yield self.format_sse_event(await current_label_payload(self), "proxy:group_labels")
+            except Exception as exc:
+                logger.warning("group_labels snapshot failed: %s", exc)
         else:
             logger.warning(
                 "SSE client %s: no storage handler available",
@@ -661,6 +667,7 @@ class SSEManager:
         app.include_router(build_deploy_router(self))
         app.include_router(build_push_router(self))
         app.include_router(build_qrz_router(self))
+        app.include_router(build_labels_router(self))
         app.include_router(build_node_admin_router(self, lambda: self.node_admin_allowed_origins))
         app.include_router(
             build_internet_feed_router(self, lambda: self.node_admin_allowed_origins)

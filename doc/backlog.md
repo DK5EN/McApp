@@ -86,3 +86,26 @@ example the bound message row id), and the `?since=` read path then filtering on
 `timestamp_from_date_time()` still assumes the host offset (contract §4, plan D6). With the node
 now following its own TZ rule the two can differ. Different code path, deliberately deferred from
 the node-TZ campaign.
+
+## B8 — group labels and callsign name overrides in mc-chat
+
+Operator decision 2026-10-25: parity deferred. mc-chat needs the same `proxy:group_labels` event,
+`/api/group_labels` and `/api/callsign_info/{call}/override` routes (wire contract in
+`doc/2026-10-25_0900-conversation-nav-group-labels-plan.md` §3) and the shipped ICSSW snapshot.
+Until then the webapp on an mc-chat backend shows bare group numbers and the editor's writes fail.
+
+## B9 — serialise label writes before their broadcast
+
+`sse_routes/labels.py` `broadcast_labels()` reads the payload and then broadcasts it. Two
+overlapping PUTs can broadcast the older payload last, leaving live clients on a stale label map
+until the next edit or reconnect. Needs concurrent operator writes, so low risk; an `asyncio.Lock`
+around write + read + broadcast closes it.
+
+## B10 — an override on a country-fallback group should inherit the country entry
+
+Editing one field of a number that only resolves through the country fallback (e.g. `2628` →
+`262`'s `DL · Deutschland`) creates an `own` label for `2628`; the exact key then beats the
+fallback, so the other fields go blank although the editor showed the country values as
+placeholders. Fix in `build_label_payload` (`group_labels.py`): treat the 3-digit country entry as
+the upstream of an override key that has no exact or range entry, and include it in the GET
+`upstream` map so the editor's `mixed` rules apply.

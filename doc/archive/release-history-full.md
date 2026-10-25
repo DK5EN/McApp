@@ -5,6 +5,55 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.1.19 (2026-10-24)
+
+Remote management can now read and edit a node's call blocklist. Firmware 4.40a.10.23 (fork) lets a
+node drop every frame from or relayed by the calls on its list; McApp's Remote Management view
+gets a Call blocklist card for it, with guards so you cannot lock yourself out. Dependencies
+refreshed in both repos. No schema change (stays at 38); `SYSTEM_EPOCH` stays at 6.
+
+### Highlights
+
+- **Call blocklist over RM1.** Node Admin > Remote Management has a new Call blocklist card:
+  **Read** fetches the node's list, **Save list** replaces it, **Clear all** empties it (with a
+  confirm). The node's answer to a write is the list it actually stored, and the card shows
+  whether that matches what you sent.
+- **You cannot block yourself.** An entry that would block your own station (the attached node or
+  any call McApp sends remote commands from) or the managed node itself is refused before
+  anything goes on air. A bare call counts for every SSID: `DK5EN` is refused when you send from
+  `DK5EN-98`.
+- **Length is checked before sending.** One remote command carries at most 39 characters, about
+  3-4 calls. A longer list, or one the node set locally (up to 16 calls), is shown read-only and
+  can only be cleared remotely, so a remote write never drops entries you cannot see.
+
+### Backend (MCProxy)
+
+- RM1 command `blockcall` in the allowlist, with the firmware's argument shape.
+- Server-side guards before any counter value is used: no self- or target-block, 39-character
+  limit, and a write needs a complete, already-read list (otherwise only `none` is allowed).
+  Calls are normalised exactly as the firmware does (`-01` becomes `-1`, `-0` the bare call).
+- Node state `fields.blockcall` with the stored list, entries the reply left out, and whether a
+  write's echo matches the request; firmware without the command is reported as unsupported.
+- New shared test corpus `rm_blocklist_vectors.json`, mirrored by the webapp.
+- Dependencies refreshed: FastAPI 0.162.0, Starlette 1.10.0, timezonefinder 9.2.0 (smaller in
+  memory), including the standalone `ble_service` lock.
+
+### Frontend (webapp)
+
+- Call blocklist card in Remote Management: chips per call, add/remove, live `N/39` counter,
+  read-only and unsupported states, and the read-back result after a save.
+- History no longer offers **Run again** for a blocklist write: replaying an old full list would
+  drop entries added since, or clear the list without asking. Reads can still be run again.
+- Dependencies refreshed.
+
+### Upgrade notes
+
+- The card needs a node on fork firmware 4.40a.10.23 or newer; older firmware shows "no call
+  blocklist".
+- Blocking a station also drops the frames it relays. If it sits between McApp and the managed
+  node, remote replies stop arriving without any error.
+- Nothing to do on the box: no migration, no system converge.
+
 ## v2.1.18 (2026-10-20)
 
 The classifier now runs the same rule set as MeshMap: every message carries tags (greeting, bot,

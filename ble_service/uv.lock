@@ -242,7 +242,7 @@ wheels = [
 
 [[package]]
 name = "mcapp-ble-service"
-version = "2.1.19"
+version = "2.1.20"
 source = { editable = "." }
 dependencies = [
     { name = "dbus-next" },

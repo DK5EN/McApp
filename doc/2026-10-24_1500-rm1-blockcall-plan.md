@@ -63,17 +63,17 @@ State (W2b): `fields.blockcall.value = {calls, omitted, requested, matches}` fro
 
 ## Waves
 
-| Wave | Owner              | Files                                                                                                                                       | State                                  |
-| ---- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
-| W0   | orchestrator       | `rm_blocklist_vectors.json`, this doc                                                                                                       | done                                   |
-| W1a  | implementer        | `src/mcapp/rm_blocklist.py`, `src/mcapp/rm_blocklist_tests.py`                                                                              | done ba6b496                           |
-| W1b  | implementer        | webapp `src/utils/nodeAdminBlocklist.ts`, `src/utils/__tests__/nodeAdminBlocklist.spec.ts`, `src/utils/__tests__/rm_blocklist_vectors.json` | done webapp c67c9a1                    |
-| W1 G | orchestrator       | `scripts/run_startup_tests.py` registration                                                                                                 | done, advisor APPROVED                 |
-| W2a  | implementer        | `remote_cmd.py` (allowlist), `node_admin_service.py` (D1 + D3 gates) + their tests                                                          | done, advisor rework applied, APPROVED |
-| W2b  | implementer        | `node_admin_state.py` + `node_admin_state_tests.py`                                                                                         | done                                   |
-| W2c  | implementer        | webapp `RemoteBlocklistCard.vue`, `NodeAdminView.vue`, `nodeAdminCommands.ts`, `nodeAdminRemoteState.ts`, vocabulary, types + specs         | done (+ no Run again for writes)       |
-| W3   | orchestrator       | CLAUDE.md, `doc/operations-reference.md`                                                                                                    | done                                   |
-| W4   | operator OK needed | on-air bench (DK5EN-1 / DK5EN-92) after a dev release                                                                                       | open                                   |
+| Wave | Owner              | Files                                                                                                                                       | State                                                                             |
+| ---- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| W0   | orchestrator       | `rm_blocklist_vectors.json`, this doc                                                                                                       | done                                                                              |
+| W1a  | implementer        | `src/mcapp/rm_blocklist.py`, `src/mcapp/rm_blocklist_tests.py`                                                                              | done ba6b496                                                                      |
+| W1b  | implementer        | webapp `src/utils/nodeAdminBlocklist.ts`, `src/utils/__tests__/nodeAdminBlocklist.spec.ts`, `src/utils/__tests__/rm_blocklist_vectors.json` | done webapp c67c9a1                                                               |
+| W1 G | orchestrator       | `scripts/run_startup_tests.py` registration                                                                                                 | done, advisor APPROVED                                                            |
+| W2a  | implementer        | `remote_cmd.py` (allowlist), `node_admin_service.py` (D1 + D3 gates) + their tests                                                          | done, advisor rework applied, APPROVED                                            |
+| W2b  | implementer        | `node_admin_state.py` + `node_admin_state_tests.py`                                                                                         | done                                                                              |
+| W2c  | implementer        | webapp `RemoteBlocklistCard.vue`, `NodeAdminView.vue`, `nodeAdminCommands.ts`, `nodeAdminRemoteState.ts`, vocabulary, types + specs         | done (+ no Run again for writes)                                                  |
+| W3   | orchestrator       | CLAUDE.md, `doc/operations-reference.md`                                                                                                    | done                                                                              |
+| W4   | operator OK needed | on-air bench (DK5EN-1 / DK5EN-92) after a dev release                                                                                       | done: operator bench on DK5EN-1 (read, write, clear verified); shipped in v2.1.19 |
 
 ## Known residuals
 

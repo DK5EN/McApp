@@ -20,7 +20,7 @@ from ..commands.parsing import is_group, is_hashtag, resolve_dst_target
 # passing suite for a reason unrelated to the change being made. This is not
 # circular with migrations.py: the step numbers there are independent literals,
 # so forgetting either half fails loudly.
-LATEST_SCHEMA_VERSION = 38
+LATEST_SCHEMA_VERSION = 39
 
 # Legacy filter category -> engine tag (classifier unification, issue #17 / Q2).
 # `directed` and `other` have no tag and are dropped on migration.

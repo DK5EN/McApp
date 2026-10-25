@@ -831,9 +831,10 @@ build_tarball() {
   # PRODUCTION is runtime only: no `*_tests.py`, and none of the .json
   # corpora/contracts either, because nothing BUT those test modules reads them
   # (config.json comes from /etc/mcapp; load_dump takes an admin-supplied path).
-  # ONE exception: contract/classifier_contract.json (mcmap's rule set). The
-  # classifier engine loads it at boot (classifier_contract.load_engine), so a
-  # slot without it does not start. Exactly that file name, nothing else.
+  # TWO exceptions, both runtime data read by name: contract/classifier_contract.json
+  # (mcmap's rule set; the classifier engine loads it at boot, so a slot without
+  # it does not start) and group_labels_icssw.json (the ICSSW group label
+  # snapshot, group_labels.load_snapshot). Exactly those file names, nothing else.
   # Shipping a test harness to the fleet buys nothing and is one more thing to
   # get wrong.
   #
@@ -854,7 +855,7 @@ build_tarball() {
   else
     src_pred=(
       '(' '(' -name '*.py' '!' -name '*_tests.py' '!' -name 'tests.py' ')'
-      -o -name 'classifier_contract.json' ')'
+      -o -name 'classifier_contract.json' -o -name 'group_labels_icssw.json' ')'
     )
   fi
   mkdir -p "${staging}/src/mcapp/commands"
