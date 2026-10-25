@@ -224,3 +224,8 @@ eye | trash) restoring hide/favourite/delete for DM and pair conversations, whic
 rebuild had dropped (advisor blocker). The funnel lights only for a real filter (search text,
 chips ≠ defaults, or a destination ≠ the open conversation) — orchestrator call, flagged to the
 operator. Country-fallback edit inheritance deferred as backlog B10.
+
+Live: `v2.1.20-dev.2` (Wave 4) then `v2.1.20-dev.3` (segment label used the global `.label`
+class → dark text on the accent tab; corner badge covered the label; saved chip preferences lit
+the funnel). Operator: "looks good" (2026-10-25). Browser checks go through `https://`; the https
+origin's service worker held the dev.1 bundle until an update + reload.
