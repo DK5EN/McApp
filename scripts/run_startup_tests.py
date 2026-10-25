@@ -86,6 +86,7 @@ from mcapp.server_imports_tests import run_server_imports_tests
 from mcapp.sqlite_storage import run_startup_tests as run_storage_tests
 from mcapp.sse_format_tests import run_sse_format_tests
 from mcapp.sse_handler import run_startup_tests as run_sse_tests
+from mcapp.sse_routes.labels_tests import run_labels_routes_tests
 from mcapp.stall_http_tests import run_stall_http_tests
 from mcapp.stall_tests import run_stall_tests
 from mcapp.storage.ack_match_vectors_tests import run_ack_match_vector_tests
@@ -261,6 +262,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     label_overrides_ok = await run_label_overrides_tests()
     print(f"label_overrides: {'PASS' if label_overrides_ok else 'FAIL'}")
+
+    labels_routes_ok = await run_labels_routes_tests()
+    print(f"labels_routes: {'PASS' if labels_routes_ok else 'FAIL'}")
 
     remote_cmd_ok = run_remote_cmd_tests()
     print(f"remote_cmd: {'PASS' if remote_cmd_ok else 'FAIL'}")
@@ -457,6 +461,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and uptime_ok
         and group_labels_ok
         and label_overrides_ok
+        and labels_routes_ok
         and remote_cmd_ok
         and rm_blocklist_ok
         and node_admin_storage_ok

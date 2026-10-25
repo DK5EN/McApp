@@ -498,12 +498,19 @@ class QrzLookupService:
             await self._handle_failure(result, now)
 
     async def _publish(self, callsign: str, info: dict[str, Any]) -> None:
-        # Same filter as get_callsign_info_map: an entry with no name, QTH or
-        # position is never on the wire, live or in the connect snapshot.
-        if self._on_info is None or not (info["first_name"] or info["qth"] or info["locator"]):
+        # Publish the MERGED entry (operator name/QTH overrides win per field,
+        # `manual: true` added), so a QRZ refresh never overwrites a manual name
+        # on live clients. Same filter as get_callsign_info_map: an entry with no
+        # name, QTH or position is never on the wire. Without an override the
+        # merged entry equals the stored row, i.e. the legacy payload.
+        if self._on_info is None:
             return
         try:
-            await self._on_info({callsign: info})
+            merged = await self._storage.get_callsign_info_merged(callsign)
+            entry = merged if merged is not None else info
+            if not (entry["first_name"] or entry["qth"] or entry["locator"]):
+                return
+            await self._on_info({callsign: entry})
         except Exception:
             # A broadcast failure must never count as a lookup failure.
             logger.warning("callsign_info broadcast failed", exc_info=True)
