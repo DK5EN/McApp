@@ -1,6 +1,6 @@
 # Conversation navigation + group labels — implementation plan
 
-Status: **APPROVED 2026-10-25**. Waves 1-2 DONE, Wave 3 (dev release + live check) in progress (see §7). Repos: MCProxy (backend) and webapp
+Status: **APPROVED 2026-10-25**. ALL WAVES DONE; live on mcapp.local as v2.1.20-dev.1 (see §7). Repos: MCProxy (backend) and webapp
 (frontend), committed independently. Dispatch mechanics: `/orchestrate-waves`.
 
 ## 1. Approved problem statement (v2, with operator answers)
@@ -189,3 +189,15 @@ drawer, drop only the chips; D11 country fallback yes.
 - Accepted: the callsign editor prefills both fields when `manual` (no per-field provenance on
   the wire), so saving a one-field override also pins the other field.
 - Wave 3: docs (CLAUDE.md "Group Labels", backlog B8 mc-chat parity + B9, prod-release Step 2b).
+
+### Wave 3 — done 2026-10-25
+
+- Dev release `v2.1.20-dev.1` on mcapp.local (slot-0, schema 39, both override tables, 17 `.json`
+  in the slot = local count, no warnings since restart). `GET /api/group_labels`: 160 labels,
+  `2325` → `OE5 · OE-Bundesländer` (range), snapshot `fetched_at 2026-10-25`.
+- Browser check at 883 px (mobile layout): header `262 · DL · Deutschland`; drawer with segments
+  and per-segment badges, no chips; sidebar labels from all four sources (`262 · DL` icssw,
+  `2325 · OE5` range, `2628 · DL` country); Other shows only pairs; Settings > Groups lists labels
+  with source badges and the editor opens pinned with upstream placeholders.
+- Not checked live: the desktop `ConversationHeader` (the Chrome window could not be widened past
+  883 px), and no write was made against the production DB (route tests cover writes).
