@@ -919,6 +919,33 @@ class MigrationsMixin(StorageBase):
                     )
                     _set_schema_version(conn, 38)
 
+                if current_version < 39:  # noqa: PLR2004 - schema migration step
+                    # Operator-edited group labels and callsign name/QTH. NULL
+                    # column = inherit the upstream value. Kept apart from
+                    # callsign_info so a QRZ refresh never touches them.
+                    conn.execute(
+                        """CREATE TABLE IF NOT EXISTS group_label_overrides (
+                               group_key TEXT PRIMARY KEY,
+                               prefix TEXT,
+                               hint TEXT,
+                               remark TEXT,
+                               updated_at INTEGER NOT NULL
+                           )"""
+                    )
+                    conn.execute(
+                        """CREATE TABLE IF NOT EXISTS callsign_info_overrides (
+                               callsign TEXT PRIMARY KEY,
+                               first_name TEXT,
+                               qth TEXT,
+                               updated_at INTEGER NOT NULL
+                           )"""
+                    )
+                    logger.info(
+                        "Migration v%d → v39: group_label_overrides, callsign_info_overrides",
+                        current_version,
+                    )
+                    _set_schema_version(conn, 39)
+
         await asyncio.to_thread(_init_db)
 
         # Initialize bucket accumulators from existing signal_log

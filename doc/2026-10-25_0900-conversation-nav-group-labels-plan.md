@@ -1,6 +1,6 @@
 # Conversation navigation + group labels — implementation plan
 
-Status: **APPROVED 2026-10-25**, Wave 1 in progress. Repos: MCProxy (backend) and webapp
+Status: **APPROVED 2026-10-25**. Wave 1 DONE (see §7), Wave 2 next. Repos: MCProxy (backend) and webapp
 (frontend), committed independently. Dispatch mechanics: `/orchestrate-waves`.
 
 ## 1. Approved problem statement (v2, with operator answers)
@@ -150,3 +150,25 @@ Gate: full gates; advisor on B3 (422 echo, burst order, override merge) and on F
 
 None. Answered 2026-10-25: D7 no guard; D8 desktop header yes; D9 keep the filter bar in the
 drawer, drop only the chips; D11 country fallback yes.
+
+## 7. Wave log
+
+### Wave 1 — done 2026-10-25
+
+- Backend: snapshot 71 rows (69 exact, ranges `2321-2329` OE1-OE9 and `26200-26299` DL00-DL99),
+  expanded payload 160 labels + 17 countries. `26244` has its own ICSSW entry (`DL 44` / Freising),
+  so exact beats range there. Migration 39, `storage/label_overrides.py`,
+  `get_callsign_info_merged()`. Snapshot shipped by name in the prod tarball (pinned in
+  `webapp_deploy_tests.py`).
+- Webapp: `ConversationSegments.vue`, drawer without chips, `groupLabels` store + D11 fallback,
+  `labelsApi.ts`, `manual` flag on callsign info.
+- Advisor rework (test-only, applied by the orchestrator, each mutation-checked): parser range
+  rows, inclusive length limits, override on an unusable QRZ row; webapp import order, msgSelect +
+  Time/unknown segment specs.
+- Carry-forward to Wave 2 (B3): `qrz_service._publish` must publish
+  `get_callsign_info_merged()` (else a QRZ refresh overwrites a manual name live); an override
+  DELETE must publish an all-null entry for an override-only callsign (the webapp store never
+  clears a key); `proxy:group_labels` is a BARE event like `proxy:callsign_info`.
+- Carry-forward to Wave 2 (F3): in the 320 px drawer "Groups" + badge truncates to "Grou…" —
+  tighten `ConversationSegments`. The drawer remounts on open, so its segment resets to All
+  (by design: not remembered).

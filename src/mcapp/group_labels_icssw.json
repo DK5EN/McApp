@@ -1,0 +1,440 @@
+{
+  "entries": [
+    {
+      "group": "2",
+      "hint": "Europa",
+      "prefix": "EU",
+      "remark": "Europaweit"
+    },
+    {
+      "group": "3",
+      "hint": "USA",
+      "prefix": "US",
+      "remark": "US-weit"
+    },
+    {
+      "group": "9",
+      "hint": "lokale Gruppe",
+      "prefix": "LOC",
+      "remark": "nur innerhalb der MeshCom HF-Wolke"
+    },
+    {
+      "group": "10",
+      "hint": "weltweit deutsch",
+      "prefix": "WW-GE",
+      "remark": "Deutschsprachige Meldungen"
+    },
+    {
+      "group": "13",
+      "hint": "weltweit english",
+      "prefix": "WW-EN",
+      "remark": "Englischsprachige Meldungen"
+    },
+    {
+      "group": "20",
+      "hint": "D-A-CH",
+      "prefix": "DACH",
+      "remark": "Deutschland, Österreich, Schweiz"
+    },
+    {
+      "group": "30",
+      "hint": "Greek",
+      "prefix": "SV",
+      "remark": null
+    },
+    {
+      "group": "204",
+      "hint": "Niederlande",
+      "prefix": "PA",
+      "remark": null
+    },
+    {
+      "group": "206",
+      "hint": "Belgien",
+      "prefix": "ON",
+      "remark": null
+    },
+    {
+      "group": "208",
+      "hint": "Frankreich",
+      "prefix": "F",
+      "remark": null
+    },
+    {
+      "group": "214",
+      "hint": "Spanien",
+      "prefix": "EA",
+      "remark": null
+    },
+    {
+      "group": "222",
+      "hint": "Italien",
+      "prefix": "I",
+      "remark": null
+    },
+    {
+      "group": "226",
+      "hint": "Rumänien",
+      "prefix": "YO",
+      "remark": null
+    },
+    {
+      "group": "228",
+      "hint": "Schweiz",
+      "prefix": "HB",
+      "remark": null
+    },
+    {
+      "group": "232",
+      "hint": "Österreich",
+      "prefix": "OE",
+      "remark": null
+    },
+    {
+      "group": "234",
+      "hint": "Great Britain",
+      "prefix": "G",
+      "remark": null
+    },
+    {
+      "group": "238",
+      "hint": "Dänemark",
+      "prefix": "OZ",
+      "remark": null
+    },
+    {
+      "group": "240",
+      "hint": "Schweden",
+      "prefix": "SA",
+      "remark": null
+    },
+    {
+      "group": "260",
+      "hint": "Polen",
+      "prefix": "SP",
+      "remark": null
+    },
+    {
+      "group": "262",
+      "hint": "Deutschland",
+      "prefix": "DL",
+      "remark": null
+    },
+    {
+      "group": "292",
+      "hint": "San Marino",
+      "prefix": "T7",
+      "remark": null
+    },
+    {
+      "group": "293",
+      "hint": "Slovenien",
+      "prefix": "S5",
+      "remark": null
+    },
+    {
+      "group": "460",
+      "hint": "China",
+      "prefix": "B",
+      "remark": null
+    },
+    {
+      "group": "901",
+      "hint": "Singapur",
+      "prefix": "9V",
+      "remark": null
+    },
+    {
+      "first_suffix": 1,
+      "hi": 2329,
+      "hint": "OE-Bundesländer",
+      "lo": 2321,
+      "prefix": "OE1-OE9",
+      "prefix_base": "OE",
+      "remark": null,
+      "width": 1
+    },
+    {
+      "group": "2622",
+      "hint": "Schleswig-Holstein",
+      "prefix": "DL 2",
+      "remark": null
+    },
+    {
+      "group": "19000",
+      "hint": "France départements 19 et 87",
+      "prefix": "F",
+      "remark": null
+    },
+    {
+      "group": "20899",
+      "hint": "Frankreich Wetter",
+      "prefix": "F 99",
+      "remark": null
+    },
+    {
+      "group": "22201",
+      "hint": "Lazio",
+      "prefix": "I",
+      "remark": null
+    },
+    {
+      "group": "22202",
+      "hint": "Sardegna",
+      "prefix": "I",
+      "remark": null
+    },
+    {
+      "group": "22203",
+      "hint": "Umbria",
+      "prefix": "I",
+      "remark": null
+    },
+    {
+      "group": "22211",
+      "hint": "Liguria",
+      "prefix": "I",
+      "remark": null
+    },
+    {
+      "group": "22213",
+      "hint": "Valle d'Aosta",
+      "prefix": "I",
+      "remark": null
+    },
+    {
+      "group": "22221",
+      "hint": "Lombardia",
+      "prefix": "I",
+      "remark": null
+    },
+    {
+      "group": "22231",
+      "hint": "Friuli Venezia Giulia",
+      "prefix": "I",
+      "remark": null
+    },
+    {
+      "group": "22232",
+      "hint": "Trentino Alto Adige",
+      "prefix": "I",
+      "remark": null
+    },
+    {
+      "group": "22233",
+      "hint": "Veneto",
+      "prefix": "I",
+      "remark": null
+    },
+    {
+      "group": "22241",
+      "hint": "Emilia Romagna",
+      "prefix": "I",
+      "remark": null
+    },
+    {
+      "group": "22251",
+      "hint": "Toscana",
+      "prefix": "I",
+      "remark": null
+    },
+    {
+      "group": "22261",
+      "hint": "Abruzzo",
+      "prefix": "I",
+      "remark": null
+    },
+    {
+      "group": "22262",
+      "hint": "Marche",
+      "prefix": "I",
+      "remark": null
+    },
+    {
+      "group": "22271",
+      "hint": "Puglia",
+      "prefix": "I",
+      "remark": null
+    },
+    {
+      "group": "22281",
+      "hint": "Basilicata",
+      "prefix": "I",
+      "remark": null
+    },
+    {
+      "group": "22282",
+      "hint": "Calabria",
+      "prefix": "I",
+      "remark": null
+    },
+    {
+      "group": "22283",
+      "hint": "Campania",
+      "prefix": "I",
+      "remark": null
+    },
+    {
+      "group": "22284",
+      "hint": "Molise",
+      "prefix": "I",
+      "remark": null
+    },
+    {
+      "group": "22291",
+      "hint": "Sicilia",
+      "prefix": "I",
+      "remark": null
+    },
+    {
+      "group": "22299",
+      "hint": "Meteo/data/sensors",
+      "prefix": "I",
+      "remark": null
+    },
+    {
+      "first_suffix": 0,
+      "hi": 26299,
+      "hint": "Deutschland regionale Gruppen",
+      "lo": 26200,
+      "prefix": "DL00-DL99",
+      "prefix_base": "DL",
+      "remark": "Deutschsprachige Meldungen",
+      "width": 2
+    },
+    {
+      "group": "26206",
+      "hint": "DARC Ortsverband Dachau C06",
+      "prefix": "DL 06",
+      "remark": null
+    },
+    {
+      "group": "26207",
+      "hint": "Sachsen-Anhalt",
+      "prefix": "DL 07",
+      "remark": null
+    },
+    {
+      "group": "26216",
+      "hint": "Chiemgau",
+      "prefix": "DL 16",
+      "remark": null
+    },
+    {
+      "group": "26220",
+      "hint": "Großraum Hamburg",
+      "prefix": "DL 20",
+      "remark": null
+    },
+    {
+      "group": "26221",
+      "hint": "Stadt Hamburg",
+      "prefix": "DL 21",
+      "remark": null
+    },
+    {
+      "group": "26225",
+      "hint": "AFU Nord",
+      "prefix": "DL 25",
+      "remark": null
+    },
+    {
+      "group": "26229",
+      "hint": "Region HL/RZ",
+      "prefix": "DL 29",
+      "remark": null
+    },
+    {
+      "group": "26235",
+      "hint": "NI-Südheide",
+      "prefix": "DL 35",
+      "remark": null
+    },
+    {
+      "group": "26242",
+      "hint": "Münsterland",
+      "prefix": "DL 42",
+      "remark": null
+    },
+    {
+      "group": "26244",
+      "hint": "Freising",
+      "prefix": "DL 44",
+      "remark": null
+    },
+    {
+      "group": "26251",
+      "hint": "Rhein-Berg",
+      "prefix": "DL 51",
+      "remark": "Rheinisch-Bergischer-Kreis"
+    },
+    {
+      "group": "26255",
+      "hint": "Pfalz",
+      "prefix": "DL 55",
+      "remark": null
+    },
+    {
+      "group": "26266",
+      "hint": "Saar",
+      "prefix": "DL 66",
+      "remark": null
+    },
+    {
+      "group": "26269",
+      "hint": "Hessen/Rheinland Pfalz",
+      "prefix": "DL 69",
+      "remark": null
+    },
+    {
+      "group": "26289",
+      "hint": "München Stadt",
+      "prefix": "DL 89",
+      "remark": null
+    },
+    {
+      "group": "26295",
+      "hint": "Ostthüringen",
+      "prefix": "DL 95",
+      "remark": null
+    },
+    {
+      "group": "26298",
+      "hint": "Thüringen",
+      "prefix": "DL 98",
+      "remark": null
+    },
+    {
+      "group": "26299",
+      "hint": "Deutschland Wetter",
+      "prefix": "DL 99",
+      "remark": null
+    },
+    {
+      "group": "26379",
+      "hint": "Hochrhein",
+      "prefix": "DL3 79",
+      "remark": null
+    },
+    {
+      "group": "60000",
+      "hint": "Oise",
+      "prefix": "FR 60",
+      "remark": null
+    },
+    {
+      "group": "82267",
+      "hint": "Amateurfunk und Camping",
+      "prefix": "AFUCAMP",
+      "remark": null
+    },
+    {
+      "group": "99099",
+      "hint": "Thüringen autom. Aussendungen",
+      "prefix": "DL 99",
+      "remark": null
+    }
+  ],
+  "fetched_at": "2026-10-25",
+  "source_url": "https://icssw.org/meshcom-grc-gruppen/"
+}

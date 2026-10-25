@@ -58,6 +58,7 @@ from mcapp.console_parse_tests import run_console_parse_tests
 from mcapp.contract_parity_tests import run_contract_parity_tests
 from mcapp.dedup_contract_tests import run_dedup_contract_tests
 from mcapp.frame_decode_tests import run_frame_decode_tests
+from mcapp.group_labels_tests import run_group_labels_tests
 from mcapp.hey_path_tests import run_hey_path_tests
 from mcapp.identity_tests import run_identity_tests
 from mcapp.internet_feed_routes_tests import run_internet_feed_routes_tests
@@ -95,6 +96,7 @@ from mcapp.storage.conv_dedup_tests import run_conv_dedup_tests
 from mcapp.storage.conversation_key_tests import run_conversation_key_tests
 from mcapp.storage.ingest_dedup_tests import run_ingest_dedup_tests
 from mcapp.storage.internet_feed_state_tests import run_internet_feed_state_tests
+from mcapp.storage.label_overrides_tests import run_label_overrides_tests
 from mcapp.storage.linkcheck_ingest_tests import run_linkcheck_ingest_tests
 from mcapp.storage.live_classification_tests import run_live_classification_tests
 from mcapp.storage.mheard_attribution_tests import run_mheard_attribution_tests
@@ -253,6 +255,12 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     uptime_ok = await run_uptime_tests()
     print(f"uptime: {'PASS' if uptime_ok else 'FAIL'}")
+
+    group_labels_ok = run_group_labels_tests()
+    print(f"group_labels: {'PASS' if group_labels_ok else 'FAIL'}")
+
+    label_overrides_ok = await run_label_overrides_tests()
+    print(f"label_overrides: {'PASS' if label_overrides_ok else 'FAIL'}")
 
     remote_cmd_ok = run_remote_cmd_tests()
     print(f"remote_cmd: {'PASS' if remote_cmd_ok else 'FAIL'}")
@@ -447,6 +455,8 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and hey_path_ok
         and connection_lifecycle_ok
         and uptime_ok
+        and group_labels_ok
+        and label_overrides_ok
         and remote_cmd_ok
         and rm_blocklist_ok
         and node_admin_storage_ok

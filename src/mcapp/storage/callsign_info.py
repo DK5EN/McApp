@@ -10,8 +10,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..qrz_client import base_callsign
 from ._base import StorageBase
 from .constants import sender_base_sql
+from .label_overrides import LabelOverridesMixin
 
 # Columns `update_qrz_state` may write. The column names are interpolated into
 # the UPDATE, so they must come from this fixed set, never from a caller's keys.
@@ -35,7 +37,36 @@ _QRZ_STATE_COLUMNS = frozenset(
 )
 
 
-class CallsignInfoMixin(StorageBase):
+def apply_callsign_override(
+    upstream: dict[str, Any] | None, override: dict[str, Any]
+) -> dict[str, Any]:
+    """Per-field merge: a non-NULL override field replaces the upstream one.
+
+    Adds `manual: True` when any field applies; returns a copy of `upstream`
+    untouched (no `manual` key) when none does."""
+    merged: dict[str, Any] = (
+        dict(upstream)
+        if upstream is not None
+        else {
+            "first_name": None,
+            "qth": None,
+            "country": None,
+            "lat": None,
+            "lon": None,
+            "locator": None,
+        }
+    )
+    applied = False
+    for field in ("first_name", "qth"):
+        if override.get(field) is not None:
+            merged[field] = override[field]
+            applied = True
+    if applied:
+        merged["manual"] = True
+    return merged
+
+
+class CallsignInfoMixin(LabelOverridesMixin, StorageBase):
     async def get_qrz_state(self) -> dict[str, Any]:
         rows = await self._query("SELECT * FROM qrz_state WHERE id = 1")
         if rows:
@@ -145,12 +176,17 @@ class CallsignInfoMixin(StorageBase):
         return {r["callsign"]: (r["status"], int(r["fetched_at"])) for r in rows}
 
     async def get_callsign_info_map(self) -> dict[str, dict[str, Any]]:
-        """Display data for every callsign with a name, QTH or position on file."""
+        """Display data for every callsign with a name, QTH or position on file.
+
+        Operator overrides win per field and add `manual: True`; a callsign with
+        an override but no (usable) QRZ row still appears. Callsigns without an
+        override keep the exact legacy payload (no `manual` key)."""
         rows = await self._query(
             "SELECT callsign, first_name, qth, country, lat, lon, locator FROM callsign_info"
             " WHERE first_name IS NOT NULL OR qth IS NOT NULL OR locator IS NOT NULL"
+            " OR callsign IN (SELECT callsign FROM callsign_info_overrides)"
         )
-        return {
+        result: dict[str, dict[str, Any]] = {
             r["callsign"]: {
                 "first_name": r["first_name"],
                 "qth": r["qth"],
@@ -161,6 +197,29 @@ class CallsignInfoMixin(StorageBase):
             }
             for r in rows
         }
+        for call, ov in (await self.get_callsign_overrides()).items():
+            result[call] = apply_callsign_override(result.get(call), ov)
+        return result
+
+    async def get_callsign_info_merged(self, callsign: str) -> dict[str, Any] | None:
+        """One callsign's merged entry (same shape as a `get_callsign_info_map`
+        value), or None when it has neither a usable QRZ row nor an override."""
+        base = base_callsign(callsign or "")
+        rows = await self._query(
+            "SELECT first_name, qth, country, lat, lon, locator FROM callsign_info"
+            " WHERE callsign = ?",
+            (base,),
+        )
+        upstream: dict[str, Any] | None = None
+        if rows and (rows[0]["first_name"] or rows[0]["qth"] or rows[0]["locator"]):
+            upstream = dict(rows[0])
+        ov_rows = await self._query(
+            "SELECT first_name, qth FROM callsign_info_overrides WHERE callsign = ?", (base,)
+        )
+        if ov_rows:
+            fallback = upstream if upstream is not None else (dict(rows[0]) if rows else None)
+            return apply_callsign_override(fallback, dict(ov_rows[0]))
+        return upstream
 
     async def count_callsign_info(self) -> dict[str, int]:
         rows = await self._query("SELECT status, COUNT(*) AS n FROM callsign_info GROUP BY status")

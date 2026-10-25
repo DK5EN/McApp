@@ -351,6 +351,9 @@ def _write_minimal_release_fixture(tmp: Path) -> tuple[Path, Path]:
     (project / "src" / "mcapp" / "contract" / "classifier_contract.json").write_text(
         '{"taxonomy_version": 6}', encoding="utf-8"
     )
+    (project / "src" / "mcapp" / "group_labels_icssw.json").write_text(
+        '{"entries": []}', encoding="utf-8"
+    )
     (project / "src" / "mcapp" / "storage").mkdir(parents=True)
     (project / "src" / "mcapp" / "contract" / "suppression_vectors.json").write_text(
         '{"version": 2}', encoding="utf-8"
@@ -552,13 +555,19 @@ def _case_build_tarball_production_is_runtime_only(record: Recorder) -> None:
             f"(names: {names})",
         )
         record(
-            "production tarball ships NO .json package data except the classifier contract",
+            "production tarball ships NO .json package data except the runtime data files",
             not any(
                 n.endswith(".json")
                 and "/src/" in n
                 and not n.endswith("src/mcapp/contract/classifier_contract.json")
+                and not n.endswith("src/mcapp/group_labels_icssw.json")
                 for n in names
             ),
+            f"(names: {names})",
+        )
+        record(
+            "production tarball ships group_labels_icssw.json (group_labels reads it at runtime)",
+            any(n.endswith("src/mcapp/group_labels_icssw.json") for n in names),
             f"(names: {names})",
         )
         record(
