@@ -86,3 +86,17 @@ example the bound message row id), and the `?since=` read path then filtering on
 `timestamp_from_date_time()` still assumes the host offset (contract §4, plan D6). With the node
 now following its own TZ rule the two can differ. Different code path, deliberately deferred from
 the node-TZ campaign.
+
+## B8 — group labels and callsign name overrides in mc-chat
+
+Operator decision 2026-10-25: parity deferred. mc-chat needs the same `proxy:group_labels` event,
+`/api/group_labels` and `/api/callsign_info/{call}/override` routes (wire contract in
+`doc/2026-10-25_0900-conversation-nav-group-labels-plan.md` §3) and the shipped ICSSW snapshot.
+Until then the webapp on an mc-chat backend shows bare group numbers and the editor's writes fail.
+
+## B9 — serialise label writes before their broadcast
+
+`sse_routes/labels.py` `broadcast_labels()` reads the payload and then broadcasts it. Two
+overlapping PUTs can broadcast the older payload last, leaving live clients on a stale label map
+until the next edit or reconnect. Needs concurrent operator writes, so low risk; an `asyncio.Lock`
+around write + read + broadcast closes it.

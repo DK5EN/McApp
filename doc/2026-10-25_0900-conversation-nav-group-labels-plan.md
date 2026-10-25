@@ -1,6 +1,6 @@
 # Conversation navigation + group labels — implementation plan
 
-Status: **APPROVED 2026-10-25**. Wave 1 DONE (see §7), Wave 2 next. Repos: MCProxy (backend) and webapp
+Status: **APPROVED 2026-10-25**. Waves 1-2 DONE, Wave 3 (dev release + live check) in progress (see §7). Repos: MCProxy (backend) and webapp
 (frontend), committed independently. Dispatch mechanics: `/orchestrate-waves`.
 
 ## 1. Approved problem statement (v2, with operator answers)
@@ -172,3 +172,20 @@ drawer, drop only the chips; D11 country fallback yes.
 - Carry-forward to Wave 2 (F3): in the 320 px drawer "Groups" + badge truncates to "Grou…" —
   tighten `ConversationSegments`. The drawer remounts on open, so its segment resets to All
   (by design: not remembered).
+
+### Wave 2 — done 2026-10-25
+
+- Backend (`ea14695`): routes, bare `proxy:group_labels` in the burst and after writes, merged
+  `_publish`, all-null entry on override-only revert. Advisor APPROVED; its write-race note is
+  backlog B9.
+- Webapp: compact labels (sidebar rows, picker options + prefix adornment), `ConversationHeader`
+  (desktop) + `useConversationTitle` (shared with `MobileChatHeader`), segment badge on the tab
+  corner, Settings > Groups editor (`GroupLabelEditor`, `CallsignNameEditor`).
+- Advisor rework, two rounds: editor seeds from `source` (country fallback / failed or pending
+  GET no longer freeze inherited values as own); added and editing rows pinned past `MAX_ROWS`
+  and search; Edit only for callsigns the backend accepts; `0262` → `262`; hashtag keys stay
+  VERBATIM (exact resolve, Add reuses the heard spelling) — a case-folding resolve made Revert hit
+  a key with no override; picker input keeps a content basis so the adornment shrinks first.
+- Accepted: the callsign editor prefills both fields when `manual` (no per-field provenance on
+  the wire), so saving a one-field override also pins the other field.
+- Wave 3: docs (CLAUDE.md "Group Labels", backlog B8 mc-chat parity + B9, prod-release Step 2b).

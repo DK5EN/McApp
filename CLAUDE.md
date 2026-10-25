@@ -854,6 +854,35 @@ Plan, threat model and API: `doc/2026-10-04_0848-qrz-callsign-lookup-plan.md`.
 - MFA on the QRZ account does not apply to the XML API (measured 2026-10-04); a free account
   gets `fname name addr2 state country`, and the login itself costs no lookup.
 
+## Group Labels (`group_labels.py`, `proxy:group_labels`)
+
+Präfix / Hinweis / remark for group numbers, plus operator name/QTH overrides for callsigns.
+Plan and decisions: `doc/2026-10-25_0900-conversation-nav-group-labels-plan.md`.
+
+- **The ICSSW GRC list ships as `src/mcapp/group_labels_icssw.json`; the Pi never fetches it.**
+  `scripts/refresh_group_labels.py` scrapes <https://icssw.org/meshcom-grc-gruppen/> (no export
+  exists; the table is a serialized array in the page) and is a step of every production release
+  (prod-release skill, Step 2b). The file is shipped by NAME in the prod tarball next to
+  `classifier_contract.json` (`scripts/release.sh`, pinned by `webapp_deploy_tests.py`). ICSSW
+  `Reichweite` is our `remark`. Never load the Brandmeister list: we stay independent of it.
+- **Resolution order: own override → exact ICSSW entry → ICSSW range → country prefix → bare
+  number.** The backend expands ranges (`2321-2329` = OE1-OE9, `26200-26299` = DL00-DL99) into
+  exact keys and merges overrides, so the wire map is flat. The country fallback (`2621` →
+  `262`'s entry) is unbounded and therefore the ONE resolution step in the webapp
+  (`groupLabels.resolve`), fed by the payload's `countries`. An exact entry beats its range:
+  `26244` is ICSSW's own `DL 44 / Freising`, not the derived `DL44`.
+- **Overrides are per field, `NULL` = inherit** (`group_label_overrides`,
+  `callsign_info_overrides`, migration 39). An all-NULL row is deleted, which is the revert. A
+  newer snapshot still reaches every field the operator did not override, and a QRZ refresh never
+  touches a name override.
+- **Callsign overrides ride `proxy:callsign_info` with an additive `manual: true`.** Callsigns
+  without an override keep the byte-identical legacy payload. `qrz_service._publish` publishes the
+  MERGED entry, or a QRZ refresh would overwrite a manual name on every live client. Reverting an
+  override-only callsign broadcasts an all-null entry, because the webapp store never clears a key.
+- **`proxy:group_labels` is a BARE event** (like `proxy:callsign_info`, not the
+  `_RESPONSE_EVENT_MAP` envelope), sent in the connect burst after `proxy:callsign_info` and after
+  every label write. Writes have no Host/Origin guard (operator decision 2026-10-25).
+
 ## Configuration
 
 `/etc/mcapp/config.json` (dev: `/etc/mcapp/config.dev.json`, auto-selected via `MCAPP_ENV=dev`).

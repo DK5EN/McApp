@@ -28,6 +28,9 @@ cd ../webapp && npm update
 diff -rq src/mcapp/contract    ../mc-chat/contract
 diff -rq src/mcapp/classifier  ../mc-chat/meshcom_mock/classifier
 
+# 2b. refresh the ICSSW group label snapshot, review the diff
+uv run python scripts/refresh_group_labels.py && git diff --stat src/mcapp/group_labels_icssw.json
+
 # 3. gate BOTH repos — release.sh gates nothing, and step 1 invalidated your last run
 uvx ruff check && uvx ruff format --check . \
   && uv run mypy src/mcapp ble_service/src \
@@ -154,6 +157,27 @@ Equal hashes per corpus, or fix it. If you change one, copy it to both siblings 
 webapp's `EXPECTED_SHA256`. Both repos carry a `.prettierignore` covering these files, because a
 formatter run is enough to break byte equality while leaving the content identical — which is the
 hardest version of this to spot.
+
+## Step 2b — Refresh the ICSSW group label snapshot
+
+Group numbers get their Präfix / Hinweis / remark from a snapshot of the ICSSW GRC list
+(<https://icssw.org/meshcom-grc-gruppen/>) that ships inside the package as
+`src/mcapp/group_labels_icssw.json`. The Pi never fetches it, so every production release
+refreshes it here, on the Mac:
+
+```bash
+uv run python scripts/refresh_group_labels.py      # rewrites the JSON; exits non-zero on < 50 rows
+git diff src/mcapp/group_labels_icssw.json         # read it: renamed groups, new ranges, removals
+```
+
+- **No diff** is the normal case: nothing to commit.
+- **A diff** goes into the dependency-bump commit of step 4 (`fetched_at` alone changing is not
+  worth a commit — revert it with `git checkout src/mcapp/group_labels_icssw.json`).
+- **Non-zero exit** means the page layout changed and the parser no longer finds the table. Do not
+  hand-edit the JSON; keep the shipped snapshot, release anyway, and fix the parser afterwards
+  (`group_labels_tests.py` pins its behaviour).
+- A removed or renamed upstream entry never touches operator overrides: those live in the
+  McApp DB (`group_label_overrides`), per field, and win over the snapshot.
 
 ## Step 3 — Gate both repos yourself
 
