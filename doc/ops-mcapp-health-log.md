@@ -3075,3 +3075,21 @@ explicitly** given a QRZ- and bootstrap-only delta.
 
 **Watch points.** W17, W19 as before. The 17:12 `{CET}` gap predates this code; re-check in the
 post-release sweep. No F.
+
+## 52. 2026-10-30 22:31 CET — post-release sweep of production v2.1.22 (1 min after the deploy)
+
+Deployed from the webapp Update page (Production mode); the modal reached DONE with "Update
+completed successfully", and the on-box wait loop (tag + new slot + service restart) fired on
+slot-2.
+
+**Verdict: green, zero findings.**
+
+- `webapp/version.html` v2.1.22; active slot-2 (was slot-0, v2.1.22-dev.2). `mcapp`, `mcapp-ble`,
+  `caddy`, `lighttpd` active; `mcapp` restarted 22:30:20, `NRestarts` 0 on all four. Journal
+  `-p warning` last 10 min: 0 lines. `/health` healthy.
+- Schema 39 in the DB and `LATEST_SCHEMA_VERSION` 39 in the slot (no migration in this release).
+- Production packaging: no `*_tests.py`; exactly two `.json` files, `contract/classifier_contract.json`
+  and `group_labels_icssw.json` (with the new group 11). `pending_new` present in `qrz_service.py`.
+  RAM 175 MB available.
+- `/api/status` `udp_target_kind` `first_seen` shortly after the restart (W11),
+  `udp_multiple_sources` false.
