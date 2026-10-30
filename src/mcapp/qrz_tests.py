@@ -849,6 +849,20 @@ async def _test_session_timeout_cleared(env: Env, record: Record) -> None:
     )
 
 
+async def _test_session_timeout_cleared_after_restart(env: Env, record: Record) -> None:
+    await env.add_heard("DK5EN", T0)
+    await env.service.set_credentials("DK5EN", PASSWORD)
+    # A note left by the previous process: `_session_errors` starts at 0.
+    await env.storage.update_qrz_state(last_error="Session Timeout", last_error_ms=T0 - 1000)
+    env.service = env.new_service()
+    await env.run_for(2 * MIN_INTERVAL_MS)  # login, then a working lookup
+    state = await env.storage.get_qrz_state()
+    record(
+        "Q66. a 'Session Timeout' note from before a restart clears on the next working lookup",
+        len(env.qrz.lookups()) == 1 and state["last_error"] is None,
+    )
+
+
 async def _test_backoff_reason_kept(env: Env, record: Record) -> None:
     await env.add_heard("DK5EN", T0)
     await env.add_heard("OE5HWN", T0 - 1)
@@ -1784,6 +1798,7 @@ async def run_qrz_tests() -> bool:
         _test_backoff,
         _test_session_rules,
         _test_session_timeout_cleared,
+        _test_session_timeout_cleared_after_restart,
         _test_backoff_reason_kept,
         _test_refused,
         _test_auth_failed,

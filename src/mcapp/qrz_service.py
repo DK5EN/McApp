@@ -521,10 +521,13 @@ class QrzLookupService:
 
     async def _lookup_succeeded(self) -> None:
         fields: dict[str, Any] = {"backoff_level": 0, "backoff_until_ms": None}
-        if self._session_errors:
+        state = await self._storage.get_qrz_state()
+        session_note = "session" in str(state["last_error"] or "").lower()
+        if self._session_errors or session_note:
             # QRZ expires session keys on its own ("Session Timeout"); the next
-            # step logged in again, so a working lookup resolves that note.
-            # Cap and refusal reasons are never cleared here.
+            # step logged in again, so a working lookup resolves that note. The
+            # text check covers a note written before a restart, which reset
+            # `_session_errors`. Cap and refusal reasons are never cleared here.
             fields |= {"last_error": None, "last_error_ms": None}
         self._session_errors = 0
         await self._storage.update_qrz_state(**fields)
