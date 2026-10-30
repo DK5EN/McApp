@@ -5,6 +5,53 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.1.21 (2026-10-25)
+
+**Every node setting the new firmware reports is now on the BLE page, and the message details show
+how long each acknowledgement took.** Firmware 4.40a.10.25 (fork) adds Max Hop, MTU, voltage, net
+console, KISS and the fitted LEDs to its settings register; McApp shows and writes all of them.
+Dependencies refreshed in both repos. Schema stays at 39, `SYSTEM_EPOCH` at 6.
+
+### Highlights
+
+- **Max Hop on the Radio card.** Same choices as the firmware's own web page (4, 3, 2), plus the
+  node's current value when it is outside that list.
+- **New Network Services card.** MTU with 1280, 1400, 1500 or a custom value, the resulting MSS
+  shown next to it, the net console switch and the four KISS flags.
+- **One Voltage toggle.** It replaces the Show Voltage and Show Percent pair on new firmware; older
+  firmware keeps the pair.
+- **LEDs match the board.** A Charge LED toggle, and LEDs the board does not have appear as disabled
+  "Not fitted on this board" tiles.
+- **INA226 only where fitted.** The INA226 tile and the Sensor card disappear on a build without
+  the current sensor.
+- **Ack latency in the message details.** Each line reads e.g.
+  `Acknowledged by DM3KS-12 via udp · 31.1 s`: seconds below 100 s, minutes or hours above, which
+  covers store-and-forward holds.
+
+### Backend (MCProxy)
+
+- No runtime change. A new test pins the firmware's new settings keys through the register cache
+  and the truncation salvage: a worst-case settings frame is 245 bytes against the 244-character
+  BLE limit, and a cut there must never make McApp treat the node as old firmware and clear its
+  time-zone rule.
+- Dependencies refreshed.
+
+### Frontend (webapp)
+
+- BLE page: Max Hop, Network Services card, Voltage and Charge LED toggles, not-fitted LED tiles,
+  INA226 hiding, each confirmed by the settings push the node sends after a command.
+- A missing key means the firmware lacks the feature: the control is hidden, never shown as off.
+- Ack latency behind every ack in the details popover; number and unit stay on one line.
+- Dependencies refreshed.
+
+### Upgrade notes
+
+- Nothing to do on the box.
+- The new BLE controls need fork firmware 4.40a.10.25 or later. On older firmware the BLE page
+  looks as before.
+- No ack latency is shown when the ack's timestamp lies before the message's, which happens when a
+  BLE node's clock runs ahead of the Pi.
+
 ## v2.1.20 (2026-10-25)
 
 Group numbers now have names. McApp ships the ICSSW list of MeshCom groups, so the sidebar, the

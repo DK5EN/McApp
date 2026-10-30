@@ -25,10 +25,28 @@
       "remark": "Deutschsprachige Meldungen"
     },
     {
+      "group": "11",
+      "hint": "weltweit französisch",
+      "prefix": "WW-FR",
+      "remark": "Französische Meldungen"
+    },
+    {
       "group": "13",
-      "hint": "weltweit english",
+      "hint": "weltweit englisch",
       "prefix": "WW-EN",
       "remark": "Englischsprachige Meldungen"
+    },
+    {
+      "group": "14",
+      "hint": "weltweit spanisch",
+      "prefix": "WW-SP",
+      "remark": "Spanische Meldungen"
+    },
+    {
+      "group": "16",
+      "hint": "weltweit italienisch",
+      "prefix": "WW-IT",
+      "remark": "Italienische Meldungen"
     },
     {
       "group": "20",
@@ -435,6 +453,6 @@
       "remark": null
     }
   ],
-  "fetched_at": "2026-10-25",
+  "fetched_at": "2026-10-30",
   "source_url": "https://icssw.org/meshcom-grc-gruppen/"
 }

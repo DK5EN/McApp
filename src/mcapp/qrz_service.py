@@ -252,6 +252,8 @@ class QrzLookupService:
         observed = self._login_count if self._login_seen else state["server_count"]
         since_login = await self._lookups_since_login(state)
         server_left = self._server_remaining(since_login)
+        due = await self._due_callsigns(now)
+        pending_new = sum(1 for rank, _ in due if rank == 0)
         next_at = None
         if label in {"verifying", "active", "idle", "suspended", "backoff"}:
             next_at = max(
@@ -277,6 +279,8 @@ class QrzLookupService:
             "last_error_at": state["last_error_ms"],
             "cached_found": cached["found"],
             "cached_not_found": cached["not_found"],
+            "pending_new": pending_new,
+            "pending_refresh": len(due) - pending_new,
         }
 
     def _state_label(
@@ -478,16 +482,14 @@ class QrzLookupService:
             }
             await self._storage.upsert_callsign_info(callsign, "found", now, raw=rec, **info)
             await self._publish(callsign, info)
-            self._session_errors = 0
-            await self._storage.update_qrz_state(backoff_level=0, backoff_until_ms=None)
+            await self._lookup_succeeded()
         elif result.outcome is Outcome.NOT_FOUND:
             index = await self._storage.get_callsign_info_index()
             if callsign in index:
                 await self._storage.touch_callsign_info(callsign, now)
             else:
                 await self._storage.upsert_callsign_info(callsign, "not_found", now)
-            self._session_errors = 0
-            await self._storage.update_qrz_state(backoff_level=0, backoff_until_ms=None)
+            await self._lookup_succeeded()
         elif result.outcome is Outcome.SESSION_INVALID:
             self._session_key = None
             self._session_errors += 1
@@ -516,6 +518,19 @@ class QrzLookupService:
             logger.warning("callsign_info broadcast failed", exc_info=True)
 
     # ── State transitions ─────────────────────────────────────────────────
+
+    async def _lookup_succeeded(self) -> None:
+        fields: dict[str, Any] = {"backoff_level": 0, "backoff_until_ms": None}
+        state = await self._storage.get_qrz_state()
+        session_note = "session" in str(state["last_error"] or "").lower()
+        if self._session_errors or session_note:
+            # QRZ expires session keys on its own ("Session Timeout"); the next
+            # step logged in again, so a working lookup resolves that note. The
+            # text check covers a note written before a restart, which reset
+            # `_session_errors`. Cap and refusal reasons are never cleared here.
+            fields |= {"last_error": None, "last_error_ms": None}
+        self._session_errors = 0
+        await self._storage.update_qrz_state(**fields)
 
     async def _handle_failure(self, result: QrzResponse, now: int) -> None:
         if result.outcome in {Outcome.REFUSED, Outcome.RATE_LIMITED}:
@@ -714,7 +729,12 @@ class QrzLookupService:
     # ── Candidates ────────────────────────────────────────────────────────
 
     async def _next_due(self, now: int) -> str | None:
-        """Never-looked-up first, then stale refreshes; chat partners before
+        due = await self._due_callsigns(now)
+        return due[0][1] if due else None
+
+    async def _due_callsigns(self, now: int) -> list[tuple[int, str]]:
+        """Every callsign due for a lookup as `(rank, base)`, in lookup order:
+        rank 0 = never looked up, rank 1 = stale refresh; chat partners before
         stations only heard; most recent first within each group."""
         activity = await self._storage.get_recent_callsign_activity(now - ACTIVITY_WINDOW_MS)
         merged: dict[str, tuple[int, int]] = {}
@@ -738,7 +758,5 @@ class QrzLookupService:
             return 1 if now - fetched_at >= ttl else None
 
         due = [(rank, base) for base in merged if (rank := due_rank(base)) is not None]
-        if not due:
-            return None
         due.sort(key=lambda item: (item[0], -merged[item[1]][1], -merged[item[1]][0]))
-        return due[0][1]
+        return due

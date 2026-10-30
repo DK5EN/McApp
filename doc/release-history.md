@@ -1,56 +1,54 @@
 # Release History
 
-## v2.1.21 (2026-10-25)
+## v2.1.22 (2026-10-30)
 
-**Every node setting the new firmware reports is now on the BLE page, and the message details show
-how long each acknowledgement took.** Firmware 4.40a.10.25 (fork) adds Max Hop, MTU, voltage, net
-console, KISS and the fitted LEDs to its settings register; McApp shows and writes all of them.
-Dependencies refreshed in both repos. Schema stays at 39, `SYSTEM_EPOCH` at 6.
+**The QRZ card now shows how many lookups are still waiting, and a recovered session no longer
+leaves a stale "Session Timeout" note behind.** Updates no longer warn about Caddy HTTPS on boxes
+that serve their own IP address as an extra site. Dependencies refreshed in both repos, ICSSW group
+list updated. Schema stays at 39, `SYSTEM_EPOCH` at 6.
 
 ### Highlights
 
-- **Max Hop on the Radio card.** Same choices as the firmware's own web page (4, 3, 2), plus the
-  node's current value when it is outside that list.
-- **New Network Services card.** MTU with 1280, 1400, 1500 or a custom value, the resulting MSS
-  shown next to it, the net console switch and the four KISS flags.
-- **One Voltage toggle.** It replaces the Show Voltage and Show Percent pair on new firmware; older
-  firmware keeps the pair.
-- **LEDs match the board.** A Charge LED toggle, and LEDs the board does not have appear as disabled
-  "Not fitted on this board" tiles.
-- **INA226 only where fitted.** The INA226 tile and the Sensor card disappear on a build without
-  the current sensor.
-- **Ack latency in the message details.** Each line reads e.g.
-  `Acknowledged by DM3KS-12 via udp · 31.1 s`: seconds below 100 s, minutes or hours above, which
-  covers store-and-forward holds.
+- **Queued lookups on the QRZ card.** It shows how many callsigns wait for a first lookup and how
+  many wait for a refresh, counted from the same list the lookup loop works through.
+- **"Session Timeout" clears itself.** The first lookup that works after a re-login removes the
+  note, also when the note was written before a restart. Daily cap, QRZ refusal and backoff notes
+  stay until their own condition ends.
+- **No false Caddy warning after an update.** A box whose `:443` site line also lists its own IP,
+  e.g. `10.0.0.236:443`, got `[WARN] Caddy HTTPS not responding` after every update while HTTPS
+  worked fine.
+  - Cause: the health probe picked the IP as host name; a connection to an IP sends no server name,
+    so Caddy could not pick a certificate.
+  - Now: the probe uses the first host name on the line and skips IP addresses.
+- **Three more ICSSW groups.** 11 (WW-FR, French), 14 (WW-SP, Spanish), 16 (WW-IT, Italian).
 
 ### Backend (MCProxy)
 
-- No runtime change. A new test pins the firmware's new settings keys through the register cache
-  and the truncation salvage: a worst-case settings frame is 245 bytes against the 244-character
-  BLE limit, and a cut there must never make McApp treat the node as old firmware and clear its
-  time-zone rule.
-- Dependencies refreshed.
+- QRZ status reports `pending_new` and `pending_refresh`; a working lookup clears any stored
+  session note, never a cap, refusal or login reason.
+- Bootstrap `caddy_site()` returns the first host name of a site line, never an IP literal.
+- ICSSW group label snapshot refreshed.
+- Dependencies refreshed: pydantic 2.14.2, sse-starlette 3.6.0, ruff 0.17.3.
 
 ### Frontend (webapp)
 
-- BLE page: Max Hop, Network Services card, Voltage and Charge LED toggles, not-fitted LED tiles,
-  INA226 hiding, each confirmed by the settings push the node sends after a command.
-- A missing key means the firmware lacks the feature: the control is hidden, never shown as off.
-- Ack latency behind every ack in the details popover; number and unit stay on one line.
+- QRZ card: the "QRZ reports" row is gone, queued new and refresh lookups are shown instead.
 - Dependencies refreshed.
 
 ### Upgrade notes
 
 - Nothing to do on the box.
-- The new BLE controls need fork firmware 4.40a.10.25 or later. On older firmware the BLE page
-  looks as before.
-- No ack latency is shown when the ack's timestamp lies before the message's, which happens when a
-  BLE node's clock runs ahead of the Pi.
 
 ## Earlier releases, in brief
 
 One entry per release. The full notes as published are in
 [`doc/archive/release-history-full.md`](https://github.com/DK5EN/McApp/blob/development/doc/archive/release-history-full.md).
+
+### v2.1.21 (2026-10-25)
+
+- BLE page shows and writes every setting of fork firmware 4.40a.10.25 (Max Hop, MTU, net console,
+  KISS, voltage, fitted LEDs); ack latency in the message details. Needs fork firmware 4.40a.10.25
+  for the new controls.
 
 ### v2.1.20 (2026-10-25)
 
