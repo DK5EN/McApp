@@ -830,6 +830,57 @@ async def _test_session_rules(env: Env, record: Record) -> None:
     )
 
 
+async def _test_session_timeout_cleared(env: Env, record: Record) -> None:
+    await env.add_heard("DK5EN", T0)
+    await env.add_heard("OE5HWN", T0 - 1)
+    await env.service.set_credentials("DK5EN", PASSWORD)
+    await env.run_for(MIN_INTERVAL_MS)  # login
+    env.qrz.responder = lambda form: (200, _session_xml(key=None, error="Session Timeout"), {})
+    await env.run_for(MIN_INTERVAL_MS)  # lookup -> session lost
+    noted = (await env.storage.get_qrz_state())["last_error"]
+    env.qrz.responder = env.qrz.default
+    await env.run_for(2 * MIN_INTERVAL_MS)  # re-login, then a working lookup
+    state = await env.storage.get_qrz_state()
+    record(
+        "Q63. a working lookup after a re-login clears the 'Session Timeout' note",
+        noted == "Session Timeout"
+        and state["last_error"] is None
+        and state["last_error_ms"] is None,
+    )
+
+
+async def _test_backoff_reason_kept(env: Env, record: Record) -> None:
+    await env.add_heard("DK5EN", T0)
+    await env.add_heard("OE5HWN", T0 - 1)
+    await env.service.set_credentials("DK5EN", PASSWORD)
+    await env.run_for(MIN_INTERVAL_MS)  # login
+    env.qrz.responder = lambda form: (429, "", {})
+    await env.run_for(MIN_INTERVAL_MS)  # lookup -> backoff
+    env.qrz.responder = env.qrz.default
+    await env.run_for(BACKOFF_BASE_MS + MIN_INTERVAL_MS)
+    state = await env.storage.get_qrz_state()
+    record(
+        "Q64. a working lookup after a non-session failure keeps that reason on file",
+        state["backoff_until_ms"] is None and state["last_error"] is not None,
+    )
+
+
+async def _test_pending_counts(env: Env, record: Record) -> None:
+    await env.add_heard("OE5HWN-12", T0)  # never looked up
+    await env.add_heard("DK5EN-98", T0, chatted=True)  # never looked up, same base twice
+    await env.add_heard("DK5EN-12", T0)
+    await env.add_heard("DL1ABC", T0)  # stale "found" -> refresh
+    await env.add_heard("DL2XYZ", T0)  # fresh "found" -> not due
+    await env.add_heard("WLNK-1", T0, chatted=True)  # alias, never a candidate
+    await env.storage.upsert_callsign_info("DL1ABC", "found", T0 - REFRESH_FOUND_MS - 1)
+    await env.storage.upsert_callsign_info("DL2XYZ", "found", T0 - 1000)
+    status = await env.service.status()
+    record(
+        "Q65. status counts callsigns waiting for a first lookup and for a refresh",
+        status["pending_new"] == 2 and status["pending_refresh"] == 1,
+    )
+
+
 async def _test_refused(env: Env, record: Record) -> None:
     await env.add_heard("DK5EN", T0)
     env.qrz.responder = lambda form: (200, _session_xml(key=None, error="Connection refused"), {})
@@ -1732,6 +1783,8 @@ async def run_qrz_tests() -> bool:
         _test_ledger_counts_failed_requests,
         _test_backoff,
         _test_session_rules,
+        _test_session_timeout_cleared,
+        _test_backoff_reason_kept,
         _test_refused,
         _test_auth_failed,
         _test_server_count,
@@ -1762,6 +1815,7 @@ async def run_qrz_tests() -> bool:
         _test_keep_other_suspensions,
         _test_refresh,
         _test_candidates,
+        _test_pending_counts,
         _test_inflight_race,
         _test_unreadable,
         _test_routes,
