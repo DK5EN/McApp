@@ -3044,3 +3044,34 @@ service restart) fired on slot-2.
   `udp_multiple_sources` false.
 
 **Watch points.** W11 as above, W17 as in §49. The §45 browser-freeze W stays open. No F.
+
+## 51. 2026-10-30 22:26 CET — pre-release sweep of v2.1.22-dev.2 before the v2.1.22 promotion (~27 min soak, operator-accepted)
+
+dev.1 (QRZ queued lookup counts, Session Timeout clearing, `caddy_site()` IP-literal fix) went into
+slot-1 at 21:59, dev.2 (stored session note cleared after a restart too, 21 lines) into slot-0 with
+`mcapp` restarting at 22:12:38. The working trees in both repos were the tag before the
+pre-release dependency refresh. **The soak is far below the usual hours; the operator accepted it
+explicitly** given a QRZ- and bootstrap-only delta.
+
+**Verdict: green, zero findings.**
+
+- `mcapp`, `mcapp-ble`, `caddy`, `lighttpd` active; `NRestarts` 0 on all four. Journal
+  `-p warning` 30 h: 0 lines for `mcapp` and `mcapp-ble`. `/health` healthy.
+- Active slot-0, `webapp/version.html` v2.1.22-dev.2. Epoch 6. Schema 39 in the DB and
+  `LATEST_SCHEMA_VERSION` 39 in the slot. dev.1 runtime symbol present (`pending_new` in
+  `qrz_service.py`).
+- Live flow last hour: 18 msg / 76 pos rows; last message 3 s old. `/api/uptime?range=24h`:
+  98.6 % uptime, 100 % coverage; one `{CET}` gap 17:12-17:32 (20 min), on production v2.1.21
+  before dev.1 was deployed.
+- Host: disk 10 % of 59 G, 177 MB RAM available, 42.9 °C, load 0.23, host uptime 23 d.
+  `vapid.json` 0600, `config.json` 0640.
+- Stalls since dev.1 (non-sample): every critical row (6 `loop_lag` 0.7-1.6 s, one `http`
+  `/api/qrz/status` 2.5 s, two `client_http` 3.2-3.7 s) lies within 60 s after one of the two
+  restarts: W19 startup cost, expected. The rest: 10 `http`, 11 `client_http`, 3 `handler`,
+  10 `loop_lag` stalls.
+
+**Absent:** crash/restart, journal warnings, schema or epoch drift, `pool_wait`,
+`sse_answer_missing`, `client_timeout`.
+
+**Watch points.** W17, W19 as before. The 17:12 `{CET}` gap predates this code; re-check in the
+post-release sweep. No F.
