@@ -118,6 +118,8 @@ came from the v2.1.22 tarball (B12 change 10). The node IP is not part of `--inf
 only in the WiFi boot line, so `node.py info` reports it only after a reset.
 | CT2 | done (U4 blocked) | U1-U3, U5 run and repeated after the macOS Local Network fix; U4 needs Rosetta |
 | CT3a | W1-W4 pass | W5 (iPhone) waits for a router DNS entry; CT3b (macOS BLE) running |
+| CT3b | done | macOS BLE backend W1-W6 committed (99de2d0, 01a9416, 99921d3, 4baf50b, f468b7f); two advisor rounds; §7.2 shared contract suite deferred |
+| CT5 | done | P1, P3, P4 pass (76a637f) |
 
 **CT5 results (2026-10-31), `scripts/container-tests/persistence/persist.sh`, ~45 s:**
 
