@@ -10,8 +10,9 @@ final; everything else is a proposal. Reworked after an advisor review (2026-10-
 - **The gate becomes a RAM-based policy**, decided on `MemTotal`, never on the model name:
   under 1 GB refuse, 1-2 GB warn and confirm, 2 GB and up proceed.
 - **Detection gets precise.** "Desktop active" means the default target is `graphical.target` AND a
-  display manager is enabled or active. `graphical.target` alone never counts: it is the Debian
-  default and Lite images may report it too (unverified, check on mcapp.local before implementing).
+  display manager is enabled or active. `graphical.target` alone never counts: it is Debian's
+  default, and non-RPi images (Armbian, Orange Pi) may ship it headless. mcapp.local (RPi OS Lite,
+  Zero 2W) reports `multi-user.target` (measured 2026-10-31; the bootstrap never sets the target).
   Installed desktop packages alone no longer abort (and the `rc` false positive is fixed).
 - **A persisted profile (`headless` | `desktop`) decides which tuning runs.** The Zero-2W tuning
   (`gpu_mem=16`, `cma-64`, `/tmp` tmpfs, service and package removal) is gated off on desktop boxes.
@@ -113,9 +114,11 @@ have_tty() {                    # /dev/tty can exist yet fail to open (ENXIO)
 
 - **Primary signal: graphical default target AND a display manager.** `systemctl get-default`
   returning `graphical.target` is necessary, not sufficient. Debian's default target is
-  `graphical.target`, and a Raspberry Pi OS Lite image may well report it as well (unverified: could
-  not be checked on mcapp.local; check there before implementing). Counting the target alone
-  would classify every marker-less Zero 2W as a desktop, refuse it under 1 GB, break the runner's
+  `graphical.target`. Raspberry Pi OS Lite does NOT report it: mcapp.local (Zero 2W, Lite)
+  answers `multi-user.target` (measured 2026-10-31), and nothing in `bootstrap/` calls
+  `systemctl set-default`, so that is the image's own value. Other boards' images (Armbian,
+  Orange Pi) are unchecked and may default to `graphical.target` without a desktop. Counting the
+  target alone there would classify a marker-less headless box as a desktop, refuse it under 1 GB, break the runner's
   `--converge`/`--skip` and loop the converge watchdog. The DM requirement is what separates a real
   desktop from a Lite image with the Debian default target.
 - **A DM that is active while the default target is `multi-user.target`** (started by hand) is not
@@ -419,9 +422,10 @@ see Persistence).
   boxes). Bump to 7 only if a future change alters `setup_system` output for them.
 - **Q5. Pre-image for `config.txt`.** Accept the new backup file (first-tune only), or revert by
   inference only with the accepted risk?
-- **Q6. Live detection check on mcapp.local before W1.** Record `systemctl get-default`,
-  `systemctl is-enabled display-manager.service` and `is-active` on a Lite Zero 2W, and the same on
-  a Pi 4 desktop if one is at hand.
+- **Q6. Live detection check before W1 (partly answered).** mcapp.local (Lite, Zero 2W):
+  `get-default` = `multi-user.target` (2026-10-31). Still open: `systemctl is-enabled` /
+  `is-active display-manager.service` on mcapp.local, the same on a Pi 4 desktop, and
+  `get-default` on an Armbian / Orange Pi image.
 
 ## Implementation sketch (waves)
 
