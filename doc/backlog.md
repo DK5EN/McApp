@@ -132,3 +132,11 @@ Concept: `doc/2026-10-31_0830-container-deployment-concept.md`.
 McApp server finds BLE services and other McApp instances in the LAN and pairs with them from
 the web GUI. Prerequisite for BLE with the container (B12), useful on bare metal too.
 Concept: `doc/2026-10-31_0830-ble-service-and-lan-discovery-concept.md`.
+
+## B14 — serve the webapp from Caddy and drop lighttpd
+
+lighttpd only serves static files on `127.0.0.1:8082` behind Caddy, which already has
+`file_server`. Moving the SPA to Caddy (`try_files` + `file_server`) removes one process, one
+package and one config from the Zero 2W. Needs a `SYSTEM_EPOCH` bump and a PSS measurement on
+mcapp.local first. Decided 2026-10-31 alongside it: no Ansible rewrite of the bootstrap, no nginx.
+Evaluation: `doc/2026-10-31_1100-ansible-and-web-server-evaluation.md`.

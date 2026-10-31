@@ -1,0 +1,1112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>McApp Deployment Roadmap</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* Layout idea: a field manual for the shack. Narrow reading column, wide figures, one teal
+   accent for "our code", amber for the RF/UDP path, semantic green/red only for verdicts. */
+:root {
+  --bg: #f4f6f7;
+  --panel: #ffffff;
+  --ink: #17232b;
+  --muted: #5a6b75;
+  --line: #c9d3d9;
+  --accent: #0d6b78;
+  --accent-soft: #dcEEF0;
+  --rf: #b36b00;
+  --rf-soft: #fbefdc;
+  --good: #2f7d3b;
+  --bad: #b3261e;
+  --font-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", Roboto, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11181d;
+    --panel: #18222a;
+    --ink: #e3eaee;
+    --muted: #9aabb5;
+    --line: #34444f;
+    --accent: #4fb8c6;
+    --accent-soft: #173a40;
+    --rf: #e9a23b;
+    --rf-soft: #3a2a12;
+    --good: #6cc27a;
+    --bad: #f07a70;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11181d;
+  --panel: #18222a;
+  --ink: #e3eaee;
+  --muted: #9aabb5;
+  --line: #34444f;
+  --accent: #4fb8c6;
+  --accent-soft: #173a40;
+  --rf: #e9a23b;
+  --rf-soft: #3a2a12;
+  --good: #6cc27a;
+  --bad: #f07a70;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.55;
+}
+main {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 40px 20px 80px;
+  display: grid;
+  gap: 56px;
+}
+header { display: grid; gap: 12px; }
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+h1, h2, h3 {
+  font-family: var(--font-display);
+  text-wrap: balance;
+  margin: 0;
+  line-height: 1.15;
+}
+h1 { font-size: 40px; font-weight: 800; }
+h2 { font-size: 26px; font-weight: 700; }
+h3 { font-size: 18px; font-weight: 700; }
+p { margin: 0; max-width: 68ch; }
+.lede { font-size: 18px; color: var(--muted); max-width: 70ch; }
+section { display: grid; gap: 18px; }
+section > header { gap: 6px; }
+.sec-num {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--accent);
+}
+code, .mono { font-family: var(--font-mono); font-size: 0.92em; }
+code { background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; }
+ul, ol { margin: 0; padding-left: 1.3em; max-width: 72ch; display: grid; gap: 6px; }
+a { color: var(--accent); }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+  gap: 16px;
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 18px 18px 16px;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+.card .id { font-family: var(--font-mono); font-size: 13px; color: var(--accent); }
+.card ul { font-size: 15px; }
+.chip {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  justify-self: start;
+}
+.chip.rf { border-color: var(--rf); color: var(--rf); }
+.chip.ac { border-color: var(--accent); color: var(--accent); }
+
+figure {
+  margin: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+.figwrap { overflow-x: auto; }
+figure svg {
+  display: block;
+  width: 100%;
+  min-width: 760px;
+  height: auto;
+  color: var(--ink);
+  font-family: var(--font-body);
+}
+figcaption { font-size: 14px; color: var(--muted); max-width: 90ch; }
+
+/* SVG roles, themed from outside the drawings */
+svg .b { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
+svg .host { fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 5 4; }
+svg .ours { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+svg .rfbox { fill: var(--rf-soft); stroke: var(--rf); stroke-width: 1.5; }
+svg .goodbox { fill: none; stroke: var(--good); stroke-width: 1.8; }
+svg .badbox { fill: none; stroke: var(--bad); stroke-width: 1.8; }
+svg .t { fill: var(--ink); font-size: 13px; }
+svg .tb { fill: var(--ink); font-size: 13px; font-weight: 600; }
+svg .ts { fill: var(--muted); font-size: 11.5px; }
+svg .tm { fill: var(--muted); font-size: 11.5px; font-family: var(--font-mono); }
+svg .th { fill: var(--muted); font-size: 12px; font-family: var(--font-mono); letter-spacing: 0.03em; }
+svg .ta { fill: var(--accent); font-size: 11.5px; }
+svg .tr { fill: var(--rf); font-size: 11.5px; }
+svg .tg { fill: var(--good); font-size: 12px; font-weight: 600; }
+svg .tbad { fill: var(--bad); font-size: 12px; font-weight: 600; }
+svg .ln { stroke: var(--ink); stroke-width: 1.4; fill: none; }
+svg .lna { stroke: var(--accent); stroke-width: 1.6; fill: none; }
+svg .lnr { stroke: var(--rf); stroke-width: 1.6; fill: none; }
+svg .lnd { stroke: var(--muted); stroke-width: 1.3; fill: none; stroke-dasharray: 4 4; }
+svg .ah { fill: var(--ink); }
+svg .aha { fill: var(--accent); }
+svg .ahr { fill: var(--rf); }
+svg .ahd { fill: var(--muted); }
+
+.tablewrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; min-width: 720px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+th { font-family: var(--font-display); font-weight: 700; font-size: 14px; background: var(--accent-soft); }
+tr:last-child td { border-bottom: 0; }
+td:first-child { font-weight: 600; white-space: nowrap; }
+td code { white-space: nowrap; }
+.yes { color: var(--good); font-weight: 600; }
+.no { color: var(--bad); font-weight: 600; }
+.partial { color: var(--rf); font-weight: 600; }
+.skip { color: var(--muted); font-weight: 600; }
+
+pre {
+  margin: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.lanes { display: grid; gap: 14px; }
+.lane {
+  display: grid;
+  grid-template-columns: 170px 1fr;
+  gap: 14px;
+  align-items: start;
+}
+.lane-label { font-family: var(--font-display); font-weight: 700; font-size: 15px; padding-top: 8px; }
+.lane-label span { display: block; font-family: var(--font-mono); font-weight: 400; font-size: 12px; color: var(--accent); }
+.steps { display: flex; flex-wrap: wrap; gap: 8px; }
+.step {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 14px;
+  max-width: 230px;
+}
+.step b { font-family: var(--font-mono); font-weight: 500; font-size: 12px; color: var(--accent); display: block; }
+.step.gate { border-left-color: var(--rf); }
+.step.gate b { color: var(--rf); }
+.note {
+  border-left: 4px solid var(--rf);
+  background: var(--rf-soft);
+  padding: 12px 14px;
+  border-radius: 0 6px 6px 0;
+  font-size: 15px;
+  max-width: 90ch;
+}
+.qlist { counter-reset: q; list-style: none; padding: 0; display: grid; gap: 10px; max-width: 90ch; }
+.qlist li {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px 10px 48px;
+  position: relative;
+  font-size: 15px;
+}
+.qlist li::before {
+  counter-increment: q;
+  content: "Q" counter(q);
+  position: absolute;
+  left: 12px;
+  top: 10px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--accent);
+}
+.qlist li .tag { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+footer { font-size: 14px; color: var(--muted); display: grid; gap: 6px; }
+
+@media (max-width: 640px) {
+  h1 { font-size: 30px; }
+  .lane { grid-template-columns: 1fr; }
+  .lane-label { padding-top: 0; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <div class="eyebrow">McApp · DK5EN · planning overview · 2026-10-31 · status: ideation, backlog B11 to B14</div>
+  <h1>McApp deployment roadmap</h1>
+  <p class="lede">Today McApp installs in one way only: a headless Raspberry Pi with the Lite image, driven
+  by <code>mcapp.sh</code>. Three backlog items widen that. Bigger Pis with a desktop become valid hosts,
+  McApp ships as a container image for NAS owners and admins, and the Bluetooth part becomes a small
+  native service that any Linux box in the LAN can run and McApp can find on its own.</p>
+</header>
+
+<section id="glance">
+  <header>
+    <div class="sec-num">01 · At a glance</div>
+    <h2>Three initiatives, one goal: more places to run McApp</h2>
+  </header>
+  <div class="cards">
+    <article class="card">
+      <div class="id">B11 · desktop-image-gate</div>
+      <h3>Pi 4/5 with a desktop</h3>
+      <span class="chip ac">bare metal · bootstrap only</span>
+      <ul>
+        <li>The hard "desktop detected, abort" rule becomes a RAM rule.</li>
+        <li>Under 1 GB refuse, 1 to 2 GB ask, 2 GB and more install.</li>
+        <li>Zero-2W memory tuning is skipped on desktop boxes, so the GUI keeps working.</li>
+      </ul>
+      <p class="mono" style="font-size:13px;color:var(--muted)">Output: changed <code>mcapp.sh</code> + one new test suite</p>
+    </article>
+    <article class="card">
+      <div class="id">B12 · container-deployment</div>
+      <h3>McApp as a container</h3>
+      <span class="chip ac">Alpine · GHCR · Traefik</span>
+      <ul>
+        <li>One small Alpine image: the web app, API and live stream in one process.</li>
+        <li>Published to <code>ghcr.io/dk5en/mcapp</code> for arm64 and amd64.</li>
+        <li>Database in a volume; updates by pulling a new image tag.</li>
+      </ul>
+      <p class="mono" style="font-size:13px;color:var(--muted)">Output: image, compose example, CI workflow</p>
+    </article>
+    <article class="card">
+      <div class="id">B13 · ble-service-and-lan-discovery</div>
+      <h3>BLE service anywhere, found automatically</h3>
+      <span class="chip rf">native · mDNS · pairing</span>
+      <ul>
+        <li><code>mcapp-ble</code> installs on any Linux box with a Bluetooth adapter.</li>
+        <li>It announces itself in the LAN; McApp lists it in Settings.</li>
+        <li>Pair once with a key; only one McApp owns the radio link at a time.</li>
+      </ul>
+      <p class="mono" style="font-size:13px;color:var(--muted)">Output: installer script, discovery, Settings panel</p>
+    </article>
+  </div>
+</section>
+
+<section id="types">
+  <header>
+    <div class="sec-num">02 · Installation types</div>
+    <h2>Four ways McApp will run</h2>
+    <p>Type 1 is what runs on mcapp.local today. Types 2 to 4 are what the backlog adds. Teal marks
+    McApp's own parts, amber marks the radio side (node, UDP, Bluetooth).</p>
+  </header>
+  <figure>
+    <div class="figwrap">
+    <svg viewBox="0 0 1000 380" role="img" aria-label="Four installation types side by side: Pi Zero Lite bare metal, Pi 4 or 5 with desktop bare metal, container on a NAS with a separate BLE box, and container on a Pi with the BLE service on the same host.">
+      <!-- column 1 -->
+      <rect class="host" x="10" y="10" width="230" height="300" rx="8"/>
+      <text class="th" x="24" y="32">1 · TODAY</text>
+      <text class="tb" x="24" y="52">Pi Zero 2W, Lite image</text>
+      <rect class="b" x="24" y="66" width="202" height="34" rx="5"/>
+      <text class="t" x="125" y="88" text-anchor="middle">Caddy · lighttpd</text>
+      <rect class="ours" x="24" y="110" width="202" height="44" rx="5"/>
+      <text class="tb" x="125" y="130" text-anchor="middle">mcapp (systemd)</text>
+      <text class="tm" x="125" y="146" text-anchor="middle">API · SSE · UDP 1799</text>
+      <rect class="rfbox" x="24" y="164" width="202" height="34" rx="5"/>
+      <text class="t" x="125" y="186" text-anchor="middle">mcapp-ble · onboard BT</text>
+      <rect class="b" x="24" y="208" width="202" height="34" rx="5"/>
+      <text class="t" x="125" y="230" text-anchor="middle">Zero memory tuning: full</text>
+      <text class="ts" x="24" y="266">install: mcapp.sh</text>
+      <text class="ts" x="24" y="284">update: Update page, slots</text>
+
+      <!-- column 2 -->
+      <rect class="host" x="260" y="10" width="230" height="300" rx="8"/>
+      <text class="th" x="274" y="32">2 · B11</text>
+      <text class="tb" x="274" y="52">Pi 4/5 with desktop</text>
+      <rect class="b" x="274" y="66" width="202" height="34" rx="5"/>
+      <text class="t" x="375" y="88" text-anchor="middle">Caddy · lighttpd</text>
+      <rect class="ours" x="274" y="110" width="202" height="44" rx="5"/>
+      <text class="tb" x="375" y="130" text-anchor="middle">mcapp (systemd)</text>
+      <text class="tm" x="375" y="146" text-anchor="middle">API · SSE · UDP 1799</text>
+      <rect class="rfbox" x="274" y="164" width="202" height="34" rx="5"/>
+      <text class="t" x="375" y="186" text-anchor="middle">mcapp-ble · onboard BT</text>
+      <rect class="b" x="274" y="208" width="202" height="34" rx="5"/>
+      <text class="t" x="375" y="230" text-anchor="middle">desktop + GUI keep running</text>
+      <text class="ts" x="274" y="266">install: mcapp.sh (+ confirm 1-2 GB)</text>
+      <text class="ts" x="274" y="284">update: Update page, slots</text>
+
+      <!-- column 3 -->
+      <rect class="host" x="510" y="10" width="230" height="300" rx="8"/>
+      <text class="th" x="524" y="32">3 · B12 + B13</text>
+      <text class="tb" x="524" y="52">NAS / any Linux box</text>
+      <rect class="b" x="524" y="66" width="202" height="34" rx="5"/>
+      <text class="t" x="625" y="88" text-anchor="middle">Traefik or your own proxy</text>
+      <rect class="ours" x="524" y="110" width="202" height="44" rx="5"/>
+      <text class="tb" x="625" y="130" text-anchor="middle">mcapp container</text>
+      <text class="tm" x="625" y="146" text-anchor="middle">SPA · API · SSE · UDP</text>
+      <rect class="b" x="524" y="164" width="202" height="34" rx="5"/>
+      <text class="t" x="625" y="186" text-anchor="middle">volume /var/lib/mcapp</text>
+      <rect class="rfbox" x="524" y="208" width="202" height="34" rx="5"/>
+      <text class="t" x="625" y="230" text-anchor="middle">BLE: on another LAN box</text>
+      <text class="ts" x="524" y="266">install: docker compose up</text>
+      <text class="ts" x="524" y="284">update: pull a new image tag</text>
+
+      <!-- column 4 -->
+      <rect class="host" x="760" y="10" width="230" height="300" rx="8"/>
+      <text class="th" x="774" y="32">4 · B12 + B13</text>
+      <text class="tb" x="774" y="52">Container on a Pi</text>
+      <rect class="b" x="774" y="66" width="202" height="34" rx="5"/>
+      <text class="t" x="875" y="88" text-anchor="middle">Traefik or your own proxy</text>
+      <rect class="ours" x="774" y="110" width="202" height="44" rx="5"/>
+      <text class="tb" x="875" y="130" text-anchor="middle">mcapp container</text>
+      <text class="tm" x="875" y="146" text-anchor="middle">SPA · API · SSE · UDP</text>
+      <rect class="b" x="774" y="164" width="202" height="34" rx="5"/>
+      <text class="t" x="875" y="186" text-anchor="middle">volume /var/lib/mcapp</text>
+      <rect class="rfbox" x="774" y="208" width="202" height="34" rx="5"/>
+      <text class="t" x="875" y="230" text-anchor="middle">mcapp-ble native on host</text>
+      <text class="ts" x="774" y="266">install: compose + mcapp-ble.sh</text>
+      <text class="ts" x="774" y="284">update: image tag + installer</text>
+
+      <!-- node row -->
+      <rect class="rfbox" x="380" y="330" width="240" height="40" rx="6"/>
+      <text class="tb" x="500" y="355" text-anchor="middle">MeshCom node (LoRa)</text>
+      <line class="lnr" x1="380" y1="350" x2="125" y2="314"/>
+      <line class="lnr" x1="440" y1="330" x2="375" y2="314"/>
+      <line class="lnr" x1="560" y1="330" x2="625" y2="314"/>
+      <line class="lnr" x1="620" y1="350" x2="875" y2="314"/>
+      <text class="tr" x="200" y="322">UDP 1799 + BLE</text>
+      <text class="tr" x="700" y="322">UDP 1799 + BLE</text>
+    </svg>
+    </div>
+    <figcaption>The node talks to every type the same way: Extern-UDP on port 1799 and, where a Bluetooth
+    adapter is close, BLE. What changes per type is who terminates TLS, where the Bluetooth radio
+    lives, and how updates arrive.</figcaption>
+  </figure>
+
+  <div class="tablewrap">
+  <table>
+    <thead>
+      <tr><th></th><th>1 · Pi Zero 2W Lite</th><th>2 · Pi 4/5 desktop</th><th>3 · Container on NAS / Linux</th><th>4 · Container on a Pi</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Install</td><td><code>mcapp.sh</code></td><td><code>mcapp.sh</code>, confirm at 1-2 GB or <code>--allow-desktop</code></td><td><code>docker compose up -d</code></td><td>compose + <code>mcapp-ble.sh</code></td></tr>
+      <tr><td>Web front door</td><td>Caddy :443 → lighttpd + API</td><td>same</td><td>Traefik labels or your own reverse proxy</td><td>same</td></tr>
+      <tr><td>Login in front</td><td>none (LAN)</td><td>none (LAN)</td><td>your proxy: Basic auth or SSO cookie</td><td>same</td></tr>
+      <tr><td>UDP 1799</td><td>direct</td><td>direct</td><td>published on the host, cannot be remapped</td><td>same, or host network</td></tr>
+      <tr><td>Bluetooth</td><td>local <code>mcapp-ble</code></td><td>local <code>mcapp-ble</code></td><td>native BLE service on a LAN box</td><td>native BLE service on the same Pi</td></tr>
+      <tr><td>Database</td><td><code>/var/lib/mcapp</code></td><td><code>/var/lib/mcapp</code></td><td>named volume at <code>/var/lib/mcapp</code></td><td>same</td></tr>
+      <tr><td>Updates</td><td>Update page, slots</td><td>Update page, slots</td><td>pull a new tag from GHCR</td><td>same</td></tr>
+      <tr><td>System tuning</td><td>full Zero tuning</td><td>gated off (desktop profile)</td><td>host's job</td><td>host's job</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section id="today">
+  <header>
+    <div class="sec-num">03 · Baseline</div>
+    <h2>How a bare-metal box works today</h2>
+    <p>Types 1 and 2 keep this layout unchanged. It is the reference the container has to replace.</p>
+  </header>
+  <figure>
+    <div class="figwrap">
+    <svg viewBox="0 0 960 330" role="img" aria-label="Bare metal today: the browser reaches Caddy on port 443, Caddy routes the web app to lighttpd and the API to uvicorn on 2981; the node sends Extern-UDP to port 1799 and BLE to the mcapp-ble service on 8081, which forwards to McApp over HTTP and SSE; McApp writes SQLite under /var/lib/mcapp.">
+      <defs>
+        <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="a3r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ahr" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <rect class="b" x="20" y="40" width="160" height="54" rx="6"/>
+      <text class="tb" x="100" y="63" text-anchor="middle">Browser / PWA</text>
+      <text class="ts" x="100" y="81" text-anchor="middle">https://mcapp.local</text>
+      <rect class="rfbox" x="20" y="180" width="160" height="70" rx="6"/>
+      <text class="tb" x="100" y="208" text-anchor="middle">MeshCom node</text>
+      <text class="ts" x="100" y="226" text-anchor="middle">EXT-UDP target = Pi</text>
+
+      <rect class="host" x="250" y="14" width="690" height="300" rx="8"/>
+      <text class="th" x="266" y="36">RASPBERRY PI · systemd · Caddy + lighttpd + mcapp + mcapp-ble</text>
+
+      <rect class="b" x="280" y="56" width="170" height="54" rx="6"/>
+      <text class="tb" x="365" y="79" text-anchor="middle">Caddy</text>
+      <text class="tm" x="365" y="97" text-anchor="middle">:80 / :443 TLS</text>
+      <rect class="b" x="520" y="56" width="170" height="54" rx="6"/>
+      <text class="tb" x="605" y="79" text-anchor="middle">lighttpd</text>
+      <text class="tm" x="605" y="97" text-anchor="middle">:8082 SPA files</text>
+      <rect class="ours" x="520" y="150" width="200" height="64" rx="6"/>
+      <text class="tb" x="620" y="174" text-anchor="middle">mcapp (uvicorn)</text>
+      <text class="tm" x="620" y="192" text-anchor="middle">:2981 API + SSE</text>
+      <text class="tm" x="620" y="207" text-anchor="middle">UDP :1799</text>
+      <rect class="rfbox" x="280" y="240" width="170" height="54" rx="6"/>
+      <text class="tb" x="365" y="263" text-anchor="middle">mcapp-ble</text>
+      <text class="tm" x="365" y="281" text-anchor="middle">127.0.0.1:8081</text>
+      <rect class="b" x="770" y="150" width="150" height="64" rx="6"/>
+      <text class="tb" x="845" y="174" text-anchor="middle">/var/lib/mcapp</text>
+      <text class="tm" x="845" y="192" text-anchor="middle">messages.db (WAL)</text>
+      <rect class="b" x="770" y="240" width="150" height="54" rx="6"/>
+      <text class="tb" x="845" y="263" text-anchor="middle">update runner</text>
+      <text class="tm" x="845" y="281" text-anchor="middle">:2985 · slots</text>
+
+      <line class="ln" x1="180" y1="67" x2="278" y2="78" marker-end="url(#a3)"/>
+      <text class="ts" x="200" y="62">HTTPS</text>
+      <line class="ln" x1="450" y1="83" x2="518" y2="83" marker-end="url(#a3)"/>
+      <text class="ts" x="458" y="76">/webapp</text>
+      <line class="ln" x1="420" y1="110" x2="530" y2="150" marker-end="url(#a3)"/>
+      <text class="ts" x="404" y="138">/api, /events</text>
+      <line class="lnr" x1="180" y1="205" x2="518" y2="190" marker-end="url(#a3r)"/>
+      <text class="tr" x="240" y="192">Extern-UDP :1799</text>
+      <line class="lnr" x1="180" y1="235" x2="278" y2="262" marker-end="url(#a3r)"/>
+      <text class="tr" x="186" y="268">BLE</text>
+      <line class="lna" x1="450" y1="262" x2="545" y2="216" marker-end="url(#a3)"/>
+      <text class="ta" x="470" y="250">HTTP + SSE</text>
+      <line class="ln" x1="720" y1="182" x2="768" y2="182" marker-end="url(#a3)"/>
+      <text class="ts" x="726" y="175">SQLite</text>
+      <line class="lnd" x1="700" y1="214" x2="790" y2="240" marker-end="url(#a3)"/>
+      <text class="ts" x="700" y="240">trigger file</text>
+    </svg>
+    </div>
+    <figcaption>Five processes on one Pi. The container collapses Caddy, lighttpd and the update runner
+    away: uvicorn serves the SPA itself, an outside proxy does TLS, and updates become image pulls.</figcaption>
+  </figure>
+</section>
+
+<section id="desktop">
+  <header>
+    <div class="sec-num">04 · B11 · Desktop image gate</div>
+    <h2>Bigger Pis may keep their desktop</h2>
+    <p>Today any desktop package aborts the install, which protects the 512 MB Zero 2W but locks out a
+    Pi 4 with 4 GB. The new gate decides on real memory, and a saved profile decides which memory
+    tuning runs, so the GUI is not crippled by settings meant for a headless Zero.</p>
+  </header>
+  <figure>
+    <div class="figwrap">
+    <svg viewBox="0 0 960 300" role="img" aria-label="Decision flow: a stored profile is reused without prompting; otherwise, if a desktop is active, memory decides between refuse, warn and confirm, or proceed; confirmed or proceeding boxes get the desktop profile with tuning gated off, all others the headless profile.">
+      <defs>
+        <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <rect class="b" x="16" y="122" width="130" height="56" rx="6"/>
+      <text class="tb" x="81" y="146" text-anchor="middle">mcapp.sh run</text>
+      <text class="ts" x="81" y="164" text-anchor="middle">install / update</text>
+
+      <rect class="b" x="186" y="114" width="170" height="72" rx="6"/>
+      <text class="tb" x="271" y="138" text-anchor="middle">Profile marker?</text>
+      <text class="tm" x="271" y="156" text-anchor="middle">/var/lib/mcapp/</text>
+      <text class="tm" x="271" y="171" text-anchor="middle">system-profile</text>
+
+      <rect class="b" x="186" y="228" width="170" height="56" rx="6"/>
+      <text class="tb" x="271" y="252" text-anchor="middle">reuse stored profile</text>
+      <text class="ts" x="271" y="270" text-anchor="middle">update runner never prompts</text>
+
+      <rect class="b" x="398" y="114" width="190" height="72" rx="6"/>
+      <text class="tb" x="493" y="138" text-anchor="middle">Desktop active?</text>
+      <text class="ts" x="493" y="156" text-anchor="middle">graphical.target AND</text>
+      <text class="ts" x="493" y="171" text-anchor="middle">display manager enabled</text>
+
+      <rect class="b" x="398" y="228" width="190" height="56" rx="6"/>
+      <text class="tb" x="493" y="252" text-anchor="middle">headless profile</text>
+      <text class="ts" x="493" y="270" text-anchor="middle">full Zero tuning, as today</text>
+
+      <rect class="badbox" x="630" y="22" width="180" height="60" rx="6"/>
+      <text class="tbad" x="720" y="44" text-anchor="middle">under ~0.8 GB: refuse</text>
+      <text class="ts" x="720" y="62" text-anchor="middle">--headless switches boot</text>
+      <text class="ts" x="720" y="76" text-anchor="middle">target, reboot, re-run</text>
+
+      <rect class="b" x="630" y="120" width="180" height="60" rx="6" style="stroke:var(--rf)"/>
+      <text class="tb" x="720" y="144" text-anchor="middle" style="fill:var(--rf)">~0.8-1.7 GB: confirm</text>
+      <text class="ts" x="720" y="162" text-anchor="middle">or --allow-desktop</text>
+
+      <rect class="goodbox" x="630" y="218" width="180" height="60" rx="6"/>
+      <text class="tg" x="720" y="242" text-anchor="middle">~1.7 GB and up: install</text>
+      <text class="ts" x="720" y="260" text-anchor="middle">Pi 4/5 with 2-8 GB</text>
+
+      <rect class="ours" x="842" y="150" width="108" height="80" rx="6"/>
+      <text class="tb" x="896" y="176" text-anchor="middle">desktop</text>
+      <text class="tb" x="896" y="192" text-anchor="middle">profile</text>
+      <text class="ts" x="896" y="212" text-anchor="middle">tuning off</text>
+
+      <line class="ln" x1="146" y1="150" x2="184" y2="150" marker-end="url(#a4)"/>
+      <line class="ln" x1="356" y1="150" x2="396" y2="150" marker-end="url(#a4)"/>
+      <text class="ts" x="360" y="142">none</text>
+      <line class="ln" x1="271" y1="186" x2="271" y2="226" marker-end="url(#a4)"/>
+      <text class="ts" x="278" y="210">present</text>
+      <line class="ln" x1="493" y1="186" x2="493" y2="226" marker-end="url(#a4)"/>
+      <text class="ts" x="500" y="210">no</text>
+      <line class="ln" x1="588" y1="140" x2="628" y2="56" marker-end="url(#a4)"/>
+      <line class="ln" x1="588" y1="150" x2="628" y2="150" marker-end="url(#a4)"/>
+      <line class="ln" x1="588" y1="160" x2="628" y2="246" marker-end="url(#a4)"/>
+      <text class="ts" x="566" y="104">yes</text>
+      <line class="ln" x1="810" y1="150" x2="840" y2="176" marker-end="url(#a4)"/>
+      <line class="ln" x1="810" y1="246" x2="840" y2="212" marker-end="url(#a4)"/>
+    </svg>
+    </div>
+    <figcaption>Thresholds sit below the nominal sizes because the kernel reports less than the label:
+    a "2 GB" Pi shows about 1.8 GB. mcapp.local (Lite) reports <code>multi-user.target</code>, so a
+    headless Zero never even reaches the memory question.</figcaption>
+  </figure>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Bootstrap step</th><th>Headless profile (Zero, Lite)</th><th>Desktop profile (Pi 4/5)</th></tr></thead>
+    <tbody>
+      <tr><td><code>gpu_mem=16</code>, <code>cma-64</code>, <code>audio=off</code></td><td class="yes">applied</td><td class="skip">skipped, McApp block reverted if present</td></tr>
+      <tr><td>Disable cups, ModemManager, udisks2</td><td class="yes">applied</td><td class="skip">skipped (desktop needs them)</td></tr>
+      <tr><td>Purge camera libs + autoremove</td><td class="yes">applied</td><td class="skip">skipped</td></tr>
+      <tr><td><code>/tmp</code> as 150 MB tmpfs</td><td class="yes">applied</td><td class="skip">skipped (browsers need room)</td></tr>
+      <tr><td>Journal bind mount</td><td class="yes">applied</td><td class="partial">only if <code>/var/log</code> is tmpfs</td></tr>
+      <tr><td>wpasupplicant hold + pin, apt under systemd-run</td><td class="yes">applied</td><td class="yes">applied (network safety everywhere)</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p><b>Output:</b> changes in <code>bootstrap/mcapp.sh</code> and <code>bootstrap/lib/*.sh</code>, a new
+  bootstrap test suite, no app code. Four waves: detection, profile gating, revert path, tests. No
+  system-epoch bump is planned, because nothing changes for existing headless boxes.</p>
+</section>
+
+<section id="container">
+  <header>
+    <div class="sec-num">05 · B12 · Container deployment</div>
+    <h2>One Alpine container, the radio stays outside</h2>
+    <p>The container holds McApp and nothing else. TLS and the login live in a reverse proxy you
+    already run, the database lives in a volume, the Bluetooth radio lives in a native service on a
+    real host. Only the UDP port from the node goes straight into the container.</p>
+  </header>
+  <figure>
+    <div class="figwrap">
+    <svg viewBox="0 0 1000 440" role="img" aria-label="Container architecture: the browser reaches a reverse proxy over HTTPS with a login, the proxy forwards over the Docker network to uvicorn in the McApp container; the node sends UDP to the host's port 1799, which Docker forwards into the container; McApp stores data in a volume and talks to a native BLE service on a LAN box over HTTP and SSE with an API key; the BLE box reaches the node over Bluetooth.">
+      <defs>
+        <marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="a5r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ahr" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="a5a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="aha" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <rect class="b" x="16" y="56" width="160" height="56" rx="6"/>
+      <text class="tb" x="96" y="80" text-anchor="middle">Browser / PWA</text>
+      <text class="ts" x="96" y="98" text-anchor="middle">mcapp.home.arpa</text>
+      <rect class="rfbox" x="16" y="250" width="160" height="70" rx="6"/>
+      <text class="tb" x="96" y="278" text-anchor="middle">MeshCom node</text>
+      <text class="ts" x="96" y="296" text-anchor="middle">EXT-UDP = host IP</text>
+
+      <rect class="host" x="220" y="14" width="540" height="380" rx="8"/>
+      <text class="th" x="236" y="36">DOCKER HOST · Pi, NAS or any Linux box in the LAN</text>
+
+      <rect class="b" x="244" y="56" width="210" height="78" rx="6"/>
+      <text class="tb" x="349" y="80" text-anchor="middle">Reverse proxy</text>
+      <text class="ts" x="349" y="98" text-anchor="middle">Traefik labels or your own</text>
+      <text class="ts" x="349" y="114" text-anchor="middle">TLS · LAN allowlist · login</text>
+
+      <rect class="b" x="244" y="250" width="210" height="56" rx="6"/>
+      <text class="tb" x="349" y="274" text-anchor="middle">host port 1799/udp</text>
+      <text class="ts" x="349" y="292" text-anchor="middle">Docker DNAT</text>
+
+      <rect class="ours" x="494" y="50" width="246" height="230" rx="8"/>
+      <text class="th" x="508" y="72">MCAPP CONTAINER · Alpine</text>
+      <rect class="b" x="514" y="86" width="206" height="74" rx="6"/>
+      <text class="tb" x="617" y="108" text-anchor="middle">uvicorn :2981</text>
+      <text class="ts" x="617" y="126" text-anchor="middle">Vue SPA + API + SSE</text>
+      <text class="ts" x="617" y="142" text-anchor="middle">not published on the host</text>
+      <rect class="b" x="514" y="196" width="206" height="62" rx="6"/>
+      <text class="tb" x="617" y="220" text-anchor="middle">UDP listener :1799</text>
+      <text class="ts" x="617" y="238" text-anchor="middle">learns the node IP</text>
+
+      <rect class="b" x="494" y="306" width="246" height="70" rx="6"/>
+      <text class="tb" x="617" y="330" text-anchor="middle">volume → /var/lib/mcapp</text>
+      <text class="ts" x="617" y="348" text-anchor="middle">messages.db + WAL, runtime.json,</text>
+      <text class="ts" x="617" y="363" text-anchor="middle">secret.key, vapid.json</text>
+
+      <rect class="host" x="800" y="150" width="184" height="160" rx="8"/>
+      <text class="th" x="814" y="172">LAN BOX WITH BLE</text>
+      <rect class="rfbox" x="814" y="186" width="156" height="56" rx="6"/>
+      <text class="tb" x="892" y="210" text-anchor="middle">mcapp-ble :8081</text>
+      <text class="ts" x="892" y="228" text-anchor="middle">native, systemd</text>
+      <rect class="b" x="814" y="254" width="156" height="40" rx="6"/>
+      <text class="t" x="892" y="279" text-anchor="middle">BlueZ · adapter</text>
+
+      <line class="ln" x1="176" y1="84" x2="242" y2="92" marker-end="url(#a5)"/>
+      <text class="ts" x="182" y="76">HTTPS</text>
+      <line class="ln" x1="454" y1="104" x2="512" y2="116" marker-end="url(#a5)"/>
+      <text class="ts" x="456" y="96">proxy net</text>
+      <line class="lnr" x1="176" y1="282" x2="242" y2="278" marker-end="url(#a5r)"/>
+      <text class="tr" x="180" y="270">UDP 1799</text>
+      <line class="lnr" x1="454" y1="272" x2="512" y2="236" marker-end="url(#a5r)"/>
+      <text class="tr" x="488" y="226" text-anchor="end">src IP kept</text>
+      <line class="ln" x1="617" y1="258" x2="617" y2="304" marker-end="url(#a5)"/>
+      <line class="lna" x1="720" y1="124" x2="812" y2="206" marker-end="url(#a5a)"/>
+      <text class="ta" x="800" y="126">HTTP + SSE</text>
+      <text class="ta" x="800" y="141">with X-API-Key</text>
+      <polyline class="lnr" points="96,320 96,420 892,420 892,296" marker-end="url(#a5r)"/>
+      <text class="tr" x="420" y="414">Bluetooth LE, a few metres from the node</text>
+    </svg>
+    </div>
+    <figcaption>No port of the McApp API is published on the host. The browser only ever talks to the
+    proxy, which is where the login sits. UDP 1799 is the one port that must sit on the host, because
+    the node firmware sends to a fixed port.</figcaption>
+  </figure>
+
+  <h3>What works, what changes, what does not</h3>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Area</th><th>In the container</th><th>Note</th></tr></thead>
+    <tbody>
+      <tr><td>Chat, map, mHeard, push, QRZ</td><td class="yes">works</td><td>same code as bare metal</td></tr>
+      <tr><td>Extern-UDP to the node</td><td class="yes">works</td><td>needs the real source IP; see the UDP trap below</td></tr>
+      <tr><td>Bluetooth</td><td class="partial">via a native BLE service</td><td>no BlueZ, no adapter inside the container (B13)</td></tr>
+      <tr><td>Web Push</td><td class="yes">works</td><td><code>vapid.json</code> in the volume keeps subscriptions</td></tr>
+      <tr><td>QRZ / Node Admin / feed passwords</td><td class="partial">re-enter once</td><td>key file in the volume; not portable from a Pi</td></tr>
+      <tr><td>Update page, slots, Activate</td><td class="no">hidden</td><td>a <code>container</code> feature flag hides them; update = new image</td></tr>
+      <tr><td>System converge, memory tuning, firewall</td><td class="no">not applicable</td><td>the host's job</td></tr>
+      <tr><td><code>/api/timezone</code> (GPS card hint)</td><td class="partial">answers 501</td><td>timezonefinder left out: 33 MB data, no arm64 build</td></tr>
+      <tr><td><code>mcapp.local</code> name</td><td class="partial">replaced</td><td>a proxy host name such as <code>mcapp.home.arpa</code></td></tr>
+      <tr><td>Kubernetes</td><td class="no">not supported</td><td>k3s recipe in the appendix only; SQLite allows one copy</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section id="udp">
+  <header>
+    <div class="sec-num">06 · B12 · The UDP path</div>
+    <h2>The one networking trap: the node's address</h2>
+    <p>McApp learns where the node is from the first UDP datagram it receives. Normal rootful Docker
+    keeps the sender's address, so this just works. Some setups replace it with Docker's own gateway
+    address, McApp learns the wrong target, and every message it sends goes nowhere.</p>
+  </header>
+  <figure>
+    <div class="figwrap">
+    <svg viewBox="0 0 960 230" role="img" aria-label="Two rows. With rootful Docker and iptables, the container sees the node's real address and learns it correctly. With rootless Docker's default port driver or the userland proxy, the container sees the Docker gateway address and learns the wrong target.">
+      <defs>
+        <marker id="a6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ahr" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <text class="th" x="16" y="26">ROOTFUL DOCKER · iptables DNAT · Pi OS, most NAS</text>
+      <rect class="rfbox" x="16" y="40" width="170" height="56" rx="6"/>
+      <text class="tb" x="101" y="63" text-anchor="middle">node</text>
+      <text class="tm" x="101" y="81" text-anchor="middle">192.168.1.50</text>
+      <rect class="b" x="290" y="40" width="200" height="56" rx="6"/>
+      <text class="tb" x="390" y="63" text-anchor="middle">host :1799</text>
+      <text class="ts" x="390" y="81" text-anchor="middle">DNAT, source untouched</text>
+      <rect class="goodbox" x="594" y="40" width="350" height="56" rx="6"/>
+      <text class="tb" x="769" y="63" text-anchor="middle">container sees 192.168.1.50</text>
+      <text class="tg" x="769" y="81" text-anchor="middle">learns the right target, replies arrive</text>
+      <line class="lnr" x1="186" y1="68" x2="288" y2="68" marker-end="url(#a6)"/>
+      <line class="lnr" x1="490" y1="68" x2="592" y2="68" marker-end="url(#a6)"/>
+
+      <text class="th" x="16" y="136">ROOTLESS DOCKER (builtin port driver) · userland proxy · some NAS builds</text>
+      <rect class="rfbox" x="16" y="150" width="170" height="56" rx="6"/>
+      <text class="tb" x="101" y="173" text-anchor="middle">node</text>
+      <text class="tm" x="101" y="191" text-anchor="middle">192.168.1.50</text>
+      <rect class="b" x="290" y="150" width="200" height="56" rx="6"/>
+      <text class="tb" x="390" y="173" text-anchor="middle">host :1799</text>
+      <text class="ts" x="390" y="191" text-anchor="middle">proxy re-sends the packet</text>
+      <rect class="badbox" x="594" y="150" width="350" height="56" rx="6"/>
+      <text class="tb" x="769" y="173" text-anchor="middle">container sees 172.17.0.1</text>
+      <text class="tbad" x="769" y="191" text-anchor="middle">learns the gateway, outgoing frames lost</text>
+      <line class="lnr" x1="186" y1="178" x2="288" y2="178" marker-end="url(#a6)"/>
+      <line class="lnr" x1="490" y1="178" x2="592" y2="178" marker-end="url(#a6)"/>
+    </svg>
+    </div>
+    <figcaption>The fix where the bottom row applies: run with host networking, or pin the node's IP
+    with <code>MCAPP_UDP_TARGET</code> and switch learning off with <code>MCAPP_UDP_LEARN=0</code>. The
+    same reason rules out Traefik for UDP: as a proxy it would also replace the source address.</figcaption>
+  </figure>
+  <ul>
+    <li><b>Point the node at the host.</b> The node's EXT-UDP IP is the Docker host's LAN address, not
+    the container's.</li>
+    <li><b>Port 1799 cannot move.</b> The firmware sends to a compile-time <code>EXTERN_PORT</code>.
+    That means one McApp per host IP; a second instance needs its own LAN IP (macvlan).</li>
+    <li><b>Outgoing frames</b> leave from a separate socket on a random port and are translated to the
+    host's address; the node accepts that.</li>
+    <li><b>Platform list:</b> wave 0 tests Pi Docker, Synology, QNAP, Unraid and rootless Podman before
+    any platform is called "supported".</li>
+  </ul>
+</section>
+
+<section id="proxy">
+  <header>
+    <div class="sec-num">07 · B12 · Web access</div>
+    <h2>Behind Traefik or behind your own proxy</h2>
+    <p>Both paths are first-class. Many home servers already run nginx, Caddy or Nginx Proxy Manager
+    with a login in front of everything, plus other web services on the same box.</p>
+  </header>
+  <div class="cards">
+    <article class="card">
+      <h3>Traefik with labels</h3>
+      <ul>
+        <li>Router with a <code>Host()</code> rule on the <code>websecure</code> entry point, cert resolver for TLS.</li>
+        <li>An <code>ipallowlist</code> on the real LAN range, never Docker's <code>172.16.0.0/12</code>.</li>
+        <li>Optional <code>basicauth</code> or <code>forwardauth</code> middleware for the login.</li>
+        <li>No buffering on the live stream (<code>flushInterval</code>).</li>
+      </ul>
+    </article>
+    <article class="card">
+      <h3>Your own reverse proxy</h3>
+      <ul>
+        <li>Publish the container port on loopback with any free host port: <code>127.0.0.1:8085:2981</code>.</li>
+        <li>The login must cover every path, <code>/api/</code> and <code>/events</code> included.</li>
+        <li>Browser tabs: Basic auth works. Installed iPhone app: prefer an SSO cookie (Authelia, Authentik).</li>
+        <li>nginx: <code>proxy_buffering off</code> for the live stream.</li>
+      </ul>
+    </article>
+    <article class="card">
+      <h3>Rules that hold either way</h3>
+      <ul>
+        <li>McApp's API has no login of its own; the proxy is the gate.</li>
+        <li>Node Admin stays LAN-only even behind a login.</li>
+        <li>Host network mode: set <code>MCAPP_PORT</code> if 2981 is taken, bind to loopback or LAN IP.</li>
+        <li>Logs rotate in compose (10 MB x 3) so a NAS disk does not fill.</li>
+      </ul>
+    </article>
+  </div>
+  <pre><code>services:
+  mcapp:
+    image: ghcr.io/dk5en/mcapp:latest        # or :v2.2.0 to pin, :dev for pre-releases
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      TZ: Europe/Berlin
+      MCAPP_BLE_URL: http://192.168.1.20:8081    # native BLE service; an IP, .local does not resolve in Alpine
+      MCAPP_BLE_API_KEY: ${MCAPP_BLE_API_KEY}
+    ports:
+      - "1799:1799/udp"                      # node EXT-UDP, fixed port
+      # - "127.0.0.1:8085:2981"              # only for your own proxy instead of Traefik
+    volumes:
+      - mcapp-data:/var/lib/mcapp            # whole directory, never just messages.db
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.mcapp.rule: Host(`mcapp.home.arpa`)
+      traefik.http.routers.mcapp.middlewares: mcapp-lan
+      traefik.http.middlewares.mcapp-lan.ipallowlist.sourcerange: 192.168.1.0/24
+      traefik.http.services.mcapp.loadbalancer.server.port: "2981"
+    logging:
+      driver: json-file
+      options: { max-size: 10m, max-file: "3" }
+volumes:
+  mcapp-data:</code></pre>
+  <p style="font-size:14px;color:var(--muted)">Illustrative excerpt; the full example (networks, cert resolver, security options) is in the container paper.</p>
+</section>
+
+<section id="registry">
+  <header>
+    <div class="sec-num">08 · B12 · Build and registry</div>
+    <h2>Where the images come from</h2>
+    <p>The release process stays as it is. A GitHub Actions workflow reacts to every published release,
+    builds the image from the same tarball the Pis install, and pushes it to the GitHub Container
+    Registry under the McApp repository.</p>
+  </header>
+  <figure>
+    <div class="figwrap">
+    <svg viewBox="0 0 1000 250" role="img" aria-label="Release pipeline: release.sh creates a tag and a GitHub release with a tarball that already contains the built web app; a GitHub Actions workflow triggered on release builds amd64 and arm64 images and pushes them to ghcr.io/dk5en/mcapp; hosts pull the new tag. Bare-metal Pis keep updating from the same release through the Update page.">
+      <defs>
+        <marker id="a8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="a8a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="aha" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <rect class="b" x="10" y="40" width="170" height="80" rx="6"/>
+      <text class="tb" x="95" y="66" text-anchor="middle">release.sh</text>
+      <text class="tm" x="95" y="86" text-anchor="middle">tag vX.Y.Z</text>
+      <text class="tm" x="95" y="102" text-anchor="middle">or vX.Y.Z-dev.N</text>
+
+      <rect class="b" x="215" y="40" width="180" height="80" rx="6"/>
+      <text class="tb" x="305" y="66" text-anchor="middle">GitHub Release</text>
+      <text class="ts" x="305" y="86" text-anchor="middle">tarball incl. built</text>
+      <text class="ts" x="305" y="102" text-anchor="middle">webapp bundle</text>
+
+      <rect class="ours" x="430" y="40" width="190" height="80" rx="6"/>
+      <text class="tb" x="525" y="62" text-anchor="middle">Actions: container.yml</text>
+      <text class="ts" x="525" y="82" text-anchor="middle">on: release published</text>
+      <text class="ts" x="525" y="98" text-anchor="middle">buildx amd64 + arm64</text>
+      <text class="ts" x="525" y="113" text-anchor="middle">MCAPP_VERSION from tag</text>
+
+      <rect class="ours" x="655" y="40" width="175" height="80" rx="6"/>
+      <text class="tb" x="742" y="64" text-anchor="middle">GHCR</text>
+      <text class="tm" x="742" y="84" text-anchor="middle">ghcr.io/dk5en/</text>
+      <text class="tm" x="742" y="100" text-anchor="middle">mcapp</text>
+
+      <rect class="b" x="865" y="40" width="125" height="80" rx="6"/>
+      <text class="tb" x="927" y="66" text-anchor="middle">Your host</text>
+      <text class="tm" x="927" y="86" text-anchor="middle">compose pull</text>
+      <text class="tm" x="927" y="102" text-anchor="middle">up -d</text>
+
+      <rect class="b" x="215" y="170" width="300" height="56" rx="6"/>
+      <text class="tb" x="365" y="194" text-anchor="middle">Bare-metal Pis (types 1, 2)</text>
+      <text class="ts" x="365" y="212" text-anchor="middle">Update page or mcapp.sh, unchanged</text>
+
+      <line class="ln" x1="180" y1="80" x2="213" y2="80" marker-end="url(#a8)"/>
+      <line class="ln" x1="395" y1="80" x2="428" y2="80" marker-end="url(#a8)"/>
+      <text class="ts" x="398" y="72">event</text>
+      <line class="lna" x1="620" y1="80" x2="653" y2="80" marker-end="url(#a8a)"/>
+      <text class="ta" x="622" y="72">push</text>
+      <line class="ln" x1="830" y1="80" x2="863" y2="80" marker-end="url(#a8)"/>
+      <text class="ts" x="832" y="72">pull</text>
+      <line class="ln" x1="305" y1="120" x2="305" y2="168" marker-end="url(#a8)"/>
+      <text class="ts" x="312" y="150">download tarball</text>
+    </svg>
+    </div>
+    <figcaption>One release, two delivery paths. The workflow uses the repository's own
+    <code>GITHUB_TOKEN</code> with <code>packages: write</code>, so no personal token is needed. Open
+    point: Actions must be enabled on <code>DK5EN/McApp</code>.</figcaption>
+  </figure>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Release</th><th>Git tag</th><th>Image tags on GHCR</th><th>Who should use it</th></tr></thead>
+    <tbody>
+      <tr><td>Production</td><td><code>vX.Y.Z</code></td><td><code>:vX.Y.Z</code> · <code>:X.Y</code> · <code>:latest</code></td><td>everyone; pin <code>:vX.Y.Z</code> for full control</td></tr>
+      <tr><td>Dev pre-release</td><td><code>vX.Y.Z-dev.N</code></td><td><code>:vX.Y.Z-dev.N</code> · <code>:dev</code></td><td>testers; <code>:dev</code> moves with every pre-release</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <ul>
+    <li><b>Platforms:</b> <code>linux/arm64</code> (Pi 3/4/5 with 64-bit OS) and <code>linux/amd64</code> (NAS, PCs). 32-bit armv7 is an open question.</li>
+    <li><b>Size:</b> target 60 to 80 MB compressed pull, roughly 90 to 110 MB on disk (estimate).</li>
+    <li><b>Base:</b> <code>python:3.13-alpine</code>, multi-stage with uv; every dependency has a musl wheel or is pure Python once timezonefinder is left out.</li>
+    <li><b>Version shown in the app</b> comes from <code>MCAPP_VERSION</code>, set from the tag; without it a dev image would claim the plain release number.</li>
+  </ul>
+</section>
+
+<section id="data">
+  <header>
+    <div class="sec-num">09 · B12 · Persistence</div>
+    <h2>Everything worth keeping lives in one volume</h2>
+  </header>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>File in /var/lib/mcapp</th><th>Content</th><th>Lost without the volume</th></tr></thead>
+    <tbody>
+      <tr><td><code>messages.db</code> + <code>-wal</code>, <code>-shm</code></td><td>all messages, positions, ACKs, settings</td><td>the whole history</td></tr>
+      <tr><td><code>runtime.json</code></td><td>learned node IP, callsign, position</td><td>McApp forgets where the node is</td></tr>
+      <tr><td><code>secret.key</code></td><td>key for stored passwords</td><td>QRZ, Node Admin and feed passwords</td></tr>
+      <tr><td><code>vapid.json</code></td><td>Web Push keypair</td><td>every push subscription</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="note"><b>Local disk only.</b> SQLite in WAL mode needs shared memory and real file locks.
+  A database volume on NFS or SMB, the usual NAS reflex, corrupts or loses writes. Mount the whole
+  directory, never only <code>messages.db</code>. Backups run online through Python's
+  <code>sqlite3</code> module inside the container; no stop needed.</div>
+  <p><b>Moving from a Pi:</b> stop McApp, copy <code>messages.db</code>, <code>runtime.json</code> and
+  <code>vapid.json</code> into the volume. Push subscriptions survive. Stored passwords do not: the
+  Pi's key is bound to its board serial, so QRZ, Node Admin and feed passwords are entered once more.</p>
+</section>
+
+<section id="ble">
+  <header>
+    <div class="sec-num">10 · B13 · BLE service and discovery</div>
+    <h2>The radio link as a small service you can place anywhere</h2>
+    <p>The Bluetooth adapter has to be near the node, while McApp can sit on a NAS in the basement. The
+    BLE service bridges that gap: it runs natively on whatever box is close to the node, announces
+    itself in the LAN, and McApp picks it up in Settings.</p>
+  </header>
+  <figure>
+    <div class="figwrap">
+    <svg viewBox="0 0 960 300" role="img" aria-label="Discovery on one LAN segment: two BLE service hosts announce _mcapp-ble._tcp through avahi, McApp announces _mcapp._tcp and browses for BLE services when Settings opens; after the operator picks one and enters its key, McApp connects over HTTP and SSE; a second McApp trying to use the same BLE service gets 423 Locked.">
+      <defs>
+        <marker id="a10" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="a10a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="aha" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="a10d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ahd" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <rect class="ours" x="40" y="20" width="240" height="76" rx="6"/>
+      <text class="tb" x="160" y="44" text-anchor="middle">McApp (bare metal or container)</text>
+      <text class="ts" x="160" y="62" text-anchor="middle">announces _mcapp._tcp</text>
+      <text class="ts" x="160" y="78" text-anchor="middle">browses 15 s when Settings opens</text>
+
+      <rect class="b" x="660" y="20" width="240" height="76" rx="6"/>
+      <text class="tb" x="780" y="44" text-anchor="middle">second McApp</text>
+      <text class="ts" x="780" y="62" text-anchor="middle">same BLE service already owned</text>
+      <text class="tbad" x="780" y="80" text-anchor="middle">gets 423 Locked</text>
+
+      <line class="ln" x1="20" y1="150" x2="940" y2="150"/>
+      <text class="th" x="940" y="142" text-anchor="end">LAN · one multicast segment · mDNS on 5353/udp</text>
+
+      <rect class="rfbox" x="40" y="200" width="240" height="76" rx="6"/>
+      <text class="tb" x="160" y="224" text-anchor="middle">mcapp-ble on shack-pi</text>
+      <text class="ts" x="160" y="242" text-anchor="middle">announces _mcapp-ble._tcp</text>
+      <text class="tm" x="160" y="258" text-anchor="middle">auth=required node=DK5EN-98</text>
+
+      <rect class="rfbox" x="350" y="200" width="240" height="76" rx="6"/>
+      <text class="tb" x="470" y="224" text-anchor="middle">mcapp-ble on laptop</text>
+      <text class="ts" x="470" y="242" text-anchor="middle">announces _mcapp-ble._tcp</text>
+      <text class="tm" x="470" y="258" text-anchor="middle">auth=required, idle</text>
+
+      <rect class="b" x="660" y="200" width="240" height="76" rx="6"/>
+      <text class="tb" x="780" y="224" text-anchor="middle">MeshCom node</text>
+      <text class="ts" x="780" y="242" text-anchor="middle">CALL.local only while its web</text>
+      <text class="ts" x="780" y="258" text-anchor="middle">server runs; no service record</text>
+
+      <line class="lnd" x1="160" y1="96" x2="160" y2="148" marker-end="url(#a10d)"/>
+      <line class="lnd" x1="160" y1="200" x2="160" y2="152" marker-end="url(#a10d)"/>
+      <line class="lnd" x1="470" y1="200" x2="470" y2="152" marker-end="url(#a10d)"/>
+      <text class="ts" x="168" y="128">browse</text>
+      <text class="ts" x="168" y="182">announce</text>
+      <text class="ts" x="478" y="182">announce</text>
+      <line class="lna" x1="240" y1="96" x2="240" y2="198" marker-end="url(#a10a)"/>
+      <text class="ta" x="248" y="118">paired: HTTP + SSE</text>
+      <text class="ta" x="248" y="132">with X-API-Key</text>
+      <line class="ln" x1="660" y1="58" x2="284" y2="226" marker-end="url(#a10)" style="stroke:var(--bad)"/>
+    </svg>
+    </div>
+    <figcaption>Discovery is a convenience over a working manual path. Typing the URL and key by hand
+    always works, including across VLANs where multicast does not pass.</figcaption>
+  </figure>
+  <div class="cards">
+    <article class="card">
+      <h3>Pairing in Settings</h3>
+      <ol>
+        <li>Open Settings, McApp scans the LAN for 15 seconds.</li>
+        <li>Pick a BLE service from the list, or type a URL.</li>
+        <li>Paste the key the installer printed on that box.</li>
+        <li>McApp checks <code>/health</code> (version, API level) and claims the link.</li>
+      </ol>
+    </article>
+    <article class="card">
+      <h3>Security changes</h3>
+      <ul>
+        <li>The BLE service refuses to listen on the LAN without a real API key.</li>
+        <li>Changing the BLE target in McApp is LAN-only and forces the key to be entered again.</li>
+        <li>The key is never shown back by the API.</li>
+        <li>One owner at a time; taking over is an explicit button.</li>
+      </ul>
+    </article>
+    <article class="card">
+      <h3>Containers and discovery</h3>
+      <ul>
+        <li>Multicast does not cross Docker's default bridge network.</li>
+        <li>Options: host network, macvlan, or announce through the host's avahi.</li>
+        <li>Otherwise: manual URL, which is enough for a fixed setup.</li>
+      </ul>
+    </article>
+  </div>
+</section>
+
+<section id="roadmap">
+  <header>
+    <div class="sec-num">11 · Roadmap</div>
+    <h2>Order of work</h2>
+    <p>Each initiative runs in waves with separate file sets. Amber boxes are gates: work that must
+    land before the next step may ship.</p>
+  </header>
+  <div class="lanes">
+    <div class="lane">
+      <div class="lane-label">Desktop gate<span>B11 · bootstrap</span></div>
+      <div class="steps">
+        <div class="step"><b>W1</b>Detection: RAM, display manager, TTY, profile marker</div>
+        <div class="step"><b>W2</b>Gate the Zero tuning in <code>setup_system</code></div>
+        <div class="step"><b>W3</b>Revert path for tuned boxes, <code>--headless</code></div>
+        <div class="step gate"><b>W4</b>Tests; field check on a Pi 4 desktop and mcapp.local</div>
+      </div>
+    </div>
+    <div class="lane">
+      <div class="lane-label">Container<span>B12 · app + CI</span></div>
+      <div class="steps">
+        <div class="step"><b>W0</b>Hand-built spike; UDP source IP per platform</div>
+        <div class="step gate"><b>W1</b>Container mode in the backend (bind, port, converge off, key, flags)</div>
+        <div class="step"><b>W2</b>uvicorn serves the SPA</div>
+        <div class="step"><b>W3</b>Webapp hides Update in containers</div>
+        <div class="step"><b>W4</b>Dockerfile, compose example, GHCR workflow</div>
+        <div class="step"><b>W5</b>Docker secret for the key</div>
+        <div class="step"><b>W6</b>Compose variant with the BLE service</div>
+      </div>
+    </div>
+    <div class="lane">
+      <div class="lane-label">BLE + discovery<span>B13 · service + GUI</span></div>
+      <div class="steps">
+        <div class="step"><b>W1</b>Harden the BLE service: key required off-loopback, owner claim</div>
+        <div class="step"><b>W2</b><code>mcapp-ble.sh</code> installer and unit</div>
+        <div class="step"><b>W3</b>McApp client: switchable target, 423 handling, LAN guard</div>
+        <div class="step"><b>W4</b>mDNS announce and browse</div>
+        <div class="step"><b>W5</b>Settings panel in the webapp</div>
+        <div class="step"><b>W6</b>Later: pairing code, .deb</div>
+      </div>
+    </div>
+  </div>
+  <ul>
+    <li><b>B12 wave 1 lands before any image is published.</b> Without it the update watchdog would
+    write update triggers into the volume and try to start a runner that does not exist.</li>
+    <li><b>B12 waves 1 and 3 ship together</b>, in one backend and webapp release.</li>
+    <li><b>B13 waves 1 and 2 are useful on their own</b> (a BLE box with a manual URL) and come before
+    B12 wave 6.</li>
+    <li><b>B11 is independent</b> of the other two and can start any time.</li>
+  </ul>
+</section>
+
+<section id="debated">
+  <header>
+    <div class="sec-num">12 · Debated</div>
+    <h2>Ansible and nginx: considered, not adopted</h2>
+  </header>
+  <div class="cards">
+    <article class="card">
+      <h3>Ansible instead of mcapp.sh</h3>
+      <span class="chip">decision: keep bash</span>
+      <ul>
+        <li>The install has no controller: one <code>curl | sudo bash</code> on a fresh Pi.</li>
+        <li>Updates run the installer on the box itself, so Ansible would run locally with its full footprint (60-100 MB per run, estimate) on a 415 MB Zero.</li>
+        <li>The hard parts (WiFi safety, detached apt, ramlog, config.txt rules) would become shell tasks in YAML anyway.</li>
+        <li>Instead: shellcheck in CI and tests for the untested libs.</li>
+      </ul>
+    </article>
+    <article class="card">
+      <h3>nginx instead of uvicorn</h3>
+      <span class="chip">decision: no</span>
+      <ul>
+        <li>uvicorn runs the Python app; nginx cannot replace it, only sit in front.</li>
+        <li>In the container the operator's proxy already does TLS, compression and login.</li>
+        <li>On bare metal nginx would lose Caddy's automatic certificates.</li>
+      </ul>
+    </article>
+    <article class="card">
+      <h3>B14: drop lighttpd</h3>
+      <span class="chip ac">new backlog item</span>
+      <ul>
+        <li>lighttpd only serves static files behind Caddy.</li>
+        <li>Caddy already has <code>file_server</code>; serving the SPA there removes a process from the Zero.</li>
+        <li>Measure the memory win first; needs an epoch bump.</li>
+      </ul>
+    </article>
+  </div>
+</section>
+
+<section id="questions">
+  <header>
+    <div class="sec-num">13 · Open questions</div>
+    <h2>Decisions still needed</h2>
+  </header>
+  <ol class="qlist">
+    <li>Exact memory thresholds in kB: refuse under 800000, confirm under 1700000? Needs real <code>/proc/meminfo</code> values from 1, 2 and 4 GB Pis. <span class="tag">B11</span></li>
+    <li>Is a display manager enabled on mcapp.local, and what do a Pi 4 desktop and an Armbian / Orange Pi image report? <span class="tag">B11</span></li>
+    <li>Which platforms get a "UDP supported" label: Synology, QNAP, Unraid, rootless Podman? Is 32-bit armv7 a target? <span class="tag">B12</span></li>
+    <li>Is GitHub Actions enabled on <code>DK5EN/McApp</code>? An earlier note says CI was switched off manually. <span class="tag">B12</span></li>
+    <li>Does the webapp's GPS card cope with a 501 from <code>/api/timezone</code>, or should it hide the hint? <span class="tag">B12</span></li>
+    <li>Does an installed iPhone PWA survive Basic auth in front of McApp, or must the docs require an SSO cookie login? <span class="tag">B12</span></li>
+    <li>Should the bootstrap install <code>avahi-daemon</code> and <code>libnss-mdns</code>? That needs a system-epoch bump. <span class="tag">B13</span></li>
+    <li>Can <code>uv tool install</code> install the BLE service from a git subdirectory once its package is renamed? <span class="tag">B13</span></li>
+  </ol>
+</section>
+
+<footer>
+  <div>Source documents in the McApp repository, <code>doc/</code>:</div>
+  <div class="mono">2026-10-31_0830-desktop-image-gate-concept.md · 2026-10-31_0830-container-deployment-concept.md · 2026-10-31_0830-ble-service-and-lan-discovery-concept.md · backlog.md (B11 to B14) · 2026-10-31_1100-ansible-and-web-server-evaluation.md</div>
+  <div>All three papers were checked against the code on 2026-10-31. Nothing is implemented yet.</div>
+</footer>
+
+</main>
+</body>
+</html>
