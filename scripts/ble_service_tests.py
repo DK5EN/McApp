@@ -3624,6 +3624,73 @@ async def _test_ensure_connected_recovers_stale_bond_end_to_end(record: Any) -> 
         await adapter2.disconnect()
 
 
+async def _test_scan_reports_names_resolved_during_scan(record: Any) -> None:
+    """REGRESSION (CT4b, 2026-10-31): the BlueZ scan only reported a device
+    whose Name was already present when GetManagedObjects ran before the scan,
+    or in the InterfacesAdded signal. On rpizero DK5EN-1 (-43 dBm) was missed
+    by every service scan while bluetoothctl saw it at once: a stale nameless
+    object never fires InterfacesAdded again, and a Name that arrives later
+    (scan response, PropertiesChanged) was never read. The scan must re-read
+    the managed objects after discovery and report what got named meanwhile.
+    """
+    adapter = BLEAdapter()
+    path_a = adapter._mac_to_dbus_path("48:CA:43:3A:89:69")
+    path_b = adapter._mac_to_dbus_path("08:F9:E0:D0:41:BA")
+    path_c = adapter._mac_to_dbus_path("B0:81:84:9C:5B:25")
+
+    def dev(name: str, addr: str, rssi: int | None = None) -> dict[str, dict[str, Any]]:
+        props: dict[str, Any] = {
+            "Name": _FakeVariant(name),
+            "Address": _FakeVariant(addr),
+            "Paired": _FakeVariant(False),
+        }
+        if rssi is not None:
+            props["RSSI"] = _FakeVariant(rssi)
+        return {DEVICE_INTERFACE: props}
+
+    obj_mgr = _FakeIface()
+    obj_mgr.returns["call_get_managed_objects"] = {
+        path_a: dev("", "48:CA:43:3A:89:69"),  # stale object, no name yet
+        path_c: dev("MC-5b24-DK5EN-99", "B0:81:84:9C:5B:25"),  # cached, known
+    }
+
+    def _named_during_scan(_n: int) -> None:
+        obj_mgr.returns["call_get_managed_objects"] = {
+            path_a: dev("MC-8968-DK5EN-1", "48:CA:43:3A:89:69", -43),
+            path_b: dev("MC-41b8-DK5EN-92", "08:F9:E0:D0:41:BA", -70),
+            path_c: dev("MC-5b24-DK5EN-99", "B0:81:84:9C:5B:25"),
+        }
+
+    adapter_iface = _FakeIface()
+    adapter_iface.raises["call_start_discovery"] = _named_during_scan
+    adapter.bus = cast(
+        "Any",
+        _FakeBus(
+            {
+                "/": {OBJECT_MANAGER_INTERFACE: obj_mgr},
+                ADAPTER_PATH: {ADAPTER_INTERFACE: adapter_iface},
+            }
+        ),
+    )
+    devices = await adapter.scan(timeout=0.01)
+    by_name = {d.name: d for d in devices}
+    record(
+        "scan: a device named during the scan is reported (stale nameless object)",
+        "MC-8968-DK5EN-1" in by_name
+        and by_name["MC-8968-DK5EN-1"].rssi == -43
+        and not by_name["MC-8968-DK5EN-1"].known,
+    )
+    record(
+        "scan: a device whose Name arrived without InterfacesAdded is reported",
+        "MC-41b8-DK5EN-92" in by_name and by_name["MC-41b8-DK5EN-92"].rssi == -70,
+    )
+    record(
+        "scan: a cached known device is listed once, still known",
+        sum(1 for d in devices if d.name == "MC-5b24-DK5EN-99") == 1
+        and by_name["MC-5b24-DK5EN-99"].known,
+    )
+
+
 async def _test_connect_with_scan_retry(record: Any) -> None:
     """`_connect_with_scan_retry`: device-not-found triggers exactly one
     scan-then-retry; any other failure does not scan at all.
@@ -6948,6 +7015,7 @@ async def run_ble_service_tests() -> bool:
         _test_set_callsign_golden_bytes,
         _test_set_callsign_length_validation,
         _test_connect_with_scan_retry,
+        _test_scan_reports_names_resolved_during_scan,
         _test_ensure_connected_already_connected_is_noop,
         _test_ensure_connected_happy_path_sets_trusted,
         _test_ensure_connected_gatt_security_pairs_then_resumes,

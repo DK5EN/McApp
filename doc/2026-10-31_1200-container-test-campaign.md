@@ -121,6 +121,7 @@ only in the WiFi boot line, so `node.py info` reports it only after a reset.
 | CT3b | done | macOS BLE backend W1-W6 committed (99de2d0, 01a9416, 99921d3, 4baf50b, f468b7f); two advisor rounds; §7.2 shared contract suite deferred |
 | CT5 | done | P1, P3, P4 pass (76a637f) |
 | CT4a | done | macOS BLE service end to end against DK5EN-1 pass; two findings fixed with regression tests |
+| CT4b | done | Linux `ble_service` (bluez) on rpizero against DK5EN-1 pass; scan gap found and fixed |
 | U4 | deferred | dropped on the Mac (amd64 emulation inside an emulated VM does not start containers); retest on real x86 or a NAS |
 
 **CT4a results (2026-10-31), `ble_service/scripts/run-macos.sh` on 127.0.0.1:8091, DK5EN-1 (fw 4.40a):**
@@ -149,6 +150,25 @@ only in the WiFi boot line, so `node.py info` reports it only after a reset.
   carry `MC-8968-DK5EN-1`.
 - Not run: Mac sleep/wake, Bluetooth off/on, PIN cases (CoreBluetooth pairs through a system
   dialog; `pair`/`unpair` report unsupported by design).
+
+**CT4b results (2026-10-31), `ble_service` (bluez 5.66) on rpizero, 127.0.0.1:8095:**
+
+- **Setup.** rpizero had `bluetooth.service` masked and `hci0` down; unmasked, started and powered on
+  for the test (undo in CT6). uv 0.13.6 and the service live in `~/ct-ble/`. Port 8081 is lighttpd's
+  there, and sshd has `AllowTcpForwarding no`, so calls ran as curl on rpizero over ssh instead of a
+  tunnel. mc-chat untouched.
+- **Pass: health, connect, registers, DM, reboot.** `backend: bluez`, `address_kind: mac`. Connect to
+  `48:CA:43:3A:89:69` in ~9 s with the name resolved, the same 14 registers as on the Mac. DM to
+  DK5EN-92 on air: echo `{908`, two binary `0x41` peer ACKs and `:ack908` on the stream. Node reboot:
+  auto-reconnect attempt 1/4 succeeds ~18 s later.
+- **Fixed: the scan missed named devices.** The service reported only devices named in the pre-scan
+  `GetManagedObjects` or in an `InterfacesAdded` signal. A stale nameless object never fires that
+  signal again, and a name from the scan response arrives later by `PropertiesChanged`, which was
+  never read: DK5EN-1 at -43 dBm was missed by every service scan while `bluetoothctl` saw it at once.
+  The scan now re-reads the managed objects after discovery. Live after the fix: 8 of 8 scans match
+  BlueZ's own device list. This affects production (mcapp.local's device picker), not just the test.
+- **Remaining, radio level:** with the cache cleared DK5EN-1 is absent from BlueZ itself in about half
+  of the 8 s scans on the Pi Zero 2W (shared WiFi/BT chip); not a service defect.
 
 **CT5 results (2026-10-31), `scripts/container-tests/persistence/persist.sh`, ~45 s:**
 

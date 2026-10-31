@@ -430,6 +430,33 @@ class MeshComPairingAgent(ServiceInterface):
         logger.info("Request cancelled")
 
 
+def _named_devices(
+    objects: Mapping[str, Mapping[str, Mapping[str, Variant]]],
+    prefix: str,
+    skip: set[str],
+    *,
+    known: bool,
+) -> dict[str, BLEDevice]:
+    """BlueZ Device1 objects from a GetManagedObjects result whose Name starts
+    with `prefix`, keyed by D-Bus path, minus the paths in `skip`."""
+    devices: dict[str, BLEDevice] = {}
+    for obj_path, interfaces in objects.items():
+        if obj_path in skip or DEVICE_INTERFACE not in interfaces:
+            continue
+        props = interfaces[DEVICE_INTERFACE]
+        name = props.get("Name", Variant("s", "")).value
+        if name.startswith(prefix):
+            devices[obj_path] = BLEDevice(
+                name=name,
+                address=props.get("Address", Variant("s", "")).value,
+                rssi=props.get("RSSI", Variant("n", 0)).value,
+                paired=props.get("Paired", Variant("b", False)).value,
+                known=known,
+                path=obj_path,
+            )
+    return devices
+
+
 class BLEAdapter(BleSessionBase):
     """
     Async BLE adapter using BlueZ D-Bus interface.
@@ -659,7 +686,6 @@ class BLEAdapter(BleSessionBase):
         bus = await self._ensure_bus()
 
         found_devices: dict[str, BLEDevice] = {}
-        known_devices: list[BLEDevice] = []
 
         # Get adapter
         path = ADAPTER_PATH
@@ -675,24 +701,7 @@ class BLEAdapter(BleSessionBase):
 
         # Check known/paired devices first
         objects = await obj_mgr_iface.call_get_managed_objects()
-        for obj_path, interfaces in objects.items():
-            if DEVICE_INTERFACE in interfaces:
-                props = interfaces[DEVICE_INTERFACE]
-                name = props.get("Name", Variant("s", "")).value
-                addr = props.get("Address", Variant("s", "")).value
-                paired = props.get("Paired", Variant("b", False)).value
-                rssi = props.get("RSSI", Variant("n", 0)).value
-
-                if name.startswith(prefix):
-                    device = BLEDevice(
-                        name=name,
-                        address=addr,
-                        rssi=rssi,
-                        paired=paired,
-                        known=True,
-                        path=obj_path,
-                    )
-                    known_devices.append(device)
+        known_devices = list(_named_devices(objects, prefix, set(), known=True).values())
 
         # Setup handler for new devices during scan
         async def on_interfaces_added(path: str, interfaces: dict[str, dict[str, Variant]]) -> None:
@@ -723,6 +732,20 @@ class BLEAdapter(BleSessionBase):
             await asyncio.sleep(timeout)
         finally:
             await adapter.call_stop_discovery()
+
+        # InterfacesAdded only fires for a NEW object, and only with the
+        # properties known at that moment. A stale nameless object (from an
+        # earlier scan) or a Name that arrives later in the scan response was
+        # never reported: rpizero missed DK5EN-1 at -43 dBm on every scan
+        # while bluetoothctl saw it (CT4b, 2026-10-31). Re-read the objects
+        # and report what got its name during this scan.
+        # A failed re-read keeps what the scan already found.
+        seen_paths = {d.path for d in known_devices} | set(found_devices)
+        try:
+            objects = await obj_mgr_iface.call_get_managed_objects()
+            found_devices.update(_named_devices(objects, prefix, seen_paths, known=False))
+        except Exception as e:
+            logger.warning("Post-scan device re-read failed: %s", e)
 
         # Combine results
         all_devices = known_devices + list(found_devices.values())
