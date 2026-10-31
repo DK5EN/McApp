@@ -53,7 +53,7 @@ the status table below.
 | CT1b | Node control                        | implementer: `scripts/container-tests/node/` (serial + net-console helper: info, extudp, send)       |
 | CT1c | Proxy + login stack                 | implementer: `scripts/container-tests/proxy/` (compose with Traefik labels, Authelia, Caddy snippet) |
 | CT1d | macOS BLE service design            | implementer (analysis): design section in this document, no code                                     |
-| CT2  | done (U4 blocked)                   | U1-U3, U5 run and repeated after the macOS Local Network fix; U4 needs Rosetta                       |
+| CT2  | UDP matrix (hardware, serialized)   | orchestrator only (exclusive: DK5EN-1, its serial port, UDP 1799 on the Mac)                         |
 | CT3a | Web, TLS, SSE, Basic auth, Authelia | orchestrator + operator (iPhone checklist)                                                           |
 | CT3b | macOS BLE service implementation    | implementer: location decided in CT1d                                                                |
 | CT4  | BLE routes end to end               | orchestrator (exclusive: DK5EN-1 BLE link)                                                           |
@@ -73,24 +73,24 @@ change in the B12 paper, so the shim shrinks to nothing as wave 1 lands.
 
 ## Test matrix (CT2-CT5)
 
-| ID  | Test                                                                        | Expected                                                                                                                                             |
-| --- | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| U1  | Node → Mac:1799 → container on OrbStack Docker (bridge, `-p 1799:1799/udp`) | learned `udp_target` = `192.168.68.71` (OrbStack's LAN forwarding may rewrite it: that is the question)                                              |
-| U2  | OrbStack Docker on the Mac, `network_mode: host`                            | First run: nothing arrived (missing macOS Local Network permission). Repeat: frames arrive from `127.0.0.1`; learning refused (loopback), fails safe |
-| U3  | Node → Docker inside `deb-arm64` (needs a Mac → VM UDP forward)             | documents what a Pi/NAS with rootful Docker sees                                                                                                     |
-| U4  | same on `deb-amd64`                                                         | same as U3, amd64 image                                                                                                                              |
-| U5  | McApp → node (outbound DM over Extern-UDP, transmits on air)                | node prints and keys the message                                                                                                                     |
-| W1  | Browser → Caddy TLS → Traefik → McApp, SPA loads                            | 200, SPA served by uvicorn                                                                                                                           |
-| W2  | SSE through Caddy and Traefik                                               | events arrive unbuffered, heartbeat every interval                                                                                                   |
-| W3  | Traefik `basicauth` in front                                                | 401 without, 200 with; SSE works in a desktop browser                                                                                                |
-| W4  | Authelia same-origin cookie login                                           | redirect to login, cookie, SSE and API work after login                                                                                              |
-| W5  | iPhone PWA checklist (operator)                                             | per the B12 paper's checklist                                                                                                                        |
-| B1  | Container → `ble_service` on Linux (route a)                                | connect, register reads, send, notifications via SSE                                                                                                 |
-| B2  | Container → macOS BLE service (route b) on the Mac                          | same as B1                                                                                                                                           |
-| P1  | Volume persists DB, `runtime.json`, `vapid.json` across recreate            | no data loss                                                                                                                                         |
-| P2  | Image tag swap (older → newer)                                              | migrations run, data kept                                                                                                                            |
-| P3  | Bare-metal DB copy (backup of 2026-10-20) into the volume                   | starts, history visible, secrets ask for re-entry                                                                                                    |
-| P4  | Log rotation per compose settings                                           | json-file capped at 10 MB x 3                                                                                                                        |
+| ID  | Test                                                                        | Expected                                                                                                |
+| --- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| U1  | Node → Mac:1799 → container on OrbStack Docker (bridge, `-p 1799:1799/udp`) | learned `udp_target` = `192.168.68.71` (OrbStack's LAN forwarding may rewrite it: that is the question) |
+| U2  | same with `network_mode: host` on OrbStack                                  | real source address                                                                                     |
+| U3  | Node → Docker inside `deb-arm64` (needs a Mac → VM UDP forward)             | documents what a Pi/NAS with rootful Docker sees                                                        |
+| U4  | same on `deb-amd64`                                                         | same as U3, amd64 image                                                                                 |
+| U5  | McApp → node (outbound DM over Extern-UDP, transmits on air)                | node prints and keys the message                                                                        |
+| W1  | Browser → Caddy TLS → Traefik → McApp, SPA loads                            | 200, SPA served by uvicorn                                                                              |
+| W2  | SSE through Caddy and Traefik                                               | events arrive unbuffered, heartbeat every interval                                                      |
+| W3  | Traefik `basicauth` in front                                                | 401 without, 200 with; SSE works in a desktop browser                                                   |
+| W4  | Authelia same-origin cookie login                                           | redirect to login, cookie, SSE and API work after login                                                 |
+| W5  | iPhone PWA checklist (operator)                                             | per the B12 paper's checklist                                                                           |
+| B1  | Container → `ble_service` on Linux (route a)                                | connect, register reads, send, notifications via SSE                                                    |
+| B2  | Container → macOS BLE service (route b) on the Mac                          | same as B1                                                                                              |
+| P1  | Volume persists DB, `runtime.json`, `vapid.json` across recreate            | no data loss                                                                                            |
+| P2  | Image tag swap (older → newer)                                              | migrations run, data kept                                                                               |
+| P3  | Bare-metal DB copy (backup of 2026-10-20) into the volume                   | starts, history visible, secrets ask for re-entry                                                       |
+| P4  | Log rotation per compose settings                                           | json-file capped at 10 MB x 3                                                                           |
 
 ## Status
 
