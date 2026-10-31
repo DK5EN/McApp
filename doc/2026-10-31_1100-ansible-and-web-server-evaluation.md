@@ -17,7 +17,7 @@
   into maintainer scripts. `mcapp-ble` is small and self-contained, a natural first `.deb`.
 - **The real simplification is on bare metal: drop lighttpd.** Caddy already fronts everything and
   already has `file_server`. Serving the SPA from Caddy removes one process from the Zero 2W. That
-  one is worth a backlog item (B14).
+  one is worth a backlog item (B15).
 
 ## Question 1: Ansible instead of the shell bootstrap
 
@@ -118,7 +118,7 @@ for traffic that is one operator with a few devices.
   (Caddyfile.mcapp:71-76). A `try_files {path} /webapp/index.html` plus `file_server` for the
   webapp removes lighttpd entirely: one process, one config file and one package fewer on the Zero.
 
-**Verdict: no nginx; drop lighttpd instead** (proposed B14). Points to check before doing it:
+**Verdict: no nginx; drop lighttpd instead** (proposed B15). Points to check before doing it:
 
 - the SPA rewrite and cache headers lighttpd provides today, reproduced in Caddy;
 - the update runner's webapp copy into `/var/www/html/webapp` keeps working with a new root;
