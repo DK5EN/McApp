@@ -1,6 +1,6 @@
-# Ansible instead of mcapp.sh, nginx instead of uvicorn - evaluation
+# Ansible, nginx or a Debian package - evaluation
 
-**Status:** Ideation, backlog. 2026-10-31. Two questions up for debate; no code changed.
+**Status:** Ideation, backlog. 2026-10-31. Three questions up for debate; no code changed.
 
 ## BLUF
 
@@ -11,6 +11,10 @@
 - **nginx instead of uvicorn: not possible as a swap, and not worth it as an addition.** uvicorn
   runs the Python app; nginx cannot. nginx could only sit in front of uvicorn, which the container
   already gets from the operator's reverse proxy.
+- **Debian package: yes for the BLE service, not yet for McApp itself.** `apt upgrade` delivering
+  McApp is attractive, but it means running a signed APT repository per distro and architecture,
+  giving up the slot system with its instant Activate rollback, and moving risky system tuning
+  into maintainer scripts. `mcapp-ble` is small and self-contained, a natural first `.deb`.
 - **The real simplification is on bare metal: drop lighttpd.** Caddy already fronts everything and
   already has `file_server`. Serving the SPA from Caddy removes one process from the Zero 2W. That
   one is worth a backlog item (B14).
@@ -121,9 +125,73 @@ for traffic that is one operator with a few devices.
 - a `SYSTEM_EPOCH` bump, because packages and units change on existing boxes;
 - the memory win measured on mcapp.local (PSS of lighttpd), as in the B4 campaign.
 
+## Question 3: a Debian package, updated by apt
+
+The idea: publish McApp as `mcapp_X.Y.Z_arm64.deb` in our own APT repository. A box adds the
+repository once; from then on `apt-get update && apt-get upgrade` installs new McApp releases like
+any other package.
+
+### What it would give us
+
+- **The standard Linux way.** Install, upgrade, remove and purge with `apt`; `dpkg -L mcapp` lists
+  every file; admins know it without reading our docs.
+- **Declared dependencies.** `Depends: caddy, lighttpd, bluez, python3` replaces the package list in
+  `packages.sh`; apt resolves and installs them.
+- **Signed delivery.** The repository's GPG key replaces trusting a `curl | bash` from GitHub.
+- **Optional automatic updates** through the `apt-daily-upgrade` timer that already runs on every
+  box.
+
+### What it costs
+
+- **An APT repository to run.** A signed repository (reprepro or aptly on GitHub Pages, or a hosted
+  service such as Cloudsmith) with a GPG key we must guard, one suite per channel (`stable`,
+  `dev`) and per Debian release (bookworm, trixie), built for arm64, armhf and amd64.
+- **One build per Debian release and architecture.** McApp runs from a uv venv with native wheels,
+  and the Python version differs per release (3.11 on bookworm, 3.13 on trixie,
+  `detect.sh:get_python_version`). Bundling the venv under `/opt/mcapp` (the dh-virtualenv
+  pattern) works but multiplies the build matrix; every dev pre-release is 4-6 packages.
+- **The slot system does not survive.** dpkg knows exactly one installed version. Today three slots
+  sit side by side and the Update page's Activate switches between them in seconds, without
+  touching the database. With apt, going back means `apt install mcapp=<old>` from the repository,
+  slower and only as long as the old version is still published. Either the slots go, or the
+  package installs only a bootstrap and the slots stay, which brings back most of today's
+  machinery inside a package.
+- **System tuning in maintainer scripts is the risky part.** `config.txt`, `cmdline.txt`, fstab,
+  the wpasupplicant pin, the firewall and the journal bind are edits to files other packages
+  own. Debian policy discourages that in `postinst`, and a failing `postinst` leaves dpkg
+  half-configured ("dpkg was interrupted"), on the very path that once took a box off WiFi. The
+  safe split is: the package installs the app, units and dependencies; `mcapp.sh --converge`
+  stays the one place that tunes the system, called once and again on an epoch change.
+- **Update timing changes hands.** Today the operator presses Update and picks dev or production.
+  With apt, any `apt upgrade` the operator runs for unrelated reasons also upgrades McApp,
+  including a schema migration. Automatic updates stay off by default: the McApp unattended
+  config allows only Debian security origins (`system.sh`, `configure_unattended_upgrades`), so a
+  third-party repository is not upgraded unless we add it there.
+- **Settings stay in the GUI.** No debconf questions; the first-run setup remains the web page
+  (operator rule: no hand-edited configuration).
+- **The Zero still has to cope.** A venv package of tens of MB per release, unpacked by dpkg next to
+  `apt-get upgrade`, on a box that already needs temporary swap for upgrades.
+
+### Recommendation
+
+1. **Start with `mcapp-ble` as a `.deb`.** It is small, has no slots, no migrations and no system
+   tuning beyond a unit and a group, and it targets "any Linux box with a BLE adapter", which is
+   exactly the audience that expects `apt install`. Build it with nfpm in GitHub Actions; B13
+   already lists the `.deb` as its last wave. This also proves the repository, signing and
+   per-architecture build pipeline on something low-risk.
+2. **Decide on a McApp `.deb` after B12 ships.** The container already serves the admins who want
+   standard tooling. If demand remains, the package installs app, venv, units and dependencies and
+   calls `mcapp.sh --converge` for the system part; the slot system is retired on packaged boxes.
+3. **Keep `mcapp.sh` as the installer for the Zero** until then: one command, slots, rollback, and
+   the network-safety logic that is already tested.
+
 ## Open questions
 
 - Is the expected lighttpd saving on the Zero 2W large enough to justify an epoch bump? Measure
   first.
 - Do any operators run more than a couple of McApp boxes, which would make a fleet playbook
   useful?
+- Is instant slot rollback (Activate) important enough to keep, or would apt-based downgrades be
+  acceptable on packaged boxes?
+- Where should a signed APT repository live (GitHub Pages with reprepro, or a hosted service), and
+  who holds the signing key?

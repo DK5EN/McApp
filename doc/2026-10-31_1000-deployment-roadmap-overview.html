@@ -1050,7 +1050,7 @@ volumes:
 <section id="debated">
   <header>
     <div class="sec-num">12 · Debated</div>
-    <h2>Ansible and nginx: considered, not adopted</h2>
+    <h2>Ansible, nginx, a Debian package: considered</h2>
   </header>
   <div class="cards">
     <article class="card">
@@ -1070,6 +1070,16 @@ volumes:
         <li>uvicorn runs the Python app; nginx cannot replace it, only sit in front.</li>
         <li>In the container the operator's proxy already does TLS, compression and login.</li>
         <li>On bare metal nginx would lose Caddy's automatic certificates.</li>
+      </ul>
+    </article>
+    <article class="card">
+      <h3>Debian package via apt</h3>
+      <span class="chip">decision: BLE first</span>
+      <ul>
+        <li>Needs a signed APT repository per Debian release and architecture.</li>
+        <li>dpkg knows one version: the slot system and instant Activate rollback go away.</li>
+        <li>System tuning stays in <code>mcapp.sh --converge</code>, never in maintainer scripts.</li>
+        <li>First <code>.deb</code>: <code>mcapp-ble</code>. Decide on McApp after the container ships.</li>
       </ul>
     </article>
     <article class="card">
