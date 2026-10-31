@@ -2,7 +2,7 @@
 
 **Read this first after a context clear.** It carries everything needed to finish the campaign.
 Detailed results live in `doc/2026-10-31_1200-container-test-campaign.md` (plan, test matrix,
-results per wave). State as of 2026-10-31 ~13:05, branch `development`; CT4a, CT4b and U4 closed; next CT4c.
+results per wave). State as of 2026-10-31 ~14:30, branch `development`; CT4a, CT4b, CT4c and U4 closed; next CT3a-W5 (operator) and CT6.
 
 ## How to work
 
@@ -51,19 +51,10 @@ results per wave). State as of 2026-10-31 ~13:05, branch `development`; CT4a, CT
 | CT5  | P1 volume survives re-create, P3 bare-metal DB (6191 msgs) migrates to schema 39, P4 log config                                                                                                                                                                                           | `76a637f`                                             |
 | CT4a | macOS BLE service vs DK5EN-1: scan, connect by UUID, 14 registers, DM on air + ACKs on SSE, reconnect after reboot, second client fails cleanly. Fixed: state dir not created on macOS, empty `device_name`                                                                               | `85c82d6`                                             |
 | CT4b | Linux `ble_service` on rpizero vs DK5EN-1: connect, 14 registers, DM + ACKs, reboot reconnect. Fixed: bluez scan missed devices named during the scan                                                                                                                                     | `9074ee8`                                             |
+| CT4c | McApp container → macOS BLE service (`host.docker.internal`, loopback bind suffices): connect via McApp, 14 registers + `ble:status` on SSE, `type: BLE` DM + peer ACK. UDP path: learned target `192.168.97.1` (traefik-net gateway, outside the 172.16/12 heuristic)                    | see campaign doc                                      |
 | U4   | Deferred: amd64 rootful Docker cannot start containers on the Mac; retest on real x86/NAS                                                                                                                                                                                                 | -                                                     |
 
 ## Remaining waves (in order)
-
-### CT4c - McApp container → BLE service
-
-Point the spike container at the BLE service: `MCAPP_BLE_MODE=remote`,
-`MCAPP_BLE_URL=http://host.docker.internal:8091` (OrbStack's host alias, verify) and
-`MCAPP_BLE_API_KEY`. Check McApp's `/api/status` BLE state, node registers in the webapp, a DM over
-BLE from the webapp UI path (`POST /api/send` with BLE connected goes over BLE), and the
-`proxy:ble_*` SSE events. The BLE service must bind beyond 127.0.0.1 for the container to reach it
-only if `host.docker.internal` does not reach the Mac's loopback; if it must, bind with the API key
-(the guard enforces it).
 
 ### CT3a-W5 - iPhone PWA - operator
 
@@ -74,7 +65,9 @@ proxy"). Authelia profile: `cd scripts/container-tests/proxy && docker compose -
 ### CT6 - Report and paper updates - orchestrator (+ one writer for the papers)
 
 1. B12 paper: replace the gateway heuristic (`x.x.x.1` in `172.16/12`) with "source equals the
-   container's default gateway (`/proc/net/route`)"; add the macOS setup note (grant OrbStack/Docker
+   container's default gateway (`/proc/net/route`)" (CT4c: traefik-net gateway `192.168.97.1` slipped
+   through and was persisted as the target); note `host.docker.internal` reaches the Mac's loopback
+   (BLE service needs no wider bind, API key is the only guard); add the macOS setup note (grant OrbStack/Docker
    Desktop Local Network access, restart with `orb stop` / `orb start`); on a Mac the target must be
    pinned to the node IP (bridge needs learning off, host mode fails safe); image size facts and the
    on-demand Browser AI decision; spike results (SSE through two proxies, Authelia, persistence);
@@ -101,6 +94,9 @@ proxy"). Authelia profile: `cd scripts/container-tests/proxy && docker compose -
   shows `null` without a reset.
 - Firmware: EXT listener not started by `--extudp on`.
 - Unknown single datagram from `172.17.0.1` in U3 (anti-flap guard ignored it).
+- Test flake: `node_admin_service_tests.case_e_dropped` (key-deleted iteration) failed once in the full
+  runner with `OSError: Directory not empty` in `TemporaryDirectory` cleanup (a DB write outliving
+  `svc.stop()` / `storage.close()`, likely an in-flight `to_thread` job); 0/10 failures alone (CT4c gate).
 
 ## Cleanup at the end (CT6)
 
@@ -117,12 +113,13 @@ proxy"). Authelia profile: `cd scripts/container-tests/proxy && docker compose -
 
 ## Current live state (to know what is running)
 
-- DK5EN-1: `EXTUDP on`, `EXT IP 192.168.68.58` (the Mac); not BLE-connected (both services disconnected).
+- DK5EN-1: `EXTUDP on`, `EXT IP 192.168.68.58` (the Mac); BLE-connected to the macOS service.
 - rpizero: `ble_service` running on 127.0.0.1:8095 (`~/ct-ble/`, key in `~/ct-ble/key`), disconnected;
   bluetooth.service unmasked and active.
-- macOS BLE service running on 127.0.0.1:8091 (API key in the session scratchpad, regenerate if lost);
-  `ble_state.json` saved, so a restart auto-connects to DK5EN-1.
-- Docker on the Mac: `mcapp-ct` compose stack, profile `authelia` (Authelia + McApp spike) up;
+- macOS BLE service running on 127.0.0.1:8091 (restarted in CT4c with a new key in that session's scratchpad,
+  regenerate if lost), connected to DK5EN-1; `ble_state.json` saved.
+- Docker on the Mac: `mcapp-ct` compose stack, profile `authelia` (Authelia + McApp spike, `CT_BLE_MODE=remote`) up;
+  its volume holds the learned UDP target `192.168.97.1`;
   Caddy + Traefik up; another session's MeshCom-Server compose stack up (not ours, port 8081).
 - Caddy carries the `@mcappct` block for the two test hostnames.
 - OrbStack VMs: `deb-arm64` (idle `ct` container), `deb-amd64` (Docker overlay2, containers do not start).

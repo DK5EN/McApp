@@ -6,6 +6,11 @@ x-mcapp: &mcapp
   image: mcapp-spike:arm64
   environment:
     MCAPP_BIND_HOST: 0.0.0.0
+    # CT4c: BLE over a host-side ble_service. Defaults keep BLE off.
+    # OrbStack's host.docker.internal reaches the Mac's 127.0.0.1, so the service stays on loopback.
+    MCAPP_BLE_MODE: ${CT_BLE_MODE:-disabled}
+    MCAPP_BLE_URL: ${CT_BLE_URL:-http://host.docker.internal:8091}
+    MCAPP_BLE_API_KEY: ${CT_BLE_API_KEY:-}
   volumes:
     - mcapp-data:/var/lib/mcapp
     - ../image/config.example.json:/etc/mcapp/config.json:ro

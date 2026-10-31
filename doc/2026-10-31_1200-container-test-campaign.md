@@ -122,6 +122,7 @@ only in the WiFi boot line, so `node.py info` reports it only after a reset.
 | CT5 | done | P1, P3, P4 pass (76a637f) |
 | CT4a | done | macOS BLE service end to end against DK5EN-1 pass; two findings fixed with regression tests |
 | CT4b | done | Linux `ble_service` (bluez) on rpizero against DK5EN-1 pass; scan gap found and fixed |
+| CT4c | done | McApp container → macOS BLE service → DK5EN-1 pass (connect, 14 registers, DM + peer ACK on SSE); UDP path hit the U1 gateway trap on traefik-net |
 | U4 | deferred | dropped on the Mac (amd64 emulation inside an emulated VM does not start containers); retest on real x86 or a NAS |
 
 **CT4a results (2026-10-31), `ble_service/scripts/run-macos.sh` on 127.0.0.1:8091, DK5EN-1 (fw 4.40a):**
@@ -169,6 +170,32 @@ only in the WiFi boot line, so `node.py info` reports it only after a reset.
   BlueZ's own device list. This affects production (mcapp.local's device picker), not just the test.
 - **Remaining, radio level:** with the cache cleared DK5EN-1 is absent from BlueZ itself in about half
   of the 8 s scans on the Pi Zero 2W (shared WiFi/BT chip); not a service defect.
+
+**CT4c results (2026-10-31), spike container (`mcapp-authelia` profile) → macOS BLE service → DK5EN-1:**
+
+- **Setup.** `proxy/compose.yml` passes `MCAPP_BLE_MODE` / `MCAPP_BLE_URL` / `MCAPP_BLE_API_KEY` from
+  `CT_BLE_MODE` / `CT_BLE_URL` / `CT_BLE_API_KEY` (default: BLE off). **OrbStack's
+  `host.docker.internal` reaches the Mac's 127.0.0.1**, so the BLE service stays on loopback; no
+  wider bind is needed. Consequence: every container on the Mac can reach it, so the API key is the
+  only guard there.
+- **Pass: link.** On start McApp gets 200 for `/api/ble/status`, `/api/ble/notifications` (SSE) and
+  `/api/ble/registers` with the key.
+- **Pass: connect + registers via McApp.** `POST /api/ble/ensure_connected` on McApp with the UUID
+  (the webapp's route) connects in ~8 s; the hydration sweep runs 10 commands; all 14 registers
+  (I, IS1, SE, S1, SW, S2, SN, SN1, W, G, SA, IO, TM, AN, `CALL DK5EN-1`) and 30 `ble:status` events
+  reach McApp's `/events`. The event name is `ble:status`, not `proxy:ble_*` as the plan assumed.
+  `/api/status` carries no BLE field; BLE state is visible only through the SSE events.
+- **Pass: DM over BLE, webapp shape.** `POST /api/send {"type": "BLE", ...}` (what `ChatInput.vue`
+  sends while BLE is connected) → `api/ble/send`; the node's BLE echo (`msg_id EA25A00A`, `{010`)
+  and a Peer ACK from DK5EN-92 arrive on `/events` within 5 s (`msg_status acked, ack_kind peer`).
+- **Note: transport is chosen by the client.** `type: "msg"` always goes down the UDP handler, also
+  while BLE is connected. The plan's "with BLE connected `/api/send` goes over BLE" holds only for
+  `type: "BLE"`.
+- **Finding: the UDP path never reached the node.** The container had learned
+  `udp_target 192.168.97.1`, the traefik-net bridge gateway OrbStack rewrites the source to (U1),
+  persisted on the volume over the config's `192.168.68.71`. The node console showed nothing for two
+  UDP sends. `192.168.97.0/24` is outside the `x.x.x.1 in 172.16/12` heuristic, so this confirms the
+  CT6 change: compare against the container's default gateway (`/proc/net/route`), not a subnet.
 
 **CT5 results (2026-10-31), `scripts/container-tests/persistence/persist.sh`, ~45 s:**
 
