@@ -332,6 +332,22 @@ def _test_identity(record: Record) -> None:
             IdentityInputs(regs, True, None, "DK5EN", "v1"), tmp / "mac", tmp / "model"
         )
         record("F5 BLE connected but no MAC -> Pi identity", no_mac["idKind"] == "pi")
+        for label, addr in (
+            ("F6 CoreBluetooth UUID address -> no mac key", "5f1c2d3e-1a2b-4c3d-8e9f-0123456789ab"),
+            ("F8 garbage address -> no mac key", "not-a-mac"),
+        ):
+            odd = build_identity(
+                IdentityInputs(regs, True, addr, "dk5en-98", "v1"), tmp / "mac", tmp / "model"
+            )
+            record(label, odd["idKind"] == "ble" and "mac" not in odd)
+        dash = build_identity(
+            IdentityInputs(regs, True, "ac-a7-04-06-b8-79", "dk5en-98", "v1"),
+            tmp / "mac",
+            tmp / "model",
+        )
+        record(
+            "F7 dash-separated MAC still sent, upper-cased", dash.get("mac") == "AC-A7-04-06-B8-79"
+        )
 
 
 # ── mapper ─────────────────────────────────────────────────────────────────
