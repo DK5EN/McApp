@@ -8,8 +8,8 @@ Status: Ideation, backlog B12, 2026-10-31. Nothing in this paper is implemented.
 - **One Alpine container, one process, no front proxy inside.** uvicorn serves the API, the SSE
   stream and the Vue SPA; Traefik (labels) does TLS and routing. Updates are new image tags from
   `ghcr.io/dk5en/mcapp` (linux/arm64 + linux/amd64).
-- **The app is closer to container-ready than expected, but 9 small backend code changes are needed
-  first** (bind host, static webapp mount, `MCAPP_DEPLOYMENT=container` gate for update/converge,
+- **The app is closer to container-ready than expected, but 10 small backend code changes are needed
+  first** (bind host, listen port, static webapp mount, `MCAPP_DEPLOYMENT=container` gate for update/converge,
   secret-box binding, UDP target learning switch, Node Admin host allow-list, `/api/timezone` degrade,
   stall-middleware passthrough, `MCAPP_VERSION` for version reporting). None is above size M; the
   webapp needs one gate that names the container (`features` contains `container`).
@@ -25,6 +25,11 @@ Status: Ideation, backlog B12, 2026-10-31. Nothing in this paper is implemented.
   Admin target passwords, internet-feed credentials) is bound to host data (`/proc/cpuinfo` serial
   on a Pi host); a host migration or k3s reschedule makes them unreadable. Change 5 binds to the key
   file alone.
+- **Own reverse proxy and shared hosts are first-class (operator requirement 2026-10-31).** An
+  operator's existing proxy (nginx, Caddy, Nginx Proxy Manager, Traefik) may put a user/password
+  or SSO login in front of McApp, and the HTTP port is freely remappable so the container coexists
+  with other web services on the box. UDP 1799 is the one port that cannot move: the node firmware
+  sends to a compile-time `EXTERN_PORT`.
 - **Not supported by design:** BLE inside the container, the in-app Update page, slots, system
   converge, Kubernetes (appendix recipe only), and any NFS/SMB-backed database. **Wave 1 must land
   before any image is published** (without change 4 the converge watchdog writes into the volume).
@@ -316,6 +321,54 @@ networks:
 - **Logs:** journald is replaced by the `json-file` driver, rotated by the `logging` block above
   (10 MB x 3). Without it the default driver grows unbounded on a NAS disk.
 
+### Behind your own reverse proxy (login, other web services on the box)
+
+Operator requirement (2026-10-31): many home servers already run a reverse proxy that asks for a
+user and password (or SSO) before anything behind it is reachable, and already host other web
+services. Both must work without Traefik.
+
+**Port remapping.**
+
+- **Bridge mode (default): no code change.** The host port is the operator's choice, the container
+  port stays 2981: `ports: ["127.0.0.1:8085:2981"]` for a proxy on the same host, or
+  `"192.168.1.10:8085:2981"` for one elsewhere in the LAN. Bind the published port to loopback or
+  the LAN address, never `0.0.0.0` on an internet-facing box, because the API itself has no auth.
+- **Host network mode needs a configurable listen port.** There is no mapping in host mode, so a
+  second service on 2981 collides. Add `MCAPP_PORT` (change 12), default 2981, read where `SSE_PORT`
+  is used today (`config_loader.py:115`, `main.py:2936`). The HEALTHCHECK must use the same value.
+- **UDP 1799 cannot be remapped on the host side.** The node sends to `EXTERN_PORT` (firmware
+  `src/extudp_functions.cpp:169`, `:458`, `:781`), which is compile-time, not a node setting. So:
+  one McApp per host IP. A second instance on the same box needs its own LAN IP (macvlan), not a
+  different port. The container-internal UDP port could change, but nothing gains from it.
+
+**Login in front of McApp.**
+
+- **This is the recommended way to make McApp reachable beyond the LAN.** The proxy's login is the
+  missing API authentication. Without it the "LAN-only router" rule in Security stands.
+- **Every path must sit behind the login, including `/api/` and `/events`.** Protecting only the
+  SPA leaves the API open. The container's own HEALTHCHECK calls `127.0.0.1:2981/health` directly,
+  so no path needs an exception for it.
+- **Browser tabs: HTTP Basic auth works.** The browser caches the credentials per origin and sends
+  them on `fetch` and on the same-origin `EventSource` that carries SSE.
+- **Installed PWA, especially iOS: prefer a cookie-based login** (Authelia, Authentik, oauth2-proxy
+  via `forwardAuth`, or the proxy's own session login). A standalone iOS PWA handles a Basic auth
+  challenge poorly and can end up with a blank app after the credential cache expires (unverified,
+  test in Wave 0 on an iPhone). With a session cookie the service worker's same-origin requests
+  carry the cookie.
+- **Web Push is unaffected.** Delivery goes from McApp out to the push service; the subscribe call
+  is a normal same-origin request behind the login.
+- **SSE through the proxy needs buffering off** (nginx `proxy_buffering off;` plus a long
+  `proxy_read_timeout`, Caddy `flush_interval -1`; Traefik is covered above). Same requirement as
+  today's Caddy/lighttpd chain.
+- **Node Admin stays LAN-only even behind a login.** Its Host/Origin guard (`node_admin.py:68-82`)
+  refuses a public host name unless it is in `MCAPP_ALLOWED_HOSTS`; adding a public name there is a
+  deliberate operator decision, not a default.
+- **The login does not protect UDP 1799.** Frame injection is a LAN matter; see Security.
+- **Example (Traefik `basicAuth`, if Traefik is the proxy):**
+  `traefik.http.routers.mcapp.middlewares: mcapp-lan,mcapp-auth` and
+  `traefik.http.middlewares.mcapp-auth.basicauth.users: <htpasswd line>` (escape `$` as `$$` in
+  compose). A `forwardauth` middleware replaces `basicauth` for SSO.
+
 ### UDP 1799: published directly, not through Traefik
 
 - Traefik UDP routers match on entrypoint (port) only, there is no host routing, so they add a hop and
@@ -400,29 +453,31 @@ networks:
 
 ## Config and environment
 
-| Variable                | State      | Purpose / default                                                                                         | Reference                      |
-| ----------------------- | ---------- | --------------------------------------------------------------------------------------------------------- | ------------------------------ |
-| `MCAPP_ENV`             | existing   | `dev` selects dev config + verbose logs; leave unset in the image                                         | `config_loader.py:331-334`     |
-| `MCAPP_BLE_MODE`        | existing   | `remote` / `disabled`                                                                                     | `config_loader.py:372`         |
-| `MCAPP_BLE_URL`         | existing   | remote `ble_service` URL                                                                                  | `main.py:2974`                 |
-| `MCAPP_BLE_API_KEY`     | existing   | key for the remote service                                                                                | `config_loader.py:376`         |
-| `MCAPP_RUNTIME_STATE`   | existing   | `runtime.json` path (set explicitly in image)                                                             | `runtime_state.py:34`          |
-| `MCAPP_SECRET_KEY_PATH` | existing   | install key path                                                                                          | `secret_box.py:59-66`          |
-| `MESHCOM_VAPID_PATH`    | existing   | VAPID keypair path                                                                                        | `push_delivery.py:81`          |
-| `TZ`                    | standard   | container time zone (needs `tzdata`)                                                                      | image                          |
-| `MCAPP_DEPLOYMENT`      | **to add** | `container` disables converge/update/slots, selects container key binding, adds `container` to `features` | changes 4, 5                   |
-| `MCAPP_VERSION`         | **to add** | version string read first by `_get_version()`; set from the tag                                           | change 10, `__init__.py:5`     |
-| `MCAPP_BIND_HOST`       | **to add** | uvicorn bind, default `127.0.0.1`, image sets `0.0.0.0`                                                   | `config_loader.py:114`         |
-| `MCAPP_WEBAPP_DIR`      | **to add** | enables the static mount; unset on bare metal                                                             | change 2                       |
-| `MCAPP_CONFIG_PATH`     | **to add** | optional config file, default as today                                                                    | `config_loader.py:331-334`     |
-| `MCAPP_UDP_TARGET`      | **to add** | pinned node IP                                                                                            | change 3                       |
-| `MCAPP_UDP_LEARN`       | **to add** | `0` disables source-IP learning                                                                           | change 3, `udp_handler.py:868` |
-| `MCAPP_ALLOWED_HOSTS`   | **to add** | extra Host names for the Node Admin guard                                                                 | `node_admin.py:68`             |
-| `MCAPP_HARDWARE`        | **to add** | hardware label for the internet feed (default `container`)                                                | `internet_feed.py:136`         |
-| `MCAPP_SECRET_KEY_FILE` | later      | read the key from `/run/secrets/...` (Docker secret), Wave 5                                              | `secret_box.py`                |
+| Variable                | State      | Purpose / default                                                                                         | Reference                         |
+| ----------------------- | ---------- | --------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| `MCAPP_ENV`             | existing   | `dev` selects dev config + verbose logs; leave unset in the image                                         | `config_loader.py:331-334`        |
+| `MCAPP_BLE_MODE`        | existing   | `remote` / `disabled`                                                                                     | `config_loader.py:372`            |
+| `MCAPP_BLE_URL`         | existing   | remote `ble_service` URL                                                                                  | `main.py:2974`                    |
+| `MCAPP_BLE_API_KEY`     | existing   | key for the remote service                                                                                | `config_loader.py:376`            |
+| `MCAPP_RUNTIME_STATE`   | existing   | `runtime.json` path (set explicitly in image)                                                             | `runtime_state.py:34`             |
+| `MCAPP_SECRET_KEY_PATH` | existing   | install key path                                                                                          | `secret_box.py:59-66`             |
+| `MESHCOM_VAPID_PATH`    | existing   | VAPID keypair path                                                                                        | `push_delivery.py:81`             |
+| `TZ`                    | standard   | container time zone (needs `tzdata`)                                                                      | image                             |
+| `MCAPP_DEPLOYMENT`      | **to add** | `container` disables converge/update/slots, selects container key binding, adds `container` to `features` | changes 4, 5                      |
+| `MCAPP_VERSION`         | **to add** | version string read first by `_get_version()`; set from the tag                                           | change 10, `__init__.py:5`        |
+| `MCAPP_BIND_HOST`       | **to add** | uvicorn bind, default `127.0.0.1`, image sets `0.0.0.0`                                                   | `config_loader.py:114`            |
+| `MCAPP_PORT`            | **to add** | uvicorn listen port, default 2981; needed in host network mode next to other web services                 | change 12, `config_loader.py:115` |
+| `MCAPP_WEBAPP_DIR`      | **to add** | enables the static mount; unset on bare metal                                                             | change 2                          |
+| `MCAPP_CONFIG_PATH`     | **to add** | optional config file, default as today                                                                    | `config_loader.py:331-334`        |
+| `MCAPP_UDP_TARGET`      | **to add** | pinned node IP                                                                                            | change 3                          |
+| `MCAPP_UDP_LEARN`       | **to add** | `0` disables source-IP learning                                                                           | change 3, `udp_handler.py:868`    |
+| `MCAPP_ALLOWED_HOSTS`   | **to add** | extra Host names for the Node Admin guard                                                                 | `node_admin.py:68`                |
+| `MCAPP_HARDWARE`        | **to add** | hardware label for the internet feed (default `container`)                                                | `internet_feed.py:136`            |
+| `MCAPP_SECRET_KEY_FILE` | later      | read the key from `/run/secrets/...` (Docker secret), Wave 5                                              | `secret_box.py`                   |
 
-- Not added: `MCAPP_DB_PATH` (the volume sits at the default path); ports stay fixed, UDP 1799
-  (`config_loader.py:113`) and HTTP 2981 (`:115`).
+- Not added: `MCAPP_DB_PATH` (the volume sits at the default path) and a UDP port variable: UDP 1799
+  (`config_loader.py:113`) is fixed by the node firmware. The HTTP port is remapped by Docker in
+  bridge mode and by `MCAPP_PORT` in host mode.
 
 ## Required code changes
 
@@ -439,6 +494,7 @@ networks:
 | 9   | Webapp (separate repo): hide Update nav entry, `/update` route, and the update affordances in `TheStatus`, `StatusPanel`, `BuildInfoCard` **only when `features` contains `container`**. Add a `isContainerDeployment` computed beside `nodeAdminAvailable` in `stores/adminStatus.ts:21-50`.                                                                                                                                                                                                                                                                                                                                                     | webapp `constants/navigation.ts:40`, `router` (`/update`), `views/Update.vue`                                     | M    |
 | 10  | Version reporting: `_get_version()` reads `MCAPP_VERSION` before `git describe`; the workflow sets it from the tag; a test pins that the env value wins and that unset keeps today's behaviour.                                                                                                                                                                                                                                                                                                                                                                                                                                                   | `__init__.py:5-24`, `container.yml`                                                                               | S    |
 | 11  | Container assets: `docker/Dockerfile`, `docker/compose.example.yml`, `docker/Dockerfile.dockerignore`, `.github/workflows/container.yml`, `doc/container-reference.md`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | new files                                                                                                         | M    |
+| 12  | `MCAPP_PORT` replaces the hard-coded `SSE_PORT` for the uvicorn listen port (default 2981); HEALTHCHECK reads it too. Only host network mode needs it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | `config_loader.py:115`, `main.py:2936`, `docker/Dockerfile`                                                       | S    |
 
 - **Gate direction (change 9):** the flag names the exception (`container`), absence means bare metal
   and the Update page is shown. Gating on the presence of a bare-metal flag fails the wrong way: a
@@ -549,8 +605,11 @@ jobs:
   credentials to the internet. The compose example therefore ships a **LAN-only router**
   (`ipallowlist` on the real LAN range only, never the Docker bridge range; v3 name, `ipwhitelist` on
   Traefik v2) and states the rule: never add a public entrypoint to this router.
-- Do not publish `2981`. Reach it only through Traefik over the Docker network (in host mode, see the
-  bind warning in Networking).
+- Do not publish `2981` openly. Reach it through Traefik over the Docker network, or publish it on
+  loopback / the LAN address for your own reverse proxy (in host mode, see the bind warning in
+  Networking).
+- **A login at the reverse proxy is the supported way to reach McApp from outside the LAN** (see
+  "Behind your own reverse proxy"). It must cover every path, `/api/` and `/events` included.
 - Publish `1799/udp` on the LAN interface address only; allow it from the node's IP at the host
   firewall. Any source that reaches 1799 can inject frames (`udp_handler.py:357-380`).
 - Non-root uid 10001, `read_only`, `cap_drop: [ALL]`, `no-new-privileges`, tmpfs `/tmp`, memory limit.
@@ -607,6 +666,8 @@ jobs:
   before depending on it.
 - Traefik specifics (default `compress` behaviour for `text/event-stream`, `flushInterval` default) are
   recalled, not verified against the deployed version.
+- Does an installed iOS PWA survive HTTP Basic auth in front of McApp, or must the docs require a
+  cookie-based login (Authelia/Authentik/oauth2-proxy)? Test on an iPhone in Wave 0.
 
 ## Appendix: k3s recipe (unsupported)
 
