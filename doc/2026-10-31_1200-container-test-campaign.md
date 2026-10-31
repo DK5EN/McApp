@@ -119,6 +119,20 @@ only in the WiFi boot line, so `node.py info` reports it only after a reset.
 | CT2 | done (U4 blocked) | U1-U3, U5 run and repeated after the macOS Local Network fix; U4 needs Rosetta |
 | CT3a | W1-W4 pass | W5 (iPhone) waits for a router DNS entry; CT3b (macOS BLE) running |
 
+**CT5 results (2026-10-31), `scripts/container-tests/persistence/persist.sh`, ~45 s:**
+
+- **P1 pass.** A synthetic message, `runtime.json` and `vapid.json` survive removing the container
+  and starting a new one on the same volume (sha256 unchanged). The volume holds `messages.db` with
+  `-wal`/`-shm`, `runtime.json` and `vapid.json`.
+- **P3 pass (covers P2's migration path).** The bare-metal backup DB of 2026-10-20 (6191 messages)
+  in a fresh volume: healthy after ~6 s, migrated to schema 39 (`LATEST_SCHEMA_VERSION`). The
+  backup was already close to the terminus, so the migration delta was small. `secret.key` is not
+  copied on purpose; QRZ, Node Admin and feed credentials need re-entry.
+- **P4 pass (config only).** `json-file` with `max-size`/`max-file` is applied; rotation itself
+  was not exercised.
+- Note: there is no REST endpoint listing messages; the script counts them from the
+  `proxy:conversations` connect burst over `/events`.
+
 **CT3a results (2026-10-31), Caddy TLS → Traefik labels → spike container (arm64):**
 
 | ID  | Result                                                                                                                                                                                                                                                               |
