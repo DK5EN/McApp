@@ -381,6 +381,32 @@ def _test_state_round_trip(record: Any) -> None:
             ble_main.BLE_STATE_FILE = original_file
 
 
+def _test_state_save_creates_parent_dir(record: Any) -> None:
+    """REGRESSION (CT4a, 2026-10-31): the macOS default state path
+    (`~/Library/Application Support/mcapp-ble/`) does not exist on a fresh
+    host, and both writers opened `<file>.tmp` without creating it, so every
+    connect logged "Failed to save BLE state" and restart auto-connect never
+    worked on macOS. Both writers must create the parent directory.
+    """
+    original_file = ble_main.BLE_STATE_FILE
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        try:
+            ble_main.BLE_STATE_FILE = pathlib.Path(tmp_dir) / "a" / "mcapp-ble" / "ble_state.json"
+            ble_main._save_ble_state("F4FAC724-A414-5DD6-1B9A-EE2C75A723EB", "MC-8968-DK5EN-1")
+            record(
+                "ble_state: _save_ble_state creates a missing parent directory",
+                ble_main._load_ble_state() == "F4FAC724-A414-5DD6-1B9A-EE2C75A723EB",
+            )
+            ble_main.BLE_STATE_FILE = pathlib.Path(tmp_dir) / "b" / "mcapp-ble" / "ble_state.json"
+            ble_main._save_ble_pin(123456)
+            record(
+                "ble_state: _save_ble_pin creates a missing parent directory",
+                ble_main._load_ble_pin() == 123456,
+            )
+        finally:
+            ble_main.BLE_STATE_FILE = original_file
+
+
 def _test_auto_reconnect_persists_the_name(record: Any) -> None:
     """REGRESSION: the auto-reconnect success path must persist the name too.
 
@@ -6847,9 +6873,14 @@ async def run_ble_service_tests() -> bool:
         if has_console:
             print(f"{'✅ PASS' if ok else '❌ FAIL'} | {label}")
 
-    _test_resolved_device_name(_record)
-    _test_state_round_trip(_record)
-    _test_auto_reconnect_persists_the_name(_record)
+    # Tuple loop (sync cases) to stay under ruff's PLR0915 statement cap.
+    for state_case in (
+        _test_resolved_device_name,
+        _test_state_round_trip,
+        _test_state_save_creates_parent_dir,
+        _test_auto_reconnect_persists_the_name,
+    ):
+        state_case(_record)
     _test_api_key_valid(_record)
     _test_auth_boundary_via_testclient(_record)
     # D{...} register-frame decode/repair coverage. Tuple loop (all sync

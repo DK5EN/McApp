@@ -211,6 +211,19 @@ async def _test_connect_notify_and_writes(record: Record) -> None:
     record("connect: state connected, notify on NUS TX, writes to NUS RX with response=True", ok)
 
 
+async def _test_connect_keeps_found_name(record: Record) -> None:
+    # REGRESSION (CT4a, 2026-10-31): _mark_connected overwrote the device with
+    # name="", so /api/ble/status showed device_name "" and ble_state.json
+    # persisted no name after a connect by UUID, although the connect lookup
+    # had the advertised name in hand.
+    ad = _make()
+    res = await ad.ensure_connected("aa:bb:cc:dd:ee:ff")
+    dev = ad.status.device
+    ok = res.success and dev is not None and dev.name == "MC-b878-DK5EN-98"
+    await ad.disconnect()
+    record("connect: status.device.name is the name the connect lookup found", ok)
+
+
 async def _test_thread_notification_hops_to_loop(record: Record) -> None:
     # Mutation: dropping the call_soon_threadsafe branch of _on_raw_notification
     # makes the delivery thread != loop thread and this test fails.
@@ -576,6 +589,7 @@ async def run_ble_bleak_tests() -> bool:
     cases: list[Callable[[Record], Awaitable[None]]] = [
         _test_scan_filters_and_maps,
         _test_connect_notify_and_writes,
+        _test_connect_keeps_found_name,
         _test_thread_notification_hops_to_loop,
         _test_early_notifications_buffered,
         _test_disconnect_callback_once,

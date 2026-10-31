@@ -726,6 +726,9 @@ def _save_ble_state(mac: str, name: str | None = None) -> None:
             "connected_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "ble_pin": existing_pin,
         }
+        # The macOS default lives under ~/Library/Application Support/, which
+        # has no mcapp-ble/ on a fresh host (CT4a, 2026-10-31).
+        BLE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp = BLE_STATE_FILE.with_name(BLE_STATE_FILE.name + ".tmp")
         with tmp.open("w") as f:
             json.dump(saved_state, f)
@@ -849,6 +852,9 @@ def _save_ble_pin(pin: int) -> None:
         # garbled-JSON file.
         saved_state = _read_ble_state_file()
         saved_state["ble_pin"] = pin
+        # The macOS default lives under ~/Library/Application Support/, which
+        # has no mcapp-ble/ on a fresh host (CT4a, 2026-10-31).
+        BLE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp = BLE_STATE_FILE.with_name(BLE_STATE_FILE.name + ".tmp")
         with tmp.open("w") as f:
             json.dump(saved_state, f)

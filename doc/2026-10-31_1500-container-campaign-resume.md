@@ -2,7 +2,7 @@
 
 **Read this first after a context clear.** It carries everything needed to finish the campaign.
 Detailed results live in `doc/2026-10-31_1200-container-test-campaign.md` (plan, test matrix,
-results per wave). State as of 2026-10-31 ~15:00, branch `development`, last commit `d377f5d`.
+results per wave). State as of 2026-10-31 ~13:05, branch `development`; CT4a and U4 closed.
 
 ## How to work
 
@@ -49,31 +49,18 @@ results per wave). State as of 2026-10-31 ~15:00, branch `development`, last com
 | CT3a | W1-W4 pass (SPA, unbuffered SSE through Caddy + Traefik, basicauth, Authelia cookie login, XHR → 401)                                                                                                                                                                                     | `0f1f1dc`                                             |
 | CT3b | macOS BLE backend W1-W6, two advisor rounds, `ble_bleak` 23/23, `ble_service` 510/510                                                                                                                                                                                                     | `99de2d0`, `01a9416`, `99921d3`, `4baf50b`, `f468b7f` |
 | CT5  | P1 volume survives re-create, P3 bare-metal DB (6191 msgs) migrates to schema 39, P4 log config                                                                                                                                                                                           | `76a637f`                                             |
+| CT4a | macOS BLE service vs DK5EN-1: scan, connect by UUID, 14 registers, DM on air + ACKs on SSE, reconnect after reboot, second client fails cleanly. Fixed: state dir not created on macOS, empty `device_name`                                                                               | CT4a commit                                           |
+| U4   | Deferred: amd64 rootful Docker cannot start containers on the Mac; retest on real x86/NAS                                                                                                                                                                                                 | -                                                     |
 
 ## Remaining waves (in order)
 
-### CT4a - macOS BLE service end to end (route b) - orchestrator + operator
+### CT4b - Linux `ble_service` (route a) - orchestrator
 
-Exclusive: DK5EN-1 BLE link. Prerequisites the operator confirms: no phone/app connected to
-DK5EN-1 over BLE; ready to allow Bluetooth for the terminal and to enter a PIN if macOS asks.
-
-1. Start `BLE_SERVICE_API_KEY=<generated 24 chars> ble_service/scripts/run-macos.sh` (default
-   127.0.0.1:8091; port 8081 is taken on this Mac by the MeshCom-Server compose stack). Operator
-   allows Bluetooth for the terminal.
-2. `curl -H "X-API-Key: ..." localhost:8091/health` → `backend: bleak`, `address_kind: uuid`.
-3. `GET /api/ble/devices` (scan) → DK5EN-1 appears as `MC-...-DK5EN-1` with a UUID.
-4. `POST /api/ble/connect` with that UUID → connected; register reads (I, SN1) arrive.
-5. Subscribe `GET /api/ble/notifications` (SSE) and send a DM over BLE to DK5EN-92 via
-   `POST /api/ble/send` (transmits, approved) → node console shows it; notifications stream.
-6. Reconnect after `node.py reboot`; second-client conflict (expect the documented behaviour).
-7. Record results (B2 in the campaign test matrix); fix findings in a wave if needed.
-
-### CT4b - Linux `ble_service` (route a) - orchestrator, pending one operator answer
-
-Open question for the operator: is rpizero's Bluetooth free, or does mc-chat use it? If free: run
-`mcapp-ble` there on 127.0.0.1 and reach it from the Mac via `ssh -L 8092:127.0.0.1:8081`, never on
-the LAN unauthenticated. If not free: mark B1 as "covered by production mcapp.local", do not touch
-mcapp.local.
+Operator answer (2026-10-31): rpizero's Bluetooth is free. Run `mcapp-ble` on rpizero bound to
+127.0.0.1 with an API key, reach it from the Mac via `ssh -L 8092:127.0.0.1:8081 rpizero.local`,
+never on the LAN unauthenticated. Same steps as CT4a (health, scan, connect, registers, DM, reboot
+reconnect). DK5EN-1 must first be released by the macOS service (`POST /api/ble/disconnect` on
+:8091, or stop it) — a connected node does not advertise. Do not touch mcapp.local or mc-chat.
 
 ### CT4c - McApp container → BLE service
 
@@ -90,11 +77,6 @@ only if `host.docker.internal` does not reach the Mac's loopback; if it must, bi
 Needs router DNS entries `mcapp-test.air-maxx.net` and `auth-test.air-maxx.net` → `192.168.68.58`
 (the Mac); Caddy already serves them. Run the checklist in the B12 paper ("Behind your own reverse
 proxy"). Authelia profile: `cd scripts/container-tests/proxy && docker compose --profile authelia up -d`.
-
-### U4 - amd64 rootful Docker
-
-Recommendation: drop on the Mac (emulation inside emulation does not start containers even with
-Rosetta). Retest later on real x86 hardware or a NAS. Record as "deferred".
 
 ### CT6 - Report and paper updates - orchestrator (+ one writer for the papers)
 
@@ -136,12 +118,14 @@ Rosetta). Retest later on real x86 hardware or a NAS. Record as "deferred".
 | Caddy                  | restore `~/docker/caddy/Caddyfile.bak-mcapp-ct-*` (or remove the `@mcappct` block), validate, `docker exec caddy-service caddy reload --config /etc/caddy/Caddyfile` |
 | VM containers          | `orb -m deb-arm64 -u root docker rm -f ct`; same for `deb-amd64`                                                                                                     |
 | Spike images / volumes | `docker image rm mcapp-spike:arm64 mcapp-spike:amd64`; remove `mcapp-ct-*` volumes                                                                                   |
-| macOS BLE service      | stop the `run-macos.sh` process                                                                                                                                      |
+| macOS BLE service      | stop the `run-macos.sh` process; delete `~/Library/Application Support/mcapp-ble/ble_state.json`                                                                     |
 | Ask the operator       | keep or delete OrbStack machines `deb-arm64`/`deb-amd64`; keep Rosetta on; remove the two `/etc/hosts` lines and the router DNS entries                              |
 
 ## Current live state (to know what is running)
 
-- DK5EN-1: `EXTUDP on`, `EXT IP 192.168.68.58` (the Mac).
+- DK5EN-1: `EXTUDP on`, `EXT IP 192.168.68.58` (the Mac); BLE-connected to the macOS service.
+- macOS BLE service running on 127.0.0.1:8091 (API key in the session scratchpad, regenerate if lost);
+  `ble_state.json` saved, so a restart auto-connects to DK5EN-1.
 - Docker on the Mac: `mcapp-ct` compose stack, profile `authelia` (Authelia + McApp spike) up;
   Caddy + Traefik up; another session's MeshCom-Server compose stack up (not ours, port 8081).
 - Caddy carries the `@mcappct` block for the two test hostnames.

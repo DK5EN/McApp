@@ -120,6 +120,35 @@ only in the WiFi boot line, so `node.py info` reports it only after a reset.
 | CT3a | W1-W4 pass | W5 (iPhone) waits for a router DNS entry; CT3b (macOS BLE) running |
 | CT3b | done | macOS BLE backend W1-W6 committed (99de2d0, 01a9416, 99921d3, 4baf50b, f468b7f); two advisor rounds; §7.2 shared contract suite deferred |
 | CT5 | done | P1, P3, P4 pass (76a637f) |
+| CT4a | done | macOS BLE service end to end against DK5EN-1 pass; two findings fixed with regression tests |
+| U4 | deferred | dropped on the Mac (amd64 emulation inside an emulated VM does not start containers); retest on real x86 or a NAS |
+
+**CT4a results (2026-10-31), `ble_service/scripts/run-macos.sh` on 127.0.0.1:8091, DK5EN-1 (fw 4.40a):**
+
+- **Pass: health, scan, connect, registers.** `backend: bleak`, `address_kind: uuid`. Scan finds
+  `MC-8968-DK5EN-1` (UUID `F4FAC724-...`, RSSI -58) and `MC-41b8-DK5EN-92`. Connect by UUID takes
+  ~9 s; 14 registers are cached (I, IS1, SE, S1, SW, S2, SN, SN1, W, G, SA, IO, TM, AN). The
+  terminal already held Bluetooth permission; no prompt and no PIN dialog appeared.
+- **Pass: DM on air over BLE.** `POST /api/ble/send` to DK5EN-92: the echo
+  `DK5EN-1>DK5EN-92:CT4a macOS bleak test{818`, two binary `0x41` peer ACK frames and the
+  `:ack818` text from DK5EN-92 all arrive on `/api/ble/notifications`. `settime` answers
+  `Time set (rule)`.
+- **Pass: reconnect after node reboot.** `node.py reboot`: disconnect detected, auto-reconnect
+  attempt 1/4 succeeds ~14 s after the reboot, no manual step.
+- **Defined failure: second client.** A second instance (port 8093) does not see the node in a
+  scan (a connected node stops advertising); its connect fails after 3 attempts in 32 s with
+  `Device not found or not paired`, no hang; the first instance stays connected. The plain
+  `/connect` route returns `error_code: null` here, as it does on Linux; codes come only from
+  `/ensure_connected`.
+- **Fixed: state file never written on macOS.** `~/Library/Application Support/mcapp-ble/` did not
+  exist and neither `_save_ble_state` nor `_save_ble_pin` created it, so restart auto-connect could
+  not work on a Mac. Both now create the parent directory. Verified live: a restart auto-connects
+  on attempt 1.
+- **Fixed: `device_name` empty after a connect.** The bleak adapter set `name=""` on connect
+  although the connect lookup had the advertised name; `/api/ble/status` and `ble_state.json` now
+  carry `MC-8968-DK5EN-1`.
+- Not run: Mac sleep/wake, Bluetooth off/on, PIN cases (CoreBluetooth pairs through a system
+  dialog; `pair`/`unpair` report unsupported by design).
 
 **CT5 results (2026-10-31), `scripts/container-tests/persistence/persist.sh`, ~45 s:**
 

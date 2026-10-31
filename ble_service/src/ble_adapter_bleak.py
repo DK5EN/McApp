@@ -75,6 +75,7 @@ class BleakAdapter(BleSessionBase):
         self._notify_ready = False
         self._early: list[bytes] = []
         self._permission_logged = False
+        self._found_name = ""  # advertised name from the last connect lookup
 
     # -- bleak seams --------------------------------------------------------
 
@@ -154,6 +155,7 @@ class BleakAdapter(BleSessionBase):
         dev = await self._scanner().find_device_by_address(mac, timeout=FIND_TIMEOUT_S)
         if dev is None:
             raise ConnectionError(DEVICE_NOT_FOUND_MSG)
+        self._found_name = dev.name or ""
         client = self._new_client(dev)
         self._client = client
         self._notify_ready = False
@@ -165,7 +167,7 @@ class BleakAdapter(BleSessionBase):
         self._status.state = ConnectionState.CONNECTED
         self._status.error = None
         self._last_a0_write_monotonic = None
-        self._status.device = BLEDevice(name="", address=mac, connected=True)
+        self._status.device = BLEDevice(name=self._found_name, address=mac, connected=True)
         self._status.last_activity = time.time()
 
     async def _discard_client(self) -> None:
