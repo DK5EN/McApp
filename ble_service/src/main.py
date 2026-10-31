@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import secrets
+import sys
 import time
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterator
@@ -25,10 +26,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from sse_starlette.sse import EventSourceResponse
 
-from .ble_adapter import BLEAdapter
+from .ble_backend import create_backend
+from .ble_session import BleSessionBase
 from .ble_types import (
     DEVICE_NOT_FOUND_MSG,
     MESHCOM_NAME_PREFIX,
+    BackendUnsupportedError,
+    BleBackend,
     ConnectionState,
     EnsureConnectedResult,
     build_hello_bytes,
@@ -163,7 +167,12 @@ logger = logging.getLogger(__name__)
 # Configuration from environment
 API_KEY = os.getenv("BLE_SERVICE_API_KEY", "")
 CORS_ORIGINS = os.getenv("BLE_SERVICE_CORS_ORIGINS", "*").split(",")
-BLE_STATE_FILE = Path(os.getenv("BLE_STATE_FILE", "/var/lib/mcapp/ble_state.json"))
+_DEFAULT_STATE_FILE = (
+    str(Path.home() / "Library" / "Application Support" / "mcapp-ble" / "ble_state.json")
+    if sys.platform == "darwin"
+    else "/var/lib/mcapp/ble_state.json"
+)
+BLE_STATE_FILE = Path(os.getenv("BLE_STATE_FILE", _DEFAULT_STATE_FILE))
 BLE_AUTO_CONNECT = os.getenv("BLE_AUTO_CONNECT", "true").lower() != "false"
 AUTO_CONNECT_DELAY = int(os.getenv("BLE_AUTO_CONNECT_DELAY", "8"))
 _BLE_PIN_ENV = int(os.getenv("BLE_SERVICE_BLE_PIN", "0"))  # startup default from env
@@ -182,7 +191,7 @@ class ServiceState:
     attribute assignment on an existing object never needs `global`.
     """
 
-    ble_adapter: BLEAdapter | None = None
+    ble_adapter: BleBackend | None = None
     ble_pin: int = 0  # active PIN; 0 = disabled
     notification_queue: deque[dict[str, Any]] = field(
         default_factory=lambda: deque(maxlen=NOTIFICATION_QUEUE_SIZE)
@@ -251,10 +260,10 @@ class ServiceState:
 state = ServiceState()
 
 
-def _adapter() -> BLEAdapter:
+def _adapter() -> BleBackend:
     """Return the initialized BLE adapter.
 
-    `state.ble_adapter` is typed as `BLEAdapter | None` because it starts out
+    `state.ble_adapter` is typed as `BleBackend | None` because it starts out
     unset, but `lifespan()` always constructs it during ASGI startup, before
     the app accepts any request — so by the time any endpoint or background
     task runs, it is never None. This documents that invariant for mypy
@@ -763,11 +772,29 @@ def _read_ble_state_file() -> dict[str, Any]:
     return loaded
 
 
+_UUID_RE = re.compile(r"^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$")
+
+
+def _address_kind_of(address: str) -> str:
+    """`uuid` for a CoreBluetooth peripheral UUID, else `mac` (the only two kinds)."""
+    return "uuid" if _UUID_RE.match(address) else "mac"
+
+
 def _load_ble_state() -> str | None:
     """Load last-connected MAC from disk. Returns None if no state."""
     saved_state = _read_ble_state_file()
     mac = saved_state.get("device_mac")
     if not isinstance(mac, str) or not mac:
+        return None
+    adapter = state.ble_adapter
+    if adapter is not None and _address_kind_of(mac) != adapter.address_kind:
+        logger.info(
+            "Ignoring saved BLE address %s: it is a %s, this backend (%s) uses %s addresses",
+            mac,
+            _address_kind_of(mac),
+            adapter.name,
+            adapter.address_kind,
+        )
         return None
     logger.info("Loaded BLE state: %s (%s)", mac, saved_state.get("device_name", "no name"))
     return mac
@@ -912,7 +939,7 @@ async def _cancel_background_connect_tasks() -> None:
     state.reconnect_attempt = 0
 
 
-async def _ensure_connected_post_init(adapter: BLEAdapter) -> None:
+async def _ensure_connected_post_init(adapter: BleBackend) -> None:
     """The post-connect initialisation /api/ble/ensure_connected runs after
     `adapter.ensure_connected()` returns -- the same steps
     `_connect_and_initialize()` performs, minus `start_notify()` (which
@@ -1286,13 +1313,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     state.ble_pin = _load_ble_pin() or _BLE_PIN_ENV
     logger.info("BLE PIN: %s", "disabled" if state.ble_pin == 0 else "set")
 
-    state.ble_adapter = BLEAdapter(
+    state.ble_adapter = create_backend(
+        os.environ.get("BLE_BACKEND"),
         notification_callback=notification_callback,
         hello_bytes=build_hello_bytes(state.ble_pin),
         register_lookup=lambda: state.register_cache,
     )
     state.ble_adapter.pairing_passkey = state.ble_pin
-    state.ble_adapter._disconnect_callback = _on_adapter_disconnect  # noqa: SLF001 - framework wiring
+    if isinstance(state.ble_adapter, BleSessionBase):  # both backends derive from it
+        state.ble_adapter._disconnect_callback = _on_adapter_disconnect  # noqa: SLF001 - framework wiring
 
     # Auto-connect to last-known device if enabled
     if BLE_AUTO_CONNECT:
@@ -1417,6 +1446,7 @@ class StatusResponse(BaseModel):
     state: str
     device_address: str | None = None
     device_name: str | None = None
+    address_kind: str = "mac"
     last_activity: float | None = None
     error: str | None = None
     reconnecting: bool = False
@@ -1432,6 +1462,7 @@ class DeviceResponse(BaseModel):
     rssi: int
     paired: bool
     known: bool = False
+    address_kind: str = "mac"
 
 
 class ScanResponse(BaseModel):
@@ -1446,6 +1477,7 @@ class ResultResponse(BaseModel):
 
     success: bool
     message: str
+    error_code: str | None = None
 
 
 class SetPinRequest(BaseModel):
@@ -1479,6 +1511,7 @@ async def get_status(_: bool = Depends(verify_api_key)) -> StatusResponse:
         state=STATUS_RECONNECTING if state.reconnecting else status.state.value,
         device_address=status.device.address if status.device else state.last_connected_mac,
         device_name=status.device.name if status.device else state.last_connected_name,
+        address_kind=adapter.address_kind,
         last_activity=status.last_activity,
         error=status.error,
         reconnecting=state.reconnecting,
@@ -1526,7 +1559,12 @@ async def scan_devices(
         return ScanResponse(
             devices=[
                 DeviceResponse(
-                    name=d.name, address=d.address, rssi=d.rssi, paired=d.paired, known=d.known
+                    name=d.name,
+                    address=d.address,
+                    rssi=d.rssi,
+                    paired=d.paired,
+                    known=d.known,
+                    address_kind=adapter.address_kind,
                 )
                 for d in devices
             ],
@@ -1879,6 +1917,11 @@ async def send_data(request: SendRequest, _: bool = Depends(verify_api_key)) -> 
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+def _unsupported_result(message: str) -> ResultResponse:
+    """HTTP 200 failure for an operation the active backend cannot do (ordinary failure shape)."""
+    return ResultResponse(success=False, message=message, error_code="unsupported_on_backend")
+
+
 @app.post("/api/ble/pair", response_model=ResultResponse)
 async def pair_device(request: ConnectRequest, _: bool = Depends(verify_api_key)) -> ResultResponse:
     """Pair with a BLE device"""
@@ -1898,6 +1941,8 @@ async def pair_device(request: ConnectRequest, _: bool = Depends(verify_api_key)
             success=success,
             message=f"Paired with {request.device_address}" if success else "Pairing failed",
         )
+    except BackendUnsupportedError:
+        return _unsupported_result("macOS pairs through a system dialog on first encrypted access")
     except Exception as e:
         logger.exception("Pair error")
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -1920,6 +1965,8 @@ async def unpair_device(
             success=success,
             message=f"Unpaired {request.device_address}" if success else "Unpair failed",
         )
+    except BackendUnsupportedError:
+        return _unsupported_result("remove the node in System Settings > Bluetooth")
     except Exception as e:
         logger.exception("Unpair error")
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -2151,21 +2198,46 @@ async def stream_notifications(
 
 
 @app.get("/health")
-async def health_check() -> dict[str, bool | int | str]:
+async def health_check() -> dict[str, Any]:
     """Health check endpoint"""
+    adapter = state.ble_adapter
     return {
         "status": "healthy",
-        "ble_connected": state.ble_adapter.is_connected if state.ble_adapter else False,
+        "ble_connected": adapter.is_connected if adapter else False,
         "timestamp": _now_ms(),
+        "backend": adapter.name if adapter else None,
+        "platform": sys.platform,
+        "address_kind": adapter.address_kind if adapter else None,
+        "capabilities": dict(adapter.capabilities) if adapter else {},
     }
+
+
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+_API_KEY_MIN_LEN = 16
+
+
+def _check_bind_security(host: str, api_key: str) -> None:
+    """B13 rule: refuse a non-loopback bind without a real API key (>= 16 chars)."""
+    if host in _LOOPBACK_HOSTS:
+        return
+    if not api_key or api_key.lower() == "disabled" or len(api_key) < _API_KEY_MIN_LEN:
+        raise SystemExit(
+            f"Refusing to bind {host}: a non-loopback bind requires BLE_SERVICE_API_KEY "
+            f"(at least {_API_KEY_MIN_LEN} characters, not 'disabled')."
+        )
 
 
 if __name__ == "__main__":
     import uvicorn
 
+    _bind_host = os.getenv("BLE_SERVICE_HOST", "0.0.0.0")  # noqa: S104 - LAN service default
+    _check_bind_security(_bind_host, API_KEY)
+    # The app object, not an import string: "main:app" cannot resolve from the repo
+    # root and `python main.py` breaks on the relative imports; run it as
+    # `python -m ble_service.src.main` from the repo root.
     uvicorn.run(
-        "main:app",
-        host="0.0.0.0",  # noqa: S104 - LAN service binds all interfaces by design
+        app,
+        host=_bind_host,
         port=int(os.getenv("BLE_SERVICE_PORT", "8081")),
         reload=False,
         ws="none",  # no WebSocket route exists; avoids importing `websockets` (B4.2a)

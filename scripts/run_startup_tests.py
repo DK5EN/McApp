@@ -23,6 +23,7 @@ user info text must contain "Node" — the built-in test cases assume both.
 import asyncio
 import sys
 
+from ble_bleak_tests import run_ble_bleak_tests
 from ble_service_tests import run_ble_service_tests
 from ble_unit_template_tests import run_ble_unit_template_tests
 from bootstrap_network_safety_tests import run_bootstrap_network_safety_tests
@@ -163,6 +164,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     ble_service_ok = await run_ble_service_tests()
     print(f"ble_service: {'PASS' if ble_service_ok else 'FAIL'}")
+
+    ble_bleak_ok = await run_ble_bleak_tests()
+    print(f"ble_bleak: {'PASS' if ble_bleak_ok else 'FAIL'}")
 
     identity_ok = await run_identity_tests()
     print(f"identity: {'PASS' if identity_ok else 'FAIL'}")
@@ -438,6 +442,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and aprs_symbol_ok
         and identity_ok
         and ble_service_ok
+        and ble_bleak_ok
         and udp_ok
         and udp_parsing_ok
         and storage_ok

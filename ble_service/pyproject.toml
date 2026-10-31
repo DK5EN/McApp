@@ -19,6 +19,8 @@ dependencies = [
     "httptools>=0.6.3",
     "sse-starlette>=3.4.4",
     "dbus-next>=0.2.3",
+    # CoreBluetooth backend (macOS dev/test host only); Linux uses BlueZ via dbus-next.
+    "bleak>=0.22; sys_platform == 'darwin'",
     "pydantic>=2.0.0",
 ]
 
@@ -28,6 +30,9 @@ dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
     "httpx>=0.25.0",
+    # optional: only for running the fake-based tests or the bleak backend from a dev env;
+    # bleak is imported lazily, and CI (no extras installed) never needs it for mypy
+    "bleak>=0.22",
 ]
 
 [project.scripts]

@@ -39,7 +39,7 @@ import contextlib
 import logging
 import time
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Any, NoReturn, cast
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 
 # Imported from their defining submodules (not the `dbus_next`/`dbus_next.aio`
 # packages) because those packages re-export these names without an `__all__`
@@ -437,6 +437,14 @@ class BLEAdapter(BleSessionBase):
     Provides methods for device discovery, connection management,
     and GATT characteristic read/write/notify operations.
     """
+
+    name: Literal["bluez", "bleak"] = "bluez"
+    address_kind: Literal["mac", "uuid"] = "mac"
+    capabilities: Mapping[str, bool] = {"pair": True, "unpair": True}
+
+    def normalize_address(self, address: str) -> str:
+        """BlueZ addresses are used exactly as given (no normalisation today)."""
+        return address
 
     def __init__(
         self,

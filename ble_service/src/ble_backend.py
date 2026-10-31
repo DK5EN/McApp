@@ -21,9 +21,7 @@ def create_backend(kind: str | None = None, **kwargs: Any) -> BleBackend:
 
         return BleakAdapter(**kwargs)
     if chosen == "bluez":
-        from . import ble_adapter  # noqa: PLC0415 - lazy by design
+        from .ble_adapter import BLEAdapter  # noqa: PLC0415 - lazy by design
 
-        # Any: BLEAdapter does not yet declare name/address_kind/capabilities (W4).
-        bluez_cls: Any = ble_adapter.BLEAdapter
-        return bluez_cls(**kwargs)  # type: ignore[no-any-return]  # Any-typed class call
+        return BLEAdapter(**kwargs)
     raise ValueError(f"unknown BLE backend {kind!r}: expected 'bluez' or 'bleak'")

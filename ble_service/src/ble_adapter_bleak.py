@@ -187,6 +187,9 @@ class BleakAdapter(BleSessionBase):
 
     async def connect(self, mac: str, max_retries: int = 3) -> bool:
         mac = self.normalize_address(mac)
+        # bleak's disconnected_callback can fire on its own thread at any time
+        # after connect(); the loop must be known before the first await.
+        self._loop = asyncio.get_running_loop()
         async with self._operation_lock:
             self._cancel_connect = False
             if self.is_connected:
@@ -228,6 +231,7 @@ class BleakAdapter(BleSessionBase):
         user_initiated: bool = False,  # noqa: ARG002 - accepted and ignored
     ) -> EnsureConnectedResult:
         mac = self.normalize_address(mac)
+        self._loop = asyncio.get_running_loop()  # see connect()
         async with self._operation_lock:
             if self.is_connected and self._connected_mac == mac and self._notify_ready:
                 return EnsureConnectedResult(success=True, stage="already_connected")
@@ -294,7 +298,7 @@ class BleakAdapter(BleSessionBase):
         if client is None:
             raise RuntimeError("Not connected")
         self._loop = asyncio.get_running_loop()
-        await client.start_notify(self.read_uuid, self._on_raw_notification)
+        await client.start_notify(self.read_uuid, self._notification_callback_for(client))
         self._notify_ready = True
         early, self._early = self._early, []
         for data in early:
@@ -305,7 +309,16 @@ class BleakAdapter(BleSessionBase):
 
     # -- callbacks ----------------------------------------------------------
 
-    def _on_raw_notification(self, _char: Any, data: bytearray) -> None:
+    def _notification_callback_for(self, client: Any) -> Callable[[Any, bytearray], None]:
+        """Bind a notification callback to `client`, so payloads that a
+        discarded client's thread still has in flight are recognisable."""
+
+        def callback(char: Any, data: bytearray) -> None:
+            self._on_raw_notification(char, data, client)
+
+        return callback
+
+    def _on_raw_notification(self, _char: Any, data: bytearray, client: Any = None) -> None:
         payload = bytes(data)
         loop = self._loop
         try:
@@ -313,11 +326,16 @@ class BleakAdapter(BleSessionBase):
         except RuntimeError:
             running = None
         if loop is not None and running is not loop:
-            loop.call_soon_threadsafe(self._on_notification, payload)
+            loop.call_soon_threadsafe(self._on_notification, payload, client)
         else:
-            self._on_notification(payload)
+            self._on_notification(payload, client)
 
-    def _on_notification(self, payload: bytes) -> None:
+    def _on_notification(self, payload: bytes, client: Any = None) -> None:
+        # `client` is the one the callback was registered on (None: caller
+        # makes no claim). A payload from a client that is no longer current
+        # belongs to a dead connection and must not reach the new one.
+        if client is not None and client is not self._client:
+            return
         if not self._notify_ready:
             self._early.append(payload)
             return

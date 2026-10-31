@@ -111,6 +111,7 @@ from ble_service.src.ble_adapter import (  # noqa: E402 - same
     BLEAdapter,
     ConnectionState,
 )
+from ble_service.src.ble_types import BackendUnsupportedError  # noqa: E402 - same
 
 # Imported directly (not as `ble_main.ConnectionState`/`ble_main.BLEAdapter`)
 # because ble_adapter.py re-exports both into main.py's namespace without an
@@ -160,7 +161,11 @@ class _FakeAdapter:
         connected: bool = False,
         address: str = "AA:BB:CC:DD:EE:FF",
         conn_state: ConnectionState | None = None,
+        identity: tuple[str, str, bool] = ("bluez", "mac", False),
     ) -> None:
+        # identity = (backend name, address kind, pair/unpair unsupported)
+        backend, address_kind, unsupported = identity
+        self._unsupported = unsupported
         resolved_state = conn_state
         if resolved_state is None:
             resolved_state = (
@@ -172,6 +177,32 @@ class _FakeAdapter:
         )
         self.is_connected = connected
         self.is_busy = False  # no test needs a busy adapter; scan/pair routes aren't exercised here
+        # BleBackend identity members the routes read since the macOS backend W4.
+        self.name = backend
+        self.address_kind = address_kind
+        self.capabilities = {"pair": not unsupported, "unpair": not unsupported}
+
+    async def pair(self, address: str) -> bool:
+        if self._unsupported:
+            raise BackendUnsupportedError("pair")
+        return True
+
+    async def unpair(self, address: str) -> bool:
+        if self._unsupported:
+            raise BackendUnsupportedError("unpair")
+        return True
+
+    async def scan(self, timeout: float = 5.0, prefix: str = "") -> list[Any]:  # noqa: ASYNC109 - mirrors BLEAdapter.scan
+        return [_FakeScanned("MC-b878-DK5EN-98", _UUID_ADDR, -70)]
+
+
+class _FakeScanned:
+    def __init__(self, name: str, address: str, rssi: int) -> None:
+        self.name = name
+        self.address = address
+        self.rssi = rssi
+        self.paired = False
+        self.known = False
 
 
 def _with_adapter(name: str | None) -> Callable[[], BLEAdapter]:
@@ -6627,6 +6658,178 @@ def _test_node_tz_settime_route_names_branch(record: Any) -> None:
         ble_main.API_KEY = original_key
 
 
+# --- macOS backend W4: main.py integration (bind guard, unsupported ops, address kind) ---
+
+_UUID_ADDR = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
+_MAC_ADDR = "AC:A7:04:06:B8:79"
+
+
+def _test_check_bind_security(record: Any) -> None:
+    """B13: loopback needs no key; a non-loopback bind needs a real (>= 16 char) key."""
+
+    def refused(host: str, key: str) -> bool:
+        try:
+            ble_main._check_bind_security(host, key)
+        except SystemExit:
+            return True
+        return False
+
+    for host in ("127.0.0.1", "localhost", "::1"):
+        record(f"bind guard: loopback {host} allowed with no key", not refused(host, ""))
+    record("bind guard: loopback allowed with 'disabled'", not refused("127.0.0.1", "disabled"))
+    record("bind guard: 0.0.0.0 refused with an empty key", refused("0.0.0.0", ""))  # noqa: S104 - guard input, not a bind
+    record("bind guard: LAN host refused with 'disabled'", refused("192.168.1.5", "disabled"))
+    record("bind guard: LAN host refused with 'DISABLED'", refused("192.168.1.5", "DISABLED"))
+    record("bind guard: LAN host refused with a 15-char key", refused("192.168.1.5", "a" * 15))
+    record("bind guard: LAN host allowed with a 16-char key", not refused("192.168.1.5", "a" * 16))
+    record(
+        "bind guard: 0.0.0.0 allowed with a long key",
+        not refused("0.0.0.0", "supersecretkey1234567"),  # noqa: S104 - guard input, not a bind
+    )
+
+
+def _test_pair_unpair_unsupported_is_http_200(record: Any) -> None:
+    """A backend that cannot pair/unpair answers 200 + success:false + unsupported_on_backend."""
+    original_adapter = _install_fake_adapter(name=None, identity=("bleak", "uuid", True))
+    original_key = ble_main.API_KEY
+    ble_main.API_KEY = ""
+    try:
+        client = TestClient(ble_main.app)
+        for route in ("pair", "unpair"):
+            response = client.post(f"/api/ble/{route}", json={"device_address": _UUID_ADDR})
+            body = response.json()
+            record(f"/api/ble/{route} (unsupported backend): HTTP 200", response.status_code == 200)
+            record(
+                f"/api/ble/{route} (unsupported backend): success false, "
+                "error_code unsupported_on_backend",
+                body.get("success") is False and body.get("error_code") == "unsupported_on_backend",
+            )
+        # A supporting backend is unaffected: plain success, no error_code.
+        ble_main._adapter = cast("Callable[[], BLEAdapter]", lambda: _FakeAdapter(None))
+        body = client.post("/api/ble/pair", json={"device_address": _MAC_ADDR}).json()
+        record(
+            "/api/ble/pair (supporting backend): success true, no error_code",
+            body.get("success") is True and body.get("error_code") is None,
+        )
+    finally:
+        ble_main._adapter = original_adapter
+        ble_main.API_KEY = original_key
+
+
+def _test_load_ble_state_ignores_wrong_address_kind(record: Any) -> None:
+    """A saved address of the other kind (MAC vs CoreBluetooth UUID) is ignored, a match kept."""
+    original_file = ble_main.BLE_STATE_FILE
+    original_adapter = ble_main.state.ble_adapter
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        ble_main.BLE_STATE_FILE = pathlib.Path(tmp_dir) / "ble_state.json"
+        try:
+            for kind, saved, other_saved in (
+                ("mac", _MAC_ADDR, _UUID_ADDR),
+                ("uuid", _UUID_ADDR, _MAC_ADDR),
+            ):
+                ble_main.state.ble_adapter = cast(
+                    "BLEAdapter",
+                    _FakeAdapter(
+                        None, identity=("bluez" if kind == "mac" else "bleak", kind, False)
+                    ),
+                )
+                ble_main._save_ble_state(saved, "MC-node")
+                record(
+                    f"_load_ble_state: a saved {kind} address is kept on a {kind} backend",
+                    ble_main._load_ble_state() == saved,
+                )
+                ble_main._save_ble_state(other_saved, "MC-node")
+                record(
+                    f"_load_ble_state: a saved address of the wrong kind is ignored on a {kind} "
+                    "backend",
+                    ble_main._load_ble_state() is None,
+                )
+        finally:
+            ble_main.BLE_STATE_FILE = original_file
+            ble_main.state.ble_adapter = original_adapter
+
+
+def _test_backend_identity_keys_and_legacy_keys(record: Any) -> None:
+    """/health, status and devices carry the new backend keys, and every old key survives."""
+    legacy_health = {"status", "ble_connected", "timestamp"}
+    legacy_status = {
+        "connected",
+        "state",
+        "device_address",
+        "device_name",
+        "last_activity",
+        "error",
+        "reconnecting",
+        "reconnect_attempt",
+        "reconnect_max_attempts",
+    }
+    legacy_device = {"name", "address", "rssi", "paired", "known"}
+    original_adapter = _install_fake_adapter(
+        name="MC-b878-DK5EN-98", identity=("bleak", "uuid", False), address=_UUID_ADDR
+    )
+    original_state_adapter = ble_main.state.ble_adapter
+    ble_main.state.ble_adapter = cast(
+        "BLEAdapter",
+        _FakeAdapter(
+            "MC-b878-DK5EN-98",
+            identity=("bleak", "uuid", True),
+            address=_UUID_ADDR,
+        ),
+    )
+    original_key = ble_main.API_KEY
+    ble_main.API_KEY = ""
+    try:
+        client = TestClient(ble_main.app)
+
+        health = client.get("/health").json()
+        record("/health: every pre-existing key still present", legacy_health <= set(health))
+        record(
+            "/health: backend / platform / address_kind / capabilities present and correct",
+            health.get("backend") == "bleak"
+            and health.get("platform") == sys.platform
+            and health.get("address_kind") == "uuid"
+            and health.get("capabilities") == {"pair": False, "unpair": False},
+        )
+
+        status = client.get("/api/ble/status").json()
+        record(
+            "/api/ble/status: every pre-existing key still present", legacy_status <= set(status)
+        )
+        record(
+            "/api/ble/status: address_kind present and correct",
+            status.get("address_kind") == "uuid",
+        )
+
+        devices = client.get("/api/ble/devices").json()
+        record(
+            "/api/ble/devices: count and devices keys kept", {"devices", "count"} <= set(devices)
+        )
+        entry = (devices.get("devices") or [{}])[0]
+        record(
+            "/api/ble/devices: every pre-existing device key still present",
+            legacy_device <= set(entry),
+        )
+        record(
+            "/api/ble/devices: address_kind present and correct on each device",
+            entry.get("address_kind") == "uuid",
+        )
+
+        # No adapter yet (before lifespan): health must not crash and reports nulls.
+        ble_main.state.ble_adapter = None
+        bare = client.get("/health").json()
+        record(
+            "/health: no adapter yet reports backend/address_kind None, capabilities {}",
+            bare.get("backend") is None
+            and bare.get("address_kind") is None
+            and bare.get("capabilities") == {}
+            and legacy_health <= set(bare),
+        )
+    finally:
+        ble_main._adapter = original_adapter
+        ble_main.state.ble_adapter = original_state_adapter
+        ble_main.API_KEY = original_key
+
+
 async def run_ble_service_tests() -> bool:
     """Run the ble_service suite. True iff every case passed.
 
@@ -6765,7 +6968,12 @@ async def run_ble_service_tests() -> bool:
         await case(_record)
 
     # Node time zone (TZ-01 firmware): node_tz.py + set_time() branching.
+    # Also macOS backend W4: main.py integration (bind guard, unsupported ops, address kind).
     for sync_case in (
+        _test_check_bind_security,
+        _test_pair_unpair_unsupported_is_http_200,
+        _test_load_ble_state_ignores_wrong_address_kind,
+        _test_backend_identity_keys_and_legacy_keys,
         _test_node_tz_host_posix_tz_reads_footer,
         _test_node_tz_validate_vectors,
         _test_node_tz_env_override_and_policy,
