@@ -1,0 +1,27 @@
+# Authelia 4.39 test config. Secrets come from files (AUTHELIA_*_FILE env in compose).
+server:
+  address: tcp://0.0.0.0:9091
+log:
+  level: info
+theme: light
+authentication_backend:
+  file:
+    path: /config/users_database.yml
+access_control:
+  default_policy: deny
+  rules:
+    - domain: mcapp-test.air-maxx.net
+      policy: one_factor
+session:
+  cookies:
+    - domain: air-maxx.net
+      authelia_url: https://auth-test.air-maxx.net
+      default_redirection_url: https://mcapp-test.air-maxx.net
+      expiration: 1h
+      inactivity: 15m
+storage:
+  local:
+    path: /data/db.sqlite3
+notifier:
+  filesystem:
+    filename: /data/notification.txt

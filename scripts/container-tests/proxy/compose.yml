@@ -1,0 +1,92 @@
+# Proxy tests W1-W4 (container campaign). Run exactly ONE mcapp profile at a time:
+#   open | basic | authelia   (all three share volume, UDP port and router name)
+name: mcapp-ct
+
+x-mcapp: &mcapp
+  image: mcapp-spike:arm64
+  environment:
+    MCAPP_BIND_HOST: 0.0.0.0
+  volumes:
+    - mcapp-data:/var/lib/mcapp
+    - ../image/config.example.json:/etc/mcapp/config.json:ro
+  read_only: true
+  tmpfs:
+    - /tmp
+  ports:
+    - "1799:1799/udp"
+  networks: [traefik-net]
+  logging:
+    driver: json-file
+    options: {max-size: 10m, max-file: "3"}
+  restart: unless-stopped
+
+x-labels: &labels
+  traefik.enable: "true"
+  traefik.docker.network: traefik-net
+  traefik.http.routers.mcapp-ct.rule: Host(`mcapp-test.air-maxx.net`)
+  traefik.http.routers.mcapp-ct.entrypoints: web
+  traefik.http.routers.mcapp-ct.service: mcapp-ct
+  traefik.http.services.mcapp-ct.loadbalancer.server.port: "2981"
+  # negative = flush immediately after each write (required for SSE)
+  traefik.http.services.mcapp-ct.loadbalancer.responseforwarding.flushinterval: "-1"
+
+services:
+  # (a) no auth
+  mcapp-open:
+    <<: *mcapp
+    profiles: [open]
+    labels:
+      <<: *labels
+
+  # (b) Traefik basicauth (users from .env, $ already doubled there)
+  mcapp-basic:
+    <<: *mcapp
+    profiles: [basic]
+    labels:
+      <<: *labels
+      traefik.http.routers.mcapp-ct.middlewares: ct-basic
+      traefik.http.middlewares.ct-basic.basicauth.users: "${CT_BASICAUTH_USERS:?copy .env.example to .env}"
+      traefik.http.middlewares.ct-basic.basicauth.removeheader: "true"
+
+  # (c) Authelia forwardauth
+  mcapp-authelia:
+    <<: *mcapp
+    profiles: [authelia]
+    labels:
+      <<: *labels
+      traefik.http.routers.mcapp-ct.middlewares: ct-authelia
+      traefik.http.middlewares.ct-authelia.forwardauth.address: http://authelia:9091/api/authz/forward-auth
+      traefik.http.middlewares.ct-authelia.forwardauth.trustForwardHeader: "true"
+      traefik.http.middlewares.ct-authelia.forwardauth.authResponseHeaders: Remote-User,Remote-Groups,Remote-Name,Remote-Email
+
+  authelia:
+    image: authelia/authelia:4.39.28
+    profiles: [authelia]
+    environment:
+      AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET_FILE: /secrets/jwt
+      AUTHELIA_SESSION_SECRET_FILE: /secrets/session
+      AUTHELIA_STORAGE_ENCRYPTION_KEY_FILE: /secrets/storage
+    volumes:
+      - ./authelia/configuration.yml:/config/configuration.yml:ro
+      - ./authelia/users_database.yml:/config/users_database.yml:ro
+      - ./authelia/secrets:/secrets:ro
+      - authelia-data:/data
+    networks: [traefik-net]
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: traefik-net
+      traefik.http.routers.authelia-ct.rule: Host(`auth-test.air-maxx.net`)
+      traefik.http.routers.authelia-ct.entrypoints: web
+      traefik.http.services.authelia-ct.loadbalancer.server.port: "9091"
+    restart: unless-stopped
+
+volumes:
+  mcapp-data:
+  authelia-data:
+
+networks:
+  traefik-net:
+    external: true

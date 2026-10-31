@@ -1,0 +1,2 @@
+127.0.0.1 mcapp-test.air-maxx.net
+127.0.0.1 auth-test.air-maxx.net
