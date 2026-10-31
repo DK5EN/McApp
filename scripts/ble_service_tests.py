@@ -97,7 +97,7 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from ble_service.src import ble_adapter, node_tz  # noqa: E402 - needs the sys.path bootstrap above
+from ble_service.src import ble_adapter, ble_session, node_tz  # noqa: E402 - needs the sys.path bootstrap above
 from ble_service.src import main as ble_main  # noqa: E402 - same
 from ble_service.src.ble_adapter import (  # noqa: E402 - same
     ADAPTER_INTERFACE,
@@ -6063,13 +6063,13 @@ class _TzRig:
         self._state = _snapshot_state("ble_adapter")
         self._cache = dict(ble_main.state.register_cache)
         self._env = {k: os.environ.get(k) for k in _TZ_ENV_VARS}
-        self._consts = {k: getattr(ble_adapter, k) for k in _TZ_TIMING_CONSTANTS}
+        self._consts = {k: getattr(ble_session, k) for k in _TZ_TIMING_CONSTANTS}
         for key in _TZ_ENV_VARS:
             os.environ.pop(key, None)
         os.environ.update(self.env)
-        ble_adapter.NODE_TZ_PROBE_TIMEOUT_S = self.probe_timeout
-        ble_adapter.NODE_TZ_VERIFY_TIMEOUT_S = self.verify_timeout
-        ble_adapter.TIME_SYNC_SETTLE_S = 0.0
+        ble_session.NODE_TZ_PROBE_TIMEOUT_S = self.probe_timeout
+        ble_session.NODE_TZ_VERIFY_TIMEOUT_S = self.verify_timeout
+        ble_session.TIME_SYNC_SETTLE_S = 0.0
         ble_main.state.register_cache.clear()
         ble_main.state.ble_adapter = self.adapter
         self.adapter._status.state = ConnectionState.CONNECTED
@@ -6085,7 +6085,7 @@ class _TzRig:
             else:
                 os.environ[key] = value
         for key, const in self._consts.items():
-            setattr(ble_adapter, key, const)
+            setattr(ble_session, key, const)
         ble_main.state.register_cache.clear()
         ble_main.state.register_cache.update(self._cache)
         _restore_state(self._state)
@@ -6193,15 +6193,15 @@ async def _test_node_tz_rule_set_sends_time_only(record: Any) -> None:
         record("node TZ T3: branch is 'rule'", rig.adapter.last_time_sync_branch == "rule")
 
         # The DST loop, ticking fast, must not send anything for this node.
-        original_interval = ble_adapter.DST_CHECK_INTERVAL_S
-        ble_adapter.DST_CHECK_INTERVAL_S = 0.01  # type: ignore[assignment]  # test: tick fast
+        original_interval = ble_session.DST_CHECK_INTERVAL_S
+        ble_session.DST_CHECK_INTERVAL_S = 0.01  # type: ignore[assignment]  # test: tick fast
         try:
             task = asyncio.create_task(rig.adapter._dst_check_loop())
             await asyncio.sleep(0.1)
             rig.adapter._status.state = ConnectionState.DISCONNECTED
             await asyncio.wait_for(task, timeout=2)
         finally:
-            ble_adapter.DST_CHECK_INTERVAL_S = original_interval
+            ble_session.DST_CHECK_INTERVAL_S = original_interval
         record(
             "node TZ T3: the DST loop sends nothing to a node with a rule",
             len(rig.wire) == 1,
@@ -6248,7 +6248,7 @@ async def _test_node_tz_settz_unverified_sends_time_only(record: Any) -> None:
             rig.push("SN1", VIA=True, TZ="")
 
     with _TzRig(registers, env={"MCAPP_NODE_TZ": _CET_RULE}, on_command=node) as rig:
-        adapter_logs, restore_a = _capture_logs(ble_adapter.logger)
+        adapter_logs, restore_a = _capture_logs(ble_session.logger)
         tz_logs, restore_t = _capture_logs(node_tz.logger)
         try:
             ok = await rig.adapter.set_time()
@@ -6331,7 +6331,7 @@ async def _test_node_tz_unclassifiable_sends_time_only(record: Any) -> None:
     """T8: empty cache, the node answers nothing: unknown. 0x20 only, no
     `--utcoff` (UTC is always right), a warning, DST watcher left idle."""
     with _TzRig({}) as rig:
-        logs, restore = _capture_logs(ble_adapter.logger)
+        logs, restore = _capture_logs(ble_session.logger)
         try:
             ok = await rig.adapter.set_time()
         finally:
@@ -6433,7 +6433,7 @@ async def _test_node_tz_failed_probe_write_is_unknown_not_unsupported(record: An
     failing_rig = _TzRig({"SN": {"UTCOF": 2.0}})
     failing_rig.fail_a0 = True
     with failing_rig as rig:
-        logs, restore = _capture_logs(ble_adapter.logger)
+        logs, restore = _capture_logs(ble_session.logger)
         try:
             ok = await rig.adapter.set_time()
         finally:
