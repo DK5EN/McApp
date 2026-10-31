@@ -172,7 +172,7 @@ any other package.
 - **The Zero still has to cope.** A venv package of tens of MB per release, unpacked by dpkg next to
   `apt-get upgrade`, on a box that already needs temporary swap for upgrades.
 
-### Recommendation
+### Recommendation (approved by the operator, 2026-10-31)
 
 1. **Start with `mcapp-ble` as a `.deb`.** It is small, has no slots, no migrations and no system
    tuning beyond a unit and a group, and it targets "any Linux box with a BLE adapter", which is

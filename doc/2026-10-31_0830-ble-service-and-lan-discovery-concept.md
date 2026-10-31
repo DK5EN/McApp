@@ -75,14 +75,15 @@ Status: Ideation, backlog, 2026-10-31. No code, no decisions beyond the operator
 
 ### 1. Standalone packaging
 
-| Option                                | Install effort          | Updates               | Fit for a NAS or generic Linux                                       | Verdict                     |
-| ------------------------------------- | ----------------------- | --------------------- | -------------------------------------------------------------------- | --------------------------- |
-| `uv tool install git+...@vX.Y.Z`      | one command, needs uv   | re-run with new tag   | good (uv self-contained)                                             | engine of the installer     |
-| `pipx install` from git tag           | one command, needs pipx | `pipx upgrade` w/ tag | good, but a second tool                                              | equivalent, no gain over uv |
-| `mcapp-ble.sh` (uv tool + unit + key) | one curl, one prompt    | `mcapp-ble.sh update` | best: handles unit, user, key                                        | recommended                 |
-| `.deb` package                        | `apt install`           | apt                   | Debian family only; needs a repo or hosted file, build in release.sh | later, if demand            |
-| Docker image for the BLE service      | n/a                     | n/a                   | needs host BlueZ socket, privileged mounts                           | rejected by operator rule   |
+| Option                                | Install effort          | Updates               | Fit for a NAS or generic Linux                                       | Verdict                        |
+| ------------------------------------- | ----------------------- | --------------------- | -------------------------------------------------------------------- | ------------------------------ |
+| `uv tool install git+...@vX.Y.Z`      | one command, needs uv   | re-run with new tag   | good (uv self-contained)                                             | engine of the installer        |
+| `pipx install` from git tag           | one command, needs pipx | `pipx upgrade` w/ tag | good, but a second tool                                              | equivalent, no gain over uv    |
+| `mcapp-ble.sh` (uv tool + unit + key) | one curl, one prompt    | `mcapp-ble.sh update` | best: handles unit, user, key                                        | recommended                    |
+| `.deb` package                        | `apt install`           | apt                   | Debian family only; needs a signed APT repo, built in Actions (nfpm) | **decided 2026-10-31: target** |
+| Docker image for the BLE service      | n/a                     | n/a                   | needs host BlueZ socket, privileged mounts                           | rejected by operator rule      |
 
+- **Decision 2026-10-31 (operator): the BLE service becomes the first Debian package**, ahead of McApp itself (which stays on `mcapp.sh` until the container has shipped; `doc/2026-10-31_1100-ansible-and-web-server-evaluation.md`, Question 3). The `mcapp-ble.sh` installer below remains the bootstrap path until the APT repository exists, and the `.deb` moves from "optional" to a planned wave.
 - Recommendation: `mcapp-ble.sh`, a single script (`install`, `update`, `show-key`, `status`, `uninstall`) following the style of `bootstrap/mcapp.sh` but with none of its system-wide side effects (no firewall rewrite, no hostname, no Caddy).
 - Pinned to a release tag, never `main`, so a LAN box cannot drift ahead of its McApp. The installer takes `--tag`, defaulting to the newest release asset.
 - Resulting host layout (all outside any McApp path):
@@ -213,7 +214,7 @@ Settings, "Bluetooth" section (new), no config-file edit anywhere:
 | 3    | Client: `api_version` negotiation, 423 handling, runtime BLE target (URL, key, mode) via a holder object, LAN-only guard on the new routes                           | `src/mcapp/ble_client_remote.py`, `src/mcapp/config_loader.py`, `src/mcapp/main.py`, new runtime-state module                                                                        |
 | 4    | Discovery: avahi D-Bus publisher in BLE service, McApp avahi service file, on-demand zeroconf browser, `/api/discovery/*`                                            | `ble_service/src/` (new module), `src/mcapp/discovery.py` (new), `src/mcapp/sse_routes/` (new route), `bootstrap/lib/`, optional `avahi-daemon` + system epoch bump                  |
 | 5    | Webapp Settings panel (separate repo, own waves), contract doc, node card with learned IP                                                                            | webapp repo; `doc/`                                                                                                                                                                  |
-| 6    | Optional: pairing code (option B), `.deb`, firmware `addService` request                                                                                             | later                                                                                                                                                                                |
+| 6    | `.deb` for `mcapp-ble` (decided) plus the signed APT repository; optional pairing code (option B), firmware `addService` request                                     | later                                                                                                                                                                                |
 
 - Waves 1 and 2 are independently useful (a LAN BLE box with manual URL) and ship before any discovery work. Wave 4 is deliberately last: discovery is a convenience over a working manual path.
 - Tests: each wave adds suites to `scripts/run_startup_tests.py` (a suite not wired into `main()` is gated by nothing). The auth-refusal rule needs a mutation-pinned test (loopback allowed, LAN refused with empty / `disabled` / short key).
@@ -240,8 +241,8 @@ Settings, "Bluetooth" section (new), no config-file edit anywhere:
 
 ## Open questions
 
-1. Does `uv tool install` from a git subdirectory (`#subdirectory=ble_service`) work with the current hatch layout once the package is renamed, or do releases need to publish a wheel asset? Needs a clean-room test.
-2. `avahi-daemon` (and `libnss-mdns` for `.local` name resolution) as bootstrap dependencies: add (system epoch bump) or keep "assumed, degrade gracefully"? Proposal: add both, since the BLE-service publisher and the `.local` resolver need them.
+1. (Researched 2026-10-31) `uv tool install "git+https://github.com/DK5EN/McApp@vX.Y.Z#subdirectory=ble_service"` should work (the `#subdirectory=` URL form is documented for uv dependencies, tag pinning with `@ref` for tools; the combination for `uv tool` is inferred, test once). Three facts: (a) `ble-service = "src.main:app"` points at the FastAPI object, which a console script would call and fail, so wave 1 needs a real `main()` running `uvicorn.run(app, ...)`; (b) the wheel installs a top-level package named `src`, which must become `mcapp_ble` (`[project.scripts] mcapp-ble = "mcapp_ble.main:main"`), and the unit templates' `ble_service.src.main:app` path moves with it; (c) `uv tool install` does NOT honour `ble_service/uv.lock`, so dependency versions float; pin with constraints from `uv export`. With the `.deb` decided, the lockfile matters less: the package build runs `uv sync --frozen` and ships the venv.
+2. (Decided 2026-10-31: add them.) `avahi-daemon` and `libnss-mdns` become explicit bootstrap dependencies, with a system-epoch bump. RAM impact on today's fleet is zero: both are already installed and `avahi-daemon` is already running on mcapp.local and rpizero, from the Raspberry Pi OS image. Declaring them only protects images that do not ship them.
 3. Runtime re-pointing of the BLE client: holder object (recommended, section 5 item 5a) or restart; the holder's start/stop ordering against the SSE task and cached registers is the thing to prove.
 4. Should `owner` be per McApp instance id or per client IP? Instance id survives DHCP changes; IP is not spoofable by a header. Proposal: id, since the key is the trust anchor anyway. Owner grace is fixed at > 150 s (section 3).
 5. Minimum supported BlueZ and distro matrix for the standalone installer (Debian 12/13, Ubuntu LTS, Armbian, DSM-class NAS where BlueZ may not be installable at all).

@@ -762,7 +762,7 @@ footer { font-size: 14px; color: var(--muted); display: grid; gap: 6px; }
       <ul>
         <li>Publish the container port on loopback with any free host port: <code>127.0.0.1:8085:2981</code>.</li>
         <li>The login must cover every path, <code>/api/</code> and <code>/events</code> included.</li>
-        <li>Browser tabs: Basic auth works. Installed iPhone app: prefer an SSO cookie (Authelia, Authentik).</li>
+        <li>Browser tabs: Basic auth works. Installed iPhone app: no Basic auth; a login page on the same origin with a session cookie.</li>
         <li>nginx: <code>proxy_buffering off</code> for the live stream.</li>
       </ul>
     </article>
@@ -1096,18 +1096,18 @@ volumes:
 
 <section id="questions">
   <header>
-    <div class="sec-num">13 · Open questions</div>
-    <h2>Decisions still needed</h2>
+    <div class="sec-num">13 · Decisions</div>
+    <h2>Questions answered on 2026-10-31</h2>
   </header>
   <ol class="qlist">
-    <li>Exact memory thresholds in kB: refuse under 800000, confirm under 1700000? Needs real <code>/proc/meminfo</code> values from 1, 2 and 4 GB Pis. <span class="tag">B11</span></li>
-    <li>Is a display manager enabled on mcapp.local, and what do a Pi 4 desktop and an Armbian / Orange Pi image report? <span class="tag">B11</span></li>
-    <li>Which platforms get a "UDP supported" label: Synology, QNAP, Unraid, rootless Podman? Is 32-bit armv7 a target? <span class="tag">B12</span></li>
-    <li>Is GitHub Actions enabled on <code>DK5EN/McApp</code>? An earlier note says CI was switched off manually. <span class="tag">B12</span></li>
-    <li>Does the webapp's GPS card cope with a 501 from <code>/api/timezone</code>, or should it hide the hint? <span class="tag">B12</span></li>
-    <li>Does an installed iPhone PWA survive Basic auth in front of McApp, or must the docs require an SSO cookie login? <span class="tag">B12</span></li>
-    <li>Should the bootstrap install <code>avahi-daemon</code> and <code>libnss-mdns</code>? That needs a system-epoch bump. <span class="tag">B13</span></li>
-    <li>Can <code>uv tool install</code> install the BLE service from a git subdirectory once its package is renamed? <span class="tag">B13</span></li>
+    <li><b>Memory thresholds.</b> Live on mcapp.local: the McApp stack uses about 120 MB RSS (mcapp 73, BLE service 24, Caddy 18) of 474 MB. Refuse below 800000 kB, confirm below 1700000 kB; one real 1 GB and 2 GB reading still wanted. Desktop boxes skip both RAM disks (<code>/tmp</code> and <code>/var/log</code>). <span class="tag">B11</span></li>
+    <li><b>Desktop detection.</b> mcapp.local and rpizero both boot to <code>multi-user.target</code> with no display manager. No Armbian in the fleet; the display-manager rule stays as a safeguard. <span class="tag">B11</span></li>
+    <li><b>Platforms.</b> 64-bit only. Supported: rootful Docker (Pi OS, Debian, Ubuntu), Synology, QNAP, Unraid with host network as fallback, rootful Podman. Conditional: rootless Podman on pasta. Unsupported: rootless Docker (builtin driver), rootless Podman bridge networks. <span class="tag">B12</span></li>
+    <li><b>GitHub Actions.</b> Enabled and the repo is public; only the <code>tests</code> workflow is switched off. Public repos get free runners, native arm64 runners and free GHCR storage. Fallback: local <code>docker buildx</code> in <code>release.sh</code>. <span class="tag">B12</span></li>
+    <li><b>GPS card on a failing <code>/api/timezone</code>.</b> No visible breakage, but it retries on every GPS update and logs a client error each time: small webapp fix, and the backend must return 501 explicitly. <span class="tag">B12</span></li>
+    <li><b>iPhone app behind a login.</b> No Basic auth: the installed app does not show the prompt. Use a login page on the same origin with a session cookie; device test in wave 0. <span class="tag">B12</span></li>
+    <li><b>avahi and libnss-mdns.</b> Added as bootstrap dependencies. Zero RAM impact: both already run on mcapp.local and rpizero. <span class="tag">B13</span></li>
+    <li><b>Installing the BLE service.</b> <code>uv tool install</code> from the repo subdirectory should work after an entry-point fix and a package rename; the decided route is a Debian package for <code>mcapp-ble</code>. <span class="tag">B13</span></li>
   </ol>
 </section>
 

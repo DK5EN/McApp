@@ -411,21 +411,31 @@ Resolved and removed from this list: `--allow-desktop` vs `--force` (dedicated f
 suggestion) and the non-interactive 1-2 GB desktop on `--converge`/`--skip` (resolves `desktop`,
 see Persistence).
 
-- **Q1. Threshold values.** Nominal 1 GB and 2 GB boards report less than nominal `MemTotal`.
-  Proposal: refuse below 800000 kB, confirm below 1700000 kB (values unverified on real boards).
-  Needs `/proc/meminfo` from a 1 GB, 2 GB and 4 GB Pi.
-- **Q2. `/var/log` tmpfs on desktop.** The whole `configure_tmpfs` is skipped here. A 30 MB
-  `/var/log` tmpfs would still save SD writes on a Pi 4 desktop; keep it and skip only `/tmp`? (That
-  would also keep the journal bind valid and drop the `findmnt` special case.)
+- **Q1. Threshold values (live data 2026-10-31).** mcapp.local (Zero 2W, tuned) reports
+  `MemTotal` 473788 kB, `MemAvailable` 207588 kB and about 80 MB of swap in use. The McApp stack
+  measured there: `mcapp` 73 MB RSS, the BLE service (uvicorn) 24 MB, Caddy 18 MB, lighttpd below
+  the top 12, so **about 120 MB RSS for the whole stack**. rpizero (Zero 2W, untuned, mc-chat)
+  reports 426140 kB. A desktop session needs several hundred MB on top of that, so a 512 MB board
+  can never host both, while 1 GB is tight and 2 GB is comfortable. Proposal stands: refuse below
+  800000 kB (every 512 MB board, tuned or not, sits far below it), confirm below 1700000 kB. Still
+  wanted: `/proc/meminfo` from a real 1 GB and 2 GB Pi to place the second threshold.
+- **Q2. RAM disks on desktop (decided 2026-10-31: skip both).** The operator's call: on a desktop
+  image the RAM disks break things. mcapp.local runs `/tmp` as a 150 MB tmpfs and `/var/log` as a
+  30 MB tmpfs; a desktop writes far more to both (display manager, compositor and browser logs,
+  apt history, browser downloads and caches in `/tmp`), and a full `/var/log` tmpfs makes
+  services fail to log or start. The desktop profile therefore skips the whole `configure_tmpfs`,
+  `/var/log` included, and the journal bind follows the "not tmpfs" rule in Persistence. A box
+  that already has the McApp tmpfs block and becomes desktop gets it removed by the revert path.
 - **Q3. `disable_ipv6` on desktop.** Kept for now; a desktop user may expect IPv6.
 - **Q4. Epoch bump or not.** Recommended: no bump (the design changes nothing for existing headless
   boxes). Bump to 7 only if a future change alters `setup_system` output for them.
 - **Q5. Pre-image for `config.txt`.** Accept the new backup file (first-tune only), or revert by
   inference only with the accepted risk?
-- **Q6. Live detection check before W1 (partly answered).** mcapp.local (Lite, Zero 2W):
-  `get-default` = `multi-user.target` (2026-10-31). Still open: `systemctl is-enabled` /
-  `is-active display-manager.service` on mcapp.local, the same on a Pi 4 desktop, and
-  `get-default` on an Armbian / Orange Pi image.
+- **Q6. Live detection check (answered for the fleet, 2026-10-31).** mcapp.local and rpizero
+  (both Zero 2W, Lite): `get-default` = `multi-user.target`, no `display-manager.service` unit at
+  all (`not-found` / inactive). No Armbian or Orange Pi box exists in the fleet, so the
+  "graphical.target without a desktop" case cannot be checked and stays covered only by the
+  display-manager requirement. Still useful: the same two commands on a Pi 4 desktop before W4.
 
 ## Implementation sketch (waves)
 

@@ -349,12 +349,22 @@ services. Both must work without Traefik.
   SPA leaves the API open. The container's own HEALTHCHECK calls `127.0.0.1:2981/health` directly,
   so no path needs an exception for it.
 - **Browser tabs: HTTP Basic auth works.** The browser caches the credentials per origin and sends
-  them on `fetch` and on the same-origin `EventSource` that carries SSE.
-- **Installed PWA, especially iOS: prefer a cookie-based login** (Authelia, Authentik, oauth2-proxy
-  via `forwardAuth`, or the proxy's own session login). A standalone iOS PWA handles a Basic auth
-  challenge poorly and can end up with a blank app after the credential cache expires (unverified,
-  test in Wave 0 on an iPhone). With a session cookie the service worker's same-origin requests
-  carry the cookie.
+  them on `fetch` and on the same-origin `EventSource` that carries SSE. Fine for a desktop
+  browser, not for the installed app (next bullet).
+- **Installed PWA (iOS): no Basic auth; a same-origin login page with a session cookie**
+  (researched 2026-10-31). A home-screen app reportedly never shows the Basic auth prompt and
+  renders the 401 body instead, and a service worker's fetch gets the 401 without a prompt
+  (whatwg/fetch#1132; the iOS report is a single project, verify on a device). Cookies work:
+  since iOS 17.2 login cookies are copied into the installed app, and the app's own domain is
+  exempt from ITP's 7-day cap; set the cookie with `Set-Cookie` and a long `Max-Age`. **The login
+  page must be on the same origin (or registrable domain)** as McApp: a redirect to a separate
+  `auth.example.com` leaves the standalone app, and an expired session turns `fetch`/SSE into
+  cross-origin redirects that CORS blocks. So Authelia/Authentik work when served on a path or
+  subdomain of the same site, and the webapp must answer a 401 or login redirect with a full-page
+  navigation. iPhone test checklist (iOS 17 and 18): log in from the icon; force-quit and
+  relaunch; SSE still arrives after 5 min in the background and after a lock; Wi-Fi off/on
+  reconnects without a prompt; push subscribe plus one test push (operator OK first); 8+ days
+  idle, then relaunch; offline load; an expired session lands on the login page inside the app.
 - **Web Push is unaffected.** Delivery goes from McApp out to the push service; the subscribe call
   is a normal same-origin request behind the login.
 - **SSE through the proxy needs buffering off** (nginx `proxy_buffering off;` plus a long
@@ -656,18 +666,43 @@ jobs:
 
 ## Open questions
 
-- Which platforms get a "supported" label for UDP: Pi OS 64-bit + Docker CE, Synology Container
-  Manager, QNAP Container Station, Unraid, rootless Podman? (Wave 0 test matrix.)
-- 32-bit Pi OS (armv7): out of scope, or add `linux/arm/v7` (musllinux armv7l wheel coverage is
-  unchecked)?
-- Is the webapp's GPS card fine with a 501 from `/api/timezone`, or should it hide the hint?
+- (Researched 2026-10-31; Wave 0 confirms) UDP source-IP support by platform:
+  - **Supported:** rootful Docker CE on Pi OS 64-bit, Debian, Ubuntu (DNAT keeps the source;
+    docker-proxy only handles loopback and cross-network traffic); Synology Container Manager,
+    QNAP Container Station and Unraid in bridge mode, each with `network_mode: host` as the
+    documented fallback (no vendor documentation on UDP source IP found; Synology users run UDP
+    services in host mode); rootful Podman (netavark DNAT).
+  - **Conditional:** rootless Podman 5 only on its default pasta network (`-p`, no
+    compose-created network), after a smoke test.
+  - **Unsupported:** rootless Docker with the default builtin port driver (rootlesskit docs: source
+    IP propagated "for TCP only", not UDP); rootless Podman on bridge or custom networks
+    (rootlessport does not preserve the client address; Pi-hole reports the same for DNS).
+  - **Startup warning:** if the first UDP source is the bridge gateway (an `x.x.x.1` in
+    `172.16.0.0/12`), log a WARNING naming this section; it catches the NAT failure on day one.
+  - 32-bit Pi OS is moot for Docker anyway: Docker Engine 29 ships no 32-bit Raspberry Pi OS
+    packages.
+- (Decided 2026-10-31) 64-bit only: `linux/arm64` and `linux/amd64`. No `linux/arm/v7`; a
+  32-bit Pi OS user reinstalls with 64-bit (the Zero 2W runs 64-bit already).
+- (Answered 2026-10-31) The GPS card survives a failing `/api/timezone`, but needs a small webapp
+  change. The automatic lookup (`NodeGpsCard.vue:55-70`, a `watchEffect`) swallows any error and the
+  timezone field falls back to `SN.UTCOF` or `--`; the Locate button shows "UTC offset lookup
+  failed" and skips `--utcoff`. But the `watchEffect` retries on every GPS register update while no
+  timezone is known, and `stallReporter.ts:493-505` records a `client_error` row for every non-2xx,
+  so a container would fill `stall_events` with noise. Webapp change: remember a failed lookup for
+  the session and pass `skipRecord` for this path. Backend change 8 must map the missing module to
+  501 explicitly: today `_get_tz_finder()` (`weather.py:28-33`) has no guard, so the `ImportError`
+  surfaces as a plain 500.
 - Should `:full` (with `timezonefinder`, amd64 only) exist at all?
-- Is GitHub Actions enabled on `DK5EN/McApp`? An earlier note says CI was manually disabled; confirm
-  before depending on it.
+- GitHub Actions (checked 2026-10-31): Actions are enabled on the repository and it is public;
+  only the `tests` workflow is `disabled_manually` (the operator recalls it was switched off when
+  it ran out of resources). For a public repository, standard runners and public GHCR storage cost
+  nothing, and native arm64 runners (`ubuntu-24.04-arm`) are available for public repositories
+  (verify before Wave 4), so no QEMU is needed. Fallback if Actions stay off: build and push the
+  multi-arch image locally with `docker buildx` during `release.sh`. Decide which before Wave 4.
 - Traefik specifics (default `compress` behaviour for `text/event-stream`, `flushInterval` default) are
   recalled, not verified against the deployed version.
-- Does an installed iOS PWA survive HTTP Basic auth in front of McApp, or must the docs require a
-  cookie-based login (Authelia/Authentik/oauth2-proxy)? Test on an iPhone in Wave 0.
+- (Researched 2026-10-31) iOS PWA: no Basic auth, same-origin cookie login; see "Behind your own
+  reverse proxy" for the reasoning and the iPhone checklist. The device test in Wave 0 remains.
 
 ## Appendix: k3s recipe (unsupported)
 
