@@ -25,10 +25,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from sse_starlette.sse import EventSourceResponse
 
-from . import ble_adapter
-from .ble_adapter import (
+from .ble_adapter import BLEAdapter
+from .ble_types import (
+    DEVICE_NOT_FOUND_MSG,
     MESHCOM_NAME_PREFIX,
-    BLEAdapter,
     ConnectionState,
     EnsureConnectedResult,
     build_hello_bytes,
@@ -957,14 +957,12 @@ def _error_code_for_result(result: EnsureConnectedResult) -> str:
     browser -- see the error_code wire-vocabulary note above STATUS_CONNECTED.
     """
     if result.stage == "connect":
-        # `_DEVICE_NOT_FOUND_MSG` is private to ble_adapter.py, imported
+        # `DEVICE_NOT_FOUND_MSG` lives in ble_types.py, imported
         # (rather than a duplicated literal here) for the same reason
         # `_is_device_not_found_error` shares it with `_attempt_connection`:
         # a second copy of this string could silently drift from the one
         # that actually gets raised.
-        if (
-            result.error_text and ble_adapter._DEVICE_NOT_FOUND_MSG in result.error_text  # noqa: SLF001 - shared failure-signature marker, see docstring
-        ):
+        if result.error_text and DEVICE_NOT_FOUND_MSG in result.error_text:
             return _ERROR_CODE_DEVICE_NOT_FOUND
         return _ERROR_CODE_CONNECT_FAILED
     if result.stage == "pair":

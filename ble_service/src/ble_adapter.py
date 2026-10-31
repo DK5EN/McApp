@@ -36,14 +36,11 @@ Extended Register Queries:
 
 import asyncio
 import contextlib
-import hashlib
 import logging
 import struct
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from enum import Enum, IntEnum
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 # Imported from their defining submodules (not the `dbus_next`/`dbus_next.aio`
@@ -59,6 +56,36 @@ from dbus_next.service import ServiceInterface, method
 from dbus_next.signature import Variant
 
 from . import node_tz
+
+# Pure values/types live in ble_types (importable without dbus_next); they are
+# re-exported here under their historic names.
+from .ble_types import (  # noqa: F401 - re-exports for existing importers
+    _FRAME_TYPE_BYTE_INDEX,
+    A0_MIN_GAP_S,
+    DEVICE_NOT_FOUND_MSG,
+    DST_CHECK_INTERVAL_S,
+    KEEPALIVE_INTERVAL_S,
+    MESHCOM_NAME_PREFIX,
+    NODE_TZ_PROBE_TIMEOUT_S,
+    NODE_TZ_VERIFY_TIMEOUT_S,
+    NUS_RX_UUID,
+    NUS_TX_UUID,
+    OPEN_HELLO,
+    RAM_ONLY,
+    REGISTER_QUERY_DELAY_S,
+    SAVE_TO_FLASH,
+    TIME_SYNC_SETTLE_S,
+    WRITE_TIMEOUT_S,
+    BackendUnsupportedError,
+    BleBackend,
+    BLEDevice,
+    BLEStatus,
+    ConnectionState,
+    EnsureConnectedResult,
+    MsgType,
+    _frame,
+    build_hello_bytes,
+)
 
 if TYPE_CHECKING:
     # dbus_next.service._Method (see dbus_next/service.py) reads each D-Bus
@@ -109,9 +136,8 @@ _INNER_LENGTH_BYTE_MAX = 0xFF
 # what went wrong -- see `BLEAdapter.send_command`'s length pre-check.
 _FRAME_LENGTH_PREFIX_MAX = 255
 
-# Timing constants (seconds)
+# Timing constants (seconds); shared ones live in ble_types.
 CONNECT_TIMEOUT_S = 10.0
-WRITE_TIMEOUT_S = 5.0
 DISCONNECT_TIMEOUT_S = 3.0
 # Pre-connect stale-state cleanup; distinct value from DISCONNECT_TIMEOUT_S.
 STALE_DISCONNECT_TIMEOUT_S = 5.0
@@ -120,28 +146,8 @@ STALE_DISCONNECT_TIMEOUT_S = 5.0
 # runs while `_operation_lock` is held, which would hang every BLE operation
 # until the service is restarted.
 PROPERTY_SET_TIMEOUT_S = 5.0
-KEEPALIVE_INTERVAL_S = 300
-DST_CHECK_INTERVAL_S = 3600
 POST_PAIR_SETTLE_S = 2
-REGISTER_QUERY_DELAY_S = 0.8
-# set_time(): pause between the node-offset command and the 0x20 timestamp so
-# the firmware has applied the offset before it converts UTC to local.
-TIME_SYNC_SETTLE_S = 0.3
-# set_time() node-TZ handling (doc/2026-10-04_1600-node-tz-implementation-plan.md
-# D3/D5): how long to wait for the SN1 push after `--nodeset` (classification
-# probe) and after `--settz` / the follow-up `--nodeset` (verification).
-NODE_TZ_PROBE_TIMEOUT_S = 3.0
-NODE_TZ_VERIFY_TIMEOUT_S = 2.0
-# The firmware drains its whole BLE RX queue into one global `textbuff_phone`
-# and acts on it once per main-loop pass (esp32_main.cpp:3058-3084,
-# nrf52_main.cpp:1642-1670): two 0xA0 (MsgType.TEXT_COMMAND) writes landing in
-# the same pass silently lose all but the last. `write()` serialises via
-# `_write_lock` but that only prevents concurrent D-Bus calls -- it adds no
-# gap between them. This floor is the loop period (unmeasured) rounded up
-# from a 200 ms guess plus margin. Only TEXT_COMMAND frames share this
-# firmware state; the binary config frames (0x20/0x50/0x55/0x70/0x80/0x90/
-# 0x95/0xF0) do not and are never delayed.
-A0_MIN_GAP_S = 0.3
+
 
 # ACK attribution opt-in (firmware proposal docs/ack-wer-hat-quittiert.md
 # §5.5): the node's "first ACK only" gate falls only while this session flag
@@ -152,7 +158,6 @@ A0_MIN_GAP_S = 0.3
 # Pre-attribution firmware answers `--wrong command --ackinfo on` on the
 # command-back channel, which is logged and otherwise harmless.
 ACK_ATTRIBUTION_COMMAND = "--ackinfo on"
-MESHCOM_NAME_PREFIX = "MC-"  # not shared with src/mcapp — ble_service is a separate process
 
 logger = logging.getLogger(__name__)
 
@@ -232,10 +237,7 @@ def _fail_connect(message: str, cause: BaseException | None = None) -> NoReturn:
     raise err
 
 
-# The exact marker _attempt_connection() raises into on InterfaceNotFoundError
-# (a MAC BlueZ has no D-Bus object for yet). Shared with _is_device_not_found_error
-# below so the two can't drift apart.
-_DEVICE_NOT_FOUND_MSG = "Device not found or not paired"
+_DEVICE_NOT_FOUND_MSG = DEVICE_NOT_FOUND_MSG
 
 
 def _is_device_not_found_error(error: BaseException) -> bool:
@@ -365,134 +367,6 @@ PROPERTIES_INTERFACE = "org.freedesktop.DBus.Properties"
 OBJECT_MANAGER_INTERFACE = "org.freedesktop.DBus.ObjectManager"
 AGENT_PATH = "/com/mcapp/agent"
 ADAPTER_PATH = "/org/bluez/hci0"
-OPEN_HELLO = b"\x04\x10\x20\x30"
-
-# Nordic UART Service UUIDs
-NUS_RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  # Write to device
-NUS_TX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  # Read from device (notify)
-
-
-def build_hello_bytes(pin: int) -> bytes:
-    """Build the BLE hello message for the given PIN.
-
-    pin == 0: 4-byte open hello (no authentication).
-    pin 100000-999999: 36-byte hello with SHA-256 of zero-padded 6-digit PIN string.
-    The firmware hashes the ASCII string e.g. b"123456", not the integer bytes.
-    """
-    if pin > 0:
-        digest = hashlib.sha256(f"{pin:06d}".encode()).digest()
-        return bytes([0x24, 0x10, 0x20, 0x30]) + digest
-    return OPEN_HELLO
-
-
-class MsgType(IntEnum):
-    """GATT write-frame type byte (see module docstring's Supported Message Types)."""
-
-    TIME_SYNC = 0x20
-    SET_CALLSIGN = 0x50
-    SET_WIFI = 0x55
-    SET_LATITUDE = 0x70
-    SET_LONGITUDE = 0x80
-    SET_ALTITUDE = 0x90
-    SET_APRS_SYMBOLS = 0x95
-    TEXT_COMMAND = 0xA0
-    SAVE_AND_REBOOT = 0xF0
-
-
-# save_and_reboot-style trailer byte on set_latitude/longitude/altitude: whether
-# the new value is persisted to flash immediately or kept RAM-only until a
-# separate --save / MsgType.SAVE_AND_REBOOT.
-SAVE_TO_FLASH = 0x0A
-RAM_ONLY = 0x0B
-
-
-# Index of the type byte in a `_frame()`-built buffer ([length, type,
-# ...payload]) -- used by `BLEAdapter.write()` to recognise a TEXT_COMMAND
-# frame for A0_MIN_GAP_S without re-deriving the frame layout there.
-_FRAME_TYPE_BYTE_INDEX = 1
-
-
-def _frame(msg_type: MsgType, payload: bytes = b"") -> bytes:
-    """Build a GATT write frame: length-byte + type-byte + payload.
-
-    `length` is len(payload) + 2 — it counts the type byte and the payload,
-    matching the firmware's frame-length convention (see module docstring).
-    """
-    length = len(payload) + 2
-    return length.to_bytes(1, "big") + bytes([msg_type]) + payload
-
-
-class ConnectionState(Enum):
-    """BLE connection states"""
-
-    DISCONNECTED = "disconnected"
-    CONNECTING = "connecting"
-    CONNECTED = "connected"
-    DISCONNECTING = "disconnecting"
-    ERROR = "error"
-
-
-@dataclass
-class BLEDevice:
-    """Discovered BLE device information"""
-
-    name: str
-    address: str
-    rssi: int = 0
-    paired: bool = False
-    connected: bool = False
-    known: bool = False
-    path: str = ""
-
-
-@dataclass
-class BLEStatus:
-    """Current BLE adapter status"""
-
-    state: ConnectionState = ConnectionState.DISCONNECTED
-    device: BLEDevice | None = None
-    error: str | None = None
-    last_activity: float = field(default_factory=time.time)
-
-
-@dataclass
-class EnsureConnectedResult:
-    """Structured outcome of `BLEAdapter.ensure_connected()`.
-
-    Wave B (`ble_service/src/main.py`) consumes `stage`/`error_name` to build
-    a machine-readable `error_code` for the HTTP layer instead of pattern-
-    matching a free-text message, so this shape is the contract between the
-    two waves -- treat field names/meanings as load-bearing.
-
-    success: True iff the device ends up connected, Trusted, and subscribed
-        to notifications -- either just now, or already (`stage ==
-        "already_connected"`).
-    stage: where the operation landed.
-        - "already_connected" / "connected": success.
-        - "connect": the Connect() stage failed (after the internal
-          scan-and-retry-once for a not-yet-known MAC).
-        - "pair": on-demand GATT-layer pairing failed.
-        - "gatt" / "gatt_post_pair": subscribing to notifications failed for
-          a reason other than "needs pairing", or failed again even after a
-          successful on-demand pair.
-    error_name: the D-Bus error NAME (e.g. "org.bluez.Error.Failed") on
-        failure, the Python exception type name for a non-D-Bus failure (e.g.
-        "TimeoutError"), or the synthetic "PairingNotEstablished" for the one
-        failure BlueZ reports without raising at all. Never None on failure --
-        Wave B may rely on that; always None on success.
-    error_text: the D-Bus error text / exception message, for logging. None
-        on success.
-
-    A failure result also implies the session has been torn down: the connect
-    stage cleans up via `_cleanup_failed_connection`, the pair/GATT stages via
-    `_teardown_after_post_connect_failure`. There is no "returned False but
-    the link is still up" state for a caller to reason about.
-    """
-
-    success: bool
-    stage: str
-    error_name: str | None = None
-    error_text: str | None = None
 
 
 class BondRecoveryReconnectError(ConnectionError):
