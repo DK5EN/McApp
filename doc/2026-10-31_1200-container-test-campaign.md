@@ -23,6 +23,17 @@ container on two platforms (Linux BlueZ and macOS CoreBluetooth). Test tooling i
 - Cookie login: yes (Authelia, same origin).
 - OrbStack machines: yes. Test scripts: in the repo, committed and pushed.
 - No Pi 4 desktop available: B11's desktop field check stays untested for now.
+- (Second round) Browser AI WebAssembly (107 MB of the 228 MB image) is **loaded on demand** by the
+  webapp instead of shipped in the bundle: smaller image and smaller bare-metal installs. A webapp
+  change, tracked outside this campaign.
+- (Second round) Rosetta enabled in OrbStack for the amd64 VM test (U4).
+- (Second round) A CoreBluetooth UUID is **never sent as `mac`** in the internet-feed identity;
+  Linux MACs are unchanged (macOS BLE design, wave W6).
+- (Second round) The macOS BLE service is a **dev/test host only**: documented bench tool, no launchd
+  service, no support promise. Linux stays the supported BLE platform.
+- (Second round) Test hostnames `mcapp-test` and `auth-test.air-maxx.net` added to `/etc/hosts` by
+  the operator; the Caddy snippet added to `~/docker/caddy/Caddyfile` by the orchestrator (backup
+  `Caddyfile.bak-mcapp-ct-*` next to it, validated, reloaded).
 
 ## Environment (verified 2026-10-31)
 
