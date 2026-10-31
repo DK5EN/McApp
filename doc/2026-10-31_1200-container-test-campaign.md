@@ -105,4 +105,29 @@ venv is 61.5 MB and the webapp bundle 112 MB, of which 107 MB are the Browser AI
 emulation, not a baseline). `/api/status` reports `v2.1.23` from package metadata while the SPA
 came from the v2.1.22 tarball (B12 change 10). The node IP is not part of `--info`; it is printed
 only in the WiFi boot line, so `node.py info` reports it only after a reset.
-| CT2+ | planned | |
+| CT2 | partly done | U1, U2, U3, U5 run; U4 blocked; U5 inbound anomaly open (below) |
+| CT3+ | planned | |
+
+**CT2 results (2026-10-31).**
+
+| ID  | Setup                                                                                   | Result                                                                                                                                                                               |
+| --- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| U1  | OrbStack Docker on the Mac, bridge, `-p 1799:1799/udp`                                  | **Trap confirmed.** First datagram from DK5EN-1 after ~170 s; McApp learned `192.168.215.1` (OrbStack's gateway), not `192.168.68.71`                                                |
+| U2  | OrbStack Docker on the Mac, `network_mode: host`                                        | **Nothing arrives** in 5 min: OrbStack's host network is the VM's, not the Mac's LAN                                                                                                 |
+| U3  | Rootful Docker 26.1.5 in `deb-arm64`, synthetic frame from the Mac                      | **Source kept.** Learned `192.168.139.3` (the real sender), via node identity. One extra datagram from `172.17.0.1` was seen once and ignored by the anti-flap guard; origin open    |
+| U4  | Same in `deb-amd64`                                                                     | **Blocked.** Containers fail to start (`runc ... broken pipe`) in an amd64 VM under QEMU; needs Rosetta in OrbStack. The amd64 image itself passed the smoke test in OrbStack Docker |
+| U5  | Container → `/api/send` → DK5EN-1 → on air (target pinned to `192.168.68.71` in config) | **Pass after a node reboot**: `[EXT] Inc` on the node, transmitted, and DK5EN-98 answered `:sto800 DK5EN-92` (store-and-forward held it)                                             |
+
+Findings for the papers:
+
+- **The startup warning heuristic in B12 is too narrow.** It looked for an `x.x.x.1` in
+  `172.16.0.0/12`; OrbStack's gateway is `192.168.215.1`. The check must compare the source with
+  the container's own default gateway (read from `/proc/net/route`).
+- **On a Mac with OrbStack the only working UDP setup is bridge mode with the target pinned to an
+  IP and learning off** (B12 change `MCAPP_UDP_LEARN=0`). Host networking receives nothing.
+- **Firmware: `--extudp on` does not start the EXT receive listener until a reboot.** Sending
+  (`[EXT] Out`) works immediately, receiving (`[EXT] Inc`) only after `--reboot`. Worth a firmware
+  issue or a note in the node setup docs.
+- **Open:** after the U5 run the container received no inbound datagram from DK5EN-1 for ~5 min,
+  although the node logged `[EXT] Out` to the Mac. Repeat U1 with a fresh container and a longer
+  window before drawing a conclusion.
