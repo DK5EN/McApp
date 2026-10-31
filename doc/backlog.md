@@ -133,10 +133,15 @@ Follow-ups from the container test campaign (`doc/2026-10-31_1200-container-test
   traefik-net gateway `192.168.97.1` and every UDP frame to the node was lost.
 - The code changes listed in the concept (learning switch, `/api/timezone` 501, secret-box binding,
   Node Admin host allow-list, version metadata) are all still open.
-- U4 (amd64 image) is unverified: retest on a real x86 host or a NAS.
-- iPhone PWA behind Authelia (campaign CT3a-W5) is untested: the phone needs `mcapp-test` and
-  `auth-test.air-maxx.net` resolved to the test host. No router DNS is available; a public A record
-  pointing at the private LAN IP would work unless the router filters private answers.
+- U4 (amd64 image) is unverified: in the OrbStack amd64 VM (QEMU/Rosetta) runc hung on every
+  container start, so this is a host limit, not an image finding. Retest on a real x86 host or a NAS.
+- iPhone PWA behind Authelia (campaign CT3a-W5, the only open campaign wave) is untested: the phone
+  needs `mcapp-test.air-maxx.net` and `auth-test.air-maxx.net` resolved to the test host
+  (`192.168.68.58`, the Mac). No router DNS is available; a public A record pointing at the private
+  LAN IP would work unless the router filters private answers. Everything else is ready: the Caddy
+  `@mcappct` block and the two `/etc/hosts` lines were kept on purpose; start the stack with
+  `cd scripts/container-tests/proxy && docker compose --profile authelia up -d` and run the
+  checklist in the concept's "Behind your own reverse proxy" section.
 - Unexplained: one datagram from `172.17.0.1` during U3 (rootful Docker in a VM); the anti-flap guard
   ignored it.
 

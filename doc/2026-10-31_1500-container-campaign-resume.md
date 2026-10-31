@@ -4,6 +4,9 @@
 Detailed results live in `doc/2026-10-31_1200-container-test-campaign.md` (plan, test matrix,
 results per wave). State as of 2026-10-31 ~15:10, branch `development`. **Campaign closed**: every wave done except
 CT3a-W5 (iPhone PWA, no DNS the operator can set; backlog B12), cleanup done.
+**Wrapped up 2026-10-31.** Every open item now lives in `doc/backlog.md`: B12 (code changes,
+gateway check, U4, CT3a-W5), B13 (bind guard, adapter-contract suite), B16 (webapp), B17 (small
+follow-ups). Resume from the backlog, not from this file.
 
 ## How to work
 
