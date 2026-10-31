@@ -117,7 +117,17 @@ emulation, not a baseline). `/api/status` reports `v2.1.23` from package metadat
 came from the v2.1.22 tarball (B12 change 10). The node IP is not part of `--info`; it is printed
 only in the WiFi boot line, so `node.py info` reports it only after a reset.
 | CT2 | done (U4 blocked) | U1-U3, U5 run and repeated after the macOS Local Network fix; U4 needs Rosetta |
-| CT3+ | planned | |
+| CT3a | W1-W4 pass | W5 (iPhone) waits for a router DNS entry; CT3b (macOS BLE) running |
+
+**CT3a results (2026-10-31), Caddy TLS → Traefik labels → spike container (arm64):**
+
+| ID  | Result                                                                                                                                                                                                                                                               |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| W1  | Pass. `/` → 307 `/webapp/`, SPA 200, `/api/status` 200 through both proxies                                                                                                                                                                                          |
+| W2  | Pass. SSE unbuffered through Caddy and Traefik (`flushinterval=-1`): first events within 20 ms, 26 lines in 0.4 s                                                                                                                                                    |
+| W3  | Pass. Traefik `basicauth`: 401 without and with wrong credentials, 200 with; SSE streams with credentials, 401 without                                                                                                                                               |
+| W4  | Pass. Authelia 4.39.28: no session → 302 to `auth-test` with `rd=`; login via `/api/firstfactor` sets an HttpOnly cookie for `.air-maxx.net`; API, SPA and SSE work with it; an XHR without session gets 401 (the webapp must answer it with a full-page navigation) |
+| W5  | Open. The iPhone needs `mcapp-test` and `auth-test.air-maxx.net` resolved to the Mac (`192.168.68.58`) by the router's DNS; `/etc/hosts` only covers the Mac                                                                                                         |
 
 **CT2 results (2026-10-31).**
 
