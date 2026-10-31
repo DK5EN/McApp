@@ -2,7 +2,8 @@
 
 **Read this first after a context clear.** It carries everything needed to finish the campaign.
 Detailed results live in `doc/2026-10-31_1200-container-test-campaign.md` (plan, test matrix,
-results per wave). State as of 2026-10-31 ~14:30, branch `development`; CT4a, CT4b, CT4c, U4 and CT6 items 1, 2, 4, 5 closed; open: CT3a-W5 (operator DNS), CT6 item 3 (firmware note, operator decides), CT6 cleanup.
+results per wave). State as of 2026-10-31 ~15:10, branch `development`. **Campaign closed**: every wave done except
+CT3a-W5 (iPhone PWA, no DNS the operator can set; backlog B12), cleanup done.
 
 ## How to work
 
@@ -64,7 +65,7 @@ proxy"). Authelia profile: `cd scripts/container-tests/proxy && docker compose -
 
 ### CT6 - Report and paper updates - orchestrator (+ one writer for the papers)
 
-**Status 2026-10-31 ~14:50:** items 1 (B12 paper), 2 (B13 paper), 4 (backlog B12/B13 follow-ups, new B16 webapp, B17 small items) and 5 (artifact republished) done. Item 3 waits for the operator (issue vs doc note); item 6 cleanup waits for W5 (needs the Authelia stack) and the operator's answers on VMs, hosts and DNS.
+**Status 2026-10-31 ~15:10:** all six items done (item 3 dropped, see above). Cleanup done except the `/etc/hosts` lines and the Caddy `@mcappct` block, kept by operator decision for later container work; OrbStack VMs deleted (operator decision).
 
 1. B12 paper: replace the gateway heuristic (`x.x.x.1` in `172.16/12`) with "source equals the
    container's default gateway (`/proc/net/route`)" (CT4c: traefik-net gateway `192.168.97.1` slipped
@@ -76,8 +77,8 @@ proxy"). Authelia profile: `cd scripts/container-tests/proxy && docker compose -
    GPS card 501 retry fix still required.
 2. B13 paper: macOS backend exists (link the design), dev/test only; bind guard gap for the
    systemd uvicorn CLI path.
-3. Firmware note: `--extudp on` starts the EXT receive listener only after `--reboot` (issue or
-   doc in MeshCom-Firmware-DEV-Main, operator decides).
+3. Firmware note: dropped. The "EXT listener only after `--reboot`" finding did not reproduce in a
+   clean run (CT6) and is retracted in the campaign doc; nothing written to the firmware repo.
 4. Backlog entries for the follow-ups below.
 5. Overview artifact: add a "Test campaign results" section to
    `doc/2026-10-31_1000-deployment-roadmap-overview.html` and republish it to the artifact above
@@ -94,7 +95,6 @@ proxy"). Authelia profile: `cd scripts/container-tests/proxy && docker compose -
   bleak + dbus-fast on Linux CI (harmless, comment wording).
 - `scripts/container-tests/node/node.py`: node IP only appears in the WiFi boot line; `info`
   shows `null` without a reset.
-- Firmware: EXT listener not started by `--extudp on`.
 - Unknown single datagram from `172.17.0.1` in U3 (anti-flap guard ignored it).
 - Test flake: `node_admin_service_tests.case_e_dropped` (key-deleted iteration) failed once in the full
   runner with `OSError: Directory not empty` in `TemporaryDirectory` cleanup (a DB write outliving
@@ -113,15 +113,11 @@ proxy"). Authelia profile: `cd scripts/container-tests/proxy && docker compose -
 | macOS BLE service      | stop the `run-macos.sh` process; delete `~/Library/Application Support/mcapp-ble/ble_state.json`                                                                     |
 | Ask the operator       | keep or delete OrbStack machines `deb-arm64`/`deb-amd64`; keep Rosetta on; remove the two `/etc/hosts` lines and the router DNS entries                              |
 
-## Current live state (to know what is running)
+## Current live state (after cleanup)
 
-- DK5EN-1: `EXTUDP on`, `EXT IP 192.168.68.58` (the Mac); BLE-connected to the macOS service.
-- rpizero: `ble_service` running on 127.0.0.1:8095 (`~/ct-ble/`, key in `~/ct-ble/key`), disconnected;
-  bluetooth.service unmasked and active.
-- macOS BLE service running on 127.0.0.1:8091 (restarted in CT4c with a new key in that session's scratchpad,
-  regenerate if lost), connected to DK5EN-1; `ble_state.json` saved.
-- Docker on the Mac: `mcapp-ct` compose stack, profile `authelia` (Authelia + McApp spike, `CT_BLE_MODE=remote`) up;
-  its volume holds the learned UDP target `192.168.97.1`;
-  Caddy + Traefik up; another session's MeshCom-Server compose stack up (not ours, port 8081).
-- Caddy carries the `@mcappct` block for the two test hostnames.
-- OrbStack VMs: `deb-arm64` (idle `ct` container), `deb-amd64` (Docker overlay2, containers do not start).
+- DK5EN-1: `EXTUDP off`, `EXT IP` empty (start state), not BLE-connected.
+- rpizero: CT4b service and `~/ct-ble` removed, bluetooth.service stopped and masked again.
+- macOS BLE service stopped, `ble_state.json` deleted.
+- Docker on the Mac: `mcapp-ct` stack down with volumes, spike images and `mcapp-ct-*` volumes removed.
+  Caddy + Traefik up (not ours); the Caddy `@mcappct` block and the two `/etc/hosts` lines stay.
+- OrbStack VMs `deb-arm64` and `deb-amd64` deleted; Rosetta stays on.

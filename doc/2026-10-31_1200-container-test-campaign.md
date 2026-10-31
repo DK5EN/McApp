@@ -123,6 +123,7 @@ only in the WiFi boot line, so `node.py info` reports it only after a reset.
 | CT4a | done | macOS BLE service end to end against DK5EN-1 pass; two findings fixed with regression tests |
 | CT4b | done | Linux `ble_service` (bluez) on rpizero against DK5EN-1 pass; scan gap found and fixed |
 | CT4c | done | McApp container → macOS BLE service → DK5EN-1 pass (connect, 14 registers, DM + peer ACK on SSE); UDP path hit the U1 gateway trap on traefik-net |
+| CT6 | done | B12/B13 papers, backlog B12/B13/B16/B17, overview artifact, cleanup; firmware EXT-listener finding retracted after a clean repro; W5 left open (no DNS) |
 | U4 | deferred | dropped on the Mac (amd64 emulation inside an emulated VM does not start containers); retest on real x86 or a NAS |
 
 **CT4a results (2026-10-31), `ble_service/scripts/run-macos.sh` on 127.0.0.1:8091, DK5EN-1 (fw 4.40a):**
@@ -239,9 +240,13 @@ Findings for the papers:
 - **On a Mac with OrbStack the UDP target must be pinned to the node's IP.** Bridge mode also needs
   learning off (B12 change `MCAPP_UDP_LEARN=0`), because it learns the gateway; host mode delivers
   from `127.0.0.1`, which the existing guard already refuses to learn.
-- **Firmware: `--extudp on` does not start the EXT receive listener until a reboot.** Sending
-  (`[EXT] Out`) works immediately, receiving (`[EXT] Inc`) only after `--reboot`. Worth a firmware
-  issue or a note in the node setup docs.
+- **Retracted (CT6, 2026-10-31): "`--extudp on` starts the EXT receive listener only after a
+  reboot".** The observation came from the same run in which macOS still blocked OrbStack's LAN
+  traffic (next bullet), so the reboot and the permission fix coincided. Clean repro on DK5EN-1
+  (fw 4.40a): `--extudpip 192.168.68.58`, `--extudp on`, no reboot, one datagram from the Mac:
+  `[EXT] Inc` at once, transmitted, `:ack103` from DK5EN-92. The code agrees: the loop calls
+  `startExternUDP()` on every pass while `bEXTUDP` is set and the socket is not open
+  (`esp32_main.cpp:5242`, `extudp_functions.cpp:102`). No firmware defect.
 - **Resolved: the missing inbound traffic was macOS, not Docker.** OrbStack had not been granted
   "Local Network" access; after the operator allowed it and OrbStack was restarted (`orb stop`,
   `orb start`), LAN UDP reached the containers again. Before the restart not even a datagram to

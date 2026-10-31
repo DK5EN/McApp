@@ -134,6 +134,9 @@ Follow-ups from the container test campaign (`doc/2026-10-31_1200-container-test
 - The code changes listed in the concept (learning switch, `/api/timezone` 501, secret-box binding,
   Node Admin host allow-list, version metadata) are all still open.
 - U4 (amd64 image) is unverified: retest on a real x86 host or a NAS.
+- iPhone PWA behind Authelia (campaign CT3a-W5) is untested: the phone needs `mcapp-test` and
+  `auth-test.air-maxx.net` resolved to the test host. No router DNS is available; a public A record
+  pointing at the private LAN IP would work unless the router filters private answers.
 - Unexplained: one datagram from `172.17.0.1` during U3 (rootful Docker in a VM); the anti-flap guard
   ignored it.
 
@@ -184,8 +187,6 @@ Webapp repo. Found while running McApp behind Traefik/Authelia in a container
 
 ## B17 — small follow-ups from the container test campaign
 
-- **Firmware:** `--extudp on` starts the EXT receive listener only after `--reboot` (DK5EN-1, fw 4.40a,
-  CT2 U5). Issue or doc note in MeshCom-Firmware-DEV-Main, operator decides.
 - **`scripts/container-tests/node/node.py info`** reports the node IP as `null` unless the node was
   reset: the IP appears only in the WiFi boot line, not in `--info`.
 - **Test flake:** `node_admin_service_tests.case_e_dropped` failed once in the full runner with
