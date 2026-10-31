@@ -109,3 +109,26 @@ fallback, so the other fields go blank although the editor showed the country va
 placeholders. Fix in `build_label_payload` (`group_labels.py`): treat the 3-digit country entry as
 the upstream of an override key that has no exact or range entry, and include it in the GET
 `upstream` map so the editor's `mixed` rules apply.
+
+## B11 — allow desktop images on boards with enough RAM
+
+The bootstrap refuses every desktop image (`check_desktop_image`, `bootstrap/lib/detect.sh`),
+which is right for a 512 MB Pi Zero 2W and wrong for a Pi 4/5 with 2-8 GB. Decided 2026-10-31:
+decide by `MemTotal` (< 1 GB refuse, 1-2 GB warn + confirm, >= 2 GB proceed), and skip the
+headless-only tuning (`gpu_mem=16`, `cma-64`, `audio=off`, service disables) on a desktop box.
+Concept: `doc/2026-10-31_0830-desktop-image-gate-concept.md`.
+
+## B12 — McApp as a container image (Alpine, GHCR, Traefik)
+
+A single Alpine-based container for NAS owners and advanced admins on any Linux box in the LAN:
+uvicorn serves the SPA and the API, Traefik does TLS through labels, UDP 1799 is published
+directly, the database lives in a volume, and updates are new image tags from
+`ghcr.io/dk5en/mcapp`. Kubernetes is not a supported target (k3s recipe as an appendix).
+Concept: `doc/2026-10-31_0830-container-deployment-concept.md`.
+
+## B13 — standalone BLE service and LAN auto-discovery
+
+`ble_service` as a native service for any Linux box with a BLE adapter, plus mDNS/DNS-SD so a
+McApp server finds BLE services and other McApp instances in the LAN and pairs with them from
+the web GUI. Prerequisite for BLE with the container (B12), useful on bare metal too.
+Concept: `doc/2026-10-31_0830-ble-service-and-lan-discovery-concept.md`.
