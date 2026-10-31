@@ -2,7 +2,7 @@
 
 **Read this first after a context clear.** It carries everything needed to finish the campaign.
 Detailed results live in `doc/2026-10-31_1200-container-test-campaign.md` (plan, test matrix,
-results per wave). State as of 2026-10-31 ~14:30, branch `development`; CT4a, CT4b, CT4c and U4 closed; next CT3a-W5 (operator) and CT6.
+results per wave). State as of 2026-10-31 ~14:30, branch `development`; CT4a, CT4b, CT4c, U4 and CT6 items 1, 2, 4, 5 closed; open: CT3a-W5 (operator DNS), CT6 item 3 (firmware note, operator decides), CT6 cleanup.
 
 ## How to work
 
@@ -20,7 +20,7 @@ results per wave). State as of 2026-10-31 ~14:30, branch `development`; CT4a, CT
 
 | What                                             | Where                                                                                                                                                                                                                              |
 | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Overview (artifact)                              | **McApp Deployment Roadmap**: https://claude.ai/artifact/Jwai6SWp5UBq12T1QUvcVo (slug `914a4b5e-6ac2-4c3c-9b81-4829d33460ca`, live version `1793436264-5a02`, local source `doc/2026-10-31_1000-deployment-roadmap-overview.html`) |
+| Overview (artifact)                              | **McApp Deployment Roadmap**: https://claude.ai/artifact/Jwai6SWp5UBq12T1QUvcVo (slug `914a4b5e-6ac2-4c3c-9b81-4829d33460ca`, live version `1793454504-b178`, local source `doc/2026-10-31_1000-deployment-roadmap-overview.html`) |
 | Campaign plan + results                          | `doc/2026-10-31_1200-container-test-campaign.md`                                                                                                                                                                                   |
 | Container concept (B12)                          | `doc/2026-10-31_0830-container-deployment-concept.md`                                                                                                                                                                              |
 | BLE + discovery concept (B13)                    | `doc/2026-10-31_0830-ble-service-and-lan-discovery-concept.md`                                                                                                                                                                     |
@@ -63,6 +63,8 @@ Needs router DNS entries `mcapp-test.air-maxx.net` and `auth-test.air-maxx.net` 
 proxy"). Authelia profile: `cd scripts/container-tests/proxy && docker compose --profile authelia up -d`.
 
 ### CT6 - Report and paper updates - orchestrator (+ one writer for the papers)
+
+**Status 2026-10-31 ~14:50:** items 1 (B12 paper), 2 (B13 paper), 4 (backlog B12/B13 follow-ups, new B16 webapp, B17 small items) and 5 (artifact republished) done. Item 3 waits for the operator (issue vs doc note); item 6 cleanup waits for W5 (needs the Authelia stack) and the operator's answers on VMs, hosts and DNS.
 
 1. B12 paper: replace the gateway heuristic (`x.x.x.1` in `172.16/12`) with "source equals the
    container's default gateway (`/proc/net/route`)" (CT4c: traefik-net gateway `192.168.97.1` slipped

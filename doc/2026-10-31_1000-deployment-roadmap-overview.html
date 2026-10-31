@@ -1111,10 +1111,46 @@ volumes:
   </ol>
 </section>
 
+<section id="results">
+  <header>
+    <div class="sec-num">14 · Test campaign · 2026-10-31</div>
+    <h2>Test campaign results: the design holds, one check needs fixing</h2>
+    <p>A spike image (arm64 and amd64) ran on the Mac under OrbStack, behind Caddy and Traefik, against the
+    real node DK5EN-1 over UDP and Bluetooth. Plan and per-test results:
+    <code>doc/2026-10-31_1200-container-test-campaign.md</code>.</p>
+  </header>
+  <div class="tablewrap">
+  <table>
+    <thead>
+      <tr><th>Area</th><th>Result</th><th>What it showed</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Image</td><td>builds, smokes</td><td>228 MB arm64 / 225 MB amd64, not 60-80 MB: 107 MB of it is the Browser AI WASM. Decision: the webapp loads it on demand.</td></tr>
+      <tr><td>Behind proxies</td><td>pass</td><td>SPA, API and unbuffered SSE through Caddy and Traefik; Traefik Basic auth; Authelia cookie login on the same origin. An XHR without a session gets 401, so the webapp must answer it with a full-page navigation.</td></tr>
+      <tr><td>Container to node, UDP</td><td>pass, with the trap confirmed</td><td>Container → node → on air works. The OrbStack bridge rewrites the source to its gateway (<code>192.168.215.1</code>, later <code>192.168.97.1</code> on the Traefik network); McApp learned it and lost every outgoing frame. Host networking fails safe (source <code>127.0.0.1</code>, learning refused).</td></tr>
+      <tr><td>Bluetooth, macOS</td><td>pass</td><td>New macOS backend for the BLE service (dev/test hosts only): scan, connect, 14 registers, DM with ACKs, reconnect after a node reboot.</td></tr>
+      <tr><td>Bluetooth, Linux</td><td>pass, bug fixed</td><td>BLE service on a Pi Zero 2W: same checks pass. The scan missed devices that got their name during the scan; fixed, which also helps mcapp.local's device picker.</td></tr>
+      <tr><td>Container to BLE service</td><td>pass</td><td>McApp in the container connects through the BLE service on the host, shows the node's registers and sends a DM with a peer ACK. On a Mac the service can stay on loopback.</td></tr>
+      <tr><td>Persistence</td><td>pass</td><td>Database and keys survive re-creating the container; a bare-metal database (6191 messages) migrates to the current schema; log rotation configured.</td></tr>
+      <tr><td>amd64 on the Mac</td><td>deferred</td><td>Emulated amd64 inside an emulated VM does not start containers. Retest on a real x86 box or a NAS.</td></tr>
+      <tr><td>iPhone app</td><td>open</td><td>Needs router DNS entries for the two test hostnames.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <ul>
+    <li><b>Fix the detection rule before building.</b> "Gateway address in <code>172.16/12</code>" misses real cases; compare
+    the source with the container's own default gateway instead. <span class="tag">B12</span></li>
+    <li><b>Pin the node on a Mac.</b> On OrbStack or Docker Desktop the bridge always rewrites the source: pin the node IP
+    with learning off, and grant the app Local Network access. <span class="tag">B12</span></li>
+    <li><b>Webapp follow-ups:</b> Browser AI on demand, GPS card stops retrying <code>/api/timezone</code>, 401 → full-page
+    login. <span class="tag">B16</span></li>
+  </ul>
+</section>
+
 <footer>
   <div>Source documents in the McApp repository, <code>doc/</code>:</div>
-  <div class="mono">2026-10-31_0830-desktop-image-gate-concept.md · 2026-10-31_0830-container-deployment-concept.md · 2026-10-31_0830-ble-service-and-lan-discovery-concept.md · backlog.md (B11 to B13, B15) · 2026-10-31_1100-ansible-and-web-server-evaluation.md</div>
-  <div>All three papers were checked against the code on 2026-10-31. Nothing is implemented yet.</div>
+  <div class="mono">2026-10-31_0830-desktop-image-gate-concept.md · 2026-10-31_0830-container-deployment-concept.md · 2026-10-31_0830-ble-service-and-lan-discovery-concept.md · backlog.md (B11 to B13, B15 to B17) · 2026-10-31_1200-container-test-campaign.md · 2026-10-31_1100-ansible-and-web-server-evaluation.md</div>
+  <div>All three papers were checked against the code on 2026-10-31. A test campaign the same day ran a spike image and fixed two BLE service bugs; the product changes in the papers are not implemented yet.</div>
 </footer>
 
 </main>

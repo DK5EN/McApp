@@ -126,6 +126,17 @@ directly, the database lives in a volume, and updates are new image tags from
 `ghcr.io/dk5en/mcapp`. Kubernetes is not a supported target (k3s recipe as an appendix).
 Concept: `doc/2026-10-31_0830-container-deployment-concept.md`.
 
+Follow-ups from the container test campaign (`doc/2026-10-31_1200-container-test-campaign.md`):
+
+- **Gateway check is wrong as written.** Detect a rewritten source by "source equals the container's
+  default gateway (`/proc/net/route`)", not `x.x.x.1` in `172.16/12`: CT4c learned and persisted the
+  traefik-net gateway `192.168.97.1` and every UDP frame to the node was lost.
+- The code changes listed in the concept (learning switch, `/api/timezone` 501, secret-box binding,
+  Node Admin host allow-list, version metadata) are all still open.
+- U4 (amd64 image) is unverified: retest on a real x86 host or a NAS.
+- Unexplained: one datagram from `172.17.0.1` during U3 (rootful Docker in a VM); the anti-flap guard
+  ignored it.
+
 ## B13 — standalone BLE service and LAN auto-discovery
 
 `ble_service` as a native service for any Linux box with a BLE adapter, plus mDNS/DNS-SD so a
@@ -135,6 +146,14 @@ Decided 2026-10-31: `mcapp-ble` ships as the first Debian package (signed APT re
 stays on `mcapp.sh` until B12 has shipped. `avahi-daemon` and `libnss-mdns` become bootstrap
 dependencies.
 Concept: `doc/2026-10-31_0830-ble-service-and-lan-discovery-concept.md`.
+
+Follow-ups from the container test campaign:
+
+- **Bind guard gap.** `run-macos.sh` refuses a non-loopback bind without an API key; the systemd unit
+  starts the uvicorn CLI directly, so nothing guards it there. Needs the wave-1 `main()` entry point.
+- Shared adapter-contract suite for the bluez and bleak backends (macOS design §7.2), deferred.
+- The dev-group `bleak` has no platform marker, so Linux CI installs bleak + dbus-fast. Harmless; fix
+  the comment wording.
 
 ## B14 — RM1 update channel switch DEV/MAIN in the Remote view
 
@@ -150,3 +169,25 @@ lighttpd only serves static files on `127.0.0.1:8082` behind Caddy, which alread
 package and one config from the Zero 2W. Needs a `SYSTEM_EPOCH` bump and a PSS measurement on
 mcapp.local first. Decided 2026-10-31 alongside it: no Ansible rewrite of the bootstrap, no nginx.
 Evaluation: `doc/2026-10-31_1100-ansible-and-web-server-evaluation.md`.
+
+## B16 — webapp follow-ups from the container test campaign
+
+Webapp repo. Found while running McApp behind Traefik/Authelia in a container
+(`doc/2026-10-31_1200-container-test-campaign.md`).
+
+- **Load the Browser AI WASM on demand.** 107 MB of the 112 MB bundle are the `litertlm_*.wasm`
+  variants, which put the image at 228 MB instead of the 60-80 MB target. Operator decision 2026-10-31.
+- **GPS card stops retrying `/api/timezone` after a failure** (501 in the image) and the stall
+  reporter skips that path.
+- **Answer a 401 with a full-page navigation.** Behind Authelia an expired session turns every XHR
+  into a 401; only a top-level navigation reaches the login portal.
+
+## B17 — small follow-ups from the container test campaign
+
+- **Firmware:** `--extudp on` starts the EXT receive listener only after `--reboot` (DK5EN-1, fw 4.40a,
+  CT2 U5). Issue or doc note in MeshCom-Firmware-DEV-Main, operator decides.
+- **`scripts/container-tests/node/node.py info`** reports the node IP as `null` unless the node was
+  reset: the IP appears only in the WiFi boot line, not in `--info`.
+- **Test flake:** `node_admin_service_tests.case_e_dropped` failed once in the full runner with
+  `OSError: Directory not empty` in `TemporaryDirectory` cleanup (a DB write outliving `svc.stop()` /
+  `storage.close()`); 0/10 failures alone.

@@ -13,9 +13,12 @@ Status: Ideation, backlog B12, 2026-10-31. Nothing in this paper is implemented.
   secret-box binding, UDP target learning switch, Node Admin host allow-list, `/api/timezone` degrade,
   stall-middleware passthrough, `MCAPP_VERSION` for version reporting). None is above size M; the
   webapp needs one gate that names the container (`features` contains `container`).
-- **The 60-80 MB target holds only without `timezonefinder`.** It drags in numpy and a 32.8 MB data
-  wheel, and has no aarch64 wheel at all. It serves one endpoint (`/api/timezone`). Recommendation:
-  leave it out of the image; the endpoint answers 501.
+- **The 60-80 MB target was missed: the measured spike image is 228 MB (arm64) / 225 MB (amd64)**
+  (CT1, see Size estimate). The Python venv is only 61.5 MB; the webapp bundle is 112 MB, 107 MB of
+  it the Browser AI WASM runtime. Operator decision: the webapp loads that runtime on demand (webapp
+  change, outside this campaign). `timezonefinder` is a separate question: it drags in numpy and a
+  32.8 MB data wheel, has no aarch64 wheel at all and serves one endpoint (`/api/timezone`).
+  Recommendation: leave it out of the image; the endpoint answers 501.
 - **musl verdict: Alpine works.** Every other dependency has a cp313 aarch64 `musllinux` wheel or is
   pure Python. `h3` (no musl aarch64 wheel) is irrelevant on Python 3.13: `timezonefinder` 9.2.0
   no longer depends on it. No `-slim` fallback needed.
@@ -34,23 +37,46 @@ Status: Ideation, backlog B12, 2026-10-31. Nothing in this paper is implemented.
   converge, Kubernetes (appendix recipe only), and any NFS/SMB-backed database. **Wave 1 must land
   before any image is published** (without change 4 the converge watchdog writes into the volume).
 
+## Spike results (2026-10-31)
+
+Source: `doc/2026-10-31_1200-container-test-campaign.md` (CT1-CT5), spike image on arm64 and amd64.
+
+- **Image (CT1).** Builds and smokes on arm64 and amd64 (health, SPA, SSE, read-only rootfs). Idle
+  RSS 55 MiB on arm64 (amd64 107 MiB under QEMU, not a baseline). Sizes: see Size estimate.
+- **SSE through Caddy and Traefik (CT3a W2).** Unbuffered with `flushinterval=-1`: first events within
+  20 ms, 26 lines in 0.4 s.
+- **Traefik `basicauth` (W3).** 401 without and with wrong credentials, 200 with; SSE streams with
+  credentials.
+- **Authelia 4.39.28, cookie login on the same origin (W4).** No session gives a 302 to the portal; the
+  login sets an HttpOnly cookie, after which API, SPA and SSE work. **An XHR without a session gets
+  401, so the webapp must answer it with a full-page navigation.**
+- **Persistence (CT5).** P1 (volume survives container removal), P3 (2026-10-20 bare-metal backup DB,
+  6191 messages, migrated to schema 39 in about 6 s) and P4 (`json-file` 10 MB x 3 applied) pass.
+  `secret.key` is not copied on purpose; QRZ, Node Admin and feed credentials need re-entry.
+- **BLE via a host-side service (CT4c).** Container to macOS `ble_service` to DK5EN-1: connect, 14
+  registers, DM plus peer ACK on SSE. Transport is chosen by the client: `type: "BLE"` goes over BLE,
+  `type: "msg"` always goes down the UDP handler.
+- **UDP (CT2).** The NAT trap is confirmed on OrbStack bridge (U1) and on CT4c; see Target learning.
+- **Deferred / open.** U4 (amd64 on the Mac) does not start containers under emulation: retest on real
+  x86 or a NAS. W5 (iPhone PWA) waits for router DNS entries.
+
 ## Works / degrades / does not work
 
-| Area                           | In the container   | Why                                                       |
-| ------------------------------ | ------------------ | --------------------------------------------------------- |
-| Chat, storage, classifier      | Works              | Pure Python + SQLite on the volume                        |
-| SSE, REST API, stall tracking  | Works              | Same ASGI app; `loop_lag` sampler needs no host access    |
-| Web Push, VAPID                | Works              | Needs outbound internet; key file on the volume           |
-| QRZ, Node Admin, internet feed | Works after fix    | Secret-box binding must not use host data (change 5)      |
-| UDP to/from a node             | Works with care    | Source-IP learning vs Docker NAT, see Networking          |
-| Webapp                         | Works after change | FastAPI serves no static files today                      |
-| BLE                            | Remote only        | `MCAPP_BLE_URL` to a native `ble_service` on a LAN host   |
-| Node TZ push                   | Remote only        | Lives in `ble_service`; uses that host's `/etc/localtime` |
-| `/api/timezone` (node GPS UI)  | Degrades (501)     | `timezonefinder` left out of the image                    |
-| Internet-feed hardware label   | Degrades           | Falls back to `Pi Zero 2W` (change 8)                     |
-| Update page, slots, converge   | Hidden / disabled  | No slots, no runner, no systemd inside                    |
-| Bootstrap tuning               | Not applicable     | `gpu_mem`, journald, nftables, Caddy are the host's job   |
-| Journald persistence           | Replaced           | `docker logs` / the log driver, rotation set in compose   |
+| Area                           | In the container   | Why                                                                             |
+| ------------------------------ | ------------------ | ------------------------------------------------------------------------------- |
+| Chat, storage, classifier      | Works              | Pure Python + SQLite on the volume                                              |
+| SSE, REST API, stall tracking  | Works              | Same ASGI app; `loop_lag` sampler needs no host access                          |
+| Web Push, VAPID                | Works              | Needs outbound internet; key file on the volume                                 |
+| QRZ, Node Admin, internet feed | Works after fix    | Secret-box binding must not use host data (change 5)                            |
+| UDP to/from a node             | Works with care    | Source-IP learning vs Docker NAT, see Networking                                |
+| Webapp                         | Works after change | FastAPI serves no static files today                                            |
+| BLE                            | Remote only        | `MCAPP_BLE_URL` to a native `ble_service` on a LAN host                         |
+| Node TZ push                   | Remote only        | Lives in `ble_service`; uses that host's `/etc/localtime`                       |
+| `/api/timezone` (node GPS UI)  | Degrades (501)     | `timezonefinder` left out; webapp retry fix still required (see Open questions) |
+| Internet-feed hardware label   | Degrades           | Falls back to `Pi Zero 2W` (change 8)                                           |
+| Update page, slots, converge   | Hidden / disabled  | No slots, no runner, no systemd inside                                          |
+| Bootstrap tuning               | Not applicable     | `gpu_mem`, journald, nftables, Caddy are the host's job                         |
+| Journald persistence           | Replaced           | `docker logs` / the log driver, rotation set in compose                         |
 
 ## Image design
 
@@ -62,6 +88,12 @@ Status: Ideation, backlog B12, 2026-10-31. Nothing in this paper is implemented.
   new tags; the Update page and slot activation are hidden.
 
 ### Size estimate
+
+- **Measured (CT1, 2026-10-31):** the spike image is **228 MB arm64 / 225 MB amd64**, not 60-80 MB.
+  Venv 61.5 MB; webapp bundle 112 MB, of which 107 MB is the Browser AI WASM runtime
+  (`assets/litertlm_*.wasm`, four variants). **Operator decision:** the webapp loads the Browser AI
+  WASM on demand instead of shipping it in the bundle (a webapp change, outside this campaign). The
+  estimates below predate the measurement.
 
 - Alpine base with Python 3.13: roughly 50 MB uncompressed. Runtime deps without
   `timezonefinder`/numpy (cryptography, pydantic-core, uvloop, httptools, regex, httpx, fastapi):
@@ -177,6 +209,9 @@ CMD ["mcapp"]
 - **`tzdata`** is needed: Alpine has no zoneinfo database; the app uses `zoneinfo` and `TZ`.
 
 ### Webapp in the image
+
+- **Bundle size (CT1):** 112 MB, 107 MB of it the Browser AI WASM runtime; see Size estimate for the
+  on-demand loading decision.
 
 - **No separate fetch needed.** `release.sh` already bakes the built SPA into the release tarball
   (`build_webapp` at `scripts/release.sh:765`, copied into `webapp/` in `build_tarball` at `:805`).
@@ -419,9 +454,20 @@ services. Both must work without Traefik.
   - some NAS Docker builds with custom network stacks.
 - **Detect:** `GET /api/status` already reports `udp_target`, `udp_target_kind`,
   `udp_known_source_ips` and `udp_untrusted_source_ips` (`sse_routes/stream.py:227-237`, from
-  `source_ip_status()`, `udp_handler.py:760-776`). A `udp_target` in the bridge subnet (`172.x`) or equal
-  to the Docker host's own IP, with kind `first_seen`, is the symptom; `runtime.json` holds the same
-  value. Add the check to the Wave 4 smoke test and the operator docs.
+  `source_ip_status()`, `udp_handler.py:760-776`). The symptom is a learned `udp_target` (kind
+  `first_seen`) **equal to the container's default gateway, read from `/proc/net/route`**. Not a
+  subnet test: an `x.x.x.1` in `172.16.0.0/12` heuristic is wrong, because bridge networks outside
+  that range are common. Evidence: CT2 U1 (OrbStack bridge rewrote the source to `192.168.215.1`) and
+  CT4c (learned `192.168.97.1`, the traefik-net gateway, persisted to the volume over the config's
+  node IP). `runtime.json` holds the same value. Add the check to the Wave 4 smoke test and the
+  operator docs.
+- **macOS dev/test host (OrbStack, Docker Desktop).** Grant the app Local Network access in macOS
+  settings, then restart it (`orb stop` / `orb start`); without it no datagram arrives (CT2 U2 first
+  run). On a Mac the bridge rewrites the source (U1), so pin the target to the node IP with learning
+  off (change 3). Host network mode fails safe: the source is `127.0.0.1`, learning is refused (CT2
+  U2). OrbStack's `host.docker.internal` reaches the Mac's `127.0.0.1` (CT4c), so a host-side
+  `ble_service` can stay on loopback; then every container on the Mac can reach it and the API key
+  is its only guard.
 - **Avoid, in order of preference:**
 
 | Option                                        | Source IP preserved | Cost                                                                                                          |
@@ -495,7 +541,7 @@ services. Both must work without Traefik.
 | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ---- |
 | 1   | `MCAPP_BIND_HOST` replaces the hard-coded `SSE_HOST` for the uvicorn bind. Keep the constant as the default; the update-runner proxy logic still reads `self.host` (`sse_handler.py:743-745`).                                                                                                                                                                                                                                                                                                                                                                                                                                                    | `config_loader.py:114`, `main.py:2936`, `sse_handler.py:1108-1110`                                                | S    |
 | 2   | Static webapp: `StaticFiles` subclass with SPA fallback + cache headers, `GET /` redirect, mounted last. Add `MCAPP_CONFIG_PATH` in the same wave.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | new `static_webapp.py`; `sse_handler.py:679` (after the last `include_router`); `config_loader.py:331-334`        | M    |
-| 3   | UDP target pin + learning switch: `MCAPP_UDP_TARGET`, `MCAPP_UDP_LEARN=0` makes `_learn_target_from_source` a no-op (still counts untrusted sources for diagnosis). Test: pinned target survives a datagram from `172.17.0.1`.                                                                                                                                                                                                                                                                                                                                                                                                                    | `udp_handler.py:868`, `config_loader.py:127`                                                                      | S    |
+| 3   | UDP target pin + learning switch: `MCAPP_UDP_TARGET`, `MCAPP_UDP_LEARN=0` makes `_learn_target_from_source` a no-op (still counts untrusted sources for diagnosis). Test: pinned target survives a datagram from `172.17.0.1`. The accompanying startup warning compares the source with the container's default gateway (`/proc/net/route`), not a `172.16/12` subnet.                                                                                                                                                                                                                                                                           | `udp_handler.py:868`, `config_loader.py:127`                                                                      | S    |
 | 4   | `MCAPP_DEPLOYMENT=container` (one helper, `deployment.py`): converge watchdog returns early (today it is NOT gated in a container, see Persistence); `features` gains `container` (and only then); `/api/update/*` answers 404/409; slots listing skipped.                                                                                                                                                                                                                                                                                                                                                                                        | `system_converge.py:191-204`; `sse_routes/stream.py:243-252`; `sse_routes/deploy.py:93-151`; `sse_handler.py:800` | M    |
 | 5   | Secret box: in container mode `board_binding()` returns empty bytes so the key file alone decides. Docker masks `/sys/firmware`; only `/proc/cpuinfo` `Serial` leaks through (Pi host only), and Alpine ships no `/etc/machine-id`, so on x86 the binding is already empty. A new image pull on the same host keeps the same binding; it breaks on host migration (Pi to Pi) or a k3s reschedule. Consumers: QRZ, Node Admin target passwords, internet-feed credentials. Side effect: a `secret.key` copied from a Pi is unreadable even on that Pi. **MUST-fix** before any of the three is offered. The empty-binding log line already exists. | `secret_box.py:88-110`                                                                                            | S    |
 | 6   | Stall middleware passes `/webapp/`, bare `/webapp` and the `/` redirect through (no id, no sampling).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | `stall_middleware.py:72-77`                                                                                       | S    |
@@ -677,8 +723,9 @@ jobs:
   - **Unsupported:** rootless Docker with the default builtin port driver (rootlesskit docs: source
     IP propagated "for TCP only", not UDP); rootless Podman on bridge or custom networks
     (rootlessport does not preserve the client address; Pi-hole reports the same for DNS).
-  - **Startup warning:** if the first UDP source is the bridge gateway (an `x.x.x.1` in
-    `172.16.0.0/12`), log a WARNING naming this section; it catches the NAT failure on day one.
+  - **Startup warning:** if the first UDP source equals the container's default gateway (from
+    `/proc/net/route`; not a `172.16.0.0/12` subnet test, see Target learning), log a WARNING naming
+    this section; it catches the NAT failure on day one.
   - 32-bit Pi OS is moot for Docker anyway: Docker Engine 29 ships no 32-bit Raspberry Pi OS
     packages.
 - (Decided 2026-10-31) 64-bit only: `linux/arm64` and `linux/amd64`. No `linux/arm/v7`; a

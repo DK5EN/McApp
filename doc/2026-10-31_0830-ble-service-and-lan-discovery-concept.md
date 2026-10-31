@@ -34,6 +34,17 @@ Status: Ideation, backlog, 2026-10-31. No code, no decisions beyond the operator
 - A second, stale unit copy lives at `ble_service/mcapp-ble.service` (hard-coded user `martin`, `uv run`, empty key); it should not become the standalone template.
 - `/health` returns only `status`, `ble_connected`, `timestamp` (`main.py:2155-2163`); the FastAPI app version is the placeholder `0.1.0` (`main.py:1325`) while `pyproject.toml` carries `2.1.23`. No `api_version` exists.
 
+### macOS backend (CT3b/CT4a, 2026-10-31)
+
+- `ble_service` also has a macOS backend (bleak/CoreBluetooth): `ble_service/scripts/run-macos.sh`,
+  `BLE_BACKEND=bleak`. **Dev/test host only**, not a production target. Design:
+  `doc/2026-10-31_1230-ble-service-macos-backend-design.md`.
+- Verified end to end in CT4a against DK5EN-1 (connect, 14 registers, DM plus ACKs, reconnect after
+  node reboot). CoreBluetooth reports a UUID, never a MAC (`address_kind: uuid`); `pair`/`unpair`
+  are unsupported by design (the system dialog pairs).
+- `run-macos.sh` refuses a non-loopback bind without an API key (at least 16 characters, not
+  `disabled`).
+
 ### Auth
 
 - Shared secret in header `X-API-Key`, env `BLE_SERVICE_API_KEY` (`main.py:164`), constant-time compare (`main.py:1342-1350`).
@@ -115,6 +126,13 @@ Host prerequisites the installer checks and reports, never silently fixes:
 - A health-based test in `scripts/ble_service_tests.py` pins the field set so it cannot silently disappear.
 
 ### 3. Security
+
+- **Bind guard gap (verified 2026-10-31).** The refusal rule lives in `_check_bind_security`, called
+  only from the `if __name__ == "__main__"` block of `ble_service/src/main.py` (and mirrored in
+  `run-macos.sh`). `bootstrap/templates/mcapp-ble.service` starts `uvicorn ble_service.src.main:app
+--host 127.0.0.1 --port 8081` through the uvicorn CLI, so the guard does not apply there. Harmless
+  today because the host is hard-coded loopback; it matters as soon as a unit or container binds
+  wider. Closing it needs the wave-1 `main()` entry point that runs the check on every start path.
 
 Threat model: LAN is semi-trusted (guest WiFi, IoT devices, a compromised laptop). The BLE service can transmit as the operator and reconfigure the node, so unauthenticated LAN exposure is a real risk, not hygiene.
 
