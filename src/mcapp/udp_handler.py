@@ -31,6 +31,7 @@ from .util import (
     undouble_aprs_symbol_escapes,
     unescape_firmware_msg_body,
 )
+from .wire_log import WireLog
 
 logger = get_logger(__name__)
 
@@ -385,13 +386,14 @@ def _is_trusted_node_source(ip_str: str) -> bool:
 
 
 class UDPHandler:
-    def __init__(
+    def __init__(  # noqa: PLR0913, PLR0917 - wire_log is the only addition to a fixed signature
         self,
         listen_port: int,
         target_host: str,
         target_port: int,
         message_router: Any = None,
         runtime_state_path: Path | None = None,
+        wire_log: WireLog | None = None,
     ) -> None:
         """`runtime_state_path=None` (the default) means DO NOT PERSIST a
         learned target — learning, anti-flap and `/api/status` reporting all
@@ -407,6 +409,7 @@ class UDPHandler:
         touches production state says so in its own source
         (`main.build_app`, `runtime_state_path=RUNTIME_PATH`).
         """
+        self.wire_log = wire_log
         self.listen_port = listen_port
         self.target_host = target_host
         self.target_port = target_port
@@ -521,7 +524,13 @@ class UDPHandler:
             if self.listen_socket:
                 self.listen_socket.close()
 
+    def _wire_log_rx(self, data: bytes, addr: tuple[str, int]) -> None:
+        """Persist the raw datagram (Wire record v1) before any decoding."""
+        if self.wire_log is not None:
+            self.wire_log.log("rx", "udp1799", data, f"{addr[0]}:{addr[1]}")
+
     async def _process_received_message(self, data: bytes, addr: tuple[str, int]) -> None:
+        self._wire_log_rx(data, addr)
         text = decode_and_filter(data)
         message: dict[str, Any] = try_repair_json(text)
 
@@ -977,6 +986,10 @@ class UDPHandler:
         )
         try:
             self._ensure_send_socket().sendto(json_data, self.target_address)
+            if self.wire_log is not None:
+                self.wire_log.log(
+                    "tx", "udp1799", json_data, f"{self.target_address[0]}:{self.target_address[1]}"
+                )
         except OSError:
             logger.exception("UDP_SEND failed to %s", self.target_address)
             raise

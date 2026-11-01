@@ -18,6 +18,7 @@ from typing import Any
 
 # BLE client abstraction - supports local, remote, and disabled modes
 from .ble_client import BLEMode, ConnectionState, create_ble_client
+from .ble_client_remote import set_wire_log
 from .commands import create_command_handler
 from .commands.constants import CALLSIGN_STRICT_RE
 from .commands.parsing import (
@@ -53,6 +54,7 @@ from .sse_routes.weather import warm_timezone_finder
 from .suppression import get_suppression_reason, should_suppress_outbound
 from .system_converge import converge_watchdog
 from .udp_handler import UDPHandler
+from .wire_log import WireLog, mcproxy_node
 from .wire_monitor import WireMonitor
 
 # Optional imports for new features
@@ -2730,6 +2732,13 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
 
     message_router = MessageRouter(storage_handler)
     message_router.stall_recorder = stall_recorder
+    # Raw-frame log (Wire record v1): persists every UDP/BLE frame, never pruned.
+    wire_log = WireLog(
+        cfg.storage.wire_log_dir,
+        enabled=cfg.storage.wire_log_enabled,
+        node_provider=lambda: mcproxy_node(message_router.my_callsign or cfg.call_sign),
+    )
+    set_wire_log(wire_log)
     # RF Monitor (docs/rf-monitor-plan.md): one WireMonitor per process,
     # reachable from both the router (TX capture, `_handle_outbound`) and
     # the SSE manager (REST + live `wire:frame` broadcast, wired below once
@@ -2926,6 +2935,7 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
         target_port=MESHCOM_UDP_PORT,
         message_router=message_router,
         runtime_state_path=RUNTIME_PATH,
+        wire_log=wire_log,
     )
     message_router.register_protocol("udp", udp_handler)
 
@@ -3484,6 +3494,8 @@ async def _shutdown_services(ctx: AppContext) -> None:
         await asyncio.wait_for(ctx.udp_handler.stop_listening(), timeout=SHUTDOWN_TIMEOUT_UDP_S)
     except TimeoutError:
         logger.warning("UDP stop timeout")
+    if ctx.udp_handler.wire_log is not None:
+        await asyncio.to_thread(ctx.udp_handler.wire_log.close)
 
     # Step 4: Stop SSE server if running
     if ctx.sse_manager:

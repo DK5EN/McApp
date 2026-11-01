@@ -117,6 +117,7 @@ from mcapp.storage.www_ingest_tests import run_www_ingest_tests
 from mcapp.template_override_tests import run_template_override_tests
 from mcapp.udp_handler import run_startup_tests as run_udp_handler_tests
 from mcapp.udp_parsing_tests import run_udp_parsing_tests
+from mcapp.wire_log_tests import run_wire_log_tests
 from mcapp.wire_monitor_tests import run_wire_monitor_tests
 
 
@@ -236,6 +237,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     wire_monitor_ok = await run_wire_monitor_tests()
     print(f"wire_monitor: {'PASS' if wire_monitor_ok else 'FAIL'}")
+
+    wire_log_ok = await run_wire_log_tests()
+    print(f"wire_log: {'PASS' if wire_log_ok else 'FAIL'}")
 
     node_console_ok = await run_node_console_tests()
     print(f"node_console: {'PASS' if node_console_ok else 'FAIL'}")
@@ -436,6 +440,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and ack_match_vectors_ok
         and linkcheck_sse_ok
         and wire_monitor_ok
+        and wire_log_ok
         and node_console_ok
         and console_parse_ok
         and frame_decode_ok

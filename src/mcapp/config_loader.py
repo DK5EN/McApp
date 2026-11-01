@@ -120,6 +120,13 @@ BLE_NUS_TX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  # Nordic UART TX
 BLE_HELLO_BYTES = b"\x04\x10\x20\x30"  # ESP32 handshake init packet
 
 
+def _parse_flag(value: object) -> bool:
+    """Boolean from a config value or env string: "false"/"0"/"no"/"off"/"" are off."""
+    if isinstance(value, str):
+        return value.strip().lower() not in ("0", "false", "no", "off", "")
+    return bool(value)
+
+
 @dataclass
 class UDPConfig:
     """UDP transport configuration."""
@@ -143,6 +150,8 @@ class StorageConfig:
     prune_hours: int = 720  # 30 days — retention for chat messages
     prune_hours_pos: int = 192  # 8 days — retention for position data
     prune_hours_ack: int = 192  # 8 days — retention for ACKs
+    wire_log_enabled: bool = True  # persist every raw frame (Wire record v1), never pruned
+    wire_log_dir: str = "/var/lib/mcapp/wire"
 
 
 @dataclass
@@ -334,6 +343,18 @@ class Config:
         return Path("/etc/mcapp/config.json")
 
     @staticmethod
+    def _apply_wire_log_overrides(storage_kwargs: dict[str, Any], data: dict[str, Any]) -> None:
+        """Wire log: env var override -> config file -> dataclass default."""
+        if "MCAPP_WIRE_LOG_ENABLED" in os.environ:
+            storage_kwargs["wire_log_enabled"] = _parse_flag(os.environ["MCAPP_WIRE_LOG_ENABLED"])
+        elif "WIRE_LOG_ENABLED" in data:
+            storage_kwargs["wire_log_enabled"] = _parse_flag(data["WIRE_LOG_ENABLED"])
+        if "MCAPP_WIRE_LOG_DIR" in os.environ:
+            storage_kwargs["wire_log_dir"] = os.environ["MCAPP_WIRE_LOG_DIR"]
+        elif "WIRE_LOG_DIR" in data:
+            storage_kwargs["wire_log_dir"] = data["WIRE_LOG_DIR"]
+
+    @staticmethod
     def _pluck_present(
         kwargs: dict[str, Any], data: dict[str, Any], mapping: dict[str, str]
     ) -> None:
@@ -390,6 +411,7 @@ class Config:
                 "PRUNE_HOURS_ACK": "prune_hours_ack",
             },
         )
+        cls._apply_wire_log_overrides(storage_kwargs, data)
         storage = StorageConfig(**storage_kwargs)
 
         location_kwargs: dict[str, Any] = {}

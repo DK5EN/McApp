@@ -29,6 +29,7 @@ from .ble_client import (
 )
 from .ble_protocol import ROUTINE_JSON_TYPS, decode_binary_message, dispatcher
 from .util import now_ms
+from .wire_log import WireLog
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +148,31 @@ class BLEServiceError(RuntimeError):
         super().__init__(message)
         self.status_code = status_code
         self.reason = reason
+
+
+# Process-wide raw-frame log (Wire record v1), installed by main.build_app before
+# the BLE client is created; the client factory signature stays untouched.
+_wire_log: WireLog | None = None
+
+
+def set_wire_log(wire_log: WireLog | None) -> None:
+    global _wire_log
+    _wire_log = wire_log
+
+
+def _log_ble_wire(data: str) -> None:
+    """Persist the raw BLE payload: decoded `raw_base64` when present, else the SSE JSON text."""
+    if _wire_log is None:
+        return
+    payload = data.encode("utf-8")
+    try:
+        notification = json.loads(data)
+        raw_b64 = notification.get("raw_base64") if isinstance(notification, dict) else None
+        if isinstance(raw_b64, str) and raw_b64:
+            payload = base64.b64decode(raw_b64)
+    except Exception:  # noqa: S110 - best effort, fall back to the JSON text
+        pass
+    _wire_log.log("rx", "ble", payload)
 
 
 class BLEClientRemote(BLEClientBase):
@@ -753,12 +779,7 @@ class BLEClientRemote(BLEClientBase):
                         elif line == "":
                             # Empty line = end of SSE event
                             if event_type and event_data:
-                                if event_type == "notification":
-                                    await self._handle_notification(event_data)
-                                elif event_type == "status":
-                                    await self._handle_status(event_data)
-                                elif event_type == "ping":
-                                    logger.debug("SSE ping received")
+                                await self._dispatch_sse_event(event_type, event_data)
                             event_type = ""
                             event_data = ""
 
@@ -935,6 +956,17 @@ class BLEClientRemote(BLEClientBase):
                 "Replayed %d cached BLE register(s) from ble_service on SSE (re)connect",
                 replayed,
             )
+
+    async def _dispatch_sse_event(self, event_type: str, event_data: str) -> None:
+        """Route one complete SSE event. Only live notifications reach the wire log;
+        `_replay_cached_registers` calls `_handle_notification` with synthetic data."""
+        if event_type == "notification":
+            _log_ble_wire(event_data)
+            await self._handle_notification(event_data)
+        elif event_type == "status":
+            await self._handle_status(event_data)
+        elif event_type == "ping":
+            logger.debug("SSE ping received")
 
     async def _handle_notification(self, data: str) -> None:
         """Handle incoming SSE notification"""
