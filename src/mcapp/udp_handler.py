@@ -397,6 +397,20 @@ def _is_trusted_node_source(ip_str: str) -> bool:
     return ip.is_private and not ip.is_loopback
 
 
+def _is_empty_text_msg(message: dict[str, Any]) -> bool:
+    """True (and logged at DEBUG) for a `type == "msg"` datagram whose `msg` is
+    empty once the charset filter has run (only zero-width/bidi/C0 characters
+    sent) -- not a chat line. Other frame types are never affected."""
+    if message.get("type") != "msg" or message["msg"].strip():
+        return False
+    logger.debug(
+        "UDP: dropped text message with empty body after charset filter (src=%s dst=%s)",
+        message.get("src"),
+        message.get("dst"),
+    )
+    return True
+
+
 class UDPHandler:
     def __init__(  # noqa: PLR0913, PLR0917 - wire_log is the only addition to a fixed signature
         self,
@@ -638,6 +652,7 @@ class UDPHandler:
         if (
             isinstance(message, dict)
             and isinstance(message.get("msg"), str)
+            and not _is_empty_text_msg(message)
             and self.message_router
         ):
             await self.message_router.publish("udp", "mesh_message", message)

@@ -1638,6 +1638,24 @@ async def _test_outbound_json_roundtrip() -> list[tuple[str, bool]]:
     return results
 
 
+async def _test_empty_msg_dropped_end_to_end() -> list[tuple[str, bool]]:
+    """A `type == "msg"` datagram whose body is empty after the charset filter
+    (zero-width / bidi / C0 only) must not be published; real text still is."""
+    results: list[tuple[str, bool]] = []
+    head = '{"src_type":"node","type":"msg","src":"DK5EN-98","dst":"20","msg":'
+    stripped_only = "\\u200b\\u202e\\u0001"
+    for label, body in (
+        ("only stripped characters", f'"{stripped_only}"}}'),
+        ("only stripped characters plus whitespace", f'" {stripped_only} \\n"}}'),
+        ("empty string", '""}'),
+    ):
+        got = await _drive_datagram((head + body).encode())
+        results.append((f"udp msg: {label} -> nothing published", got == {}))
+    got = await _drive_datagram((head + '"\u200bHi"}').encode())
+    results.append(("udp msg: control case with real text still published", got.get("msg") == "Hi"))
+    return results
+
+
 async def run_udp_parsing_tests() -> bool:
     """Run the pure-parsing helper tests; return True iff all pass."""
     results: list[tuple[str, bool]] = []
@@ -1661,6 +1679,7 @@ async def run_udp_parsing_tests() -> bool:
     results.extend(await _test_json_escaped_controls_end_to_end())
     results.extend(await _test_outbound_charset())
     results.extend(await _test_outbound_json_roundtrip())
+    results.extend(await _test_empty_msg_dropped_end_to_end())
 
     for label, passed in results:
         print(f"    {'✅ PASS' if passed else '❌ FAIL'} | {label}")

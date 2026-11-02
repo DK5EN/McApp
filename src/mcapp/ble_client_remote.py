@@ -27,7 +27,7 @@ from .ble_client import (
     BLEStatus,
     ConnectionState,
 )
-from .ble_protocol import ROUTINE_JSON_TYPS, decode_binary_message, dispatcher
+from .ble_protocol import ROUTINE_JSON_TYPS, decode_binary_message, dispatcher, is_empty_text_body
 from .util import now_ms
 from .wire_log import WireLog
 
@@ -1174,6 +1174,9 @@ class BLEClientRemote(BLEClientBase):
         output = dispatcher(decoded, own_call)
         if output:
             return self._finalize_transformed_output(output, notification)
+        if is_empty_text_body(decoded):
+            # CHARS-01: deliberately dropped by the dispatcher (DEBUG there), not undecodable
+            return None
         _drop_notification("binary dispatcher returned None", notification)
         return None
 

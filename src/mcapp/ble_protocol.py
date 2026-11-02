@@ -1183,6 +1183,41 @@ _TELE_DEST = "100001"
 _TELE_TEXT_PREFIX_RE = re.compile(r"^.{9}:T#")
 
 
+def is_empty_text_body(input_dict: dict[str, Any]) -> bool:
+    """True for a text frame (PAYLOAD_TYPE_MSG) whose body is empty once the
+    charset filter has run -- only zero-width/bidi/C0 characters were sent. Such
+    a frame must not become an empty chat line. `message` keeps the ":"
+    separator, hence `strip_prefix`. ACK/pos/JSON frames are never empty text."""
+    if input_dict.get("payload_type") != PAYLOAD_TYPE_MSG:
+        return False
+    return not strip_prefix(input_dict.get("message", "")).strip()
+
+
+def _dispatch_msg(input_dict: dict[str, Any], own_callsign: str) -> dict[str, Any] | None:
+    """The PAYLOAD_TYPE_MSG arm of `dispatcher`: tele-over-text or chat message."""
+    message = input_dict.get("message", "")
+    if is_empty_text_body(input_dict):
+        logger.debug(
+            "BLE: dropped text message with empty body after charset filter (msg_id=%s dst=%s)",
+            hex_msg_id(input_dict.get("msg_id", 0)),
+            input_dict.get("dest"),
+        )
+        return None
+    if input_dict.get("dest") == _TELE_DEST and _TELE_TEXT_PREFIX_RE.match(message):
+        result = transform_tele(input_dict, own_callsign)
+    else:
+        result = transform_msg(input_dict, own_callsign)
+    if result:
+        logger.debug(
+            "BLE dispatch: type=%s src=%s msg_id=%s dst=%s",
+            result.get("type"),
+            result.get("src"),
+            result.get("msg_id"),
+            result.get("dst"),
+        )
+    return result
+
+
 def dispatcher(input_dict: dict[str, Any], own_callsign: str = "") -> dict[str, Any] | None:
     """
     Route BLE messages to appropriate transformer based on type.
@@ -1212,20 +1247,7 @@ def dispatcher(input_dict: dict[str, Any], own_callsign: str = "") -> dict[str, 
         logger.warning("Type not found! %s", input_dict)
 
     elif input_dict.get("payload_type") == PAYLOAD_TYPE_MSG:
-        message = input_dict.get("message", "")
-        if input_dict.get("dest") == _TELE_DEST and _TELE_TEXT_PREFIX_RE.match(message):
-            result = transform_tele(input_dict, own_callsign)
-        else:
-            result = transform_msg(input_dict, own_callsign)
-        if result:
-            logger.debug(
-                "BLE dispatch: type=%s src=%s msg_id=%s dst=%s",
-                result.get("type"),
-                result.get("src"),
-                result.get("msg_id"),
-                result.get("dst"),
-            )
-        return result
+        return _dispatch_msg(input_dict, own_callsign)
 
     elif input_dict.get("payload_type") == PAYLOAD_TYPE_POS:
         msg = input_dict.get("message", "")

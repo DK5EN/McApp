@@ -636,6 +636,59 @@ def _test_decode_msg_frame_charset(results: list[tuple[str, bool]]) -> None:
     )
 
 
+def _test_empty_msg_dropped(results: list[tuple[str, bool]]) -> None:
+    """A text frame whose body is empty after the charset filter must not
+    dispatch (nothing to publish); real text and non-text frames still do."""
+    for label, body in (
+        ("zero-width + bidi + C0 only", b":\xe2\x80\x8b\xe2\x80\xae\x01"),
+        ("whitespace around stripped chars", b": \xe2\x80\x8b\n"),
+        ("no body at all", b":"),
+    ):
+        frame = _build_data_frame(
+            MSG_TYPE_BYTE,
+            MSG_MSG_ID,
+            MSG_MAX_HOP_RAW,
+            MSG_PATH.encode() + MSG_DEST.encode() + body,
+            (
+                MSG_HARDWARE_ID,
+                MSG_LORA_MOD,
+                MSG_FW,
+                MSG_LASTHW,
+                MSG_FW_SUB_BYTE,
+                MSG_ENDING,
+                MSG_TIME_MS,
+            ),
+        )
+        decoded = decode_binary_message(frame)
+        _check(
+            results,
+            f"msg empty after filter ({label}): dispatcher publishes nothing",
+            decoded is not None and dispatcher(decoded, "") is None,
+        )
+    frame = _build_data_frame(
+        MSG_TYPE_BYTE,
+        MSG_MSG_ID,
+        MSG_MAX_HOP_RAW,
+        MSG_PATH.encode() + MSG_DEST.encode() + b":\xe2\x80\x8bHi",
+        (
+            MSG_HARDWARE_ID,
+            MSG_LORA_MOD,
+            MSG_FW,
+            MSG_LASTHW,
+            MSG_FW_SUB_BYTE,
+            MSG_ENDING,
+            MSG_TIME_MS,
+        ),
+    )
+    decoded = decode_binary_message(frame)
+    out = None if decoded is None else dispatcher(decoded, "")
+    _check(
+        results,
+        "msg with real text (plus stripped char) is still dispatched",
+        out is not None and out.get("msg") == "Hi",
+    )
+
+
 def _test_decode_pos_frame(results: list[tuple[str, bool]]) -> None:
     decoded = decode_binary_message(POS_FRAME)
     if decoded is None:
@@ -2051,6 +2104,7 @@ def run_ble_protocol_tests() -> bool:
 
     _test_decode_msg_frame(results)
     _test_decode_msg_frame_charset(results)
+    _test_empty_msg_dropped(results)
     _test_decode_pos_frame(results)
     _test_node_rx_ts_ms_msg_frame(results)
     _test_node_rx_ts_ms_pos_frame(results)
