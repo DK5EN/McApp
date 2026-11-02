@@ -59,7 +59,7 @@
         "expected": "🌤️ WX DK5EN JN58sd: 17.0C 42% rF, 1013.0hPa, windstill, klar"
       },
       {
-        "why": "position null/null -> no locator, string identical to the pre-locator form (len 58)",
+        "why": "position null/null -> no locator, string identical to the pre-locator form (63 bytes)",
         "weather_data": {"temperatur_celsius": 17.0, "luftfeuchtigkeit_prozent": 42, "luftdruck_hpa": 1013.0, "windgeschwindigkeit_kmh": 0, "windrichtung_grad": null, "wolkenbedeckung_prozent": null, "niederschlag_mm": 0},
         "prefix": "",
         "position": {"lat": null, "lon": null},
@@ -80,25 +80,25 @@
         "expected": "🌤️ WX DK5EN: 17.0C 42% rF, 1013.0hPa, windstill, unbekannt"
       },
       {
-        "why": "full form with locator fits exactly (len 149 <= 149; 83-char prefix)",
+        "why": "full form with locator fits exactly (149 UTF-8 bytes <= 149; 78-char prefix)",
         "weather_data": {"temperatur_celsius": 17.0, "luftfeuchtigkeit_prozent": 42, "luftdruck_hpa": 1013.0, "windgeschwindigkeit_kmh": 0, "windrichtung_grad": null, "wolkenbedeckung_prozent": null, "niederschlag_mm": 0},
-        "prefix": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-        "expected": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 🌤️ WX DK5EN JN58sd: 17.0C 42% rF, 1013.0hPa, windstill, unbekannt"
+        "prefix": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "expected": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 🌤️ WX DK5EN JN58sd: 17.0C 42% rF, 1013.0hPa, windstill, unbekannt"
       },
       {
-        "why": "full+locator is 150 > 149, compact+locator fits -> compact WITH locator (len 143; 84-char prefix)",
+        "why": "full+locator is 150 bytes > 149, compact+locator fits -> compact WITH locator (138 bytes; 79-char prefix)",
         "weather_data": {"temperatur_celsius": 17.0, "luftfeuchtigkeit_prozent": 42, "luftdruck_hpa": 1013.0, "windgeschwindigkeit_kmh": 0, "windrichtung_grad": null, "wolkenbedeckung_prozent": null, "niederschlag_mm": 0},
-        "prefix": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-        "expected": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx WX DK5EN JN58sd: 17.0C 42%rF 1013.0hPa windstill unbekannt"
+        "prefix": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "expected": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx WX DK5EN JN58sd: 17.0C 42%rF 1013.0hPa windstill unbekannt"
       },
       {
-        "why": "compact+locator fits exactly (len 149 == 149; 90-char prefix)",
+        "why": "compact+locator fits exactly (149 bytes == 149; 90-char prefix)",
         "weather_data": {"temperatur_celsius": 17.0, "luftfeuchtigkeit_prozent": 42, "luftdruck_hpa": 1013.0, "windgeschwindigkeit_kmh": 0, "windrichtung_grad": null, "wolkenbedeckung_prozent": null, "niederschlag_mm": 0},
         "prefix": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
         "expected": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx WX DK5EN JN58sd: 17.0C 42%rF 1013.0hPa windstill unbekannt"
       },
       {
-        "why": "compact+locator is 150 > 149 -> compact WITHOUT locator, returned as-is (len 143; 91-char prefix)",
+        "why": "compact+locator is 150 bytes > 149 -> compact WITHOUT locator, returned as-is (143 bytes; 91-char prefix)",
         "weather_data": {"temperatur_celsius": 17.0, "luftfeuchtigkeit_prozent": 42, "luftdruck_hpa": 1013.0, "windgeschwindigkeit_kmh": 0, "windrichtung_grad": null, "wolkenbedeckung_prozent": null, "niederschlag_mm": 0},
         "prefix": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
         "expected": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx WX DK5EN: 17.0C 42%rF 1013.0hPa windstill unbekannt"

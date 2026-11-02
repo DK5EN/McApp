@@ -77,6 +77,7 @@ from .qrz_service import QrzLookupService
 from .secret_box import SecretBox
 from .sqlite_storage import SQLiteStorage, create_sqlite_storage
 from .stalls import StallRecorder
+from .text_decode import sanitize_outbound
 from .util import PLACEHOLDER_CALLSIGN_BASES as _PLACEHOLDER_CALLSIGN_BASES
 from .util import now_ms
 
@@ -2229,7 +2230,16 @@ class MessageRouter:
             return "BLE client not available"
 
         try:
-            sent = await client.send_message(normalized_data.get("msg"), normalized_data.get("dst"))
+            ble_msg = normalized_data.get("msg")
+            # CHARS-01: one filter at the BLE write point, covering API and internal callers.
+            if isinstance(ble_msg, str):
+                ble_msg = sanitize_outbound(ble_msg)
+                if not ble_msg:
+                    # Nothing left to send (only controls/bidi); UDP refuses 0 bytes too.
+                    reason = "msg is empty after removing unsupported characters"
+                    await self._publish_send_failed(normalized_data, reason)
+                    return reason
+            sent = await client.send_message(ble_msg, normalized_data.get("dst"))
         except Exception as e:
             self._logger.warning("BLE message send failed: %s", e)
             await self.publish(

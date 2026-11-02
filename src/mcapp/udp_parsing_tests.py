@@ -42,7 +42,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from .text_decode import decode_and_filter
+from .schemas import SendMessageRequest
+from .text_decode import decode_and_filter, filter_unsafe
 from .udp_handler import (
     MAX_JSON_REPAIR_ATTEMPTS,
     UDPHandler,
@@ -1449,6 +1450,194 @@ async def _test_send_message_wire_frame_guard() -> list[tuple[str, bool]]:
     return results
 
 
+_BIDI_AND_ZERO_WIDTH = "\u200b\u200c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2060\u2064\ufeff"
+_NATIONAL_TEXT = "Zażółć gęślą jaźń é ñ ã ü ß € 5° “Hallo” – ok"
+
+
+def _test_inbound_whitespace_controls() -> list[tuple[str, bool]]:
+    """CHARS-01: inbound \\n, \\r, \\t become ONE space (were deleted, gluing words)."""
+    return [
+        (
+            "inbound: '\\n' becomes a space, not deleted ('Hi there', was 'Hithere')",
+            decode_and_filter(b"Hi\nthere") == "Hi there",
+        ),
+        (
+            "inbound: a run of \\r\\n\\t collapses to one space",
+            decode_and_filter(b"a\r\n\t\nb") == "a b",
+        ),
+        (
+            "inbound: whitespace run containing a control collapses with its spaces",
+            decode_and_filter(b"Hi \n there") == "Hi there",
+        ),
+        (
+            "inbound: plain space runs without a control char stay untouched",
+            decode_and_filter(b"a   b") == "a   b",
+        ),
+        (
+            "inbound: tab becomes a space",
+            decode_and_filter(b"a\tb") == "a b",
+        ),
+        (
+            "inbound: other controls still deleted (NUL, BEL)",
+            decode_and_filter(b"a\x00b\x07c") == "abc",
+        ),
+    ]
+
+
+def _test_chars01_rework() -> list[tuple[str, bool]]:
+    """CHARS-01 rework: unassigned codepoints pass (emoji newer than the running
+    Unicode table), only noncharacters go; strip happens before the whitespace
+    collapse."""
+    results: list[tuple[str, bool]] = []
+    for label, cp in (
+        ("U+1FAE9 (Unicode 16 emoji)", 0x1FAE9),
+        ("U+1FA77 (Unicode 15 emoji)", 0x1FA77),
+        ("U+0378 (unassigned, not a noncharacter)", 0x0378),
+    ):
+        text = f"x{chr(cp)}y"
+        results.append((f"filter: {label} passes unchanged", filter_unsafe(text) == text))
+    for label, cp in (
+        ("U+FDD0 (noncharacter)", 0xFDD0),
+        ("U+FDEF (noncharacter)", 0xFDEF),
+        ("U+FFFE (noncharacter)", 0xFFFE),
+        ("U+FFFF (noncharacter)", 0xFFFF),
+        ("U+1FFFE (noncharacter, plane 1)", 0x1FFFE),
+        ("U+10FFFF (noncharacter, last plane)", 0x10FFFF),
+    ):
+        results.append((f"filter: {label} stripped", filter_unsafe(f"x{chr(cp)}y") == "xy"))
+    results.append(
+        (
+            "filter: a stripped control between newlines still collapses to 'a b'",
+            filter_unsafe("a\n\x00\nb") == "a b",
+        )
+    )
+    results.append(
+        (
+            "filter: a stripped zero-width char between newlines still collapses",
+            filter_unsafe("a\n\u200b\nb") == "a b",
+        )
+    )
+    results.append(
+        (
+            "filter: idempotent on controls, bidi and whitespace runs",
+            filter_unsafe(filter_unsafe("a\u202eb\n\x00 c\t\u200bd"))
+            == filter_unsafe("a\u202eb\n\x00 c\t\u200bd"),
+        )
+    )
+    return results
+
+
+async def _test_json_escaped_controls_end_to_end() -> list[tuple[str, bool]]:
+    """JSON escapes (\\u202e, \\u0000, \\n) only turn into the real character
+    in json.loads, i.e. AFTER the pre-parse filter: the parsed fields need
+    their own pass."""
+    datagram = (
+        b'{"src_type":"node","type":"msg","src":"DK5EN-98","dst":"20",'
+        b'"msg":"a\\u202eb\\nc\\u0000d\\u200be"}'
+    )
+    published = await _drive_datagram(datagram)
+    return [
+        (
+            (
+                "decode_and_filter e2e: JSON-escaped bidi/NUL/newline/zero-width in msg "
+                "are filtered after parsing"
+            ),
+            published.get("msg") == "ab cde",
+        )
+    ]
+
+
+async def _test_outbound_charset() -> list[tuple[str, bool]]:
+    """CHARS-01: outbound text is filtered with the firmware's policy BEFORE the
+    byte-length check, on the API model and on the transport (UDP) guard."""
+    results: list[tuple[str, bool]] = []
+
+    def _api(msg: str, msg_type: str = "msg") -> str | None:
+        try:
+            return SendMessageRequest(type=msg_type, dst="20", msg=msg).msg
+        except ValueError:
+            return None
+
+    results.append(("outbound API: NUL stripped", _api("a\x00b") == "ab"))
+    results.append(("outbound API: C0/DEL/C1 stripped", _api("a\x01\x7f\x85b") == "ab"))
+    results.append(("outbound API: '\\n' -> space", _api("Hi\nthere") == "Hi there"))
+    results.append(
+        ("outbound API: '\\r\\n' and tab -> one space each run", _api("a\r\n\tb") == "a b")
+    )
+    results.append(
+        (
+            "outbound API: bidi (U+202E) and zero-width stripped",
+            _api("a" + _BIDI_AND_ZERO_WIDTH + "b") == "ab",
+        )
+    )
+    zwj = "\U0001f64b\u200d\u2642"
+    results.append(("outbound API: ZWJ sequence kept", _api(zwj) == zwj))
+    results.append(
+        (
+            "outbound API: national letters, euro, degree, quotes unchanged",
+            _api(_NATIONAL_TEXT) == _NATIONAL_TEXT,
+        )
+    )
+    results.append(
+        ("outbound API: only-NUL message rejected (empty after filter)", _api("\x00\u202e") is None)
+    )
+    # 75 x 'ł' = 150 bytes (ok); 76 = 152 bytes (over). Padding of 10 NULs must not
+    # count: the check measures what is sent.
+    results.append(
+        (
+            "outbound API: byte check after filter (NUL padding not counted)",
+            _api("\x00" * 10 + "ł" * 70) == "ł" * 70,
+        )
+    )
+    results.append(
+        ("outbound API: byte check still rejects 76 x 'ł' (152 B)", _api("ł" * 76) is None)
+    )
+    results.append(("outbound API: BLE path filtered too", _api("a\nb\x00", "BLE") == "a b"))
+
+    handler = UDPHandler(listen_port=0, target_host="127.0.0.1", target_port=0)
+    fake_socket = _RecordingSendSocket()
+    handler.send_socket = fake_socket  # type: ignore[assignment]
+    try:
+        await handler.send_message({"type": "msg", "dst": "20", "msg": "Hi\nthe\x00re\u202e"})
+    finally:
+        handler.send_socket = None  # type: ignore[assignment]
+    wire = json.loads(fake_socket.calls[0][0]) if fake_socket.calls else {}
+    results.append(
+        ("outbound UDP wire: NUL, U+202E removed and '\\n' -> space", wire.get("msg") == "Hi there")
+    )
+    return results
+
+
+async def _test_outbound_json_roundtrip() -> list[tuple[str, bool]]:
+    """Outbound UDP JSON is json.dumps(ensure_ascii=True): non-ASCII leaves as
+    \\uXXXX escapes (ArduinoJson 7 decodes them). Must round-trip losslessly;
+    the 150-byte check measures the decoded UTF-8, not the escaped JSON."""
+    results: list[tuple[str, bool]] = []
+    text = "Zażółć gęślą jaźń 🙋\u200d\u2642 € “x”"
+    handler = UDPHandler(listen_port=0, target_host="127.0.0.1", target_port=0)
+    fake_socket = _RecordingSendSocket()
+    handler.send_socket = fake_socket  # type: ignore[assignment]
+    await handler.send_message({"type": "msg", "dst": "20", "msg": text})
+    raw = fake_socket.calls[0][0] if fake_socket.calls else b""
+    results.append(
+        ("outbound JSON: datagram is pure ASCII (\\u escapes)", raw.isascii() and b"\\u" in raw)
+    )
+    results.append(
+        (
+            "outbound JSON: Polish/emoji/ZWJ round-trips via json.loads",
+            json.loads(raw).get("msg") == text,
+        )
+    )
+    # 75 x 'ł' = 150 UTF-8 bytes passes although its escaped JSON is 450 bytes.
+    handler.send_socket = _RecordingSendSocket()  # type: ignore[assignment]
+    await handler.send_message({"type": "msg", "dst": "20", "msg": "ł" * 75})
+    sent = handler.send_socket.calls[0][0] if handler.send_socket.calls else b""  # type: ignore[attr-defined]
+    results.append(
+        ("outbound JSON: 150-byte msg accepted though escaped JSON is longer", len(sent) > 150)
+    )
+    return results
+
+
 async def run_udp_parsing_tests() -> bool:
     """Run the pure-parsing helper tests; return True iff all pass."""
     results: list[tuple[str, bool]] = []
@@ -1467,6 +1656,11 @@ async def run_udp_parsing_tests() -> bool:
     results.extend(await _test_extudp_ack_end_to_end())
     results.extend(await _test_pseudo_callsign())
     results.extend(await _test_send_message_wire_frame_guard())
+    results.extend(_test_inbound_whitespace_controls())
+    results.extend(_test_chars01_rework())
+    results.extend(await _test_json_escaped_controls_end_to_end())
+    results.extend(await _test_outbound_charset())
+    results.extend(await _test_outbound_json_roundtrip())
 
     for label, passed in results:
         print(f"    {'✅ PASS' if passed else '❌ FAIL'} | {label}")

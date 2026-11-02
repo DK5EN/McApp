@@ -284,7 +284,7 @@ The MeshCom McApp project consists of three components:
 
   - **Connectivity**
     - Must be able to connect to the MeshCom node via BLE and UDP
-    - Must filter out characters that do not conform to the APRS + UTF-8 protocol
+    - Must filter out characters that would break the wire format (see the character policy under Background Information); national letters, symbols and emoji pass unchanged
     - Should be fault-tolerant with characters that can be filtered without issues
     - Messages that cannot be easily filtered and contain illegal binary data are hard-rejected, as they originate from malfunctioning E22 nodes. There is no point displaying them since they contain garbage data.
     - Must reload messages from the MeshCom node on every browser refresh
@@ -326,7 +326,7 @@ The MeshCom McApp project consists of three components:
   - Preferably connects via Bluetooth protocol for more stable transmission with more data and more capabilities like RSSI and SNR info
   - Implements a keep-alive over Bluetooth and automatically reconnects if the connection is lost
   - Automatically sets the timezone on the MeshCom node, accounting for daylight saving time
-  - Must perform UTF-8 and APRS protocol checks, as there are regularly illegal characters that cause crashes
+  - Must apply the UTF-8 character policy in both directions, as there are regularly illegal characters that cause crashes
   - Can automatically update scripts and website via the bootstrap script
   - Generates mheard RSSI and SNR statistics when BLE is connected
 
@@ -344,12 +344,16 @@ The MeshCom McApp project consists of three components:
 
 # Background Information
 
-- Messages must conform to the APRS protocol
-  - APRS messages are designed to be ASCII-compatible, typically 7-bit printable ASCII (decimal 33-126)
-  - Control characters (like null \x00, bell \x07, or newline \x0A) and extended 8-bit values (128-255) are not safe
-  - Characters outside this range may cause message corruption
-  - Allowed: A-Z, a-z, 0-9, common punctuation
-  - Not allowed: _binary_data_, _emoji_, _extended_Unicode_
+- Character policy (inbound and outbound, `src/mcapp/text_decode.py`; mirrors the firmware's `charset_filter.h`)
+  - Text is UTF-8. Inbound bytes that are not valid UTF-8 are re-read per byte as CP1252 (old firmware sends umlauts as single bytes) instead of being dropped
+  - Passes unchanged: printable ASCII, national letters (ä ö ü ß ł ą é ñ ã ...), symbols such as € and °, typographic quotes, emoji including zero-width-joiner sequences
+  - Newline, carriage return and tab become one space (a run collapses to a single space)
+  - Stripped, by Unicode category (not an explicit range list): Cc (NUL and all other C0/C1 control characters, DEL), Cf (all format characters: bidi controls, zero-width space/joiner variants U+200B-U+200F, U+202A-U+202E, U+2060-U+2064, U+FEFF, soft hyphen U+00AD, ...), Cs (surrogates), Co (private use) and the noncharacters (U+FDD0-U+FDEF, U+xxFFFE/U+xxFFFF). Exceptions inside Cf: the zero-width joiner U+200D and the tag characters U+E0020-U+E007F stay, because they glue emoji sequences together
+  - Unassigned codepoints are NOT stripped (they would hit every emoji newer than the Python Unicode table); only the noncharacters above go
+  - Difference to the firmware (`charset_filter.h`) and mc-chat, which strip an explicit list: here whole categories go, so soft hyphen U+00AD and private-use codepoints are stripped on the proxy, while the firmware/mc-chat pass them
+  - Order: strip first, then collapse newline/CR/tab runs, so a stripped character between two line breaks does not split the run
+  - Text fields of inbound UDP JSON are filtered a second time after parsing, because JSON escapes (\u202e, \u0000, \n) only become real characters in the parser; filtering is idempotent
+  - Outbound chat text is filtered before the byte-length check, so the check measures what is sent. Accents are never stripped or transliterated
 
 - MeshCom uses UTF-8, with the peculiarity that during UDP transmission the JSON is double-stringified
 
@@ -378,7 +382,7 @@ The MeshCom McApp project consists of three components:
 ### Technical Details on the Preliminary Considerations, Which Unfortunately Did Not Pan Out
 
 - Channel model: publicly shared medium, definitely with hidden-node problem since everything is repeated up to 4 hops, high packet error probability with increasing payload size
-- Payload packet size: maximum 149 bytes; restriction to UTF-8-safe, APRS-compatible, JSON-compatible characters
+- Payload packet size: maximum 149 bytes; measured in UTF-8 bytes after the character filter
 - Chunking: messages are segmented into ~10-byte payload chunks
 - Compression: real-time compatible lossless compression (e.g., deflate)
 - Error correction: FEC with redundancy factor r = 1.2 - i.e., 20% additional data (Reed-Solomon)

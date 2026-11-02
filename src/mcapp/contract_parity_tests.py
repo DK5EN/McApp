@@ -44,7 +44,7 @@ _CORPUS_PATH = pathlib.Path(__file__).parent / "contract" / "command_contract.js
 # edit it in mc-chat and re-sync), a subtree pull brought new content, or the
 # pull has not been run yet. For an intentional upstream change, re-capture the
 # hash in the same commit as the pull.
-_EXPECTED_SHA256 = "5ace37afdedee7016cccef4b81d2254568bef6a7fb5f2ffd067857ccec2660fc"
+_EXPECTED_SHA256 = "b666b2da034cf7609ede8bcc45aeeaa4802595621b63674237af0d084900d8ee"
 
 # mcmap's exported classifier rule set (mc-chat contract/ subtree). Same drift
 # tripwire as above: re-capture only in the commit that pulls a new export.

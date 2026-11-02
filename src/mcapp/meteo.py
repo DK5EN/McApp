@@ -20,7 +20,55 @@ from .geo import latlon_to_locator
 from .logging_setup import get_logger
 
 _RAIN_REPORT_MIN_MM = 0.1
-_MAX_LORA_MSG_LEN = 149
+_MAX_LORA_MSG_LEN = 149  # UTF-8 BYTES (wire unit, node rejects > 150), not characters
+_UTF8_CONTINUATION_MASK = 0xC0
+_UTF8_CONTINUATION = 0x80
+_ZWJ = "\u200d"
+_VS16 = 0xFE0F
+_KEYCAP = 0x20E3
+_SKIN_TONE_FIRST = 0x1F3FB
+_SKIN_TONE_LAST = 0x1F3FF
+
+
+def _utf8_len(text: str) -> int:
+    return len(text.encode("utf-8"))
+
+
+def _is_glyph_modifier(ch: str) -> bool:
+    cp = ord(ch)
+    return cp in {_VS16, _KEYCAP} or _SKIN_TONE_FIRST <= cp <= _SKIN_TONE_LAST
+
+
+def _drop_broken_zwj_sequence(kept: str, following: str) -> str:
+    """Remove a ZWJ emoji sequence that the cut left half-sent."""
+    broken = following == _ZWJ or kept.endswith(_ZWJ)
+    while broken:
+        if kept.endswith(_ZWJ):
+            kept = kept[:-1]
+        i = len(kept)
+        while i > 0 and _is_glyph_modifier(kept[i - 1]):
+            i -= 1
+        if i > 0:
+            i -= 1
+        kept = kept[:i]
+        broken = kept.endswith(_ZWJ)
+    return kept
+
+
+def _truncate_utf8(text: str, max_bytes: int) -> str:
+    """Cut `text` to at most `max_bytes` UTF-8 bytes; never splits a code
+    point, drops a ZWJ emoji sequence the cut would leave half-sent.
+    Same algorithm as mc-chat's `meshcom_mock.text_filter.truncate_utf8`."""
+    raw = text.encode("utf-8")
+    if len(raw) <= max_bytes:
+        return text
+    cut = max_bytes
+    while cut > 0 and (raw[cut] & _UTF8_CONTINUATION_MASK) == _UTF8_CONTINUATION:
+        cut -= 1
+    kept = raw[:cut].decode("utf-8")
+    return _drop_broken_zwj_sequence(kept, text[len(kept) : len(kept) + 1])
+
+
 _MAX_LAT_DEG = 90.0
 _MAX_LON_DEG = 180.0
 
@@ -981,10 +1029,10 @@ class WeatherService:
         if locator:
             candidates.append(f"{prefix}WX {_name(True)}{body_compact}")
         for lora_msg in candidates:
-            if len(lora_msg) <= _MAX_LORA_MSG_LEN:
+            if _utf8_len(lora_msg) <= _MAX_LORA_MSG_LEN:
                 return lora_msg
 
-        return f"{prefix}WX {_name(False)}{body_compact}"
+        return _truncate_utf8(f"{prefix}WX {_name(False)}{body_compact}", _MAX_LORA_MSG_LEN)
 
     def _wind_direction_to_compass(self, degrees: int | None) -> str:
         """

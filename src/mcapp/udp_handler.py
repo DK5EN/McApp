@@ -24,7 +24,7 @@ from .ble_protocol import (
 from .commands.parsing import strip_relay_path
 from .logging_setup import get_logger
 from .runtime_state import save_runtime_state
-from .text_decode import decode_and_filter
+from .text_decode import decode_and_filter, filter_unsafe, sanitize_outbound
 from .util import (
     FEET_TO_METERS,
     now_ms,
@@ -206,6 +206,18 @@ def _strip_non_scalar_fields(message: dict[str, Any]) -> list[str]:
     for key in dropped:
         del message[key]
     return dropped
+
+
+def _filter_parsed_text_fields(message: dict[str, Any]) -> None:
+    """Run `filter_unsafe` over the top-level string values of a parsed datagram.
+
+    The pre-parse pass cannot see JSON escapes (\\u202e, \\u0000, \\n): they only
+    become the real character in json.loads. Idempotent, so filtering twice is
+    harmless.
+    """
+    for key, value in message.items():
+        if isinstance(value, str):
+            message[key] = filter_unsafe(value)
 
 
 def try_repair_json(text: str) -> dict[str, Any]:
@@ -533,6 +545,8 @@ class UDPHandler:
         self._wire_log_rx(data, addr)
         text = decode_and_filter(data)
         message: dict[str, Any] = try_repair_json(text)
+
+        _filter_parsed_text_fields(message)
 
         await self._learn_target_from_source(addr, message.get("src") if message else None)
 
@@ -967,6 +981,11 @@ class UDPHandler:
         `send_message` directly, so they all route through this same
         try/except, never around it).
         """
+        # CHARS-01: same charset policy as the API model, applied before the
+        # length guard so internal callers (which bypass SendMessageRequest)
+        # are covered and the guard measures what is sent.
+        if isinstance(message_data.get("msg"), str):
+            message_data = {**message_data, "msg": sanitize_outbound(message_data["msg"])}
         violation = _dst_msg_wire_violation(message_data.get("dst"), message_data.get("msg"))
         if violation is not None:
             logger.warning(

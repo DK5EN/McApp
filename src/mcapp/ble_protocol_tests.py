@@ -616,6 +616,11 @@ def _test_decode_msg_frame_charset(results: list[tuple[str, bool]]) -> None:
     )
     _check(
         results,
+        "msg message: newline becomes a space, not deleted (CHARS-01)",
+        _decode_msg_body(b":Hi\nthere") == ":Hi there",
+    )
+    _check(
+        results,
         "msg message: valid UTF-8 multi-byte character round-trips untouched",
         _decode_msg_body(b":Gr\xc3\xbc\xc3\x9fe") == ":Gr\xfc\xdfe",
     )
@@ -623,6 +628,11 @@ def _test_decode_msg_frame_charset(results: list[tuple[str, bool]]) -> None:
         results,
         "msg message: emoji + zero-width joiner survives intact",
         _decode_msg_body(b":" + _EMOJI_WITH_ZWJ.encode("utf-8")) == ":" + _EMOJI_WITH_ZWJ,
+    )
+    _check(
+        results,
+        "msg message: emoji newer than the running Unicode table (U+1FAE9) is not stripped",
+        _decode_msg_body(b":" + "\U0001fae9".encode("utf-8")) == ":\U0001fae9",
     )
 
 
