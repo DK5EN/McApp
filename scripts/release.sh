@@ -165,7 +165,7 @@ cleanup_stale_artifacts() {
 #──────────────────────────────────────────────────────────────────
 
 validate_tools() {
-  local -a required=("git" "gh" "shasum" "tar" "sed" "npm" "jq")
+  local -a required=("git" "gh" "shasum" "tar" "sed" "npm" "node" "jq")
   for tool in "${required[@]}"; do
     if ! command -v "$tool" &>/dev/null; then
       log_error "Required tool not found: ${tool}"
@@ -909,6 +909,16 @@ build_tarball() {
     COPYFILE_DISABLE=1 tar -cf - -C "${WEBAPP_DIR}/dist" \
       --exclude='.DS_Store' --exclude='._*' . | tar -xf - -C "${staging}/webapp"
     log_info "  Included webapp ($(find "${staging}/webapp" -type f | wc -l | tr -d ' ') files)"
+
+    # Pre-compressed .br/.gz sidecars for Caddy's `precompressed br gzip`. Runs on
+    # the staged copy (after the AppleDouble exclusion above, so no ._* or
+    # .DS_Store can get a sidecar) and for both tarball shapes. A failure
+    # aborts the release: shipping half a set of sidecars is worse than none.
+    # stdout is the tarball name (captured by the caller), so node reports on stderr.
+    if ! node "${PROJECT_DIR}/scripts/precompress_webapp.mjs" "${staging}/webapp" >&2; then
+      log_error "  Webapp pre-compression failed"
+      return 1
+    fi
   else
     log_warn "  No webapp dist found — tarball will not include webapp"
   fi

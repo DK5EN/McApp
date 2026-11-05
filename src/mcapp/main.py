@@ -50,7 +50,6 @@ from .runtime_state import RUNTIME_PATH
 from .runtime_state import (
     save_runtime_state as save_runtime_state,  # noqa: PLC0414 - explicit re-export for mypy
 )
-from .sse_routes.weather import warm_timezone_finder
 from .suppression import get_suppression_reason, should_suppress_outbound
 from .system_converge import converge_watchdog
 from .udp_handler import UDPHandler
@@ -3333,19 +3332,8 @@ class _BackgroundTasks:
     sperrliste_task: asyncio.Task[None]
     converge_task: asyncio.Task[None]
     link_uptime_heartbeat_task: asyncio.Task[None]
-    tz_warm_task: asyncio.Task[None]
     qrz_task: asyncio.Task[None]
     internet_feed_task: asyncio.Task[None] | None
-
-
-async def _warm_timezone_finder_later(delay_s: float = 30.0) -> None:
-    """F3a (doc/2026-09-16_0800-stall-data-report.md): the first `/api/timezone`
-    call paid ~3.9 s constructing `TimezoneFinder`. Construct it off the request
-    path, in the thread pool, after startup has settled — the delay keeps it
-    from competing with the BLE hydration and backfills on the Pi Zero's CPU.
-    """
-    await asyncio.sleep(delay_s)
-    await asyncio.to_thread(warm_timezone_finder)
 
 
 def _start_background_tasks(
@@ -3386,7 +3374,6 @@ def _start_background_tasks(
     link_uptime_heartbeat_task = asyncio.create_task(
         _link_uptime_heartbeat(ctx.storage_handler, stop_event)
     )
-    tz_warm_task = asyncio.create_task(_warm_timezone_finder_later())
     # QRZ.com callsign lookup loop (issue #14): idles until credentials exist.
     qrz_task = asyncio.create_task(ctx.qrz_service.run(stop_event))
     # Internet feed loop (meshmap): idles until enabled in Settings > Internet.
@@ -3404,17 +3391,13 @@ def _start_background_tasks(
         sperrliste_task=sperrliste_task,
         converge_task=converge_task,
         link_uptime_heartbeat_task=link_uptime_heartbeat_task,
-        tz_warm_task=tz_warm_task,
         qrz_task=qrz_task,
         internet_feed_task=internet_feed_task,
     )
 
 
 async def _cancel_background_tasks(tasks: _BackgroundTasks) -> None:
-    """Cancel the six long-running loops; backfill tasks are one-shots, left alone.
-    The timezone warm-up is cancelled too: it may still be in its start delay.
-    """
-    tasks.tz_warm_task.cancel()
+    """Cancel the long-running loops; backfill tasks are one-shots, left alone."""
     tasks.prune_task.cancel()
     tasks.classifier_stats_task.cancel()
     tasks.sperrliste_task.cancel()
@@ -3433,8 +3416,6 @@ async def _cancel_background_tasks(tasks: _BackgroundTasks) -> None:
         await tasks.converge_task
     with contextlib.suppress(asyncio.CancelledError):
         await tasks.link_uptime_heartbeat_task
-    with contextlib.suppress(asyncio.CancelledError):
-        await tasks.tz_warm_task
     with contextlib.suppress(asyncio.CancelledError):
         await tasks.qrz_task
     if tasks.internet_feed_task is not None:

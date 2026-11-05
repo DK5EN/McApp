@@ -1,7 +1,7 @@
 # Installed by ssl-tunnel-setup.sh as /etc/caddy/Caddyfile — this REPLACES
 # the LAN-HTTPS default (bootstrap/templates/caddy/Caddyfile.mcapp), it does
-# not run alongside it. lighttpd is the backend on 127.0.0.1:8082 (moved off
-# :80 by configure_lighttpd() in bootstrap/lib/packages.sh).
+# not run alongside it. Caddy serves the webapp itself (pre-compressed, see the
+# webapp block below); lighttpd on 127.0.0.1:8082 is legacy and no longer proxied.
 {
     dynamic_dns {
         provider cloudflare {env.CF_API_TOKEN}
@@ -33,9 +33,68 @@
         }
     }
 
-    # Everything else -> lighttpd backend (static webapp + SPA rewrite; lighttpd
-    # re-proxies /api, /events, /health to 127.0.0.1:2981).
+    # SSE event stream, REST API and health: straight to FastAPI on 2981. These
+    # used to ride through lighttpd (its 99-mcapp.conf re-proxied them); Caddy now
+    # owns them so the webapp block below needs no lighttpd hop at all.
+    handle /events* {
+        reverse_proxy 127.0.0.1:2981 {
+            flush_interval -1
+        }
+    }
+
+    handle /api/* {
+        reverse_proxy 127.0.0.1:2981
+    }
+
+    handle /health* {
+        reverse_proxy 127.0.0.1:2981
+    }
+
+    # Webapp (SPA) served by Caddy itself from /var/www/html, pre-compressed.
+    # Sidecars (.br/.gz) are produced at release time by scripts/precompress_webapp.mjs;
+    # `precompressed br gzip` serves them when the client accepts the encoding and falls
+    # back to the plain file when no sidecar exists (old bundle). No on-the-fly `encode`:
+    # it costs RAM and CPU on a Pi Zero.
+
+    # Root -> webapp
+    @root path /
+    handle @root {
+        redir * /webapp/
+    }
+
+    # Content-hashed assets: immutable. NO SPA fallback -- a missing asset must be a
+    # real 404, otherwise index.html would be cached immutably at an asset URL.
+    handle /webapp/assets/* {
+        root * /var/www/html
+        # Only an existing file is immutable: on a bare `header` the 404 carries it too,
+        # and a browser may then keep that failure for a year.
+        @asset_exists file
+        header @asset_exists Cache-Control "public, max-age=31536000, immutable"
+        file_server {
+            precompressed br gzip
+        }
+    }
+
+    # Everything else under /webapp (index.html, sw.js, manifest.webmanifest,
+    # version.html, icons, deep SPA routes): always revalidate. try_files falls back
+    # to index.html for any path that is not a file; a directory path (/webapp/)
+    # is not a file match and so also lands on index.html.
+    @spa path /webapp /webapp/*
+    handle @spa {
+        root * /var/www/html
+        header Cache-Control "no-cache"
+        # Go's MIME table has no .webmanifest when the box has FreeDesktop globs, so
+        # file_server would send no Content-Type at all.
+        @manifest path *.webmanifest
+        header @manifest Content-Type "application/manifest+json"
+        try_files {path} /webapp/index.html
+        file_server {
+            precompressed br gzip
+        }
+    }
+
+    # Anything else: plain 404 (no lighttpd hop).
     handle {
-        reverse_proxy 127.0.0.1:8082
+        respond "Not Found" 404
     }
 }

@@ -88,6 +88,7 @@ from mcapp.sqlite_storage import run_startup_tests as run_storage_tests
 from mcapp.sse_format_tests import run_sse_format_tests
 from mcapp.sse_handler import run_startup_tests as run_sse_tests
 from mcapp.sse_routes.labels_tests import run_labels_routes_tests
+from mcapp.sse_routes.timezone_tests import run_timezone_tests
 from mcapp.stall_http_tests import run_stall_http_tests
 from mcapp.stall_tests import run_stall_tests
 from mcapp.storage.ack_match_vectors_tests import run_ack_match_vector_tests
@@ -352,6 +353,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     server_imports_ok = await run_server_imports_tests()
     print(f"server_imports: {'PASS' if server_imports_ok else 'FAIL'}")
 
+    timezone_ok = await run_timezone_tests()
+    print(f"timezone: {'PASS' if timezone_ok else 'FAIL'}")
+
     blocklist_history_ok = await run_blocklist_history_tests()
     print(f"blocklist_history: {'PASS' if blocklist_history_ok else 'FAIL'}")
 
@@ -502,6 +506,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and msg_core_ok
         and push_ok
         and server_imports_ok
+        and timezone_ok
         and blocklist_history_ok
         and ble_protocol_ok
         and ble_hydration_ok

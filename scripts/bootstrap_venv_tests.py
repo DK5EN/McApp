@@ -31,6 +31,7 @@ log_ok() {{ :; }}
 log_error() {{ printf 'ERR %s\\n' "$*" >&2; }}
 getent() {{ printf 'u:x:1:1::%s:/bin/bash\\n' "$FAKE_HOME"; }}
 sudo() {{ shift 2; "$@"; }}
+warm_tz_worker_bytecode() {{ :; }}
 {function}
 setup_python_env "$1"
 """

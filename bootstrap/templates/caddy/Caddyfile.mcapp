@@ -1,4 +1,4 @@
-# mcapp-caddy-config-version: 3 host=@@HOST@@
+# mcapp-caddy-config-version: 4 host=@@HOST@@
 # (keep the version number in sync with CADDY_CONFIG_VERSION in
 #  bootstrap/lib/packages.sh — configure_caddy() rewrites this file whenever the
 #  marker line above stops matching. The marker carries the HOSTNAME as well as
@@ -13,22 +13,23 @@
 #
 # LAN-HTTPS default Caddyfile.
 #
-# Caddy is the public front door on :80 and :443. lighttpd is the backend,
-# bound to 127.0.0.1:8082 (see configure_lighttpd() in bootstrap/lib/packages.sh)
-# — NOT port 8081, which is reserved by mcapp-ble.service's uvicorn on this host.
+# Caddy is the public front door on :80 and :443 and (since v4) serves the
+# webapp itself from /var/www/html. lighttpd stays installed on
+# 127.0.0.1:8082 (see configure_lighttpd() in bootstrap/lib/packages.sh) only
+# because public-TLS Caddyfiles on existing boxes and an older slot's mcapp.sh
+# still proxy to it — NOT port 8081, which is reserved by mcapp-ble.service.
 #
-# Header policy: Cache-Control for the webapp (index.html, sw.js,
-# manifest.webmanifest, version.html -> no-cache; /webapp/assets/* -> immutable)
-# is owned by lighttpd's 99-mcapp.conf, NOT by Caddy. Caddy passes upstream
-# response headers through unchanged — do not add Cache-Control directives
-# here, that would create two competing sources of truth for the same headers.
+# Header policy: Cache-Control for the webapp is owned by CADDY here: every shell
+# response (/webapp/, index.html, sw.js, manifest.webmanifest, version.html, icons,
+# deep SPA routes) -> no-cache; /webapp/assets/* -> public, immutable. Do not add
+# a second source (lighttpd's 99-mcapp.conf only matters for the legacy proxy path).
 #
 # This file is installed/kept up to date by install_caddy()/configure_caddy()
 # in bootstrap/lib/packages.sh, keyed on the version marker above. It is
 # REPLACED (not supplemented) by ssl-tunnel-setup.sh if the operator opts into
 # public-domain TLS (DuckDNS/Cloudflare/deSEC) — that script writes its own
 # /etc/caddy/Caddyfile pointed at a real hostname with ACME-issued certs and
-# also reverse-proxies to lighttpd on 127.0.0.1:8082.
+# also reverse-proxies to lighttpd on 127.0.0.1:8082 (that path is legacy).
 {
 	auto_https disable_redirects
 }
@@ -75,9 +76,52 @@
 		file_server
 	}
 
-	# Everything else -> lighttpd (static webapp + SPA rewrite)
+	# Webapp (SPA) served by Caddy itself from /var/www/html, pre-compressed.
+	# Sidecars (.br/.gz) are produced at release time by scripts/precompress_webapp.mjs;
+	# `precompressed br gzip` serves them when the client accepts the encoding and falls
+	# back to the plain file when no sidecar exists (old bundle). No on-the-fly `encode`:
+	# it costs RAM and CPU on a Pi Zero.
+
+	# Root -> webapp
+	@root path /
+	handle @root {
+		redir * /webapp/
+	}
+
+	# Content-hashed assets: immutable. NO SPA fallback -- a missing asset must be a
+	# real 404, otherwise index.html would be cached immutably at an asset URL.
+	handle /webapp/assets/* {
+		root * /var/www/html
+		# Only an existing file is immutable: on a bare `header` the 404 carries it too,
+		# and a browser may then keep that failure for a year.
+		@asset_exists file
+		header @asset_exists Cache-Control "public, max-age=31536000, immutable"
+		file_server {
+			precompressed br gzip
+		}
+	}
+
+	# Everything else under /webapp (index.html, sw.js, manifest.webmanifest,
+	# version.html, icons, deep SPA routes): always revalidate. try_files falls back
+	# to index.html for any path that is not a file; a directory path (/webapp/)
+	# is not a file match and so also lands on index.html.
+	@spa path /webapp /webapp/*
+	handle @spa {
+		root * /var/www/html
+		header Cache-Control "no-cache"
+		# Go's MIME table has no .webmanifest when the box has FreeDesktop globs, so
+		# file_server would send no Content-Type at all.
+		@manifest path *.webmanifest
+		header @manifest Content-Type "application/manifest+json"
+		try_files {path} /webapp/index.html
+		file_server {
+			precompressed br gzip
+		}
+	}
+
+	# Anything else: plain 404 (no lighttpd hop).
 	handle {
-		reverse_proxy 127.0.0.1:8082
+		respond "Not Found" 404
 	}
 }
 
