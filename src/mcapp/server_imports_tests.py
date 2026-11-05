@@ -51,7 +51,7 @@ import sys
 from typing import Any
 from unittest.mock import patch
 
-from fastapi import FastAPI
+from mcapp.weblite import FastAPI
 
 from .sse_handler import SSEManager
 
@@ -61,7 +61,7 @@ _SUBPROCESS_SCRIPT = """
 import sys
 
 import uvicorn
-from fastapi import FastAPI
+from mcapp.weblite import FastAPI
 
 config = uvicorn.Config(FastAPI(), ws="none")
 config.load()

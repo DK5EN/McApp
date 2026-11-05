@@ -26,7 +26,8 @@ from pathlib import Path
 from typing import Any, cast
 
 import httpx
-from fastapi import FastAPI
+
+from mcapp.weblite import FastAPI
 
 from . import node_admin_service, remote_cmd
 from .commands.constants import has_console

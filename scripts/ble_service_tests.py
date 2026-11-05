@@ -85,8 +85,8 @@ from contextlib import suppress
 from typing import Any, cast
 
 from dbus_next.errors import DBusError, InterfaceNotFoundError
-from fastapi import HTTPException
-from fastapi.testclient import TestClient
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.testclient import TestClient
 
 # `ble_service` is an editable workspace member whose .pth does not put it on
 # sys.path globally, and sys.path[0] is this script's own directory whether the
@@ -112,6 +112,7 @@ from ble_service.src.ble_adapter import (  # noqa: E402 - same
     ConnectionState,
 )
 from ble_service.src.ble_types import BackendUnsupportedError  # noqa: E402 - same
+from ble_service.src.weblite import HTTPException  # noqa: E402 - same
 
 # Imported directly (not as `ble_main.ConnectionState`/`ble_main.BLEAdapter`)
 # because ble_adapter.py re-exports both into main.py's namespace without an
@@ -6097,12 +6098,14 @@ async def _test_mcapp_ensure_connected_forward_route(record: Any) -> None:
     )
 
     disabled_endpoint = _route(_StubManager(_NoEnsureBLE()))
-    raised: HTTPException | None = None
+    # mcapp's route raises mcapp.weblite.HTTPException, a different class from
+    # ble_service's copy; both share this Starlette base.
+    raised: StarletteHTTPException | None = None
     try:
         await disabled_endpoint(
             mcapp_schemas.BleEnsureConnectRequest(device_address=_ENSURE_CONNECTED_TEST_MAC)
         )
-    except HTTPException as e:
+    except StarletteHTTPException as e:
         raised = e
     record(
         "mcapp /api/ble/ensure_connected: a BLE client without ensure_connected() gets a "

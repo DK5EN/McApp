@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI
+
+from mcapp.weblite import FastAPI
 
 from . import weather
 

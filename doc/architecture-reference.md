@@ -314,7 +314,7 @@ MCProxy/
 Python packages (managed via `uv`, see `pyproject.toml`):
 
 - `dbus-next>=0.2.3`: BlueZ D-Bus interface for BLE (only in ble_service, removed from main package)
-- `timezonefinder>=6.5.0`: Timezone detection for node time sync
+- `timezonefinder>=6.5.0`: Timezone detection for node time sync, only ever loaded in the short-lived `tz_lookup_worker.py` child
 - `requests>=2.31.0`: HTTP client for weather API (DWD BrightSky + OpenMeteo)
 - `aiohttp>=3.9.0`: Async HTTP client for remote BLE
 - `aiohttp-sse-client>=0.2.1`: SSE client for remote BLE notifications

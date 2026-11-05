@@ -82,6 +82,7 @@ from mcapp.qrz_tests import run_qrz_tests
 from mcapp.remote_cmd_tests import run_remote_cmd_tests
 from mcapp.rm1_suppression_tests import run_rm1_suppression_tests
 from mcapp.rm_blocklist_tests import run_rm_blocklist_tests
+from mcapp.route_table_tests import run_route_table_tests
 from mcapp.send_path_tests import run_send_path_tests
 from mcapp.server_imports_tests import run_server_imports_tests
 from mcapp.sqlite_storage import run_startup_tests as run_storage_tests
@@ -118,6 +119,7 @@ from mcapp.storage.www_ingest_tests import run_www_ingest_tests
 from mcapp.template_override_tests import run_template_override_tests
 from mcapp.udp_handler import run_startup_tests as run_udp_handler_tests
 from mcapp.udp_parsing_tests import run_udp_parsing_tests
+from mcapp.weblite_tests import run_weblite_tests
 from mcapp.wire_log_tests import run_wire_log_tests
 from mcapp.wire_monitor_tests import run_wire_monitor_tests
 
@@ -353,6 +355,10 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     server_imports_ok = await run_server_imports_tests()
     print(f"server_imports: {'PASS' if server_imports_ok else 'FAIL'}")
 
+    route_table_ok = await run_route_table_tests()
+    print(f"route_table: {'PASS' if route_table_ok else 'FAIL'}")
+    weblite_ok = run_weblite_tests()
+    print(f"weblite: {'PASS' if weblite_ok else 'FAIL'}")
     timezone_ok = await run_timezone_tests()
     print(f"timezone: {'PASS' if timezone_ok else 'FAIL'}")
 
@@ -507,6 +513,8 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and push_ok
         and server_imports_ok
         and timezone_ok
+        and weblite_ok
+        and route_table_ok
         and blocklist_history_ok
         and ble_protocol_ok
         and ble_hydration_ok

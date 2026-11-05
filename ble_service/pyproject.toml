@@ -9,7 +9,8 @@ authors = [
     { name = "Martin Werner" }
 ]
 dependencies = [
-    "fastapi>=0.109.0",
+    # Not fastapi: see src/weblite.py, a byte-identical copy of mcapp's compatible layer.
+    "starlette>=1.0.0",
     "uvicorn>=0.53.0",
     # uvloop + httptools are what uvicorn's loop/http="auto" picks; listed
     # explicitly instead of the [standard] extra, which also pulls

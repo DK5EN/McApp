@@ -1,7 +1,7 @@
 """
 BLE Service API - HTTP/SSE interface for remote BLE access.
 
-This FastAPI application exposes BLE functionality via REST endpoints
+This FastAPI-compatible (weblite) application exposes BLE functionality via REST endpoints
 and Server-Sent Events for real-time notifications.
 """
 
@@ -21,8 +21,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from sse_starlette.sse import EventSourceResponse
 
@@ -37,6 +35,7 @@ from .ble_types import (
     EnsureConnectedResult,
     build_hello_bytes,
 )
+from .weblite import CORSMiddleware, Depends, FastAPI, Header, HTTPException, Query
 
 _BLE_PIN_MIN = 100_000
 _BLE_PIN_MAX = 999_999

@@ -12,11 +12,10 @@ import functools
 import json
 from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, HTTPException, Request, Response
-
 from ..commands.parsing import is_group, is_hashtag
 from ..group_labels import build_label_payload, load_snapshot, upstream_for
 from ..qrz_client import base_callsign, is_lookup_candidate
+from ..weblite import APIRouter, HTTPException, Request, Response
 
 if TYPE_CHECKING:
     from ..sse_handler import SSEManager

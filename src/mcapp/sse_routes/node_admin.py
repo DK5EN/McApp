@@ -18,11 +18,11 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, Any, TypeVar
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import ValidationError
 
 from ..node_admin_types import NodeAdminBusyError, NodeAdminError, NodeAdminUnavailableError
 from ..schemas import NodeAdminKeyRequest, NodeAdminSendRequest
+from ..weblite import APIRouter, Depends, HTTPException, Query, Request, Response
 
 if TYPE_CHECKING:
     from ..node_admin_types import NodeAdminService
@@ -149,7 +149,7 @@ def build_node_admin_router(
     @router.put("/api/node-admin/keys/{target}", status_code=204)
     async def put_key(target: str, request: Request) -> Response:
         svc = service()
-        # Hand-validated, never a body-model parameter: FastAPI's 422 would
+        # Hand-validated, never a body-model parameter: weblite's 422 would
         # echo the plaintext password in `input`.
         body = _parse_key_body(await request.body())
         password = body.password.get_secret_value()

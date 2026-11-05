@@ -12,8 +12,6 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-
 from ..commands.parsing import is_hashtag
 from ..internet_feed_types import (
     MAX_GROUPS,
@@ -22,6 +20,7 @@ from ..internet_feed_types import (
     RADIUS_KM_MIN,
     InternetFeedSettingsError,
 )
+from ..weblite import APIRouter, Depends, HTTPException, Request
 from .node_admin import host_allowed, origin_allowed
 
 if TYPE_CHECKING:

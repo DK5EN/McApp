@@ -131,7 +131,7 @@ Follow-ups from the container test campaign (`doc/2026-10-31_1200-container-test
 - **Gateway check is wrong as written.** Detect a rewritten source by "source equals the container's
   default gateway (`/proc/net/route`)", not `x.x.x.1` in `172.16/12`: CT4c learned and persisted the
   traefik-net gateway `192.168.97.1` and every UDP frame to the node was lost.
-- The code changes listed in the concept (learning switch, `/api/timezone` 501, secret-box binding,
+- `/api/timezone` 501 shipped 2026-11-05. The other code changes listed in the concept (learning switch, secret-box binding,
   Node Admin host allow-list, version metadata) are all still open.
 - U4 (amd64 image) is unverified: in the OrbStack amd64 VM (QEMU/Rosetta) runc hung on every
   container start, so this is a host limit, not an image finding. Retest on a real x86 host or a NAS.
@@ -170,12 +170,12 @@ needs the backend shape check, the vectors, the reply handling, and a MAIN/DEV s
 card of the webapp. Work order with contract, file pointers and acceptance criteria:
 `doc/2026-10-31_1000-rm1-updchan-requirements.md`.
 
-## B15 — serve the webapp from Caddy and drop lighttpd
+## B15 — drop lighttpd
 
-lighttpd only serves static files on `127.0.0.1:8082` behind Caddy, which already has
-`file_server`. Moving the SPA to Caddy (`try_files` + `file_server`) removes one process, one
-package and one config from the Zero 2W. Needs a `SYSTEM_EPOCH` bump and a PSS measurement on
-mcapp.local first. Decided 2026-10-31 alongside it: no Ansible rewrite of the bootstrap, no nginx.
+Caddy serves the SPA since `SYSTEM_EPOCH` 7 (2026-11-05, LAN template v4). lighttpd is now idle on
+a LAN box and only still proxied by public-TLS Caddyfiles on existing boxes and an older slot's
+`mcapp.sh`. Removing it saves about 1.5 MB PSS, so this is simplification, not a RAM win. It needs
+those Caddyfiles re-rendered first, plus the health checks in `update-runner.py` and `health.sh`. Decided 2026-10-31 alongside it: no Ansible rewrite of the bootstrap, no nginx.
 Evaluation: `doc/2026-10-31_1100-ansible-and-web-server-evaluation.md`.
 
 ## B16 — webapp follow-ups from the container test campaign

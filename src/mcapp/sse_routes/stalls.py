@@ -17,8 +17,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
-from fastapi import APIRouter, HTTPException, Request
 from pydantic import RootModel
+
+from ..weblite import APIRouter, HTTPException, Request
 
 if TYPE_CHECKING:
     from ..sse_handler import SSEManager

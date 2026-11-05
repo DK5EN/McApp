@@ -24,10 +24,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ..logging_setup import get_logger
+from ..weblite import APIRouter, HTTPException
 
 if TYPE_CHECKING:
     from ..sse_handler import SSEManager

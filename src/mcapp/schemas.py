@@ -2,7 +2,7 @@
 
 Centralises body validation so each endpoint in ``sse_handler.py`` declares a
 typed model instead of hand-parsing ``request.json()``. Validation errors are
-returned by FastAPI as HTTP 422.
+returned by weblite as HTTP 422.
 """
 
 import re

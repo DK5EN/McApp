@@ -280,6 +280,9 @@ class NodeAdminService:
         injected sleep only finishes once the test lets that sleep complete."""
         while self._tasks:
             await asyncio.gather(*list(self._tasks), return_exceptions=True)
+            # gather() over finished tasks returns without yielding, and each task's
+            # discard is a queued callback: without this the loop never runs it.
+            await asyncio.sleep(0)
 
     def _spawn(self, coro: Awaitable[None]) -> None:
         task = asyncio.ensure_future(coro)

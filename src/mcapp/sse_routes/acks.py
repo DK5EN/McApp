@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, HTTPException, Query
+from ..weblite import APIRouter, HTTPException, Query
 
 if TYPE_CHECKING:
     from ..sse_handler import SSEManager
@@ -37,7 +37,7 @@ def build_acks_router(manager: SSEManager) -> APIRouter:
         `get_message_acks` bind the ledger window around that row instead of
         guessing from "newest ack for this msg_id", the only option when a
         firmware msg_id has been reused (see that method's docstring).
-        Omitted, behaviour is unchanged for mc-chat and older webapps. FastAPI
+        Omitted, behaviour is unchanged for mc-chat and older webapps. weblite
         rejects a non-integer or negative value with 422 before this body
         runs.
         """

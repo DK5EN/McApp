@@ -59,8 +59,7 @@ import warnings
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any, cast
 
-from fastapi import HTTPException
-from fastapi.routing import APIRoute
+from mcapp.weblite import APIRoute, HTTPException
 
 from . import ble_client_remote as ble_client_remote_module
 from . import main as main_module

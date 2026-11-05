@@ -5,8 +5,6 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any, cast
 
-from fastapi import APIRouter, HTTPException, Request
-
 from ..logging_setup import get_logger
 from ..schemas import (
     BleEnsureConnectRequest,
@@ -14,6 +12,7 @@ from ..schemas import (
     UpdateActivateRequest,
     UpdateStartRequest,
 )
+from ..weblite import APIRouter, HTTPException, Request
 
 if TYPE_CHECKING:
     from ..sse_handler import SSEManager

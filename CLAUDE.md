@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-McApp is a message proxy service for MeshCom (LoRa mesh network for ham radio operators). It bridges MeshCom nodes with web clients via SSE/REST (FastAPI), supporting both UDP and Bluetooth Low Energy (BLE) connections. Runs on Raspberry Pi; Caddy terminates TLS on :80/:443 and lighttpd (backend on :8082) serves the Vue.js SPA and reverse-proxies the API.
+McApp is a message proxy service for MeshCom (LoRa mesh network for ham radio operators). It bridges MeshCom nodes with web clients via SSE/REST (FastAPI), supporting both UDP and Bluetooth Low Energy (BLE) connections. Runs on Raspberry Pi; Caddy terminates TLS on :80/:443, serves the Vue.js SPA from pre-compressed sidecars and reverse-proxies the API. lighttpd on :8082 only remains for public-TLS boxes and older slots (B15).
 
 Companion frontend: `/Users/martinwerner/WebDev/webapp` (separate git repo — commit each repo independently).
 
@@ -882,6 +882,32 @@ Plan and decisions: `doc/2026-10-25_0900-conversation-nav-group-labels-plan.md`.
 - **`proxy:group_labels` is a BARE event** (like `proxy:callsign_info`, not the
   `_RESPONSE_EVENT_MAP` envelope), sent in the connect burst after `proxy:callsign_info` and after
   every label write. Writes have no Host/Origin guard (operator decision 2026-10-25).
+
+## Web Layer (`weblite`, `/api/timezone`, Caddy static)
+
+RAM and front-door campaign, 2026-11-05: `doc/2026-11-05_2230-ram-and-front-door-campaign.md`.
+
+- **FastAPI is gone; do not add it back.** `src/mcapp/weblite.py` is a small compatible layer on
+  Starlette implementing only what the routes use, and it raises `TypeError` at registration for
+  anything else. `ble_service/src/weblite.py` is a byte-identical copy, pinned by `weblite_tests`,
+  because that service cannot import mcapp. A 422 deliberately omits `input`, `ctx` and `url`,
+  which echo passwords. There is no `/docs` or `/openapi.json`.
+- **`route_table_tests` builds the real `_create_app()`.** Route suites build their own routers and
+  `server_imports_tests` stubs it, so a route weblite refuses would otherwise first fail on the box.
+  It also asserts that every Node Admin and internet-feed route refuses a foreign Host.
+- **`/api/timezone` runs a short-lived child** (`tz_lookup_worker.py`, 33 MB for 1.2-2 s) so numpy
+  and TimezoneFinder are never resident in `mcapp`; a clean-process test pins that. They stay
+  installed, so this saves RAM and not the 90 MB of disk. `uv sync` compiles no bytecode (6.6 s cold
+  against 1.6 s), so `deploy.sh` runs the worker once. Out-of-range coordinates are 400 with no spawn.
+- **Caddy serves `/webapp` from `.br`/`.gz` sidecars**, built by `scripts/precompress_webapp.mjs` in
+  `release.sh`, not on the fly. WASM gets none: 107 MB raw would add about 70 MB per tarball (B16).
+  Assets are immutable with no SPA fallback, because falling back would cache HTML at an asset URL;
+  `immutable` is gated on the file existing because a bare `header` also stamps the 404. Everything
+  else under `/webapp` is `no-cache`. Go's MIME table lacks `.webmanifest` on the box, hence the
+  explicit `Content-Type`. String tests cannot see these: render the template and run real Caddy on
+  a high port with `admin off`.
+- **lighttpd is still installed and running** for public-TLS Caddyfiles on existing boxes and an
+  older slot's `mcapp.sh`, which rewrites Caddy to v3 until the next `--skip` from a new slot.
 
 ## Configuration
 

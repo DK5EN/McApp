@@ -2413,7 +2413,7 @@ class AppContext:
     message_router: MessageRouter
     command_handler: Any
     udp_handler: UDPHandler
-    sse_manager: Any  # SSEManager | None — Any here to avoid a hard fastapi import
+    sse_manager: Any  # SSEManager | None — Any here to avoid a hard web-stack import
     ble_client: Any
     ble_mode: BLEMode
     stall_recorder: StallRecorder
@@ -2972,7 +2972,7 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
                 sse_manager.set_classifier(classifier)
             classifier.set_event_bus(_ClassifierBus(sse_manager))
     else:
-        logger.warning("FastAPI/Uvicorn not installed — SSE transport unavailable")
+        logger.warning("Starlette/Uvicorn not installed — SSE transport unavailable")
 
     # Start UDP early — before BLE init which can block for seconds on Pi,
     # ensuring the health check finds port 1799 listening promptly.

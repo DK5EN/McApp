@@ -37,7 +37,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI
+
+from mcapp.weblite import FastAPI
 
 from .commands.constants import has_console
 from .geo import latlon_to_locator

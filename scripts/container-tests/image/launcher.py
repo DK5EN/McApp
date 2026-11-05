@@ -10,11 +10,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
-from fastapi.responses import RedirectResponse
+from starlette.responses import RedirectResponse
 from starlette.staticfiles import StaticFiles
 
 from mcapp import config_loader, sse_handler, system_converge
+from mcapp.weblite import FastAPI
 
 # (a) B12 change 1: MCAPP_BIND_HOST replaces SSE_HOST. main.py does
 # `from .config_loader import SSE_HOST`, so this must run before mcapp.main is imported.
@@ -40,7 +40,7 @@ def _create_app_with_webapp(self: Any) -> FastAPI:
     webapp_dir = os.environ.get("MCAPP_WEBAPP_DIR")
     if webapp_dir and Path(webapp_dir).is_dir():
 
-        @app.get("/", include_in_schema=False)
+        @app.get("/")
         async def _root() -> RedirectResponse:
             return RedirectResponse("/webapp/")
 

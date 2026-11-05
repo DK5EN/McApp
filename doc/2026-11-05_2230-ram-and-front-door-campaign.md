@@ -34,9 +34,9 @@ measurements are from mcapp.local, v2.1.23, 48 min uptime, no client connected.
 | ---- | ------------------------------------- | ------------ | ------ |
 | 1A   | Timezone subprocess                   | implementer  | done   |
 | 1B   | Caddy static, sidecars, cache headers | implementer  | done   |
-| 2    | `weblite` module and its test suite   | implementer  | built  |
-| 3A   | `mcapp` routes onto `weblite`         | implementer  | open   |
-| 3B   | `ble_service` routes onto its copy    | implementer  | open   |
+| 2    | `weblite` module and its test suite   | implementer  | done   |
+| 3A   | `mcapp` routes onto `weblite`         | implementer  | done   |
+| 3B   | `ble_service` routes onto its copy    | implementer  | done   |
 | 4    | Docs, gate, commit, push, dev release | orchestrator | open   |
 
 Acceptance on the box: `mcapp` and `mcapp-ble` PSS re-read against the baseline, `/api/timezone` works

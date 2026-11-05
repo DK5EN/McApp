@@ -14,7 +14,8 @@ import sqlite3
 from typing import Any, cast
 
 import httpx
-from fastapi import FastAPI
+
+from mcapp.weblite import FastAPI
 
 from .commands.constants import has_console
 from .sse_routes.classifier import build_classifier_router

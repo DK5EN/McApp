@@ -8,12 +8,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, HTTPException
-
 from ..schemas import (
     ReclassifyRequest,
     TemplateActionRequest,
 )
+from ..weblite import APIRouter, HTTPException
 
 if TYPE_CHECKING:
     from ..sse_handler import SSEManager
