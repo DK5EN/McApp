@@ -114,6 +114,7 @@ from mcapp.storage.store_notice_tests import run_store_notice_tests
 from mcapp.storage.suppression_tests import run_suppression_predicate_tests
 from mcapp.storage.telemetry_reconcile_tests import run_telemetry_reconcile_tests
 from mcapp.storage.unread_suppression_tests import run_unread_suppression_tests
+from mcapp.storage.uptime_gateway_tests import run_uptime_gateway_tests
 from mcapp.storage.uptime_tests import run_uptime_tests
 from mcapp.storage.www_ingest_tests import run_www_ingest_tests
 from mcapp.template_override_tests import run_template_override_tests
@@ -267,6 +268,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     uptime_ok = await run_uptime_tests()
     print(f"uptime: {'PASS' if uptime_ok else 'FAIL'}")
+
+    uptime_gateway_ok = await run_uptime_gateway_tests()
+    print(f"uptime_gateway: {'PASS' if uptime_gateway_ok else 'FAIL'}")
 
     group_labels_ok = run_group_labels_tests()
     print(f"group_labels: {'PASS' if group_labels_ok else 'FAIL'}")
@@ -479,6 +483,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and hey_path_ok
         and connection_lifecycle_ok
         and uptime_ok
+        and uptime_gateway_ok
         and group_labels_ok
         and label_overrides_ok
         and labels_routes_ok

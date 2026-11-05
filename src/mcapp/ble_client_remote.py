@@ -8,6 +8,7 @@ and Server-Sent Events for notifications.
 import asyncio
 import base64
 import contextlib
+import contextvars
 import json
 import logging
 import time
@@ -32,6 +33,15 @@ from .util import now_ms
 from .wire_log import WireLog
 
 logger = logging.getLogger(__name__)
+
+# True while `BLEClientRemote._replay_cached_registers` feeds ble_service's cached
+# registers through the notification path. A ContextVar rather than a payload
+# key: the frames reach `cached_ble_registers` and the webapp's SSE, both pinned
+# wire shapes. `MessageRouter.publish` awaits every subscriber inline, so the
+# value is visible to subscribers (see `main._wire_ble_caches`).
+register_replay_active: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "register_replay_active", default=False
+)
 
 CONNECT_COOLDOWN_S = 15.0
 SSE_DISCONNECT_GRACE_S = 2.0
@@ -943,14 +953,18 @@ class BLEClientRemote(BLEClientBase):
             return
 
         replayed = 0
-        for typ, raw in registers.items():
-            if not isinstance(raw, dict):
-                continue
-            logger.debug("BLE register replay from ble_service cache: TYP=%s", typ)
-            await self._handle_notification(
-                json.dumps({"format": "json", "parsed": raw, "timestamp": now_ms()})
-            )
-            replayed += 1
+        token = register_replay_active.set(True)
+        try:
+            for typ, raw in registers.items():
+                if not isinstance(raw, dict):
+                    continue
+                logger.debug("BLE register replay from ble_service cache: TYP=%s", typ)
+                await self._handle_notification(
+                    json.dumps({"format": "json", "parsed": raw, "timestamp": now_ms()})
+                )
+                replayed += 1
+        finally:
+            register_replay_active.reset(token)
         if replayed:
             logger.info(
                 "Replayed %d cached BLE register(s) from ble_service on SSE (re)connect",

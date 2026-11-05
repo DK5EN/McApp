@@ -18,7 +18,7 @@ from typing import Any
 
 # BLE client abstraction - supports local, remote, and disabled modes
 from .ble_client import BLEMode, ConnectionState, create_ble_client
-from .ble_client_remote import set_wire_log
+from .ble_client_remote import register_replay_active, set_wire_log
 from .commands import create_command_handler
 from .commands.constants import CALLSIGN_STRICT_RE
 from .commands.parsing import (
@@ -76,6 +76,7 @@ from .qrz_service import QrzLookupService
 from .secret_box import SecretBox
 from .sqlite_storage import SQLiteStorage, create_sqlite_storage
 from .stalls import StallRecorder
+from .storage.uptime import gateway_mode_from_register
 from .text_decode import sanitize_outbound
 from .util import PLACEHOLDER_CALLSIGN_BASES as _PLACEHOLDER_CALLSIGN_BASES
 from .util import now_ms
@@ -2482,6 +2483,25 @@ def _log_sn1_via_change(previous: Any, current: dict[str, Any]) -> None:
         logger.debug("BLE via-change logging failed", exc_info=True)
 
 
+async def _record_register_gateway_mode(
+    storage: SQLiteStorage | None, data: dict[str, Any], *, replayed: bool = False
+) -> None:
+    """Feed the `SN` register's `GW` flag to the uptime ledger. Never raises:
+    a failing ledger write must not break register caching. `replayed` marks a
+    frame from ble_service's age-less register cache (possibly stale): it only
+    seeds an unknown mode.
+    """
+    if storage is None:
+        return
+    enabled = gateway_mode_from_register(data)
+    if enabled is None:
+        return
+    try:
+        await storage.record_link_gateway_mode(enabled, now_ms(), seed_only=replayed)
+    except Exception:
+        logger.warning("Gateway-mode ledger write failed", exc_info=True)
+
+
 def _wire_ble_caches(message_router: MessageRouter) -> None:
     """Subscribe the BLE-register/GPS caching handlers used to serve SSE
     reconnects instantly instead of re-querying the device."""
@@ -2494,6 +2514,10 @@ def _wire_ble_caches(message_router: MessageRouter) -> None:
             if typ == "SN1":
                 _log_sn1_via_change(message_router.cached_ble_registers.get("SN1"), data)
             message_router.cached_ble_registers[typ] = data
+        if typ == "SN":
+            await _record_register_gateway_mode(
+                message_router.storage_handler, data, replayed=register_replay_active.get()
+            )
 
     message_router.subscribe("ble_notification", _cache_ble_register)
 

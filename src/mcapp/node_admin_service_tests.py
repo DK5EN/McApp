@@ -286,7 +286,10 @@ class Env:
 async def make_env(
     *, attached: str | None = ATTACHED, ble: bool = False, unix: int = 0
 ) -> AsyncIterator[Env]:
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    # stop() cancels a task, but its to_thread DB call runs on and can recreate the WAL
+    # while rmtree walks the directory ("Directory not empty", about 1 run in 8). A
+    # leftover temp file must not fail a suite.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
         tmp = Path(tmp_dir)
         storage = await create_sqlite_storage(tmp / "node_admin_service_test.db")
         box = SecretBox(key_path=tmp / "secret.key", binding=b"board:TEST")

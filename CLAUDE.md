@@ -385,6 +385,17 @@ webapp's Gateway Availability card in Settings. Design and the on-air measuremen
   COVERAGE only. Startup reconciliation writes the `dark` row and resets `last_beacon_ms`, so a
   deploy restart can never look like a link outage — and it must run before the heartbeat task
   starts, or the first tick papers over the very downtime it exists to record.
+- **`disabled` is a third claim, from the `SN` register's `GW`** (schema v40, plan
+  `doc/2026-11-06_0020-gateway-availability-fix.md`). A node with gateway off gets no hop-0 beacon, so
+  without it the card reports one endless outage. It counts against COVERAGE only, like `dark`. A
+  counted beacon overrides a stale `GW=false`. **A replayed `SN` only seeds a NULL ledger:**
+  `_replay_cached_registers` feeds ble_service's age-less cache through the live path on every SSE
+  attach, and firmware pushes `SN` only on a BLE-driven change, so that copy can be days old
+  (`register_replay_active`). A UDP-only box has no `SN` and stays unknown, which measures as before.
+- **Year and month bars come from `buckets`, never from `segments`.** The old bar floored each
+  outage to 2 px of an assumed 280 px, taken from `up`: 131 gaps erased all green and squeezed `dark`
+  from 79% to 46%, while the stats were right. `_downsample` is worst-wins and lies the same way past
+  500 segments, so buckets are computed from the exact list.
 - **The metric's resolution is one cadence.** A 20-minute outage between beacons reads as 20 min +
   606 s, and nothing shorter than the tolerance (~12 min) is visible at all. Inherent to a
   heartbeat-driven metric, and it got twice as coarse when the cadence halved.
