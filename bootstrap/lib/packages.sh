@@ -579,7 +579,7 @@ EOF
 # LIGHTTPD_MCAPP_CONF_VERSION above). Keep this number in sync with the
 # "mcapp-caddy-config-version:" comment in
 # bootstrap/templates/caddy/Caddyfile.mcapp.
-readonly CADDY_CONFIG_VERSION=5
+readonly CADDY_CONFIG_VERSION=6
 
 # Short hostname the Caddyfile template is rendered with (@@HOST@@). Falls back
 # to "mcapp" when `hostname -s` is empty or is not a valid DNS label: an empty
@@ -775,6 +775,29 @@ configure_caddy() {
 
   mkdir -p /etc/caddy
 
+  # Home for an operator's own sites (imported at the end of every Caddyfile
+  # template). Created on every run, also for a TLS_ENABLED box, so the folder
+  # exists for an operator to use. Files inside are NEVER touched; only the
+  # README (no .caddy suffix, so it is not imported) is written when absent.
+  local custom_dir="${MCAPP_CADDY_CUSTOM_DIR:-/etc/caddy/conf.d}"
+  if mkdir -p "$custom_dir" 2>/dev/null && [[ ! -e "$custom_dir/README" ]]; then
+    cat > "$custom_dir/README" 2>/dev/null << 'CADDY_README_EOF' || true
+McApp imports every *.caddy file in this folder at the END of the Caddyfile.
+Each file must hold one or more WHOLE site blocks of your own, for example:
+
+  example.lan:8443 {
+      respond "hello"
+  }
+
+Do not claim :80, :443 or a McApp hostname: the whole config then fails
+validation, and McApp keeps its previous Caddyfile (no upgrade is applied).
+Files here are never modified by McApp. Editor backup files (no .caddy
+suffix) are ignored. Check with: caddy validate --config /etc/caddy/Caddyfile
+On a public-TLS box the import only exists after ssl-tunnel-setup.sh has been
+run again, so files here are ignored until then.
+CADDY_README_EOF
+  fi
+
   # If ssl-tunnel-setup.sh has already claimed Caddy for public-domain TLS
   # (it sets TLS_ENABLED=true in config.json via update_mcapp_config() and
   # overwrites this same /etc/caddy/Caddyfile path with a provider-specific
@@ -860,6 +883,10 @@ configure_caddy() {
     # (defense-in-depth; the update-runner already forces HOME=root's home).
     if ! HOME=/root caddy validate --config "$staged" --adapter caddyfile &>/dev/null; then
       log_warn "  Rendered Caddyfile failed validation — keeping the existing config"
+      if compgen -G "${custom_dir}/*.caddy" >/dev/null 2>&1; then
+        log_warn "  ${custom_dir} holds site files: one of them may be the cause (broken, or claiming :80/:443 or the McApp host)"
+        log_warn "  Move it aside and re-run to confirm; McApp never edits that folder"
+      fi
       log_warn "  Debug: caddy validate --config ${staged} --adapter caddyfile"
       return 0
     fi
@@ -881,6 +908,9 @@ configure_caddy() {
   # the up-to-date path it is the only check an already-present config gets.
   if ! HOME=/root caddy validate --config "$caddy_conf" --adapter caddyfile &>/dev/null; then
     log_warn "  Caddy config validation failed — leaving caddy service as-is"
+    if compgen -G "${custom_dir}/*.caddy" >/dev/null 2>&1; then
+      log_warn "  ${custom_dir} holds site files: a broken one makes the whole config invalid"
+    fi
     log_warn "  Run: caddy validate --config ${caddy_conf} --adapter caddyfile"
     # The staged copy validated, so the installed one is damaged (partial install,
     # full disk). Keep the old file and fail: returning 0 would advance the epoch

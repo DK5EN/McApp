@@ -964,6 +964,53 @@ table inet filter {
 """
 
 
+# The field file, byte for byte: an `nft list ruleset` dump saved over the config. A dump
+# loses every comment, so McApp's marker is gone while all its rules are still there.
+_FIELD_DUMP = """table inet filter {
+\tchain input {
+\t\ttype filter hook input priority filter; policy drop;
+\t\tiif "lo" accept
+\t\tct state established,related accept
+\t\tct state invalid drop
+\t\tip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } tcp dport 22 accept
+\t\ttcp dport 22 ct state new limit rate 6/minute burst 5 packets accept
+\t\ttcp dport 80 accept
+\t\ttcp dport 443 accept
+\t\tudp dport 443 accept
+\t\ttcp dport 2985 accept
+\t\ttcp dport 8080 accept
+\t\tip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } tcp dport 19532 accept
+\t\tudp dport 1799 accept
+\t\tip daddr 224.0.0.251 udp dport 5353 accept
+\t\ticmp type echo-request accept
+\t\tmeta pkttype broadcast drop
+\t\tmeta pkttype multicast drop
+\t\tip daddr 255.255.255.255 drop
+\t\tip daddr & 0.0.0.255 == 0.0.0.255 drop
+\t\tudp dport 1900 drop
+\t\tudp sport 5353 drop
+\t\tudp dport 5353 drop
+\t\tudp dport > 30000 drop
+\t\tmeta l4proto igmp drop
+\t\tudp dport { 137, 138 } drop
+\t\tudp dport 5355 drop
+\t\tip daddr { 224.0.0.0/4 } drop
+\t\tlimit rate 10/minute burst 5 packets log prefix "[nftables DROP] " flags all counter \
+packets 133 bytes 6988 drop
+\t\tip saddr 192.168.0.0/16 tcp dport 8080 accept
+\t}
+
+\tchain forward {
+\t\ttype filter hook forward priority filter; policy drop;
+\t}
+
+\tchain output {
+\t\ttype filter hook output priority filter; policy accept;
+\t}
+}
+"""
+
+
 def _test_operator_file(tmp: Path, failures: list[str]) -> None:
     # Field report 2026-11-06: a converge replaced an operator's 1273-byte file with
     # our rules and closed :8080. A file with real rules and no marker is theirs.
@@ -998,6 +1045,15 @@ def _test_operator_file(tmp: Path, failures: list[str]) -> None:
         not Path(env["MCAPP_NFT_CUSTOM_DIR"]).exists(),
         "operator file: no custom folder, nothing would include it",
         failures,
+    )
+    root, env = _board(tmp, "operator-field-dump")
+    conf = Path(env["MCAPP_NFT_CONF"])
+    conf.write_text(_FIELD_DUMP)
+    r = _nft(root, env)
+    calls = _calls(root)
+    _check(conf.read_text() == _FIELD_DUMP, "field dump: kept byte-identical", failures)
+    _check(
+        _no_verb(calls, "reload", "restart", "reload-or-restart"), "field dump: no reload", failures
     )
     # Shapes with no accept rule that are still somebody's firewall.
     for name, text in (

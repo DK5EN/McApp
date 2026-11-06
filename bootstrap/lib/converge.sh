@@ -34,6 +34,7 @@ converge_step_table() {
 disable_unused_services 8
 remove_bloat_packages 8
 configure_tmpfs 8
+configure_logdirs 9
 configure_boot_memory 8
 configure_journald 8
 configure_logrotate 8

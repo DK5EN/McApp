@@ -109,3 +109,8 @@
         respond "Not Found" 404
     }
 }
+
+# Operator sites: every /etc/caddy/conf.d/*.caddy file is one WHOLE site block
+# of your own (McApp never edits that folder). It must not claim :80, :443 or
+# a McApp hostname, or the whole config fails validation.
+import /etc/caddy/conf.d/*.caddy

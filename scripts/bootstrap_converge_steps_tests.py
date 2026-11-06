@@ -119,6 +119,28 @@ def _test_runs(tmp: Path, failures: list[str]) -> None:
     changed = [name for name, since in _table_rows() if since > 8]
     # Epoch 9 changed the firewall. Lowering this row would skip it on every existing box.
     _check("configure_firewall" in changed, f"1: firewall not in epoch 9: {changed}", failures)
+    # Epoch 9 added configure_logdirs as its own step. configure_tmpfs stays at 8: it
+    # re-mounts /var/log on customised boxes, so it must not run on every box coming from 8.
+    rows = dict(_table_rows())
+    _check(
+        rows.get("configure_logdirs") == 9,
+        f"1: configure_logdirs row {rows.get('configure_logdirs')}",
+        failures,
+    )
+    _check(
+        "configure_tmpfs" not in changed, f"1: configure_tmpfs re-runs from 8: {changed}", failures
+    )
+    _check(
+        rows.get("configure_tmpfs") == 8,
+        f"1: configure_tmpfs row {rows.get('configure_tmpfs')}",
+        failures,
+    )
+    _check(
+        "configure_logdirs" in order
+        and order.index("configure_logdirs") == order.index("configure_tmpfs") + 1,
+        "1: setup_system calls configure_logdirs right after configure_tmpfs",
+        failures,
+    )
     rc, got, _ = _run(tmp, 8)
     _check(
         rc == 0 and got == [*changed, "ensure_web_frontend", "REACHED_AFTER"],

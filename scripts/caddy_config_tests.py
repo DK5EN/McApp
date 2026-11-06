@@ -520,9 +520,9 @@ def _test_webapp_routes() -> None:
     _check("handle /root.crt" in mcapp, "Caddyfile.mcapp keeps the /root.crt handler")
     _check("redir * /webapp/" in mcapp, "Caddyfile.mcapp redirects / to /webapp/")
     _check(
-        _declared_version() == "5"
-        and re.search(r"mcapp-caddy-config-version:\s*5\b", mcapp) is not None,
-        "Caddyfile.mcapp marker and CADDY_CONFIG_VERSION are both 5",
+        _declared_version() == "6"
+        and re.search(r"mcapp-caddy-config-version:\s*6\b", mcapp) is not None,
+        "Caddyfile.mcapp marker and CADDY_CONFIG_VERSION are both 6",
     )
 
 
@@ -538,10 +538,11 @@ eval "$fn"
 CONFIG_FILE="$T/config.json"
 caddy() {{
   if [[ -f "$T/installed_invalid" && "$*" == *"etc/caddy/Caddyfile"* ]]; then return 1; fi
+  if [[ -f "$T/staged_invalid" && "$*" != *"etc/caddy/Caddyfile"* ]]; then return 1; fi
   return 0
 }}
 journalctl() {{ return 0; }}
-log_info() {{ :; }}; log_ok() {{ :; }}; log_warn() {{ :; }}
+log_info() {{ :; }}; log_ok() {{ :; }}; log_warn() {{ echo "$*" >> "$T/warns"; }}
 log_error() {{ echo "ERROR: $*" >&2; }}
 caddy_render_host() {{ echo mcapp; }}
 pick_caddy_template() {{ echo "$T/tmpl"; }}
@@ -566,6 +567,7 @@ case "$MODE" in
   bare) trap 'echo "rc=$?"' EXIT; configure_caddy; exit 0 ;;
   second-run) configure_caddy || true; touch "$T/allow_new" ;;
   installed-invalid) touch "$T/installed_invalid" ;;
+  staged-invalid) touch "$T/staged_invalid" ;;
 esac
 rc=0
 configure_caddy || rc=$?
@@ -574,7 +576,12 @@ echo "rc=$rc"
 
 
 def _run_configure_caddy(
-    old: str | None, *, restart_fails: bool, tls: bool = False, mode: str = "guarded"
+    old: str | None,
+    *,
+    restart_fails: bool,
+    tls: bool = False,
+    mode: str = "guarded",
+    custom_dir: dict[str, bytes | None] | None = None,
 ) -> tuple[int, str | None, int, bool] | None:
     """Drive the real configure_caddy() against a sandbox instead of /etc/caddy.
 
@@ -592,6 +599,14 @@ def _run_configure_caddy(
         (t / "configure_caddy.sh").write_text(
             match.group(0).replace("/etc/caddy", f"{t}/etc/caddy"), encoding="utf-8"
         )
+        # custom_dir is in/out: seeded into conf.d before the run, then replaced by
+        # what conf.d holds afterwards ("__dir__" is set iff the folder exists;
+        # "__warns__" carries every log_warn line of the run).
+        seed = {k: v for k, v in (custom_dir or {}).items() if v is not None}
+        if seed:
+            (t / "etc" / "caddy" / "conf.d").mkdir(parents=True)
+            for name, data in seed.items():
+                (t / "etc" / "caddy" / "conf.d" / name).write_bytes(data)
         body = "NEWCONF" if restart_fails else "FRESHCONF"
         (t / "tmpl").write_text(
             f"# mcapp-caddy-config-version: {current} host=@@HOST@@\n{body}\n", encoding="utf-8"
@@ -616,14 +631,25 @@ def _run_configure_caddy(
             text=True,
             timeout=60,
             check=False,
+            stdin=subprocess.DEVNULL,
         )
+        warn_file = t / "warns"
+        warn_text = warn_file.read_bytes() if warn_file.exists() else b""
         m = re.search(r"rc=(\d+)", res.stdout)
         if m is None:
             print(f"    driver output: {res.stdout!r} {res.stderr[-300:]!r}")
             return None
         conf = t / "etc" / "caddy" / "Caddyfile"
         restarts = (t / "restarts").read_text().count("r") if (t / "restarts").exists() else 0
-        leftovers = any(f.name != "Caddyfile" for f in conf.parent.iterdir())
+        leftovers = any(f.name not in ("Caddyfile", "conf.d") for f in conf.parent.iterdir())
+        if custom_dir is not None:
+            cdir = conf.parent / "conf.d"
+            custom_dir.clear()
+            custom_dir["__dir__"] = b"" if cdir.is_dir() else None
+            if cdir.is_dir():
+                for f in cdir.iterdir():
+                    custom_dir[f.name] = f.read_bytes()
+            custom_dir["__warns__"] = warn_text
         return (
             int(m.group(1)),
             conf.read_text(encoding="utf-8") if conf.exists() else None,
@@ -724,6 +750,95 @@ def _test_rollback() -> None:
     )
 
 
+_IMPORT_LINE = "import /etc/caddy/conf.d/*.caddy"
+
+
+def _test_custom_sites() -> None:
+    for tmpl in sorted(_TEMPLATE.parent.glob("Caddyfile.*")):
+        lines = tmpl.read_text(encoding="utf-8").splitlines()
+        hits = [i for i, ln in enumerate(lines) if ln == _IMPORT_LINE]
+        last_close = max((i for i, ln in enumerate(lines) if ln == "}"), default=-1)
+        _check(
+            len(hits) == 1 and hits[0] > last_close,
+            f"{tmpl.name}: custom-site import once, at column 0, after the last site block",
+        )
+        _check(
+            sum(1 for ln in lines if "conf.d" in ln and not ln.lstrip().startswith("#")) == 1,
+            f"{tmpl.name}: no other uncommented conf.d reference",
+        )
+    if not _check(_BASH is not None, "bash is available to drive configure_caddy()"):
+        return
+    old = f"# mcapp-caddy-config-version: {int(_declared_version() or '0') - 1} host=mcapp\nOLDCONF"
+    mine = b"example.lan:8443 {\n\trespond hi\n}\n"
+    after: dict[str, bytes | None] = {"mine.caddy": mine, "mine.caddy~": b"x"}
+    r = _run_configure_caddy(old, restart_fails=False, custom_dir=after)
+    _check(
+        r is not None and r[0] == 0 and r[1] is not None and "FRESHCONF" in r[1],
+        "Caddyfile was rewritten with a custom folder present",
+    )
+    _check(
+        after.get("mine.caddy") == mine and after.get("mine.caddy~") == b"x",
+        "files already in the custom folder are byte-identical after a Caddyfile rewrite",
+    )
+    _check("README" in after, "README written into the custom folder when absent")
+    after2: dict[str, bytes | None] = {"README": b"mine"}
+    _run_configure_caddy(old, restart_fails=False, custom_dir=after2)
+    _check(after2.get("README") == b"mine", "an existing README is left alone")
+    after3: dict[str, bytes | None] = {}
+    _run_configure_caddy(old, restart_fails=False, custom_dir=after3)
+    _check(after3.get("__dir__") is not None, "custom folder created (normal)")
+    if shutil.which("jq") is None:
+        print("    (jq not on PATH - TLS custom folder check skipped: NOT VERIFIED here)")
+        return
+    after4: dict[str, bytes | None] = {}
+    _run_configure_caddy("TLSPROVIDERCONF", restart_fails=True, tls=True, custom_dir=after4)
+    _check(
+        after4.get("__dir__") is not None and "README" in after4,
+        "custom folder created on the TLS_ENABLED early-return path",
+    )
+    after5: dict[str, bytes | None] = {"a.caddy": mine}
+    _run_configure_caddy("TLSPROVIDERCONF", restart_fails=True, tls=True, custom_dir=after5)
+    _check(after5.get("a.caddy") == mine, "TLS path leaves custom files byte-identical")
+
+
+def _run_warnings(old: str, mode: str, seed: dict[str, bytes | None]) -> list[str]:
+    """Run configure_caddy() in ``mode`` with ``seed`` in conf.d; return its log_warn lines."""
+    folder = dict(seed)
+    _run_configure_caddy(old, restart_fails=False, mode=mode, custom_dir=folder)
+    return (folder.get("__warns__") or b"").decode("utf-8").splitlines()
+
+
+def _test_custom_folder_warnings() -> None:
+    """Both validation-failure paths name the custom folder only when it holds .caddy files."""
+    if not _check(_BASH is not None, "bash is available to drive the custom-folder warnings"):
+        return
+    old = f"# mcapp-caddy-config-version: {int(_declared_version() or '0') - 1} host=mcapp\nOLDCONF"
+    mine = b"example.lan:8443 {\n\trespond hi\n}\n"
+    cases = (
+        ("staged-invalid", "one of them may be the cause"),
+        ("installed-invalid", "a broken one makes the whole config invalid"),
+    )
+    for mode, hint in cases:
+        w = _run_warnings(old, mode, {"a.caddy": mine})
+        _check(
+            any("holds site files" in ln and hint in ln for ln in w),
+            f"{mode}: warning names the custom folder when it holds .caddy files",
+        )
+        if mode == "staged-invalid":
+            _check(
+                any("Move it aside" in ln for ln in w),
+                f"{mode}: second hint tells the operator to move the file aside",
+            )
+        # No .caddy file: an empty folder, a README and an editor backup are not site files.
+        for seed in ({}, {"README": b"x", "a.caddy~": b"x"}):
+            w2 = _run_warnings(old, mode, dict(seed))
+            _check(
+                any("validation" in ln for ln in w2)
+                and not any("holds site files" in ln for ln in w2),
+                f"{mode}: no custom-folder warning without .caddy files ({sorted(seed)})",
+            )
+
+
 def run_caddy_config_tests() -> bool:
     """Run the suite. Returns True when every check passed."""
     print("\n🧪 Testing Caddy front-door config (template, caddy_site, probe):")
@@ -734,6 +849,8 @@ def run_caddy_config_tests() -> bool:
     _test_template_pick()
     _test_probe()
     _test_rollback()
+    _test_custom_sites()
+    _test_custom_folder_warnings()
     if _failures:
         print(f"\n  {len(_failures)} check(s) failed:")
         for failure in _failures:

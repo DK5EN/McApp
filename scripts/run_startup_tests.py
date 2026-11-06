@@ -29,11 +29,13 @@ from ble_unit_template_tests import run_ble_unit_template_tests
 from bootstrap_config_backup_tests import run_bootstrap_config_backup_tests
 from bootstrap_converge_steps_tests import run_bootstrap_converge_steps_tests
 from bootstrap_firewall_tests import run_bootstrap_firewall_tests
+from bootstrap_logdirs_tests import run_bootstrap_logdirs_tests
 from bootstrap_network_safety_tests import run_bootstrap_network_safety_tests
 from bootstrap_pinning_tests import run_bootstrap_pinning_tests
 from bootstrap_port_warning_tests import run_bootstrap_port_warning_tests
 from bootstrap_ramlog_tests import run_bootstrap_ramlog_tests
 from bootstrap_tmpdir_tests import run_bootstrap_tmpdir_tests
+from bootstrap_tunnel_backup_tests import run_bootstrap_tunnel_backup_tests
 from bootstrap_venv_tests import run_bootstrap_venv_tests
 from caddy_config_tests import run_caddy_config_tests
 from config_migration_tests import run_config_migration_tests
@@ -427,6 +429,12 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     bootstrap_port_warning_ok = run_bootstrap_port_warning_tests()
     print(f"bootstrap_port_warning: {'PASS' if bootstrap_port_warning_ok else 'FAIL'}")
 
+    bootstrap_logdirs_ok = run_bootstrap_logdirs_tests()
+    print(f"bootstrap_logdirs: {'PASS' if bootstrap_logdirs_ok else 'FAIL'}")
+
+    bootstrap_tunnel_backup_ok = run_bootstrap_tunnel_backup_tests()
+    print(f"bootstrap_tunnel_backup: {'PASS' if bootstrap_tunnel_backup_ok else 'FAIL'}")
+
     slot_info_ok = run_slot_info_tests()
     print(f"slot_info: {'PASS' if slot_info_ok else 'FAIL'}")
 
@@ -521,6 +529,8 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and bootstrap_converge_steps_ok
         and bootstrap_firewall_ok
         and bootstrap_port_warning_ok
+        and bootstrap_logdirs_ok
+        and bootstrap_tunnel_backup_ok
         and slot_info_ok
         and ble_unit_template_ok
         and node_admin_service_ok

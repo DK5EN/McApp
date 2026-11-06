@@ -1,4 +1,4 @@
-# mcapp-caddy-config-version: 5 host=@@HOST@@
+# mcapp-caddy-config-version: 6 host=@@HOST@@
 # (keep the version number in sync with CADDY_CONFIG_VERSION in
 #  bootstrap/lib/packages.sh — configure_caddy() rewrites this file whenever the
 #  marker line above stops matching. The marker carries the HOSTNAME as well as
@@ -177,3 +177,8 @@
 
 	import mcapp_routes
 }
+
+# Operator sites: every /etc/caddy/conf.d/*.caddy file is one WHOLE site block
+# of your own (McApp never edits that folder). It must not claim :80, :443 or
+# a McApp hostname, or the whole config fails validation.
+import /etc/caddy/conf.d/*.caddy
