@@ -197,3 +197,25 @@ Webapp repo. Found while running McApp behind Traefik/Authelia in a container
 - **Test flake:** `node_admin_service_tests.case_e_dropped` failed once in the full runner with
   `OSError: Directory not empty` in `TemporaryDirectory` cleanup (a DB write outliving `svc.stop()` /
   `storage.close()`); 0/10 failures alone.
+
+## B18 — the full `mcapp.sh` run ignores a failed apt phase
+
+`if ! install_packages` tests only the last function, so a failed `install_apt_deps`, including its link check, is ignored and the epoch is written. `--converge` already stops there (`bootstrap/lib/converge.sh`). Found by the coexistence campaign review, 2026-11-06.
+
+## B19 — lighttpd listens beyond loopback
+
+With the shipped config it binds `0.0.0.0:8082` or `[::]:8082` despite `server.bind = "127.0.0.1"`: seen in a Trixie VM, and `[::]:8082` on a field box next to `127.0.0.1:8082`. `use-ipv6.pl` is the likely cause. The firewall blocks it, but on a box with the firewall off the backend is reachable. B15 removes it altogether; `health.sh` exempts the port from its warning.
+
+## B20 — `ssl-tunnel-setup.sh` does not fit the current layout
+
+- **Templates not found:** `TEMPLATE_DIR` is `${SCRIPT_DIR}/bootstrap/templates`, but the script lives in `bootstrap/` since `7613e4a`, so a first-time TLS setup likely stops with "Template not found". Read from the code, not run.
+- **Stale docs:** `doc/tls-maintenance-SOP.md` still names `scripts/ssl-tunnel-setup.sh`.
+- **No staged validate:** it installs the Caddyfile before validating, so a broken `/etc/caddy/conf.d` file leaves the new config in place and the script exits.
+- **nftables edits:** `sed` on the file and `nft add rule` on `inet filter` ignore the rule that a file with no McApp marker belongs to the operator.
+
+## B21 — small follow-ups from the coexistence campaign
+
+- **Failed reload not retried:** a managed box whose reload failed reads "already configured" on the next run, with the new rules on disk but not live.
+- **Port warning noise:** `th dport`, `ip saddr ... drop` before an accept, and a `!` in an iptables comment can warn wrongly. Nothing common is read as allowed by mistake.
+- **`bootstrap/templates/nftables.conf` is unused:** the rules are generated in `bootstrap/lib/system.sh`. Remove the file.
+- **Stray backup copies in tests:** three bootstrap suites do not set `MCAPP_CONFIG_BACKUP_DIR`, so as root on a dev box they leave temp-path copies in the real folder.

@@ -399,6 +399,7 @@ configure_lighttpd_ktls_workaround() {
     log_info "  kTLS modprobe override already in place"
     return 0
   fi
+  backup_config_file "$modprobe_conf"
   printf '%s\n' "install tls /bin/true" > "$modprobe_conf"
   log_ok "  kTLS modprobe override written (${modprobe_conf})"
 }
@@ -414,6 +415,7 @@ configure_lighttpd() {
   # replace it with the clean template to avoid duplicate module conflicts
   if [[ -f "$main_conf" ]] && grep -q "webapp" "$main_conf" 2>/dev/null; then
     local backup="${main_conf}.bak.$(date +%s)"
+    backup_config_file "$main_conf"
     cp "$main_conf" "$backup"
 
     # Find template: installed copy, local script dir, or download from GitHub
@@ -445,6 +447,10 @@ configure_lighttpd() {
   # before the version-marker early-return so it reconciles the base regardless
   # of 99-mcapp.conf state. Idempotent: no-ops once the base already reads 8082.
   if [[ -f "$main_conf" ]]; then
+    if grep -qE '^server\.port[[:space:]]*=[[:space:]]*80[[:space:]]*$' "$main_conf" \
+      || ! grep -qE '^[[:space:]]*server\.bind[[:space:]]*=' "$main_conf"; then
+      backup_config_file "$main_conf"
+    fi
     sed -i -E 's/^(server\.port[[:space:]]*=[[:space:]]*)80([[:space:]]*)$/\18082\2/' "$main_conf"
     if ! grep -qE '^[[:space:]]*server\.bind[[:space:]]*=' "$main_conf"; then
       sed -i -E '/^server\.port[[:space:]]*=/a server.bind                 = "127.0.0.1"' "$main_conf"
@@ -467,6 +473,7 @@ configure_lighttpd() {
   # Create McApp-specific config
   # (heredoc is quoted to protect lighttpd's $HTTP[...] syntax from shell
   # expansion — the version marker is interpolated afterwards via sed)
+  backup_config_file "$conf_file"
   cat > "$conf_file" << 'EOF'
 # McApp SPA rewrite + redirect + API proxy configuration
 # Enables Vue.js SPA routing, root redirect, and reverse proxy to FastAPI
@@ -572,7 +579,7 @@ EOF
 # LIGHTTPD_MCAPP_CONF_VERSION above). Keep this number in sync with the
 # "mcapp-caddy-config-version:" comment in
 # bootstrap/templates/caddy/Caddyfile.mcapp.
-readonly CADDY_CONFIG_VERSION=5
+readonly CADDY_CONFIG_VERSION=6
 
 # Short hostname the Caddyfile template is rendered with (@@HOST@@). Falls back
 # to "mcapp" when `hostname -s` is empty or is not a valid DNS label: an empty
@@ -689,6 +696,7 @@ configure_caddy_sudo() {
       && grep -qF "update-ca-certificates" "$sudoers_file" 2>/dev/null; then
     log_info "  caddy sudoers rules already in place"
   else
+    backup_config_file "$sudoers_file"
     {
       printf '%s\n' "caddy ALL=(root) NOPASSWD: /usr/bin/tee /usr/local/share/ca-certificates/*"
       printf '%s\n' "caddy ALL=(root) NOPASSWD: /usr/sbin/update-ca-certificates"
@@ -712,6 +720,7 @@ configure_caddy_sudo() {
     log_info "  caddy systemd drop-in already in place"
   else
     mkdir -p "$dropin_dir"
+    backup_config_file "$dropin_file"
     cat > "$dropin_file" <<'DROPIN'
 [Service]
 # Allow Caddy and its subprocesses (sudo tee + sudo update-ca-certificates) to
@@ -736,6 +745,7 @@ DROPIN
     log_info "  caddy memory drop-in already in place"
   else
     mkdir -p "$dropin_dir"
+    backup_config_file "$mem_file"
     cat > "$mem_file" <<'DROPIN'
 [Service]
 # Go runtime memory ceiling for a 512 MB Pi (McApp backlog B4). GOMEMLIMIT is a
@@ -764,6 +774,29 @@ configure_caddy() {
   version_marker=$(caddy_config_marker)
 
   mkdir -p /etc/caddy
+
+  # Home for an operator's own sites (imported at the end of every Caddyfile
+  # template). Created on every run, also for a TLS_ENABLED box, so the folder
+  # exists for an operator to use. Files inside are NEVER touched; only the
+  # README (no .caddy suffix, so it is not imported) is written when absent.
+  local custom_dir="${MCAPP_CADDY_CUSTOM_DIR:-/etc/caddy/conf.d}"
+  if mkdir -p "$custom_dir" 2>/dev/null && [[ ! -e "$custom_dir/README" ]]; then
+    cat > "$custom_dir/README" 2>/dev/null << 'CADDY_README_EOF' || true
+McApp imports every *.caddy file in this folder at the END of the Caddyfile.
+Each file must hold one or more WHOLE site blocks of your own, for example:
+
+  example.lan:8443 {
+      respond "hello"
+  }
+
+Do not claim :80, :443 or a McApp hostname: the whole config then fails
+validation, and McApp keeps its previous Caddyfile (no upgrade is applied).
+Files here are never modified by McApp. Editor backup files (no .caddy
+suffix) are ignored. Check with: caddy validate --config /etc/caddy/Caddyfile
+On a public-TLS box the import only exists after ssl-tunnel-setup.sh has been
+run again, so files here are ignored until then.
+CADDY_README_EOF
+  fi
 
   # If ssl-tunnel-setup.sh has already claimed Caddy for public-domain TLS
   # (it sets TLS_ENABLED=true in config.json via update_mcapp_config() and
@@ -850,6 +883,10 @@ configure_caddy() {
     # (defense-in-depth; the update-runner already forces HOME=root's home).
     if ! HOME=/root caddy validate --config "$staged" --adapter caddyfile &>/dev/null; then
       log_warn "  Rendered Caddyfile failed validation — keeping the existing config"
+      if compgen -G "${custom_dir}/*.caddy" >/dev/null 2>&1; then
+        log_warn "  ${custom_dir} holds site files: one of them may be the cause (broken, or claiming :80/:443 or the McApp host)"
+        log_warn "  Move it aside and re-run to confirm; McApp never edits that folder"
+      fi
       log_warn "  Debug: caddy validate --config ${staged} --adapter caddyfile"
       return 0
     fi
@@ -858,6 +895,7 @@ configure_caddy() {
     if [[ -f "$caddy_conf" ]]; then
       cp -p "$caddy_conf" "$caddy_backup" 2>/dev/null || rm -f "$caddy_backup"
     fi
+    backup_config_file "$caddy_conf"
     install -m 644 "$staged" "$caddy_conf"
     rm -f "$staged"
     rewrote=true
@@ -870,6 +908,9 @@ configure_caddy() {
   # the up-to-date path it is the only check an already-present config gets.
   if ! HOME=/root caddy validate --config "$caddy_conf" --adapter caddyfile &>/dev/null; then
     log_warn "  Caddy config validation failed — leaving caddy service as-is"
+    if compgen -G "${custom_dir}/*.caddy" >/dev/null 2>&1; then
+      log_warn "  ${custom_dir} holds site files: a broken one makes the whole config invalid"
+    fi
     log_warn "  Run: caddy validate --config ${caddy_conf} --adapter caddyfile"
     # The staged copy validated, so the installed one is damaged (partial install,
     # full disk). Keep the old file and fail: returning 0 would advance the epoch

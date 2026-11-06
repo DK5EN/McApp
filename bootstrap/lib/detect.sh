@@ -3,6 +3,78 @@
 # Determines: fresh install, incomplete, or upgrade
 
 #──────────────────────────────────────────────────────────────────
+# CONFIG BACKUPS
+#──────────────────────────────────────────────────────────────────
+
+# backup_config_file <path>
+# Keep a copy of an existing config file before the bootstrap changes it, as
+# evidence for later troubleshooting. Copies live in a persistent 0700 folder
+# (/var/lib/mcapp/config-backups; MCAPP_CONFIG_BACKUP_DIR overrides), mode
+# 0600 because config.json holds secrets. Name: the absolute path with "/"
+# flattened to "__", then ".<UTC timestamp>-<seq>", which sorts lexically and
+# never collides. Skips a copy identical to the newest one, keeps the newest
+# 5 per source file. ALWAYS returns 0: a failure is a warning, never an abort.
+backup_config_file() {
+  local src="${1:-}"
+  [[ -n "$src" && -f "$src" ]] || return 0
+  # Subshell with errexit off so no failure can leak out under set -e.
+  local rc=0
+  (
+    set +e
+    umask 077
+    root="${MCAPP_CONFIG_BACKUP_DIR:-/var/lib/mcapp/config-backups}"
+    # The service user owns /var/lib/mcapp: never chmod or copy through a swapped-in symlink.
+    [[ ! -L "$root" ]] || exit 1
+    mkdir -p "$root" || exit 1
+    chmod 0700 "$root" || exit 1
+    abs="$src"
+    [[ "$abs" == /* ]] || abs="$(pwd)/$abs"
+    flat="${abs//\//__}"
+    flat="${flat//[^A-Za-z0-9._-]/_}"
+    newest=""
+    for f in "$root/${flat}".[0-9]*T[0-9]*Z-[0-9][0-9][0-9]; do
+      [[ -f "$f" ]] && newest="$f"
+    done
+    if [[ -n "$newest" ]] && cmp -s "$src" "$newest"; then
+      exit 0
+    fi
+    ts="$(date -u +%Y%m%dT%H%M%SZ)"
+    # Sequence = highest one already used in this second + 1 (never a freed
+    # slot, or a pruned name would be reused and sort as the oldest).
+    n=0
+    for f in "$root/${flat}.${ts}"-[0-9][0-9][0-9]; do
+      [[ -f "$f" ]] || continue
+      used=$((10#${f##*-}))
+      [[ $used -lt $n ]] || n=$((used + 1))
+    done
+    [[ $n -lt 1000 ]] || exit 1
+    dest="$root/${flat}.${ts}-$(printf '%03d' "$n")"
+    cp "$src" "$dest" || exit 1
+    chmod 0600 "$dest" || exit 1
+    # Retention: newest 5 (lexical order == age order).
+    files=()
+    for f in "$root/${flat}".[0-9]*T[0-9]*Z-[0-9][0-9][0-9]; do
+      [[ -f "$f" ]] && files+=("$f")
+    done
+    count=${#files[@]}
+    if ((count > 5)); then
+      for ((i = 0; i < count - 5; i++)); do
+        rm -f "${files[$i]}"
+      done
+    fi
+    exit 0
+  ) || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    if declare -F log_warn >/dev/null 2>&1; then
+      log_warn "Could not back up ${src} to ${MCAPP_CONFIG_BACKUP_DIR:-/var/lib/mcapp/config-backups} (continuing)"
+    else
+      echo "[WARN] Could not back up ${src} (continuing)" >&2
+    fi
+  fi
+  return 0
+}
+
+#──────────────────────────────────────────────────────────────────
 # DEBIAN VERSION DETECTION
 #──────────────────────────────────────────────────────────────────
 
@@ -188,6 +260,7 @@ migrate_old_installation() {
   local service_file="/etc/systemd/system/mcapp.service"
   if [[ -f "$service_file" ]]; then
     log_info "  Backing up old systemd service file..."
+    backup_config_file "$service_file"
     cp "$service_file" "${service_file}.bak.$(date +%Y%m%d%H%M%S)"
   fi
 

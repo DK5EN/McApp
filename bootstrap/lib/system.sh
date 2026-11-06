@@ -12,6 +12,7 @@ setup_system() {
   disable_unused_services
   remove_bloat_packages
   configure_tmpfs
+  configure_logdirs
   configure_boot_memory
   configure_journald
   configure_logrotate
@@ -53,11 +54,13 @@ configure_locale() {
 
     # Uncomment in locale.gen if present but commented out
     if grep -qE "^#\s*${loc}" "$locale_gen" 2>/dev/null; then
+      backup_config_file "$locale_gen"
       sed -i "s/^#\s*\(${loc}\)/\1/" "$locale_gen"
       needs_generate=true
       log_info "  Enabled ${loc} in locale.gen"
     elif ! grep -q "^${loc}" "$locale_gen" 2>/dev/null; then
       # Not present at all — add it
+      backup_config_file "$locale_gen"
       echo "${loc} UTF-8" >> "$locale_gen"
       needs_generate=true
       log_info "  Added ${loc} to locale.gen"
@@ -221,6 +224,7 @@ configure_tmpfs() {
     local tmpfs_log_re='^tmpfs /var/log tmpfs'
     local in_block='/# McApp tmpfs - begin/ { inb = 1 } /# McApp tmpfs - end/ { inb = 0 }'
     if awk -v re="$tmpfs_log_re" "$in_block"' inb && $0 ~ re { found = 1 } END { exit !found }' "$fstab" 2>/dev/null; then
+      backup_config_file "$fstab"
       awk -v re="$tmpfs_log_re" "$in_block"' !(inb && $0 ~ re) { print }' \
         "$fstab" > "${fstab}.mcapp-tmp" && mv -f "${fstab}.mcapp-tmp" "$fstab"
       _mcapp_mark_reboot_required
@@ -228,6 +232,7 @@ configure_tmpfs() {
     elif grep -qE "(McApp tmpfs|MCProxy tmpfs|pi-harden)" "$fstab" 2>/dev/null; then
       log_info "  ${ramlog} owns /var/log: no /var/log tmpfs line to remove"
     else
+      backup_config_file "$fstab"
       cp "$fstab" "${fstab}.bak.$(date +%Y%m%d)"
       cat >> "$fstab" << EOF
 
@@ -242,6 +247,7 @@ EOF
     log_info "  tmpfs already configured in fstab"
   else
     # Backup fstab
+    backup_config_file "$fstab"
     cp "$fstab" "${fstab}.bak.$(date +%Y%m%d)"
 
     # Add tmpfs entries — nodev,noexec on /var/log for security
@@ -258,6 +264,7 @@ EOF
 
   # Create log directory structure in tmpfs after mount
   mkdir -p "$MCAPP_TMPFILES_DIR"
+  backup_config_file "${MCAPP_TMPFILES_DIR}/mcapp.conf"
   cat > "${MCAPP_TMPFILES_DIR}/mcapp.conf" << 'EOF'
 # McApp + system log directories (recreated on every boot in tmpfs)
 d /var/log/mcapp     0755 root     root     -
@@ -280,8 +287,19 @@ EOF
   else
     # Create dirs before mount so services don't break
     systemd-tmpfiles --create "${MCAPP_TMPFILES_DIR}/mcapp.conf" 2>/dev/null || true
+    # Capture the real folders (nginx, ...) while the disk /var/log is still
+    # visible: after the mount it is an empty tmpfs and the generator would
+    # see nothing, losing custom folders and real owners.
+    configure_logdirs
     if mount /var/log 2>/dev/null; then
       log_ok "  Mounted /var/log tmpfs"
+      # The earlier create ran on the disk under the mount; redo it on the tmpfs.
+      local tf
+      for tf in mcapp.conf mcapp-logdirs.conf; do
+        [[ -f "${MCAPP_TMPFILES_DIR}/${tf}" ]] || continue
+        systemd-tmpfiles --create "${MCAPP_TMPFILES_DIR}/${tf}" 2>/dev/null \
+          || log_warn "  systemd-tmpfiles --create ${tf} after the /var/log mount failed"
+      done
     else
       log_warn "  /var/log tmpfs mount deferred to next reboot"
     fi
@@ -291,6 +309,215 @@ EOF
   if ! mountpoint -q /tmp 2>/dev/null; then
     mount -t tmpfs -o defaults,noatime,nosuid,mode=1777,size=150M tmpfs /tmp || true
   fi
+}
+
+# ---- logdirs: keep other services' /var/log folders across reboots --------
+# mcapp.conf above only recreates folders McApp knows. On a tmpfs /var/log
+# anything else (nginx, ...) vanishes at reboot and its unit fails with
+# "open() /var/log/nginx/error.log failed". A generator script writes one
+# `d` line per folder it finds (real folders with their actual mode/owner,
+# packaged ones from dpkg *.list with 0755 root adm) into
+# mcapp-logdirs.conf, run hourly by a timer. Rewrites only on change (SD card).
+# Limit, accepted: a folder owned by a non-root writer that is already gone
+# when first seen gets the default owner; `d` also re-applies mode/owner to an
+# existing folder, which is why real values must win over the default.
+MCAPP_SBIN_DIR="${MCAPP_SBIN_DIR:-/usr/local/sbin}"
+
+# Write $2 (content) to $1 only when it differs; backs up the old file first.
+# Returns 0 when it changed the file, 1 when unchanged or on failure.
+_mcapp_logdirs_put() {
+  local dest="$1" content="$2" mode="${3:-0644}"
+  if [[ -f "$dest" ]] && [[ "$(cat "$dest" 2>/dev/null)" == "$content" ]]; then
+    return 1
+  fi
+  mkdir -p "$(dirname "$dest")" || return 1
+  backup_config_file "$dest"
+  printf '%s\n' "$content" > "${dest}.mcapp-tmp" || return 1
+  chmod "$mode" "${dest}.mcapp-tmp" && mv -f "${dest}.mcapp-tmp" "$dest" || return 1
+  return 0
+}
+
+# A ramlog board owns /var/log: drop a prior install.
+_mcapp_logdirs_remove() {
+  local script="${MCAPP_SBIN_DIR}/mcapp-logdirs" udir="$MCAPP_SYSTEMD_UNIT_DIR"
+  local f gone=0
+  if [[ -e "${udir}/mcapp-logdirs.timer" || -e "${udir}/mcapp-logdirs.service" ]]; then
+    systemctl disable --now mcapp-logdirs.timer > /dev/null 2>&1 || true
+  fi
+  for f in "$script" "${udir}/mcapp-logdirs.timer" "${udir}/mcapp-logdirs.service" \
+    "${MCAPP_TMPFILES_DIR}/mcapp-logdirs.conf"; do
+    if [[ -e "$f" ]]; then
+      rm -f "$f" && gone=1
+    fi
+  done
+  if [[ "$gone" == 1 ]]; then
+    systemctl daemon-reload > /dev/null 2>&1 || true
+    log_ok "  ramlog owns /var/log: removed the mcapp-logdirs install"
+  fi
+}
+
+_mcapp_logdirs_apply() {
+  local script="${MCAPP_SBIN_DIR}/mcapp-logdirs" udir="$MCAPP_SYSTEMD_UNIT_DIR"
+  local changed=0 ramlog_unit
+  ramlog_unit="$(detect_ramlog_service)"
+  if [[ -n "$ramlog_unit" ]]; then
+    _mcapp_logdirs_remove
+    return 0
+  fi
+
+  local gen
+  IFS= read -r -d '' gen << 'GENEOF' || true
+#!/bin/bash
+# Generated by mcapp.sh (configure_logdirs). Writes mcapp-logdirs.conf so
+# other services' /var/log folders are recreated on every boot.
+set -u
+export LC_ALL=C
+log_root="${MCAPP_LOG_ROOT:-/var/log}"
+tmpdir="${MCAPP_TMPFILES_DIR:-/etc/tmpfiles.d}"
+dpkg_info="${MCAPP_DPKG_INFO:-/var/lib/dpkg/info}"
+out="${tmpdir}/mcapp-logdirs.conf"
+tmp="${out}.mcapp-tmp.$$"
+
+# tmpfiles expands % specifiers and splits on blanks and quotes: only this set
+# may reach the file. A function, not an inline case: bash 3.2 cannot parse a
+# case pattern inside $( ... ).
+safe_name() {
+  case "$1" in
+    "" | *[!A-Za-z0-9._@+-]*) return 1 ;;
+  esac
+  return 0
+}
+
+# Folders mcapp.conf already owns stay defined there only.
+skip=""
+if [ -r "${tmpdir}/mcapp.conf" ]; then
+  skip="$(awk '$1 !~ /^#/ && $2 ~ /^\/var\/log\/[^\/]+$/ { n = $2; sub(/^\/var\/log\//, "", n); print n }' \
+    "${tmpdir}/mcapp.conf" 2>/dev/null)"
+fi
+
+real_lines=""
+for d in "$log_root"/*/; do
+  d="${d%/}"
+  [ -d "$d" ] || continue
+  [ -L "$d" ] && continue
+  name="${d##*/}"
+  safe_name "$name" || continue
+  # %u/%g first: a UID/GID without a name prints UNKNOWN, which is no valid
+  # tmpfiles user, so such an id is written numerically.
+  st="$(stat -c '%a %u %g %U %G' "$d" 2>/dev/null)" || continue
+  set -- $st
+  [ "$#" -ge 3 ] || continue
+  # An owner name holding a blank (directory services) shifts the fields: use the ids.
+  u="$2"
+  g="$3"
+  if [ "$#" -eq 5 ]; then
+    if [ "$4" != UNKNOWN ] && safe_name "$4"; then u="$4"; fi
+    if [ "$5" != UNKNOWN ] && safe_name "$5"; then g="$5"; fi
+  fi
+  real_lines="${real_lines}${name} ${1} ${u} ${g}
+"
+done
+
+# Lines an earlier scan wrote. A folder can be missing right now (a scan landed on a
+# freshly mounted tmpfs, or tmpfiles failed), and dropping its line would lose it for
+# good, or downgrade its owner to the package default. Cost: a folder an admin removed
+# stays listed, recreated empty, until its line is deleted by hand.
+old_lines=""
+if [ -r "$out" ]; then
+  old_lines="$(awk -v root="$log_root/" '
+    $1 == "d" && NF >= 5 && index($2, root) == 1 {
+      print substr($2, length(root) + 1), $3, $4, $5
+    }' "$out" 2>/dev/null \
+    | while IFS= read -r line; do
+      n="${line%% *}"
+      safe_name "$n" || continue
+      [ -L "$log_root/$n" ] && continue
+      if [ -e "$log_root/$n" ] && [ ! -d "$log_root/$n" ]; then continue; fi
+      printf '%s\n' "$line"
+    done)"
+fi
+
+pkg_lines=""
+if [ -d "$dpkg_info" ]; then
+  pkg_lines="$(cat "$dpkg_info"/*.list 2>/dev/null \
+    | grep -h '^/var/log/[^/][^/]*$' 2>/dev/null \
+    | sed 's|^/var/log/||' \
+    | grep -v '[[:space:]]' | grep -v '\.[A-Za-z0-9_-]*$' \
+    | while IFS= read -r n; do
+      safe_name "$n" || continue
+      [ -L "$log_root/$n" ] && continue
+      # A packaged plain file (no extension) is not a folder. Once it is gone it cannot
+      # be told apart from a folder: accepted, Debian policy keeps log files out of
+      # packages, and only folders were seen in these lists.
+      if [ -e "$log_root/$n" ] && [ ! -d "$log_root/$n" ]; then continue; fi
+      echo "$n 755 root adm"
+    done)"
+fi
+
+body="$(
+  { printf '%s\n' "$skip" | sed -n 's/^\(.\)/@ \1/p'; printf '%s\n' "$real_lines"; printf '%s\n' "$old_lines"; printf '%s\n' "$pkg_lines"; } \
+    | awk -v root="$log_root" '
+      $1 == "@" { s[$2] = 1; next }
+      NF == 4 && !($1 in s) && !($1 in seen) {
+        seen[$1] = 1
+        printf "d %s/%s %04d %s %s -\n", root, $1, $2, $3, $4
+      }' | LC_ALL=C sort
+)"
+
+content="# Generated by mcapp-logdirs (mcapp.sh): other services' log folders, recreated on boot."
+if [ -n "$body" ]; then
+  content="${content}
+${body}"
+fi
+
+mkdir -p "$tmpdir" 2>/dev/null || exit 0
+if [ -f "$out" ] && [ "$(cat "$out" 2>/dev/null)" = "$content" ]; then
+  exit 0
+fi
+printf '%s\n' "$content" > "$tmp" 2>/dev/null || exit 0
+chmod 0644 "$tmp" 2>/dev/null
+mv -f "$tmp" "$out" 2>/dev/null || exit 0
+systemd-tmpfiles --create "$out" 2>/dev/null || echo "mcapp-logdirs: systemd-tmpfiles failed" >&2
+exit 0
+GENEOF
+  gen="${gen%$'\n'}"
+
+  local svc timer
+  svc="[Unit]
+Description=Keep other services' /var/log folders across reboots (McApp tmpfs)
+
+[Service]
+Type=oneshot
+ExecStart=${script}"
+  timer="[Unit]
+Description=Refresh McApp log folder list hourly
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+
+[Install]
+WantedBy=timers.target"
+
+  _mcapp_logdirs_put "$script" "$gen" 0755 && changed=1
+  _mcapp_logdirs_put "${udir}/mcapp-logdirs.service" "$svc" && changed=1
+  _mcapp_logdirs_put "${udir}/mcapp-logdirs.timer" "$timer" && changed=1
+  if [[ "$changed" == 1 ]]; then
+    systemctl daemon-reload > /dev/null 2>&1 || log_warn "  mcapp-logdirs: daemon-reload failed"
+  fi
+  systemctl enable --now mcapp-logdirs.timer > /dev/null 2>&1 \
+    || log_warn "  mcapp-logdirs: could not enable the timer"
+  "$script" || log_warn "  mcapp-logdirs: generator failed"
+  return 0
+}
+
+# Never aborts the bootstrap: every failure is a warning.
+configure_logdirs() {
+  (
+    set +e
+    _mcapp_logdirs_apply
+  ) || log_warn "  mcapp-logdirs: setup failed (continuing)"
+  return 0
 }
 
 #──────────────────────────────────────────────────────────────────
@@ -343,6 +570,7 @@ _mcapp_configure_config_txt() {
   rm -f "${tmp}.bak"
 
   if ! cmp -s "$file" "$tmp"; then
+    backup_config_file "$file"
     cat "$tmp" > "$file"
     rm -f "$tmp"
     return 0
@@ -363,6 +591,7 @@ _mcapp_configure_cmdline_txt() {
     return 1
   fi
 
+  backup_config_file "$file"
   printf '%s cgroup_enable=memory cgroup_memory=1\n' "$content" > "$file"
   return 0
 }
@@ -464,9 +693,11 @@ _mcapp_fstab_ensure_line() {
   grep -qxF "$line" "$fstab" 2>/dev/null && return 0
   if grep -qE "$after_regex" "$fstab" 2>/dev/null; then
     # sed -i differs between GNU and BSD; go through a temp file instead.
+    backup_config_file "$fstab"
     awk -v line="$line" -v re="$after_regex" 'BEGIN { done = 0 } { print } !done && $0 ~ re { print line; done = 1 }' \
       "$fstab" > "${fstab}.mcapp-tmp" && mv -f "${fstab}.mcapp-tmp" "$fstab"
   else
+    backup_config_file "$fstab"
     printf '%s\n' "$line" >> "$fstab"
   fi
   grep -qxF "$line" "$fstab"
@@ -483,6 +714,7 @@ _mcapp_journal_ramlog_cleanup() {
   local changed=false
 
   if grep -qxF "$MCAPP_JOURNAL_BIND_LINE" "$MCAPP_FSTAB" 2>/dev/null; then
+    backup_config_file "$MCAPP_FSTAB"
     grep -vxF "$MCAPP_JOURNAL_BIND_LINE" "$MCAPP_FSTAB" > "${MCAPP_FSTAB}.mcapp-tmp" || true
     mv -f "${MCAPP_FSTAB}.mcapp-tmp" "$MCAPP_FSTAB"
     changed=true
@@ -541,6 +773,7 @@ configure_journald() {
     return 0
   fi
 
+  backup_config_file "$conf_file"
   cat > "$conf_file" << 'EOF'
 # McApp: persistent journal, capped small. On a tmpfs /var/log, /var/log/journal
 # is a bind mount of /var/lib/mcapp/journal (see /etc/fstab, McApp tmpfs block);
@@ -608,6 +841,7 @@ EOF
     log_info "  wpasupplicant pin already in place"
   else
     mkdir -p "$MCAPP_APT_PREFERENCES_DIR"
+    backup_config_file "$file"
     printf '%s\n' "$content" > "$file"
     chmod 644 "$file"
     log_ok "  wpasupplicant pinned to 2:2.10-24 (${file})"
@@ -634,6 +868,7 @@ configure_logrotate() {
     return 0
   fi
 
+  backup_config_file /etc/logrotate.conf
   sed -i 's/^\s*rotate\s\+[0-9]\+/rotate 2/' /etc/logrotate.conf
   log_ok "  logrotate set to rotate 2"
 }
@@ -656,80 +891,272 @@ configure_firewall() {
   fi
 }
 
-configure_nftables() {
-  log_info "  Using nftables (Trixie)"
+# Overridable for the offline test suite (scripts/bootstrap_firewall_tests.py).
+MCAPP_NFT_CONF="${MCAPP_NFT_CONF:-/etc/nftables.conf}"
+MCAPP_NFT_CUSTOM_DIR="${MCAPP_NFT_CUSTOM_DIR:-/etc/mcapp/nftables.d}"
+MCAPP_NFT_DROPIN_DIR="${MCAPP_NFT_DROPIN_DIR:-/etc/systemd/system/nftables.service.d}"
+MCAPP_IPT_RULES="${MCAPP_IPT_RULES:-/etc/iptables/rules.v4}"
 
-  # Install nftables if not present
-  if ! command -v nft &>/dev/null; then
-    apt-get update -qq
-    apt-get install -y -qq nftables
+# Operators put their own rules in MCAPP_NFT_CUSTOM_DIR/*.nft; the generated
+# ruleset includes that folder. This writes the (non-loading) example file.
+_mcapp_nft_ensure_custom_dir() {
+  local dir="$MCAPP_NFT_CUSTOM_DIR"
+  mkdir -p "$dir" || { log_warn "  could not create $dir"; return 0; }
+  local example="$dir/custom.nft.example"
+  [[ -f "$example" ]] && return 0
+  cat > "$example" << EOF || true
+# McApp custom firewall rules
+#
+# Copy this file to a name ending in .nft (for example custom.nft). Every
+# $dir/*.nft file is included by /etc/nftables.conf INSIDE the
+# "input" chain of "table inet filter", so put chain rules here, not tables.
+# This .example file is never loaded. McApp updates keep this folder.
+#
+# Example: open TCP port 8080
+#
+#   tcp dport 8080 accept
+#
+# Apply with: sudo systemctl reload nftables
+EOF
+}
+
+# Boot safeguard: if a custom file breaks nftables.conf, retry without the
+# include so the box never boots with no firewall at all.
+_mcapp_nft_ensure_dropin() {
+  local dir="$MCAPP_NFT_DROPIN_DIR"
+  local file="$dir/mcapp-fallback.conf"
+  local tmp
+  tmp=$(mktemp "${TMPDIR:-/tmp}/mcapp-dropin.XXXXXX") || return 0
+  cat > "$tmp" << EOF
+[Service]
+ExecStart=
+ExecStart=/bin/sh -c '/usr/sbin/nft -f ${MCAPP_NFT_CONF} || { echo "McApp: nftables.conf failed, retrying without custom rules" >&2; grep -vF "${MCAPP_NFT_CUSTOM_DIR}" ${MCAPP_NFT_CONF} | /usr/sbin/nft -f -; }'
+EOF
+  if [[ -f "$file" ]] && cmp -s "$tmp" "$file"; then
+    rm -f "$tmp"
+    return 0
+  fi
+  backup_config_file "$file"
+  if mkdir -p "$dir" && cat "$tmp" > "$file"; then
+    systemctl daemon-reload || log_warn "  systemctl daemon-reload failed"
+    log_info "  nftables boot fallback drop-in written"
+  else
+    log_warn "  could not write $file"
+  fi
+  rm -f "$tmp"
+  return 0
+}
+
+# Legacy triggers: succeeds (0) when the marked file predates a rule we need.
+_mcapp_nft_legacy_needs_update() {
+  local nft_conf="$1"
+  local needs_update=false
+
+  # Update if ports 2980/2981 are still present (legacy config)
+  if grep -q "dport 2980\|dport 2981" "$nft_conf" 2>/dev/null; then
+    log_info "  Updating nftables rules (removing legacy ports 2980/2981)..."
+    needs_update=true
   fi
 
-  local nft_conf="/etc/nftables.conf"
-  local marker="# McApp firewall rules"
+  # Update if LAN SSH exemption is missing
+  if ! grep -q "192.168.0.0/16" "$nft_conf" 2>/dev/null; then
+    log_info "  Updating nftables rules (adding LAN SSH exemption)..."
+    needs_update=true
+  fi
 
-  # Check if our rules already exist and are up to date
-  if grep -q "$marker" "$nft_conf" 2>/dev/null; then
-    local needs_update=false
+  # Update if log rate limit is still 5/min (old value)
+  if grep -q "limit rate 5/minute" "$nft_conf" 2>/dev/null; then
+    log_info "  Updating nftables rules (increasing log rate limit to 10/min)..."
+    needs_update=true
+  fi
 
-    # Update if ports 2980/2981 are still present (legacy config)
-    if grep -q "dport 2980\|dport 2981" "$nft_conf" 2>/dev/null; then
-      log_info "  Updating nftables rules (removing legacy ports 2980/2981)..."
-      needs_update=true
+  # Update if port 2985 (update runner) is missing
+  if ! grep -q "dport 2985" "$nft_conf" 2>/dev/null; then
+    log_info "  Updating nftables rules (adding update runner port 2985)..."
+    needs_update=true
+  fi
+
+  # Update if port 443 (Caddy HTTPS front door) is missing — Wave 0.
+  # Without this clause, already-marked installs would SKIP the rewrite and
+  # never open :443, leaving LAN/iPhone HTTPS clients firewall-dropped.
+  if ! grep -q "dport 443" "$nft_conf" 2>/dev/null; then
+    log_info "  Updating nftables rules (adding Caddy HTTPS port 443)..."
+    needs_update=true
+  fi
+
+  # Update if AIOps journal cross-shipping port 19532 is missing (AIOps AD-8, B-4).
+  if ! grep -q "dport 19532" "$nft_conf" 2>/dev/null; then
+    log_info "  Updating nftables rules (adding AIOps journal-xship port 19532)..."
+    needs_update=true
+  fi
+
+  # Update if UDP 443 (QUIC/HTTP3 for Caddy) is missing.
+  if ! grep -q "udp dport 443" "$nft_conf" 2>/dev/null; then
+    log_info "  Updating nftables rules (adding Caddy QUIC/HTTP3 UDP port 443)..."
+    needs_update=true
+  fi
+
+  [[ "$needs_update" == "true" ]]
+}
+
+# Apply a changed ruleset. Never `restart`: nftables.service ExecStop flushes
+# EVERY table, including other tools' (docker, fail2ban, ...).
+# $1 = fresh (enable + reload-or-restart) | existing (reload only if active)
+_mcapp_nft_apply() {
+  local mode="$1"
+  if [[ "$mode" == "fresh" ]]; then
+    systemctl enable nftables || log_warn "  systemctl enable nftables failed"
+    if ! systemctl reload-or-restart nftables; then
+      log_warn "  nftables did not (re)load; check: systemctl status nftables"
     fi
-
-    # Update if LAN SSH exemption is missing
-    if ! grep -q "192.168.0.0/16" "$nft_conf" 2>/dev/null; then
-      log_info "  Updating nftables rules (adding LAN SSH exemption)..."
-      needs_update=true
+    return 0
+  fi
+  if systemctl is-active --quiet nftables; then
+    if ! systemctl reload nftables; then
+      log_warn "  nftables reload failed; the new rules are in ${MCAPP_NFT_CONF} but not live"
     fi
+  else
+    log_warn "  nftables.service is inactive; leaving it off (firewall switched off by the operator?)"
+  fi
+  return 0
+}
 
-    # Update if log rate limit is still 5/min (old value)
-    if grep -q "limit rate 5/minute" "$nft_conf" 2>/dev/null; then
-      log_info "  Updating nftables rules (increasing log rate limit to 10/min)..."
-      needs_update=true
-    fi
+# Does this file hold rules of its own? Debian's stock file has only empty chains, so
+# anything beyond the table skeleton counts. A missing file has none.
+_mcapp_nft_has_own_rules() {
+  [[ -f "$1" ]] || return 1
+  # One awk, no pipe: under pipefail a `grep | grep -q` on a large file reports failure
+  # through SIGPIPE, which would read as "no rules" and replace the operator's file.
+  # `policy drop` counts as a rule: an empty deny-all chain is a firewall.
+  local rc=0
+  awk '
+    /^[[:space:]]*(#.*)?$/ { next }
+    /^[[:space:]]*(flush ruleset|table [^{;]*\{?|chain [^{;]*\{?|\})[[:space:]]*$/ { next }
+    /^[[:space:]]*type [a-z]+ hook [^;]*;([[:space:]]*policy accept;)?[[:space:]]*$/ { next }
+    { found = 1; exit }
+    END { exit !found }
+  ' "$1" 2>/dev/null || rc=$?
+  # 0 = rules found, 1 = none. Anything else means awk could not judge the file: keep it.
+  [[ "$rc" -ne 1 ]]
+}
 
-    # Update if port 2985 (update runner) is missing
-    if ! grep -q "dport 2985" "$nft_conf" 2>/dev/null; then
-      log_info "  Updating nftables rules (adding update runner port 2985)..."
-      needs_update=true
-    fi
+# Marked file, no legacy trigger: never rewrite. Stage a copy with the minimal
+# edits (custom include, table-scoped delete instead of flush), validate, then
+# install.
+_mcapp_nft_migrate_existing() {
+  local nft_conf="$MCAPP_NFT_CONF"
+  local inc_line="    include \"${MCAPP_NFT_CUSTOM_DIR}/*.nft\""
+  local staged staged2
+  staged=$(mktemp "${TMPDIR:-/tmp}/mcapp-nft.XXXXXX") || return 0
+  staged2=$(mktemp "${TMPDIR:-/tmp}/mcapp-nft.XXXXXX") || { rm -f "$staged"; return 0; }
+  cat "$nft_conf" > "$staged"
 
-    # Update if port 443 (Caddy HTTPS front door) is missing — Wave 0.
-    # Without this clause, already-marked installs (e.g. mcapp, which has the
-    # marker + the 2985 rule) would SKIP the rewrite and never open :443,
-    # leaving LAN/iPhone HTTPS clients firewall-dropped even with Caddy up.
-    if ! grep -q "dport 443" "$nft_conf" 2>/dev/null; then
-      log_info "  Updating nftables rules (adding Caddy HTTPS port 443)..."
-      needs_update=true
-    fi
-
-    # Update if AIOps journal cross-shipping port 19532 is missing.
-    # Pi↔Pi journal-upload→journal-remote; LAN-scoped, required for off-box
-    # log evidence (AIOps AD-8, B-4). Without this, journal-remote is unreachable
-    # after any nftables rewrite and shipping silently stops.
-    if ! grep -q "dport 19532" "$nft_conf" 2>/dev/null; then
-      log_info "  Updating nftables rules (adding AIOps journal-xship port 19532)..."
-      needs_update=true
-    fi
-
-    # Update if UDP 443 (QUIC/HTTP3 for Caddy) is missing.
-    if ! grep -q "udp dport 443" "$nft_conf" 2>/dev/null; then
-      log_info "  Updating nftables rules (adding Caddy QUIC/HTTP3 UDP port 443)..."
-      needs_update=true
-    fi
-
-    if [[ "$needs_update" == "false" ]]; then
-      log_info "  nftables rules already configured"
-      return 0
+  # Include after the HTTP accept rule, once.
+  if ! grep -F -- "$MCAPP_NFT_CUSTOM_DIR" "$staged" | grep -q '^[[:space:]]*include'; then
+    if grep -q '^[[:space:]]*tcp dport 80 accept[[:space:]]*$' "$staged"; then
+      awk -v inc="$inc_line" '
+        { print }
+        !done && $0 ~ /^[[:space:]]*tcp dport 80 accept[[:space:]]*$/ { print inc; done = 1 }
+      ' "$staged" > "$staged2" && cat "$staged2" > "$staged"
+    else
+      log_warn "  no 'tcp dport 80 accept' line in ${nft_conf}; custom rules include not added"
     fi
   fi
 
-  # Backup existing config
-  [[ -f "$nft_conf" ]] && cp "$nft_conf" "${nft_conf}.bak.$(date +%Y%m%d)"
+  # flush ruleset -> `table inet filter` + `delete table inet filter` (the
+  # portable idiom: `destroy` needs kernel 6.3+), unless the file owns other
+  # tables or has a top-level include, whose rules a flush-less reload would
+  # duplicate.
+  if grep -q '^[[:space:]]*flush ruleset[[:space:]]*$' "$staged"; then
+    if grep -E '^[[:space:]]*table[[:space:]]' "$staged" |
+      grep -qvE '^[[:space:]]*table[[:space:]]+inet[[:space:]]+filter([[:space:]]|\{|$)'; then
+      log_info "  ${nft_conf} defines more than table inet filter; keeping 'flush ruleset'"
+    elif grep -q '^include' "$staged"; then
+      log_info "  ${nft_conf} has a top-level include; keeping 'flush ruleset'"
+    else
+      awk '
+        /^[[:space:]]*flush ruleset[[:space:]]*$/ { print "table inet filter"; print "delete table inet filter"; next }
+        { print }
+      ' "$staged" > "$staged2" && cat "$staged2" > "$staged"
+    fi
+  fi
+  rm -f "$staged2"
 
-  cat > "$nft_conf" << 'EOF'
+  if cmp -s "$nft_conf" "$staged"; then
+    rm -f "$staged"
+    log_info "  nftables rules already configured"
+    _mcapp_nft_ensure_dropin
+    return 0
+  fi
+
+  # Validate before touching the live file.
+  local out
+  if ! out=$(nft -c -f "$staged" 2>&1); then
+    log_warn "  staged nftables.conf failed validation; ${nft_conf} left unchanged: $out"
+    rm -f "$staged"
+    return 0
+  fi
+  if ! grep -q 'dport 22' "$staged"; then
+    log_warn "  staged nftables.conf has no SSH rule; ${nft_conf} left unchanged"
+    rm -f "$staged"
+    return 0
+  fi
+
+  backup_config_file "$nft_conf"
+  local new="${nft_conf}.mcapp-new"
+  if cp -p "$nft_conf" "$new" && cat "$staged" > "$new" && mv -f "$new" "$nft_conf"; then
+    log_ok "  nftables.conf updated in place (custom rules kept)"
+  else
+    rm -f "$new" "$staged"
+    log_warn "  could not install the new ${nft_conf}; left unchanged"
+    return 0
+  fi
+  rm -f "$staged"
+  _mcapp_nft_ensure_dropin
+  _mcapp_nft_apply existing
+  return 0
+}
+
+# Extra sshd ports (everything but 22), one per line. sshd absent or failing
+# yields nothing and never aborts: only the wholesale-replace paths need this,
+# so a box on Port 2222 is not locked out by the rewrite.
+_mcapp_ssh_extra_ports() {
+  local out="" ports="" p seen=" "
+  if command -v sshd > /dev/null 2>&1; then
+    if out=$(sshd -T 2> /dev/null); then
+      # A ListenAddress can carry the port instead, and newer OpenSSH prints "Port".
+      ports=$(printf '%s\n' "$out" | awk '
+        tolower($1) == "port" { print $2 }
+        tolower($1) == "listenaddress" { n = split($2, a, ":"); print a[n] }')
+    else
+      log_warn "  could not read the SSH ports (sshd -T failed); only port 22 is opened" >&2
+    fi
+  fi
+  # The port this session came in on, in case sshd could not tell us. Field 4 is the
+  # server port; sudo may strip the variable, so it is only a second source.
+  if [[ -n "${SSH_CONNECTION:-}" ]]; then
+    ports="$ports $(printf '%s\n' "$SSH_CONNECTION" | awk '{print $4}')"
+  fi
+  for p in $ports; do
+    # An invalid port would make nft refuse the whole ruleset. 10# keeps 022 from octal.
+    [[ "$p" =~ ^[0-9]{1,5}$ ]] || continue
+    p=$((10#$p))
+    ((p >= 1 && p <= 65535)) || continue
+    [[ "$p" == "22" ]] && continue
+    case "$seen" in *" $p "*) continue ;; esac
+    seen="$seen$p "
+    printf '%s\n' "$p"
+  done
+  return 0
+}
+
+# Generated full ruleset on stdout. `table inet filter` + `delete table inet
+# filter` (not `flush ruleset`, not `destroy`: that needs kernel 6.3+) resets
+# our own table and leaves other tools' tables alone.
+_mcapp_nft_render() {
+  local p
+  {
+    cat << 'EOF'
 #!/usr/sbin/nft -f
 # McApp firewall rules
 # Generated by mcapp.sh bootstrap
@@ -747,8 +1174,11 @@ configure_nftables() {
 # Internal only (not exposed):
 #   2981/tcp - FastAPI SSE/REST (proxied via Caddy→lighttpd)
 #   8082/tcp - lighttpd backend (127.0.0.1 only, behind Caddy)
+#
+# Own rules: put *.nft files into the custom folder included below.
 
-flush ruleset
+table inet filter
+delete table inet filter
 
 table inet filter {
   chain input {
@@ -768,9 +1198,17 @@ table inet filter {
 
     # SSH - rate limit external connections (6 new per minute)
     tcp dport 22 ct state new limit rate 6/minute accept
+EOF
+    for p in $(_mcapp_ssh_extra_ports); do
+      printf '\n    # SSH on a non-default port\n    tcp dport %s accept\n' "$p"
+    done
+    cat << 'EOF'
 
     # HTTP (Caddy front door → lighttpd/FastAPI)
     tcp dport 80 accept
+EOF
+    printf '    include "%s/*.nft"\n' "$MCAPP_NFT_CUSTOM_DIR"
+    cat << 'EOF'
 
     # HTTPS (Caddy HTTPS front door — Wave 0; LAN/iPhone clients hit :443)
     tcp dport 443 accept
@@ -843,12 +1281,180 @@ table inet filter {
   }
 }
 EOF
+  }
+}
 
-  # Enable and start nftables
-  systemctl enable nftables
-  systemctl restart nftables
+# Render, validate, then install. A failing check (for example a faulty file
+# in the custom folder) keeps the existing file and applies nothing; the result
+# is reported through _MCAPP_NFT_WROTE, the return code is always 0.
+_mcapp_nft_write_full() {
+  local nft_conf="$MCAPP_NFT_CONF"
+  local staged out new="${MCAPP_NFT_CONF}.mcapp-new"
+  _MCAPP_NFT_WROTE=false
+  staged=$(mktemp "${TMPDIR:-/tmp}/mcapp-nft.XXXXXX") || {
+    log_warn "  could not stage the nftables ruleset; ${nft_conf} left unchanged"
+    return 0
+  }
+  _mcapp_nft_render > "$staged"
+  if ! out=$(nft -c -f "$staged" 2>&1); then
+    log_warn "  generated nftables ruleset failed validation; ${nft_conf} left unchanged and McApp's firewall rules are NOT active: $out"
+    rm -f "$staged"
+    return 0
+  fi
+  if cat "$staged" > "$new" && mv -f "$new" "$nft_conf"; then
+    _MCAPP_NFT_WROTE=true
+  else
+    rm -f "$new"
+    log_warn "  could not install the new ${nft_conf}; left unchanged"
+  fi
+  rm -f "$staged"
+  return 0
+}
 
-  log_ok "  nftables firewall configured and enabled"
+configure_nftables() {
+  log_info "  Using nftables (Trixie)"
+
+  # Install nftables if not present
+  if ! command -v nft &>/dev/null; then
+    apt-get update -qq
+    apt-get install -y -qq nftables
+  fi
+
+  local nft_conf="$MCAPP_NFT_CONF"
+  local marker="# McApp firewall rules"
+  local had_marker=false legacy=false
+
+  if [[ -f "$nft_conf" ]] && grep -q "$marker" "$nft_conf" 2>/dev/null; then
+    had_marker=true
+    if _mcapp_nft_legacy_needs_update "$nft_conf"; then
+      legacy=true
+    fi
+  fi
+
+  if [[ "$had_marker" == "true" && "$legacy" == "false" ]]; then
+    _mcapp_nft_ensure_custom_dir
+    _mcapp_nft_migrate_existing
+    return 0
+  fi
+
+  # A file with real rules and no marker belongs to the operator or another tool.
+  # Replacing it closed an operator's :8080 on a converge (field report 2026-11-06).
+  if [[ "$had_marker" == "false" ]] && _mcapp_nft_has_own_rules "$nft_conf"; then
+    log_warn "  ${nft_conf} has its own rules and no McApp marker: keeping it, McApp does not manage this firewall. For McApp to work it must allow loopback, 22, 80, 443 and 2985/tcp, and 1799 and 5353/udp."
+    return 0
+  fi
+
+  _mcapp_nft_ensure_custom_dir
+
+  # Full (re)write: fresh box, a rule-free stock file, or a marked legacy file.
+  if [[ -f "$nft_conf" ]]; then
+    backup_config_file "$nft_conf"
+    cp "$nft_conf" "${nft_conf}.bak.$(date +%Y%m%d)" || true
+  fi
+
+  _mcapp_nft_write_full
+  if [[ "$_MCAPP_NFT_WROTE" != "true" ]]; then
+    return 0
+  fi
+  _mcapp_nft_ensure_dropin
+
+  if [[ "$had_marker" == "true" ]]; then
+    log_warn "  Rewrote ${nft_conf}: custom rules in the old file were not carried over; copy in ${MCAPP_CONFIG_BACKUP_DIR:-/var/lib/mcapp/config-backups}"
+    _mcapp_nft_apply existing
+  else
+    _mcapp_nft_apply fresh
+  fi
+
+  log_ok "  nftables firewall configured"
+}
+
+# One list of INPUT rules for Bookworm, applied by _mcapp_ipt_add.
+# _MCAPP_IPT_MODE: append (fresh install, after a flush) | check (existing box:
+# add only what is missing, never flush, so an operator's rules survive).
+_mcapp_ipt_add() {
+  if [[ "$_MCAPP_IPT_MODE" == "append" ]]; then
+    iptables -A INPUT "$@"
+  else
+    iptables -C INPUT "$@" 2>/dev/null || iptables -A INPUT "$@"
+  fi
+}
+
+_mcapp_ipt_apply_rules() {
+  _MCAPP_IPT_MODE="$1"
+
+  # Allow loopback
+  _mcapp_ipt_add -i lo -j ACCEPT
+
+  # Allow established connections
+  _mcapp_ipt_add -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+  # SSH - allow local LAN without rate limiting
+  _mcapp_ipt_add -p tcp --dport 22 -s 192.168.0.0/16 -j ACCEPT
+  _mcapp_ipt_add -p tcp --dport 22 -s 10.0.0.0/8 -j ACCEPT
+  _mcapp_ipt_add -p tcp --dport 22 -s 172.16.0.0/12 -j ACCEPT
+
+  # SSH - rate limit external connections (4 per minute)
+  _mcapp_ipt_add -p tcp --dport 22 -m state --state NEW -m recent --set
+  _mcapp_ipt_add -p tcp --dport 22 -m state --state NEW -m recent --update --seconds 60 --hitcount 4 -j DROP
+  _mcapp_ipt_add -p tcp --dport 22 -j ACCEPT
+
+  # SSH on a non-default port: only where the rules replace the old ones
+  # wholesale (first install). An existing box only gets additions.
+  if [[ "$_MCAPP_IPT_MODE" == "append" ]]; then
+    local p
+    for p in $(_mcapp_ssh_extra_ports); do
+      _mcapp_ipt_add -p tcp --dport "$p" -j ACCEPT
+    done
+  fi
+
+  # HTTP (Caddy front door → lighttpd/FastAPI)
+  _mcapp_ipt_add -p tcp --dport 80 -j ACCEPT
+
+  # HTTPS (Caddy HTTPS front door — Wave 0; LAN/iPhone clients hit :443)
+  _mcapp_ipt_add -p tcp --dport 443 -j ACCEPT
+
+  # Update runner SSE stream (frontend-triggered updates)
+  _mcapp_ipt_add -p tcp --dport 2985 -j ACCEPT
+
+  # MeshCom UDP communication
+  _mcapp_ipt_add -p udp --dport 1799 -j ACCEPT
+
+  # mDNS for .local hostname resolution (restricted to multicast only)
+  _mcapp_ipt_add -p udp -d 224.0.0.251 --dport 5353 -j ACCEPT
+
+  # ICMP (ping)
+  _mcapp_ipt_add -p icmp --icmp-type echo-request -j ACCEPT
+
+  # Silent drops for common broadcast/multicast traffic (prevents log spam)
+
+  # Broadcast packets
+  _mcapp_ipt_add -m addrtype --dst-type BROADCAST -j DROP
+
+  # Common multicast addresses
+  _mcapp_ipt_add -d 224.0.0.0/4 -j DROP
+  _mcapp_ipt_add -d 239.0.0.0/8 -j DROP
+
+  # Global broadcast
+  _mcapp_ipt_add -d 255.255.255.255 -j DROP
+
+  # SSDP/UPnP device discovery
+  _mcapp_ipt_add -p udp --dport 1900 -j DROP
+
+  # NetBIOS name service
+  _mcapp_ipt_add -p udp --dport 137 -j DROP
+  _mcapp_ipt_add -p udp --dport 138 -j DROP
+
+  # LLMNR (Windows name resolution)
+  _mcapp_ipt_add -p udp --dport 5355 -j DROP
+
+  # High UDP ports (gaming, P2P, etc)
+  _mcapp_ipt_add -p udp --dport 30000:65535 -j DROP
+
+  # IGMP multicast management
+  _mcapp_ipt_add -p igmp -j DROP
+
+  # Log remaining drops (rate limited to 10/min to prevent spam)
+  _mcapp_ipt_add -m limit --limit 10/min -j LOG --log-prefix "[iptables DROP] " --log-level 7
 }
 
 configure_iptables_legacy() {
@@ -863,84 +1469,59 @@ configure_iptables_legacy() {
     apt-get install -y -qq iptables-persistent
   fi
 
-  # Flush existing rules
-  iptables -F
-  iptables -X
+  # First install only when McApp left no trace: no rules file with our LOG
+  # prefix AND no system-epoch marker. A deleted LOG rule or a lost rules.v4
+  # on a marked box must not wipe the operator's rules.
+  local epoch_file="${SYSTEM_EPOCH_FILE:-/var/lib/mcapp/system-epoch}"
+  local first_install=false
+  if [[ ! -f "$epoch_file" ]] &&
+    ! { [[ -f "$MCAPP_IPT_RULES" ]] && grep -qF '[iptables DROP]' "$MCAPP_IPT_RULES" 2> /dev/null; }; then
+    first_install=true
+  fi
 
-  # Default policies
-  iptables -P INPUT DROP
-  iptables -P FORWARD DROP
-  iptables -P OUTPUT ACCEPT
+  if [[ "$first_install" == "true" ]]; then
+    # First install: start from a clean slate. Open INPUT first: on a box already at
+    # default drop, an abort between the flush and the rules would be a lockout.
+    iptables -P INPUT ACCEPT
+    iptables -F
+    iptables -X
 
-  # Allow loopback
-  iptables -A INPUT -i lo -j ACCEPT
+    _mcapp_ipt_apply_rules append
 
-  # Allow established connections
-  iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+    # Policies last: an abort above must not leave default-drop with partial rules.
+    iptables -P INPUT DROP
+    iptables -P FORWARD DROP
+    iptables -P OUTPUT ACCEPT
+  else
+    # Existing box: a firewall the operator switched off (policy ACCEPT and no
+    # INPUT rule at all) stays off, like a stopped nftables service.
+    local input_rules=""
+    input_rules=$(iptables -S INPUT 2> /dev/null) || input_rules=""
+    if grep -qx -- '-P INPUT ACCEPT' <<< "$input_rules" && ! grep -q -- '^-A INPUT' <<< "$input_rules"; then
+      log_warn "  iptables INPUT is open (policy ACCEPT, no rules); leaving the firewall off (switched off by the operator?)"
+      return 0
+    fi
+    # Add what is missing, touch nothing else. Policies are not reasserted: an
+    # operator's change stands. iptables-save below captures the live rules,
+    # so custom rules persist.
+    _mcapp_ipt_apply_rules check
+  fi
 
-  # SSH - allow local LAN without rate limiting
-  iptables -A INPUT -p tcp --dport 22 -s 192.168.0.0/16 -j ACCEPT
-  iptables -A INPUT -p tcp --dport 22 -s 10.0.0.0/8 -j ACCEPT
-  iptables -A INPUT -p tcp --dport 22 -s 172.16.0.0/12 -j ACCEPT
-
-  # SSH - rate limit external connections (4 per minute)
-  iptables -A INPUT -p tcp --dport 22 -m state --state NEW -m recent --set
-  iptables -A INPUT -p tcp --dport 22 -m state --state NEW -m recent --update --seconds 60 --hitcount 4 -j DROP
-  iptables -A INPUT -p tcp --dport 22 -j ACCEPT
-
-  # HTTP (Caddy front door → lighttpd/FastAPI)
-  iptables -A INPUT -p tcp --dport 80 -j ACCEPT
-
-  # HTTPS (Caddy HTTPS front door — Wave 0; LAN/iPhone clients hit :443)
-  iptables -A INPUT -p tcp --dport 443 -j ACCEPT
-
-  # Update runner SSE stream (frontend-triggered updates)
-  iptables -A INPUT -p tcp --dport 2985 -j ACCEPT
-
-  # MeshCom UDP communication
-  iptables -A INPUT -p udp --dport 1799 -j ACCEPT
-
-  # mDNS for .local hostname resolution (restricted to multicast only)
-  iptables -A INPUT -p udp -d 224.0.0.251 --dport 5353 -j ACCEPT
-
-  # ICMP (ping)
-  iptables -A INPUT -p icmp --icmp-type echo-request -j ACCEPT
-
-  # Silent drops for common broadcast/multicast traffic (prevents log spam)
-
-  # Broadcast packets
-  iptables -A INPUT -m addrtype --dst-type BROADCAST -j DROP
-
-  # Common multicast addresses
-  iptables -A INPUT -d 224.0.0.0/4 -j DROP
-  iptables -A INPUT -d 239.0.0.0/8 -j DROP
-
-  # Global broadcast
-  iptables -A INPUT -d 255.255.255.255 -j DROP
-
-  # SSDP/UPnP device discovery
-  iptables -A INPUT -p udp --dport 1900 -j DROP
-
-  # NetBIOS name service
-  iptables -A INPUT -p udp --dport 137 -j DROP
-  iptables -A INPUT -p udp --dport 138 -j DROP
-
-  # LLMNR (Windows name resolution)
-  iptables -A INPUT -p udp --dport 5355 -j DROP
-
-  # High UDP ports (gaming, P2P, etc)
-  iptables -A INPUT -p udp --dport 30000:65535 -j DROP
-
-  # IGMP multicast management
-  iptables -A INPUT -p igmp -j DROP
-
-  # Log remaining drops (rate limited to 10/min to prevent spam)
-  iptables -A INPUT -m limit --limit 10/min -j LOG --log-prefix "[iptables DROP] " --log-level 7
-
-  # Save rules
-  iptables-save > /etc/iptables/rules.v4
-
-  log_ok "  iptables firewall configured and saved"
+  # Save rules: temp file beside the target, then mv, so a failed iptables-save
+  # cannot truncate the file whose LOG rule is the next run's marker.
+  mkdir -p "$(dirname "$MCAPP_IPT_RULES")"
+  backup_config_file "$MCAPP_IPT_RULES"
+  local saved
+  saved=$(mktemp "${MCAPP_IPT_RULES}.XXXXXX") || {
+    log_warn "  could not stage ${MCAPP_IPT_RULES}; rules are live but not saved"
+    return 0
+  }
+  if iptables-save > "$saved" && chmod 0644 "$saved" && mv -f "$saved" "$MCAPP_IPT_RULES"; then
+    log_ok "  iptables firewall configured and saved"
+  else
+    rm -f "$saved"
+    log_warn "  iptables-save failed; ${MCAPP_IPT_RULES} left unchanged (rules are live but not saved)"
+  fi
 }
 
 #──────────────────────────────────────────────────────────────────
@@ -967,6 +1548,7 @@ configure_bluetooth() {
   fi
 
   # Write the service unit inline (no external template dependency)
+  backup_config_file "$service_file"
   cat > "$service_file" << 'EOF'
 # McApp: Unblock Bluetooth at boot
 # Some Pi images ship with rfkill default_state=0 which blocks all radios
@@ -1019,6 +1601,7 @@ disable_ipv6() {
   fi
 
   # Create sysctl config to disable IPv6
+  backup_config_file "$sysctl_conf"
   cat > "$sysctl_conf" << 'EOF'
 # McApp: Disable IPv6
 # Fixes mDNS advertisements and eliminates Happy Eyeballs timeout
@@ -1053,6 +1636,7 @@ configure_unattended_upgrades() {
   codename=$(get_debian_codename)
 
   # Configure which updates to apply
+  backup_config_file /etc/apt/apt.conf.d/50unattended-upgrades
   cat > /etc/apt/apt.conf.d/50unattended-upgrades << EOF
 // McApp: Automatic security updates
 Unattended-Upgrade::Origins-Pattern {
@@ -1074,6 +1658,7 @@ Unattended-Upgrade::SyslogEnable "true";
 EOF
 
   # Enable automatic updates
+  backup_config_file /etc/apt/apt.conf.d/20auto-upgrades
   cat > /etc/apt/apt.conf.d/20auto-upgrades << 'EOF'
 APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
@@ -1121,6 +1706,7 @@ configure_fast_ssh_login() {
   # Comment out pam_motd in sshd PAM config (avoids dynamic MOTD generation)
   if [[ -f /etc/pam.d/sshd ]]; then
     if grep -qE '^\s*session.*pam_motd' /etc/pam.d/sshd; then
+      backup_config_file /etc/pam.d/sshd
       sed -i 's/^\(\s*session.*pam_motd\)/#\1/' /etc/pam.d/sshd
       log_info "  Disabled pam_motd in /etc/pam.d/sshd"
     else
@@ -1149,6 +1735,7 @@ configure_ssh_hardening() {
     return 0
   fi
 
+  backup_config_file "$ssh_conf"
   cat > "$ssh_conf" << 'EOF'
 # McApp SSH hardening — crypto + access control
 HostKey /etc/ssh/ssh_host_ed25519_key

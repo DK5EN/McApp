@@ -86,7 +86,7 @@ _BOOTSTRAP_DIR = _REPO / "bootstrap"
 _MCAPP_SH = _BOOTSTRAP_DIR / "mcapp.sh"
 _LIB_DIR = _BOOTSTRAP_DIR / "lib"
 
-# The six files source_libs() sources, in the order it sources them --
+# The files source_libs() sources, in the order it sources them --
 # reused verbatim by _make_real_bootstrap_tarball() (case 9) so the packaged
 # fixture tree is the real, current lib set rather than a hand-rolled stand-in.
 _REAL_LIB_FILES = (
@@ -96,6 +96,7 @@ _REAL_LIB_FILES = (
     "packages.sh",
     "deploy.sh",
     "health.sh",
+    "converge.sh",
 )
 
 _failures: list[str] = []

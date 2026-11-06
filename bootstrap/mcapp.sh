@@ -40,7 +40,11 @@ readonly SCRIPT_VERSION="2.6.0"
 # persistent 16M journal on a /var/log/journal bind mount.
 # Epoch 6: ramlog boards (Armbian/Orange Pi) drop the McApp /var/log tmpfs and
 # journal bind; the board's ramlog owns /var/log and its native journal persistence.
-readonly SYSTEM_EPOCH=8
+# Epoch 7: Caddy serves the webapp directly with pre-compressed sidecars.
+# Epoch 8: gzip on /events and /api at the Caddy front door.
+# Epoch 9: per-step convergence (lib/converge.sh); steps now carry their own
+# last-changed epoch, this one is the first bump that ran only what changed.
+readonly SYSTEM_EPOCH=9
 
 # Detect piped mode (curl | bash) — BASH_SOURCE is empty when piped
 # SCRIPT_DIR is intentionally NOT readonly: source_libs() overwrites it with
@@ -458,7 +462,7 @@ fetch_bootstrap_tree() {
   echo "${tmp_dir}/bootstrap"
 }
 
-# Functions main() reaches into across the six sourced libs. Not
+# Functions main() reaches into across the sourced libs. Not
 # exhaustive — one or more canaries per lib file, enough to catch a
 # script/lib API skew (e.g. --tag pinning an old release whose libs predate
 # a function main() now calls) as a clean abort instead of a bootstrap run
@@ -472,6 +476,7 @@ readonly REQUIRED_LIB_FUNCTIONS=(
   collect_config
   setup_system
   install_packages
+  converge_system_steps
   ensure_web_frontend
   caddy_config_marker
   deploy_app
@@ -545,6 +550,12 @@ source_libs() {
   source "${lib_dir}/deploy.sh"
   # shellcheck source=lib/health.sh
   source "${lib_dir}/health.sh"
+  # An older release pinned with --tag has no converge.sh. Tolerate that here so
+  # verify_lib_skew can report it instead of `source` dying under set -e.
+  if [[ -f "${lib_dir}/converge.sh" ]]; then
+    # shellcheck source=lib/converge.sh
+    source "${lib_dir}/converge.sh"
+  fi
 }
 
 #──────────────────────────────────────────────────────────────────
@@ -762,14 +773,12 @@ main() {
     fi
 
     log_step "Converging system state (epoch ${installed_epoch} -> ${SYSTEM_EPOCH})..."
-    log_step "Configuring system..."
-    setup_system
-
-    log_step "Installing packages..."
-    if ! install_packages; then
-      log_error "Package phase failed - system epoch NOT advanced (see ${MCAPP_BOOTSTRAP_LOG})"
-      exit 1
-    fi
+    # Plain call on purpose (no if/||/!): set -e must stay live inside so a
+    # failing setup step aborts the run. converge_system_steps logs "Package
+    # phase failed - system epoch NOT advanced" itself and returns 1, which
+    # set -e turns into an exit before write_system_epoch.
+    log_step "Configuring system and packages (only steps changed since epoch ${installed_epoch})..."
+    converge_system_steps "$installed_epoch"
 
     write_system_epoch
 
@@ -796,7 +805,8 @@ main() {
     # SYSTEM_EPOCH (e.g. a new firewall rule or package). Full system-level
     # convergence is owned by `--converge`, gated on SYSTEM_EPOCH vs the
     # installed marker at /var/lib/mcapp/system-epoch: a no-op once the box
-    # is current, otherwise setup_system + install_packages + health_check.
+    # is current, otherwise the steps changed since the installed epoch
+    # (lib/converge.sh) + health_check.
     #
     # `--converge` is invoked from two places: scripts/update-runner.py runs
     # it (via the newly deployed slot's bootstrap) after every successful

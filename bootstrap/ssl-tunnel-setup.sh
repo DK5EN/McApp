@@ -45,6 +45,73 @@ log_ok()    { echo -e "${GREEN}✔${NC}  $*"; }
 log_warn()  { echo -e "${YELLOW}⚠${NC}  $*"; }
 log_error() { echo -e "${RED}✖${NC}  $*"; }
 
+# Config backups: reuse backup_config_file from lib/detect.sh when it ships next
+# to this script; otherwise a local copy with the same contract (0700 folder,
+# 0600 files, symlinked folder refused, identical-to-newest skipped, newest 5
+# kept, ALWAYS returns 0). caddy.env holds DNS tokens: 0600 matters.
+for _detect in "${SCRIPT_DIR}/lib/detect.sh" "${SCRIPT_DIR}/bootstrap/lib/detect.sh"; do
+  if [[ -f "$_detect" ]]; then
+    # shellcheck disable=SC1090
+    source "$_detect" || true
+    break
+  fi
+done
+unset _detect
+if ! declare -F backup_config_file >/dev/null 2>&1; then
+  # BEGIN local backup_config_file fallback
+  backup_config_file() {
+    local src="${1:-}"
+    [[ -n "$src" && -f "$src" ]] || return 0
+    local rc=0
+    (
+      set +e
+      umask 077
+      root="${MCAPP_CONFIG_BACKUP_DIR:-/var/lib/mcapp/config-backups}"
+      [[ ! -L "$root" ]] || exit 1
+      mkdir -p "$root" || exit 1
+      chmod 0700 "$root" || exit 1
+      abs="$src"
+      [[ "$abs" == /* ]] || abs="$(pwd)/$abs"
+      flat="${abs//\//__}"
+      flat="${flat//[^A-Za-z0-9._-]/_}"
+      newest=""
+      for f in "$root/${flat}".[0-9]*T[0-9]*Z-[0-9][0-9][0-9]; do
+        [[ -f "$f" ]] && newest="$f"
+      done
+      if [[ -n "$newest" ]] && cmp -s "$src" "$newest"; then
+        exit 0
+      fi
+      ts="$(date -u +%Y%m%dT%H%M%SZ)"
+      n=0
+      for f in "$root/${flat}.${ts}"-[0-9][0-9][0-9]; do
+        [[ -f "$f" ]] || continue
+        used=$((10#${f##*-}))
+        [[ $used -lt $n ]] || n=$((used + 1))
+      done
+      [[ $n -lt 1000 ]] || exit 1
+      dest="$root/${flat}.${ts}-$(printf '%03d' "$n")"
+      cp "$src" "$dest" || exit 1
+      chmod 0600 "$dest" || exit 1
+      files=()
+      for f in "$root/${flat}".[0-9]*T[0-9]*Z-[0-9][0-9][0-9]; do
+        [[ -f "$f" ]] && files+=("$f")
+      done
+      count=${#files[@]}
+      if ((count > 5)); then
+        for ((i = 0; i < count - 5; i++)); do
+          rm -f "${files[$i]}"
+        done
+      fi
+      exit 0
+    ) || rc=$?
+    if [[ $rc -ne 0 ]]; then
+      echo "[WARN] Could not back up ${src} (continuing)" >&2
+    fi
+    return 0
+  }
+  # END local backup_config_file fallback
+fi
+
 #──────────────────────────────────────────────────────────────────
 # PRE-FLIGHT CHECKS
 #──────────────────────────────────────────────────────────────────
@@ -294,12 +361,14 @@ configure_caddy() {
     log_error "Template not found: ${tmpl}"
     exit 1
   fi
+  backup_config_file "$CADDY_CONFIG"
   cp "$tmpl" "$CADDY_CONFIG"
   log_ok "  Caddyfile written to ${CADDY_CONFIG}"
 
   # Write environment file with secrets
   mkdir -p /etc/mcapp
   local env_file="$CADDY_ENV"
+  backup_config_file "$env_file"
 
   case "$PROVIDER" in
     duckdns)
@@ -330,6 +399,7 @@ EOF
   log_ok "  Secrets stored in ${env_file} (mode 600)"
 
   # Install systemd service
+  backup_config_file "$CADDY_SERVICE"
   cp "${TEMPLATE_DIR}/caddy/caddy.service" "$CADDY_SERVICE"
   systemctl daemon-reload
   log_ok "  Caddy systemd service installed"
@@ -371,6 +441,7 @@ update_firewall() {
     local nft_conf="/etc/nftables.conf"
     if [[ -f "$nft_conf" ]]; then
       if ! grep -q 'tcp dport 443' "$nft_conf"; then
+        backup_config_file "$nft_conf"
         sed -i '/tcp dport 80 accept/a\    # HTTPS (Caddy TLS reverse proxy)\n    tcp dport 443 accept' "$nft_conf"
         log_ok "  Updated ${nft_conf} with port 443"
       fi

@@ -99,6 +99,24 @@ Add columns/tables via a `current_version < N` block in the chain in `storage/mi
 
 System-level machine state (packages, firewall, web front door) is versioned by `SYSTEM_EPOCH` in `bootstrap/mcapp.sh` and mirrored by `REQUIRED_SYSTEM_EPOCH` in `src/mcapp/system_converge.py` — bump both together, a startup test enforces parity. Installed state is marked at `/var/lib/mcapp/system-epoch`; `mcapp.sh --converge` runs `setup_system` + `install_packages` idempotently to bring a box up to date. The update runner converges the newly deployed slot after every successful update, and the app's converge watchdog self-heals boxes whose update was driven by a pre-epoch runner.
 
+**A converge runs only what changed.** Each step in `bootstrap/lib/converge.sh` carries the epoch it last changed in, and runs only if the installed epoch is below it. Changing a step means raising its row to the new `SYSTEM_EPOCH` in the same commit, or existing boxes skip the change. `ensure_web_frontend` always runs; the apt upgrade does not. The table lives beside `setup_system` and `install_packages`, and the parity test fails if they gain a function without a row. A full `mcapp.sh` run still runs everything, so a step must be safe on an installed box regardless.
+
+## Coexisting with other software
+
+A McApp update must not break what else runs on the box. Field report 2026-11-06: an operator saved `nft list ruleset` over `/etc/nftables.conf` to open :8080, the dump lost our marker, and a bootstrap run replaced the file. Operator guide: `doc/operations-reference.md`, "Running other software on the box". Plan and evidence: `doc/2026-11-06_2053-install-coexistence-plan.md`.
+
+- **A firewall file with real rules and no marker belongs to the operator.** `_mcapp_nft_has_own_rules` keeps it byte-identical, and nothing is applied. An empty deny-all chain counts as a rule. Only a rule-free stock file is replaced. An unreadable file is kept.
+- **A marked file is edited, never rewritten.** Staged copy, `nft -c`, install, reload. **Never `systemctl restart nftables`:** its `ExecStop` is `nft flush ruleset`, which also deletes Docker's and fail2ban's tables. A stopped service stays stopped.
+- **`table inet filter` + `delete table inet filter`, not `destroy`.** `destroy` needs kernel 6.3, and on an older vendor kernel the generated file and the boot fallback would both fail, leaving no firewall.
+- **The custom include sits inside `chain input`, before the drops.** A separate table cannot work: a drop in our table still wins over an accept in theirs. Hence `/etc/mcapp/nftables.d`, not the generic `/etc/nftables.d`, where another tool's whole-table file would break the chain.
+- **Boot fallback drop-in.** `nft -f` failing on a faulty custom file would leave no firewall at all, so `mcapp-fallback.conf` retries without the include line.
+- **Bookworm flushes only on a real first install:** no `[iptables DROP]` line in `rules.v4` AND no epoch marker. Otherwise `iptables -C || -A`. Policies are set after the rules, and INPUT is opened before the flush, so an abort cannot lock anyone out.
+- **SSH ports other than 22 stay open on wholesale paths**, from `sshd -T` (`Port`, `port` and `ListenAddress`) and `SSH_CONNECTION`.
+- **`configure_logdirs` is its own step at epoch 9, and `configure_tmpfs` must stay at 8:** re-running it can re-mount `/var/log` and `/tmp` over live services on a customised box. On a first install the generator must run BEFORE the mount, because it reads the real folders. It merges real folder > its own earlier line > package default, so a scan of an empty tmpfs loses nothing.
+- **`backup_config_file` before every overwrite** of a config file, inside the branch that writes. It always returns 0. Copies are 0600, because `config.json` and `caddy.env` hold secrets. A new write site needs an entry in `bootstrap_config_backup_tests.py`.
+- **A step's table read must not sit on stdin:** `converge_system_steps` reads on fd 3, because `apt-get` or `systemd-run` reading stdin would eat the remaining rows and silently skip steps.
+- **`check_coexistence` is advisory** and never flips `health_check`. A false "allowed" is worse than noise. 2981, 8081 and 8082 are exempt.
+
 ## Memory Footprint (B4)
 
 Reduced the usable-RAM squeeze on mcapp.local's Pi Zero 2W (512 MB physical, 415 MB seen by

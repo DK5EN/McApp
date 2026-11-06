@@ -1,6 +1,6 @@
 # McApp production health log — mcapp.local
 
-> **Status:** Current — newest section: §55 (2026-11-06 16:04 CET, pre-release sweep of `v2.1.24-dev.1` before the v2.1.24 promotion, 67 min soak, green, zero findings, new watch point **W27**). Before that: §54 (2026-11-06 01:35 CET, post-release sweep of production `v2.1.23`, 2 min after the deploy, green, zero findings, schema 40). Before that: §53 (pre-release sweep of `v2.1.23-dev.3`, about 15 min soak at the operator's decision, green, zero findings). Before that: §50 (2026-10-25 19:33 CET, post-release sweep of production `v2.1.21`, 1 min after the deploy, green, zero findings, schema 39). Before that: §49 (2026-10-25 19:18 CET, pre-release sweep of `v2.1.21-dev.3` before the v2.1.21 promotion, ~2 h 22 min soak, green, zero findings, schema 39). Before that: §48 (2026-10-25 10:50 CET, post-release sweep of production `v2.1.20`, 1 min after the deploy, green, zero findings, schema 39). Before that: §47 (2026-10-25 10:36 CET, pre-release sweep of `v2.1.20-dev.3` before the v2.1.20 promotion, ~4 min soak at the operator's decision, green, zero findings, schema 39). Before that: §44 (2026-10-20 21:22 CEST, post-release sweep of production `v2.1.18`, 2 min after the deploy, green, zero findings, schema 38, epoch 6). Before that: §43 (2026-10-20 21:12 CEST, pre-release sweep of `v2.1.18-dev.5` before the v2.1.18 promotion, ~18 min soak at the operator's decision, green, zero findings; records the 19:54-20:26 `classifier_rules` crash loop that dev.5's schema guard addresses). Before that: §42 (2026-10-20 08:38 CEST, post-release sweep of production `v2.1.17`, 8 min after the deploy, green, zero findings, W24 reset by the restart, W11 still open). Before that: §41 (2026-10-20 08:12 CEST, pre-release sweep of production `v2.1.16` before the unsoaked v2.1.17 promotion, green, one watch point W24). Before that: §40 (2026-10-17 15:11 CEST, post-release sweep of production `v2.1.14`, 2 min after the deploy, green, zero findings, schema 37, no mypy in the slot). Before that: §39 (2026-10-17 14:56 CEST, pre-release sweep of `v2.1.14-dev.3` before the v2.1.14 promotion, green, zero findings, 2 h 46 min soak; the operator promoted HEAD, 6 commits past the tag, unsoaked). Before that: §38 (2026-10-16 20:29 CEST, post-release sweep of production `v2.1.13`, 2 min after the deploy, green, zero findings, `NRestarts` 0, schema 36). Before that: §37 (2026-10-16 20:23 CEST, pre-release sweep of `v2.1.13-dev.4` (on-device Browser AI, Q-code/locator links, Node Admin TX ceiling dropped, bootstrap TMPDIR) before the v2.1.13 promotion, green, zero findings, ~21 min soak at the operator's decision). Before that: §36 (2026-10-13 16:34 CEST, pre-release sweep of `v2.1.12-dev.1` (parsed DBG console lines, setlog as third flag, live `flags`/`node` in the console status) before the v2.1.12 promotion, green, zero findings, ~8 min soak at the operator's decision; new watch point W26). Before that: §35 (2026-10-11 20:53 CEST, post-release sweep of production `v2.1.11`, 3 min after the deploy, green, zero release findings; internet feed found disabled by a settings save between 20:42 and 20:49, not by the release). Before that: §34 (2026-10-11 20:41 CEST, pre-release sweep of `v2.1.11-dev.2` (Node Admin remote parity) before the v2.1.11 promotion, green, zero findings, ~9 min soak at the operator's decision). Before that: §33 (2026-10-11 15:05 CEST, pre-release sweep of `v2.1.10-dev.3` (meshmap internet feed, RM1 out of chat) before the v2.1.10 promotion, green, zero findings, ~13 min soak at the operator's decision; W20 recurred before the deploy). Before that: §32 (2026-10-10 15:35 CEST, pre-release sweep of `v2.1.7-dev.1` (Internet feed removed) before the v2.1.7 promotion, green, zero findings, ~15 min soak). Before that: §31 (2026-10-06, v2.1.6-dev.6 short soak). Before that: §30 (2026-10-05 19:08 CEST, sweep of `v2.1.5-dev.2` node time zone, green, zero findings). Before that: §26 (2026-10-04 09:36 CEST, pre-release sweep of
+> **Status:** Current — newest section: §57 (2026-11-06 23:21 CET, pre-release sweep of `v2.1.25-dev.2`, 2 min soak at the operator's decision, green, zero findings). Before that: §56 (2026-11-06 16:40 CET, post-release sweep of production `v2.1.24`, 1 min after the deploy, green, zero findings). Before that: §55 (2026-11-06 16:04 CET, pre-release sweep of `v2.1.24-dev.1` before the v2.1.24 promotion, 67 min soak, green, zero findings, new watch point **W27**). Before that: §54 (2026-11-06 01:35 CET, post-release sweep of production `v2.1.23`, 2 min after the deploy, green, zero findings, schema 40). Before that: §53 (pre-release sweep of `v2.1.23-dev.3`, about 15 min soak at the operator's decision, green, zero findings). Before that: §50 (2026-10-25 19:33 CET, post-release sweep of production `v2.1.21`, 1 min after the deploy, green, zero findings, schema 39). Before that: §49 (2026-10-25 19:18 CET, pre-release sweep of `v2.1.21-dev.3` before the v2.1.21 promotion, ~2 h 22 min soak, green, zero findings, schema 39). Before that: §48 (2026-10-25 10:50 CET, post-release sweep of production `v2.1.20`, 1 min after the deploy, green, zero findings, schema 39). Before that: §47 (2026-10-25 10:36 CET, pre-release sweep of `v2.1.20-dev.3` before the v2.1.20 promotion, ~4 min soak at the operator's decision, green, zero findings, schema 39). Before that: §44 (2026-10-20 21:22 CEST, post-release sweep of production `v2.1.18`, 2 min after the deploy, green, zero findings, schema 38, epoch 6). Before that: §43 (2026-10-20 21:12 CEST, pre-release sweep of `v2.1.18-dev.5` before the v2.1.18 promotion, ~18 min soak at the operator's decision, green, zero findings; records the 19:54-20:26 `classifier_rules` crash loop that dev.5's schema guard addresses). Before that: §42 (2026-10-20 08:38 CEST, post-release sweep of production `v2.1.17`, 8 min after the deploy, green, zero findings, W24 reset by the restart, W11 still open). Before that: §41 (2026-10-20 08:12 CEST, pre-release sweep of production `v2.1.16` before the unsoaked v2.1.17 promotion, green, one watch point W24). Before that: §40 (2026-10-17 15:11 CEST, post-release sweep of production `v2.1.14`, 2 min after the deploy, green, zero findings, schema 37, no mypy in the slot). Before that: §39 (2026-10-17 14:56 CEST, pre-release sweep of `v2.1.14-dev.3` before the v2.1.14 promotion, green, zero findings, 2 h 46 min soak; the operator promoted HEAD, 6 commits past the tag, unsoaked). Before that: §38 (2026-10-16 20:29 CEST, post-release sweep of production `v2.1.13`, 2 min after the deploy, green, zero findings, `NRestarts` 0, schema 36). Before that: §37 (2026-10-16 20:23 CEST, pre-release sweep of `v2.1.13-dev.4` (on-device Browser AI, Q-code/locator links, Node Admin TX ceiling dropped, bootstrap TMPDIR) before the v2.1.13 promotion, green, zero findings, ~21 min soak at the operator's decision). Before that: §36 (2026-10-13 16:34 CEST, pre-release sweep of `v2.1.12-dev.1` (parsed DBG console lines, setlog as third flag, live `flags`/`node` in the console status) before the v2.1.12 promotion, green, zero findings, ~8 min soak at the operator's decision; new watch point W26). Before that: §35 (2026-10-11 20:53 CEST, post-release sweep of production `v2.1.11`, 3 min after the deploy, green, zero release findings; internet feed found disabled by a settings save between 20:42 and 20:49, not by the release). Before that: §34 (2026-10-11 20:41 CEST, pre-release sweep of `v2.1.11-dev.2` (Node Admin remote parity) before the v2.1.11 promotion, green, zero findings, ~9 min soak at the operator's decision). Before that: §33 (2026-10-11 15:05 CEST, pre-release sweep of `v2.1.10-dev.3` (meshmap internet feed, RM1 out of chat) before the v2.1.10 promotion, green, zero findings, ~13 min soak at the operator's decision; W20 recurred before the deploy). Before that: §32 (2026-10-10 15:35 CEST, pre-release sweep of `v2.1.7-dev.1` (Internet feed removed) before the v2.1.7 promotion, green, zero findings, ~15 min soak). Before that: §31 (2026-10-06, v2.1.6-dev.6 short soak). Before that: §30 (2026-10-05 19:08 CEST, sweep of `v2.1.5-dev.2` node time zone, green, zero findings). Before that: §26 (2026-10-04 09:36 CEST, pre-release sweep of
 > `v2.1.1-dev.2` before the v2.1.1 promotion) — green, zero findings, **~3 min soak at the operator's
 > decision**; new watch point **W23** (QRZ lookup budget). Before that: §25 (2026-10-02, no-soak
 > sign-off of v2.0.19, re-released as v2.1.0). Before that: §24 (2026-09-29 10:03 CEST, post-release sweep of
@@ -3189,3 +3189,58 @@ matching load would point to a leak per SSE connect.
 
 **Not measured:** iPhone Safari over h3 with gzip. Results of the change:
 `doc/2026-11-06_1400-runtime-compression-measurements.md`.
+
+## 56. 2026-11-06 16:40 CET — post-release sweep of production v2.1.24 (1 min after the deploy)
+
+Deployed from the webapp Update page (Production mode). The modal reached DONE with "Update completed
+successfully", and the on-box wait loop (tag + new slot + service restart) fired on slot-2.
+
+**Verdict: green, zero findings.**
+
+- **Running:** `webapp/version.html` v2.1.24, active slot-2 (was slot-0, v2.1.24-dev.1). `mcapp`,
+  `mcapp-ble`, `caddy`, `lighttpd` active, `mcapp` restarted 16:39:54, `NRestarts` 0 on all three
+  checked units. Journal `-p warning` for `mcapp` and `mcapp-ble` since the restart: 0 lines.
+- **Versions:** schema 40 in the DB and the slot, system epoch 8, Caddyfile version 5 with 2 `gzip 1`
+  blocks.
+- **Packaging:** no `*_tests.py`. Exactly two `.json` files, `contract/classifier_contract.json` and
+  `group_labels_icssw.json`.
+- **Wire, over h3 from the Mac:** `/api/stalls?limit=200` 186844 bytes plain in 293 ms, 28390 bytes gzip
+  in 124 ms.
+- **Host:** 196 MB RAM available. `mcapp` RSS 91 MB and Caddy 32 MB, 25 s after the restart.
+- `/api/status`: `udp_target_kind` `config` this soon after a restart, as in §54.
+  `udp_multiple_sources` false, no untrusted IPs.
+
+**Absent:** restarts, journal warnings, untrusted UDP sources.
+
+**Not measured:** the dependency refresh has only this minute of runtime. W27 (`mcapp` RSS) needs a quiet
+day. iPhone Safari over h3 with gzip is still open unless the Caddy log says otherwise.
+
+## 57. 2026-11-06 23:21 CET — pre-release sweep of v2.1.25-dev.2 before the v2.1.25 promotion (2 min soak)
+
+**Verdict: green, zero findings, with a soak of minutes at the operator's decision.** `v2.1.25-dev.1` ran
+from 22:59 including one reboot at 23:02. `v2.1.25-dev.2` ran from 23:19 and differs only in the firewall
+boot fallback's drop-in.
+
+- **Running:** `webapp/version.html` v2.1.25-dev.2, active slot-0. `mcapp`, `mcapp-ble`, `caddy`, `lighttpd`,
+  `nftables`, `mcapp-logdirs.timer` active, `mcapp` restarted 23:19:15, `NRestarts` 0 on both McApp units.
+- **Versions:** schema 40 in the DB and the slot, classifier 7, system epoch 9 equal to
+  `REQUIRED_SYSTEM_EPOCH`.
+- **Data, last hour:** 33 msg, 90 pos, 274 signal rows, 0 unclassified. Newest message 23:21. DB 67 MB, 24187
+  messages, 392 stations.
+- **Uptime ledger:** last `{CET}` beacon 298 s ago, heartbeat 4 s.
+- **Journal:** `mcapp -p warning` over 24 h: only the "no entries" line, so 0 warnings.
+- **Host:** 210 MB RAM available, swap 9 MB used of 462 MB, disk 11% of 59 G, 44.5 C, uptime 19 min.
+- **Hygiene:** `vapid.json` 0600, `config.json` 0640. Caddy internal CA leaf cert mid-life, not a finding.
+- **`/api/status`:** `udp_target_kind` `first_seen` 2 min after the restart (W11), `udp_multiple_sources` false,
+  no untrusted IPs, 0 suppressed target changes.
+- **Firewall after the reboot on dev.1:** loaded from the migrated file without the fallback, policy drop.
+  `/var/log` on tmpfs with `/var/log/runit` recreated. On dev.2 a fresh `daemon-reload` logs 0 escape warnings.
+
+**Absent:** restarts, journal warnings, failed units, untrusted UDP sources.
+
+**Gate for this promotion:** run by hand in both repos after the dependency refresh. CI `tests` is
+`disabled_manually`, so it signs off nothing. `config_migration` is skipped on macOS and was run on the Pi
+against the dev.2 tree.
+
+**Not measured:** the 8 to 9 `--converge` path on a real Pi, since this box took the full run. It is VM-only
+evidence until a field box updates. Nothing here says anything about RSS at matched load (W27).

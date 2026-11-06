@@ -386,6 +386,7 @@ EOF
   # 0666 & ~umask (0644 under the common 022 umask), which would leave the
   # secret world-readable, if only for the window before a follow-up chmod.
   if [[ -f "$CONFIG_FILE" ]]; then
+    backup_config_file "$CONFIG_FILE"
     install -m 600 "$CONFIG_FILE" "${CONFIG_FILE}.bak"
   fi
 
@@ -497,6 +498,7 @@ migrate_config() {
     # Same reasoning as write_config()'s backup: contains BLE_API_KEY in
     # clear, and cp-then-chmod would leave it briefly world-readable under a
     # 022 umask. install -m 600 creates it at the right mode directly.
+    backup_config_file "$CONFIG_FILE"
     install -m 600 "$CONFIG_FILE" "${CONFIG_FILE}.bak"
     mv "$tmp_config" "$CONFIG_FILE"
     # mv inherits tmp_config's mode from mktemp rather than any mode we

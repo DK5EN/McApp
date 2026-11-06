@@ -111,6 +111,7 @@ log_info() { :; }
 log_ok() { :; }
 log_warn() { :; }
 log_error() { :; }
+backup_config_file() { :; }
 umask 022
 CONFIG_FILE="$1"
 # shellcheck source=/dev/null
@@ -129,6 +130,7 @@ log_info() { :; }
 log_ok() { :; }
 log_warn() { :; }
 log_error() { :; }
+backup_config_file() { :; }
 umask 022
 CONFIG_FILE="$1"
 CONFIG_DIR="$2"

@@ -5,6 +5,50 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.1.24 (2026-11-06)
+
+**On a slow connection, McApp now connects about 3 times faster and uses 84% less data.** Caddy gzips
+the live event stream and the large API responses. On a fast LAN you will barely notice a change.
+
+> Update from the Update page as usual. `SYSTEM_EPOCH` goes to 8, schema stays at 40. A box with public
+> TLS keeps its old Caddyfile until `ssl-tunnel-setup.sh` is run again, and works as before.
+
+### Highlights
+
+- **Faster connect on a weak link.** Time until the message history has arrived, measured on the Pi
+  Zero 2W with `mcapp.local`'s real data, plain against gzip, median of 5 to 7 runs:
+  - 1 Mbit/s: 6.5 s to 2.2 s.
+  - 10 Mbit/s: 2.1 s to 1.6 s.
+  - LAN: 1.6 s in both cases, because that time is spent on the server, not on the network.
+- **Less data on every reconnect.** The burst of data a client gets when it connects shrinks from 631 KB
+  to 103 KB. A phone waking from sleep pays this each time.
+- **Live messages arrive as fast as before.** Over 200 s, 89 of 89 real events arrived 2.9 ms after a
+  direct connection, against 1.8 ms without gzip.
+- **No extra memory cost measured.** Caddy peaked at 28 MB with 8 connected clients, with and without
+  gzip.
+
+### Backend (MCProxy)
+
+- `encode { gzip 1 }` on `/events*` and `/api/*`, in all four Caddyfile templates. Caddyfile version 5.
+- Gzip level 1, because a trial on the Pi showed zstd holding 7 MB more with 3 clients, and level 5
+  costing about 50% more CPU for a smaller gain.
+- Responses under 512 bytes stay plain, and static files keep their pre-built Brotli and gzip files.
+- `/events` compresses only on Caddy 2.11.5 or newer, and stays plain and working on an older one.
+- New `scripts/measure_front_door.py` for wire bytes and timing. Full numbers:
+  `doc/2026-11-06_1400-runtime-compression-measurements.md`.
+
+### Frontend (webapp)
+
+- No code changes. Transitive dependencies refreshed in `package-lock.json`. Python locks were already
+  current.
+
+### Upgrade notes
+
+- No action needed. The update restarts Caddy once to load the new configuration.
+- Soak before this release was 67 minutes, on a dev build, with Chrome on a Mac.
+- Not tested: iPhone Safari over HTTP/3 with gzip, and a real slow link. The slow links above were
+  simulated with a throttling relay.
+
 ## v2.1.23 (2026-11-06)
 
 **The Gateway Availability card now shows the truth for a month and a year, and knows when a node's
