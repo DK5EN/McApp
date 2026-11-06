@@ -1,53 +1,73 @@
 # Release History
 
-## v2.1.24 (2026-11-06)
+## v2.1.25 (2026-11-06)
 
-**On a slow connection, McApp now connects about 3 times faster and uses 84% less data.** Caddy gzips
-the live event stream and the large API responses. On a fast LAN you will barely notice a change.
+**A McApp update no longer breaks other software on the box.** Your own firewall rules, the log folders
+of other services and your own Caddy sites now survive an update. Before McApp overwrites a config file,
+it keeps a backup.
 
-> Update from the Update page as usual. `SYSTEM_EPOCH` goes to 8, schema stays at 40. A box with public
-> TLS keeps its old Caddyfile until `ssl-tunnel-setup.sh` is run again, and works as before.
+> Update from the Update page as usual. `SYSTEM_EPOCH` goes to 9, schema stays at 40. If you run other
+> software next to McApp, read "Running other software on the box" in `doc/operations-reference.md`.
 
 ### Highlights
 
-- **Faster connect on a weak link.** Time until the message history has arrived, measured on the Pi
-  Zero 2W with `mcapp.local`'s real data, plain against gzip, median of 5 to 7 runs:
-  - 1 Mbit/s: 6.5 s to 2.2 s.
-  - 10 Mbit/s: 2.1 s to 1.6 s.
-  - LAN: 1.6 s in both cases, because that time is spent on the server, not on the network.
-- **Less data on every reconnect.** The burst of data a client gets when it connects shrinks from 631 KB
-  to 103 KB. A phone waking from sleep pays this each time.
-- **Live messages arrive as fast as before.** Over 200 s, 89 of 89 real events arrived 2.9 ms after a
-  direct connection, against 1.8 ms without gzip.
-- **No extra memory cost measured.** Caddy peaked at 28 MB with 8 connected clients, with and without
-  gzip.
+- **Your firewall rules stay.** A firewall file with real rules and no McApp marker counts as yours. It
+  stays byte-identical, and McApp applies nothing to it.
+  - Cause: a saved `nft list ruleset` dump lost McApp's marker, so the next bootstrap run replaced the
+    file and a port opened by hand was closed again.
+- **A place for your own rules.** On Trixie, put a rule into `/etc/mcapp/nftables.d/custom.nft`, for
+  example `tcp dport 8080 accept`. Updates never touch that folder.
+- **A faulty custom file cannot leave the box open.** A reload refuses it and the running firewall stays.
+  At boot the box retries without your rules, so McApp's own rules stay active, and logs that it did.
+- **Docker and fail2ban keep their firewall tables.** McApp edits its own table and reloads, and never
+  flushes the whole ruleset.
+- **Other services' log folders survive a reboot.** `/var/log` is on tmpfs, so a service whose folder
+  vanished, such as nginx, could fail after a reboot. McApp now recreates those folders at boot.
+- **A warning instead of a silent block.** Every update and health check lists listening ports the
+  firewall blocks and any port or config conflict. It only warns and never fails the update.
+- **Config backups.** McApp copies a config file to `/var/lib/mcapp/config-backups` before it overwrites
+  it. Copies are readable by root only, because `config.json` and `caddy.env` hold secrets.
+- **Updates do less.** A converge now runs only the steps that changed since the box's installed epoch,
+  and no longer runs a system-wide `apt upgrade`.
 
 ### Backend (MCProxy)
 
-- `encode { gzip 1 }` on `/events*` and `/api/*`, in all four Caddyfile templates. Caddyfile version 5.
-- Gzip level 1, because a trial on the Pi showed zstd holding 7 MB more with 3 clients, and level 5
-  costing about 50% more CPU for a smaller gain.
-- Responses under 512 bytes stay plain, and static files keep their pre-built Brotli and gzip files.
-- `/events` compresses only on Caddy 2.11.5 or newer, and stays plain and working on an older one.
-- New `scripts/measure_front_door.py` for wire bytes and timing. Full numbers:
-  `doc/2026-11-06_1400-runtime-compression-measurements.md`.
+- `bootstrap/lib/converge.sh`: a table of steps, each with the epoch it last changed in. `ensure_web_frontend`
+  always runs. A full `mcapp.sh` run still runs everything.
+- Firewall on Bookworm: flushes only on a real first install. Otherwise it adds missing rules with
+  `iptables -C || -A`.
+- SSH ports other than 22 stay open on the paths that write the whole firewall file, taken from `sshd -T`
+  and `SSH_CONNECTION`.
+- Caddy imports `/etc/caddy/conf.d/*.caddy`, so your own sites have a home that updates do not rewrite.
+  A public-TLS box gets this only when `ssl-tunnel-setup.sh` runs again.
+- Python locks refreshed: click 8.5.1, regex 2026.11.7.
 
 ### Frontend (webapp)
 
-- No code changes. Transitive dependencies refreshed in `package-lock.json`. Python locks were already
-  current.
+- No code changes. Transitive dependencies refreshed in `package-lock.json`, mainly Rollup 4.68.0.
 
 ### Upgrade notes
 
-- No action needed. The update restarts Caddy once to load the new configuration.
-- Soak before this release was 67 minutes, on a dev build, with Chrome on a Mac.
-- Not tested: iPhone Safari over HTTP/3 with gzip, and a real slow link. The slow links above were
-  simulated with a throttling relay.
+- No action needed on a box with only McApp on it.
+- **Your firewall file may be left alone on purpose.** If it holds real rules and no McApp marker, it is
+  not updated. McApp's newer rules then do not reach it, and the update tells you.
+- **Soak before this release was minutes, by operator decision.** `v2.1.25-dev.1` ran from 22:59,
+  including one reboot, and `v2.1.25-dev.2` from 23:19, with Chrome on a Mac.
+- **Tested in VMs only:** the 8 to 9 converge that this update runs on an existing box, a custom rule
+  surviving it, a faulty custom file at boot, and the Bookworm path. These ran in OrbStack VMs with Debian
+  Trixie and Bookworm, not on a real Pi. The test box, a Pi Zero 2W, took the full bootstrap run instead.
+- **Not tested at all:** Docker or fail2ban on a real box, and the Orange Pi.
 
 ## Earlier releases, in brief
 
 One entry per release. The full notes as published are in
 [`doc/archive/release-history-full.md`](https://github.com/DK5EN/McApp/blob/development/doc/archive/release-history-full.md).
+
+### v2.1.24 (2026-11-06)
+
+- Caddy gzips `/events*` and `/api/*`: on a slow link about 3 times faster to connect and 84% less data.
+- `SYSTEM_EPOCH` 8, schema 40, Caddyfile version 5. A public-TLS box keeps its old Caddyfile until
+  `ssl-tunnel-setup.sh` runs again.
 
 ### v2.1.23 (2026-11-06)
 
