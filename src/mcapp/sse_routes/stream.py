@@ -7,12 +7,12 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from starlette.responses import StreamingResponse
 
 from ..logging_setup import get_logger
 from ..schemas import SendMessageRequest
 from ..util import now_ms
+from ..weblite import APIRouter, HTTPException, Request
 
 if TYPE_CHECKING:
     from ..sse_handler import SSEManager

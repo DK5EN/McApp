@@ -361,7 +361,7 @@ def _test_format_for_lora() -> None:
         "WX ERR: Alle Wetter-APIs nicht ve",
     )
 
-    # Rich payload whose emoji-format rendering exceeds _MAX_LORA_MSG_LEN chars,
+    # Rich payload whose emoji-format rendering exceeds _MAX_LORA_MSG_LEN bytes,
     # forcing the shorter, emoji-free fallback format. Chosen so the *fallback* itself
     # still fits within the cap.
     rich_ws = WeatherService(
@@ -387,13 +387,13 @@ def _test_format_for_lora() -> None:
         "WX LONGSTATION123456: -12.3C 87%rF 987.6hPa Wind 45.6km/h SW bewölkt, 12.3mm rain",
     )
     _check(
-        "format_for_lora: fallback format has no emoji (production checks len(), not bytes)",
+        "format_for_lora: fallback format has no emoji (the cap is in UTF-8 bytes)",
         "\U0001f324" in truncated,
         False,
     )
     _check(
-        "format_for_lora: fallback format fits within the _MAX_LORA_MSG_LEN char cap",
-        len(truncated) <= _MAX_LORA_MSG_LEN,
+        "format_for_lora: fallback format fits within the _MAX_LORA_MSG_LEN byte cap",
+        len(truncated.encode()) <= _MAX_LORA_MSG_LEN,
         True,
     )
     _check(
@@ -411,6 +411,41 @@ def _test_format_for_lora() -> None:
                 "12.3mm rain",
             )
         ),
+        True,
+    )
+
+
+def _test_format_for_lora_utf8_byte_cap() -> None:
+    """The 149 cap is UTF-8 BYTES (the node rejects >150 bytes): 149 characters
+    including the 7-byte weather emoji and umlauts are ~155+ bytes."""
+    ws = WeatherService(lat=48.15, lon=11.58, stat_name="DK5EN", max_age_minutes=30)
+    data: dict[str, Any] = {
+        "temperatur_celsius": 17.0,
+        "luftfeuchtigkeit_prozent": 42,
+        "luftdruck_hpa": 1013.0,
+        "windgeschwindigkeit_kmh": 0,
+        "windrichtung_grad": None,
+        "wolkenbedeckung_prozent": None,
+        "niederschlag_mm": 0,
+    }
+    base_chars = len(ws.format_for_lora(data))
+    # Prefix sized so the emoji form is exactly 149 CHARACTERS but 154 bytes (the 7-byte emoji).
+    prefix = "x" * (_MAX_LORA_MSG_LEN - base_chars - 1)
+    out = ws.format_for_lora(data, prefix_text=prefix)
+    _check(
+        "format_for_lora bytes: 149-char / >149-byte emoji form falls back to the compact form",
+        "\U0001f324" not in out and out.startswith(prefix + " WX DK5EN JN58sd"),
+        True,
+    )
+    _check(
+        "format_for_lora bytes: result fits the byte cap",
+        len(out.encode("utf-8")) <= _MAX_LORA_MSG_LEN,
+        True,
+    )
+    huge = ws.format_for_lora(data, prefix_text="ä" * 200)
+    _check(
+        "format_for_lora bytes: last-resort truncation is within the cap and valid UTF-8",
+        len(huge.encode("utf-8")) <= _MAX_LORA_MSG_LEN and huge == "ä" * 74,
         True,
     )
 
@@ -1119,6 +1154,7 @@ def run_meteo_tests() -> bool:
     _test_okta_conversion()
     _test_compass_conversion()
     _test_format_for_lora()
+    _test_format_for_lora_utf8_byte_cap()
     _test_is_valid_position()
     _test_no_position_defers_without_network()
     _test_update_location_bumps_generation_and_invalidates_cache()

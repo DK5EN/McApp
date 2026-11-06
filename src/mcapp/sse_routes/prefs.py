@@ -11,8 +11,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter
-
 from ..commands.parsing import SPAM_GROUP
 from ..schemas import (
     BlockedTextRequest,
@@ -23,6 +21,7 @@ from ..schemas import (
     SidebarStateRequest,
 )
 from ..storage.prefs import conversation_key_for_sidebar_key
+from ..weblite import APIRouter
 
 if TYPE_CHECKING:
     from ..sse_handler import SSEManager

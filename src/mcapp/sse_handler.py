@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Server-Sent Events (SSE) transport for McApp using FastAPI.
+Server-Sent Events (SSE) transport for McApp using Starlette (mcapp.weblite).
 
 This module provides an alternative to WebSocket for clients that prefer
 HTTP-based event streaming. It runs alongside the existing WebSocket server.
@@ -71,7 +71,7 @@ SLOT_COUNT = 3  # ⚠ must match scripts/update-runner.py's NUM_SLOTS
 SERVER_SHUTDOWN_TIMEOUT = 5.0
 DEFAULT_SSE_PORT = 2981
 
-VERSION = f"v{__version__}"  # emitted in the FastAPI app metadata and GET /api/status
+VERSION = f"v{__version__}"  # emitted in the app metadata and GET /api/status
 
 # Hosts that are only reachable from the Pi itself — never hand these to a
 # remote browser as an update-runner stream URL (it would connect to its own
@@ -217,10 +217,8 @@ def broadcast_verdict(
 
 logger = get_logger(__name__)
 
-# Import FastAPI and related modules
+# Import weblite and related modules
 try:
-    from fastapi import FastAPI, HTTPException
-    from fastapi.middleware.cors import CORSMiddleware
     from starlette.routing import Route
 
     from .sse_routes.acks import build_acks_router
@@ -239,11 +237,12 @@ try:
     from .sse_routes.uptime import build_uptime_router
     from .sse_routes.weather import build_weather_router
     from .stall_middleware import StallMiddleware
+    from .weblite import CORSMiddleware, FastAPI, HTTPException
 
     FASTAPI_AVAILABLE = True
 except ImportError:
     FASTAPI_AVAILABLE = False
-    logger.warning("FastAPI not installed. SSE transport will not be available.")
+    logger.warning("Starlette not installed. SSE transport will not be available.")
     logger.warning("Install with: uv sync --all-packages")
 
 try:
@@ -629,7 +628,7 @@ class SSEManager:
         logger.debug("SSE client %s: initial data sent", client_id)
 
     def _create_app(self) -> FastAPI:
-        """Create and configure the FastAPI application."""
+        """Create and configure the web application."""
 
         @asynccontextmanager
         async def lifespan(_app: FastAPI) -> Any:
@@ -1096,9 +1095,9 @@ class SSEManager:
             self.clients.clear()
 
     async def start_server(self) -> None:
-        """Start the SSE/FastAPI server."""
+        """Start the SSE server."""
         if not FASTAPI_AVAILABLE or not UVICORN_AVAILABLE:
-            logger.error("Cannot start SSE server: FastAPI or Uvicorn not installed")
+            logger.error("Cannot start SSE server: Starlette or Uvicorn not installed")
             return
 
         self.app = self._create_app()
@@ -1129,7 +1128,7 @@ class SSEManager:
             logger.exception("SSE server error")
 
     async def stop_server(self) -> None:
-        """Stop the SSE/FastAPI server."""
+        """Stop the SSE server."""
         # Tell every active event_generator loop to wind down on the next tick.
         self.shutdown_event.set()
         if self.server:
@@ -1166,7 +1165,7 @@ def create_sse_manager(
     """
     Create an SSE manager if dependencies are available.
 
-    Returns None if FastAPI/Uvicorn are not installed.
+    Returns None if Starlette/Uvicorn are not installed.
     """
     if not FASTAPI_AVAILABLE or not UVICORN_AVAILABLE:
         logger.warning("SSE transport not available - missing dependencies")

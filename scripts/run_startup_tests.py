@@ -23,6 +23,7 @@ user info text must contain "Node" — the built-in test cases assume both.
 import asyncio
 import sys
 
+from ble_bleak_tests import run_ble_bleak_tests
 from ble_service_tests import run_ble_service_tests
 from ble_unit_template_tests import run_ble_unit_template_tests
 from bootstrap_network_safety_tests import run_bootstrap_network_safety_tests
@@ -81,12 +82,14 @@ from mcapp.qrz_tests import run_qrz_tests
 from mcapp.remote_cmd_tests import run_remote_cmd_tests
 from mcapp.rm1_suppression_tests import run_rm1_suppression_tests
 from mcapp.rm_blocklist_tests import run_rm_blocklist_tests
+from mcapp.route_table_tests import run_route_table_tests
 from mcapp.send_path_tests import run_send_path_tests
 from mcapp.server_imports_tests import run_server_imports_tests
 from mcapp.sqlite_storage import run_startup_tests as run_storage_tests
 from mcapp.sse_format_tests import run_sse_format_tests
 from mcapp.sse_handler import run_startup_tests as run_sse_tests
 from mcapp.sse_routes.labels_tests import run_labels_routes_tests
+from mcapp.sse_routes.timezone_tests import run_timezone_tests
 from mcapp.stall_http_tests import run_stall_http_tests
 from mcapp.stall_tests import run_stall_tests
 from mcapp.storage.ack_match_vectors_tests import run_ack_match_vector_tests
@@ -111,11 +114,14 @@ from mcapp.storage.store_notice_tests import run_store_notice_tests
 from mcapp.storage.suppression_tests import run_suppression_predicate_tests
 from mcapp.storage.telemetry_reconcile_tests import run_telemetry_reconcile_tests
 from mcapp.storage.unread_suppression_tests import run_unread_suppression_tests
+from mcapp.storage.uptime_gateway_tests import run_uptime_gateway_tests
 from mcapp.storage.uptime_tests import run_uptime_tests
 from mcapp.storage.www_ingest_tests import run_www_ingest_tests
 from mcapp.template_override_tests import run_template_override_tests
 from mcapp.udp_handler import run_startup_tests as run_udp_handler_tests
 from mcapp.udp_parsing_tests import run_udp_parsing_tests
+from mcapp.weblite_tests import run_weblite_tests
+from mcapp.wire_log_tests import run_wire_log_tests
 from mcapp.wire_monitor_tests import run_wire_monitor_tests
 
 
@@ -163,6 +169,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     ble_service_ok = await run_ble_service_tests()
     print(f"ble_service: {'PASS' if ble_service_ok else 'FAIL'}")
+
+    ble_bleak_ok = await run_ble_bleak_tests()
+    print(f"ble_bleak: {'PASS' if ble_bleak_ok else 'FAIL'}")
 
     identity_ok = await run_identity_tests()
     print(f"identity: {'PASS' if identity_ok else 'FAIL'}")
@@ -233,6 +242,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     wire_monitor_ok = await run_wire_monitor_tests()
     print(f"wire_monitor: {'PASS' if wire_monitor_ok else 'FAIL'}")
 
+    wire_log_ok = await run_wire_log_tests()
+    print(f"wire_log: {'PASS' if wire_log_ok else 'FAIL'}")
+
     node_console_ok = await run_node_console_tests()
     print(f"node_console: {'PASS' if node_console_ok else 'FAIL'}")
 
@@ -256,6 +268,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     uptime_ok = await run_uptime_tests()
     print(f"uptime: {'PASS' if uptime_ok else 'FAIL'}")
+
+    uptime_gateway_ok = await run_uptime_gateway_tests()
+    print(f"uptime_gateway: {'PASS' if uptime_gateway_ok else 'FAIL'}")
 
     group_labels_ok = run_group_labels_tests()
     print(f"group_labels: {'PASS' if group_labels_ok else 'FAIL'}")
@@ -343,6 +358,13 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     server_imports_ok = await run_server_imports_tests()
     print(f"server_imports: {'PASS' if server_imports_ok else 'FAIL'}")
+
+    route_table_ok = await run_route_table_tests()
+    print(f"route_table: {'PASS' if route_table_ok else 'FAIL'}")
+    weblite_ok = run_weblite_tests()
+    print(f"weblite: {'PASS' if weblite_ok else 'FAIL'}")
+    timezone_ok = await run_timezone_tests()
+    print(f"timezone: {'PASS' if timezone_ok else 'FAIL'}")
 
     blocklist_history_ok = await run_blocklist_history_tests()
     print(f"blocklist_history: {'PASS' if blocklist_history_ok else 'FAIL'}")
@@ -432,12 +454,14 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and ack_match_vectors_ok
         and linkcheck_sse_ok
         and wire_monitor_ok
+        and wire_log_ok
         and node_console_ok
         and console_parse_ok
         and frame_decode_ok
         and aprs_symbol_ok
         and identity_ok
         and ble_service_ok
+        and ble_bleak_ok
         and udp_ok
         and udp_parsing_ok
         and storage_ok
@@ -459,6 +483,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and hey_path_ok
         and connection_lifecycle_ok
         and uptime_ok
+        and uptime_gateway_ok
         and group_labels_ok
         and label_overrides_ok
         and labels_routes_ok
@@ -492,6 +517,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and msg_core_ok
         and push_ok
         and server_imports_ok
+        and timezone_ok
+        and weblite_ok
+        and route_table_ok
         and blocklist_history_ok
         and ble_protocol_ok
         and ble_hydration_ok

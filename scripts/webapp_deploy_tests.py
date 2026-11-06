@@ -43,20 +43,24 @@ production code strict instead of loosening it for the test.
 
 from __future__ import annotations
 
+import gzip
 import os
 import re
 import shutil
 import subprocess
 import tarfile
 import tempfile
-from collections.abc import Callable
 from pathlib import Path
+from typing import Protocol
 
 _BASH = shutil.which("bash")
 
 _REPO = Path(__file__).resolve().parent.parent
 _DEPLOY_SH = _REPO / "bootstrap" / "lib" / "deploy.sh"
 _RELEASE_SH = _REPO / "scripts" / "release.sh"
+_PRECOMPRESS = _REPO / "scripts" / "precompress_webapp.mjs"
+_PACKAGES_SH = _REPO / "bootstrap" / "lib" / "packages.sh"
+_NODE = shutil.which("node")
 
 
 def _extract_function(source: str, name: str) -> str:
@@ -153,7 +157,8 @@ def _tree(root: Path) -> set[str]:
     return {str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()}
 
 
-Recorder = Callable[[str, bool, str], None]
+class Recorder(Protocol):
+    def __call__(self, label: str, ok: bool, detail: str = "") -> None: ...
 
 
 def _safe_extract(record: Recorder, source: str, name: str) -> str | None:
@@ -380,14 +385,26 @@ def _write_minimal_release_fixture(tmp: Path) -> tuple[Path, Path]:
     )
     (project / "src" / "mcapp" / "commands").mkdir(parents=True)
     (project / "src" / "mcapp" / "commands" / "tests.py").write_text("", encoding="utf-8")
+    # The /api/timezone worker is RUNTIME code (spawned by sse_routes/weather.py
+    # as `python -I <file>`) and its suite sits beside the route: production
+    # must ship the first and not the second.
+    (project / "src" / "mcapp" / "tz_lookup_worker.py").write_text("", encoding="utf-8")
+    (project / "src" / "mcapp" / "sse_routes").mkdir(parents=True)
+    (project / "src" / "mcapp" / "sse_routes" / "timezone_tests.py").write_text(
+        "", encoding="utf-8"
+    )
 
     (project / "scripts").mkdir()
     (project / "scripts" / "update-runner.py").write_text("", encoding="utf-8")
     (project / "scripts" / "run_startup_tests.py").write_text("", encoding="utf-8")
+    # build_tarball() runs the pre-compressor from PROJECT_DIR/scripts.
+    shutil.copy(_PRECOMPRESS, project / "scripts" / "precompress_webapp.mjs")
 
     (webapp / "dist").mkdir(parents=True)
     (webapp / "dist" / "index.html").write_text("<html></html>", encoding="utf-8")
     (webapp / "dist" / "._stray").write_text("applesauce", encoding="utf-8")
+    (webapp / "dist" / "assets").mkdir()
+    (webapp / "dist" / "assets" / "app.js").write_text("var a = 1;\n" * 400, encoding="utf-8")
 
     return project, webapp
 
@@ -445,6 +462,17 @@ def _case_build_tarball_excludes_appledouble(record: Recorder) -> None:
         record(
             "the produced tarball does NOT contain the ._stray AppleDouble sidecar",
             not any(Path(n).name == "._stray" for n in names),
+            f"(names: {names})",
+        )
+        record(
+            "the produced tarball ships .br and .gz sidecars for a compressible asset",
+            any(n.endswith("webapp/assets/app.js.br") for n in names)
+            and any(n.endswith("webapp/assets/app.js.gz") for n in names),
+            f"(names: {names})",
+        )
+        record(
+            "no sidecar is made for the ._stray AppleDouble file",
+            not any("._stray." in n for n in names),
             f"(names: {names})",
         )
         record(
@@ -576,6 +604,16 @@ def _case_build_tarball_production_is_runtime_only(record: Recorder) -> None:
             f"(names: {names})",
         )
         record(
+            "production tarball ships tz_lookup_worker.py (/api/timezone spawns it at runtime)",
+            any(n.endswith("src/mcapp/tz_lookup_worker.py") for n in names),
+            f"(names: {names})",
+        )
+        record(
+            "production tarball ships NO timezone_tests.py",
+            not any(Path(n).name == "timezone_tests.py" for n in names),
+            f"(names: {names})",
+        )
+        record(
             "production tarball ships NO gate runner",
             not any(Path(n).name == "run_startup_tests.py" for n in names),
             f"(names: {names})",
@@ -586,6 +624,252 @@ def _case_build_tarball_production_is_runtime_only(record: Recorder) -> None:
             and any(Path(n).name == "update-runner.py" for n in names),
             f"(names: {names})",
         )
+
+
+_WARM_DRIVER = """set -eo pipefail
+set -u
+source "{deploy_sh}"
+log_error() {{ echo "ERROR: $*" >&2; }}
+log_warn() {{ :; }}
+log_info() {{ :; }}
+log_ok() {{ :; }}
+warm_tz_worker_bytecode "$1" "$2"
+echo "rc=$?"
+"""
+
+
+def _case_tz_worker_bytecode_warmup(record: Recorder) -> None:
+    """`uv sync` compiles no bytecode, and the removed warm-up used to pay it:
+    the first /api/timezone child costs 6.56 s cold against 1.64 s warm (8 s
+    deadline). setup_python_env must run the worker once from the new slot,
+    best effort -- a failing worker, a missing venv or a missing worker file
+    must never fail the deploy.
+    """
+    assert _BASH is not None
+    deploy_src = _DEPLOY_SH.read_text(encoding="utf-8")
+    setup = _safe_extract(record, deploy_src, "setup_python_env")
+    if setup is not None:
+        record(
+            "setup_python_env warms the tz worker after a successful uv sync",
+            "warm_tz_worker_bytecode" in setup
+            and setup.index("sync_ok=false") < setup.index("warm_tz_worker_bytecode"),
+        )
+
+    def run(tmp: Path, target: Path, user: str, with_sudo: bool) -> tuple[str, str]:
+        driver = tmp / "warm_driver.sh"
+        driver.write_text(_WARM_DRIVER.format(deploy_sh=_DEPLOY_SH), encoding="utf-8")
+        env = dict(os.environ)
+        if with_sudo:
+            bin_dir = tmp / "sbin"
+            bin_dir.mkdir()
+            sudo = bin_dir / "sudo"
+            sudo.write_text(
+                f'#!/bin/sh\necho "sudo $*" >> "{tmp}/calls"\nshift 2\nexec "$@"\n',
+                encoding="utf-8",
+            )
+            sudo.chmod(0o755)
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+        res = subprocess.run(  # noqa: S603 - fixed argv, absolute binaries
+            [_BASH, str(driver), str(target), user],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+        return res.stdout, res.stderr
+
+    def make_slot(tmp: Path, *, venv: bool, worker: bool) -> Path:
+        target = tmp / "slot"
+        (target / "src" / "mcapp").mkdir(parents=True)
+        if worker:
+            (target / "src" / "mcapp" / "tz_lookup_worker.py").write_text("", encoding="utf-8")
+        if venv:
+            py = target / ".venv" / "bin" / "python"
+            py.parent.mkdir(parents=True)
+            # A worker that FAILS (exit 3 = timezonefinder not installed): the
+            # deploy must carry on regardless.
+            py.write_text(f'#!/bin/sh\necho "$PWD|$*" >> "{tmp}/calls"\nexit 3\n', encoding="utf-8")
+            py.chmod(0o755)
+        return target
+
+    for user, with_sudo, label in (("root", False, "root"), ("martin", True, "slot user via sudo")):
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            target = make_slot(tmp, venv=True, worker=True)
+            out, err = run(tmp, target, user, with_sudo)
+            calls = (tmp / "calls").read_text(encoding="utf-8") if (tmp / "calls").exists() else ""
+            record(
+                f"warm-up ({label}) runs the worker isolated from the slot dir; "
+                "a failing worker does not fail the deploy",
+                "rc=0" in out
+                and f"{target}|-I src/mcapp/tz_lookup_worker.py 48 11" in calls
+                and (not with_sudo or "sudo -u martin" in calls),
+                f"(out={out!r} err={err[:200]!r} calls={calls!r})",
+            )
+
+    for venv, worker, label in ((False, True, "no venv"), (True, False, "no worker file")):
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            target = make_slot(tmp, venv=venv, worker=worker)
+            out, err = run(tmp, target, "root", False)
+            record(
+                f"warm-up with {label} is a harmless no-op",
+                "rc=0" in out and not (tmp / "calls").exists(),
+                f"(out={out!r} err={err[:200]!r})",
+            )
+
+
+_LIGHTTPD_LEGACY_ASSET = "/webapp/assets/x.js"
+
+
+def _case_lighttpd_shell_no_cache_regex(record: Recorder) -> None:
+    """Exercise the real no-cache URL regex out of the lighttpd heredoc.
+
+    The old rule ended in `(index|sw|...)$` and so never matched the bare
+    directory URL /webapp/, which is what the SPA is actually opened at: no
+    Cache-Control at all on the shell.
+    """
+    text = _PACKAGES_SH.read_text(encoding="utf-8")
+    heredoc = re.search(r"cat > \"\$conf_file\" << 'EOF'\n(.*?)\nEOF\n", text, re.DOTALL)
+    if heredoc is None:
+        record("lighttpd 99-mcapp.conf heredoc is findable in packages.sh", False)
+        return
+    rule = re.search(
+        r'\$HTTP\["url"\] =~ "([^"]*)" \{\s*'
+        r'setenv\.add-response-header \+= \( "Cache-Control" => "no-cache"',
+        heredoc.group(1),
+    )
+    if rule is None:
+        record("lighttpd has a no-cache URL rule", False)
+        return
+    pattern = rule.group(1)
+    for url, want in (
+        ("/webapp/", True),
+        ("/webapp/index.html", True),
+        ("/webapp/sw.js", True),
+        (_LIGHTTPD_LEGACY_ASSET, False),
+    ):
+        got = re.search(pattern, url) is not None
+        record(f"lighttpd no-cache regex {'matches' if want else 'skips'} {url}", got == want)
+    record(
+        "lighttpd conf version bumped to 4",
+        re.search(r"^readonly LIGHTTPD_MCAPP_CONF_VERSION=4$", text, re.MULTILINE) is not None,
+    )
+
+
+def _case_release_runs_precompress(record: Recorder) -> None:
+    release_src = _RELEASE_SH.read_text(encoding="utf-8")
+    function = _extract_function(release_src, "build_tarball")
+    run = function.find("precompress_webapp.mjs")
+    tar = function.find("tar -czf")
+    record(
+        "build_tarball runs precompress_webapp.mjs before building the tarball",
+        run != -1 and tar != -1 and run < tar,
+    )
+    record(
+        "a failing pre-compression aborts the build (guarded, returns 1)",
+        re.search(
+            r"if ! node [^\n]*precompress_webapp\.mjs[^\n]*; then\n[^\n]*\n\s*return 1", function
+        )
+        is not None,
+    )
+    record("release.sh requires node", '"npm" "node"' in release_src)
+
+
+def _case_precompress_behaviour(record: Recorder) -> None:
+    if _NODE is None:
+        record("node is available to run precompress_webapp.mjs", False)
+        return
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        (root / "assets").mkdir()
+        text = ("function f() { return 42; }\n" * 300).encode()
+        (root / "assets" / "app.js").write_bytes(text)
+        (root / "index.html").write_bytes(b"<p>hello</p>\n" * 200)
+        (root / "tiny.js").write_bytes(b"x=1;")
+        (root / "big.wasm").write_bytes(b"\0" * 5000)
+        (root / "._app.js").write_bytes(text)
+        (root / "random.json").write_bytes(os.urandom(4000))
+        (root / "photo.png").write_bytes(b"\0" * 5000)
+
+        def run() -> subprocess.CompletedProcess[str]:
+            return subprocess.run(  # noqa: S603 - fixed argv, absolute binary
+                [_NODE, str(_PRECOMPRESS), str(root)], capture_output=True, text=True, check=False
+            )
+
+        first = run()
+        record(
+            "precompress exits 0 and prints a one-line summary",
+            first.returncode == 0
+            and first.stdout.strip().count("\n") == 0
+            and "precompress:" in first.stdout,
+            f"(rc={first.returncode} {first.stdout!r} {first.stderr!r})",
+        )
+        js = root / "assets" / "app.js"
+        record(
+            "a .gz and a .br sidecar exist for a compressible file",
+            (root / "assets" / "app.js.gz").exists() and (root / "assets" / "app.js.br").exists(),
+        )
+        record(
+            ".gz decompresses back byte-identical",
+            (root / "assets" / "app.js.gz").exists()
+            and gzip.decompress((root / "assets" / "app.js.gz").read_bytes()) == text,
+        )
+        check = subprocess.run(  # noqa: S603 - fixed argv, absolute binary
+            [
+                _NODE,
+                "-e",
+                (
+                    "const z=require('node:zlib'),f=require('node:fs');"
+                    "const a=z.brotliDecompressSync(f.readFileSync(process.argv[1]));"
+                    "process.exit(a.equals(f.readFileSync(process.argv[2]))?0:1)"
+                ),
+                str(root / "assets" / "app.js.br"),
+                str(js),
+            ],
+            capture_output=True,
+            check=False,
+        )
+        record(".br decompresses back byte-identical", check.returncode == 0)
+        record(
+            "sidecar mtime equals its source mtime to the millisecond (never newer)",
+            all(
+                -0.0000005
+                <= js.stat().st_mtime - (root / "assets" / f"app.js.{ext}").stat().st_mtime
+                < 0.002
+                for ext in ("br", "gz")
+            ),
+        )
+        record("html is compressed too", (root / "index.html.br").exists())
+        record(
+            "a .wasm file is skipped",
+            not (root / "big.wasm.br").exists() and not (root / "big.wasm.gz").exists(),
+        )
+        record("a file under 1024 bytes is skipped", not (root / "tiny.js.br").exists())
+        record(
+            "an incompressible file gets no sidecar (< 5 percent saving)",
+            not (root / "random.json.br").exists() and not (root / "random.json.gz").exists(),
+        )
+        record("an AppleDouble ._ file gets no sidecar", not (root / "._app.js.br").exists())
+        record("a non-listed extension (.png) is skipped", not (root / "photo.png.br").exists())
+
+        before = sorted(p.name for p in root.rglob("*"))
+        second = run()
+        after = sorted(p.name for p in root.rglob("*"))
+        record(
+            "a second run is idempotent (same files, no .br.br / .gz.gz)",
+            second.returncode == 0
+            and before == after
+            and not any(n.endswith((".br.br", ".gz.gz", ".br.gz", ".gz.br")) for n in after),
+            f"(rc={second.returncode})",
+        )
+        missing = subprocess.run(  # noqa: S603 - fixed argv, absolute binary
+            [_NODE, str(_PRECOMPRESS), str(root / "nope")],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        record("a missing directory exits non-zero", missing.returncode != 0)
 
 
 def run_webapp_deploy_tests() -> bool:
@@ -627,6 +911,10 @@ def run_webapp_deploy_tests() -> bool:
         _case_build_tarball_excludes_appledouble,
         _case_build_tarball_production_is_runtime_only,
         _case_release_sh_guards,
+        _case_tz_worker_bytecode_warmup,
+        _case_lighttpd_shell_no_cache_regex,
+        _case_release_runs_precompress,
+        _case_precompress_behaviour,
     ):
         case(record)
 

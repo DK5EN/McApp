@@ -1,0 +1,6 @@
+    # Container test campaign (mcapp-ct): TLS only, Traefik routes by Docker labels.
+    # Insert inside the existing `air-maxx.net *.air-maxx.net { ... }` block, before the fallback `handle {`.
+    @mcappct host mcapp-test.air-maxx.net auth-test.air-maxx.net
+    handle @mcappct {
+        reverse_proxy traefik:80
+    }

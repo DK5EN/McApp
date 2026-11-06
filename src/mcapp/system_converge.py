@@ -44,7 +44,9 @@ UPDATE_RUNNER_PORT = 2985  # must match scripts/update-runner.py's listen port
 # persistent 16M journal on a /var/log/journal bind mount.
 # Epoch 6: ramlog boards (Armbian/Orange Pi) drop the McApp /var/log tmpfs and
 # journal bind; the board's ramlog owns /var/log and its native journal persistence.
-REQUIRED_SYSTEM_EPOCH = 6
+# Epoch 7: Caddy serves the webapp directly with pre-compressed sidecars
+# (Caddyfile.mcapp v4); lighttpd stays as a legacy backend.
+REQUIRED_SYSTEM_EPOCH = 7
 
 SYSTEM_EPOCH_FILE = Path("/var/lib/mcapp/system-epoch")
 CONVERGE_ATTEMPT_FILE = Path("/var/lib/mcapp/converge-attempt")

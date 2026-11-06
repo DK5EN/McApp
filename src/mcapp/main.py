@@ -18,6 +18,7 @@ from typing import Any
 
 # BLE client abstraction - supports local, remote, and disabled modes
 from .ble_client import BLEMode, ConnectionState, create_ble_client
+from .ble_client_remote import register_replay_active, set_wire_log
 from .commands import create_command_handler
 from .commands.constants import CALLSIGN_STRICT_RE
 from .commands.parsing import (
@@ -49,10 +50,10 @@ from .runtime_state import RUNTIME_PATH
 from .runtime_state import (
     save_runtime_state as save_runtime_state,  # noqa: PLC0414 - explicit re-export for mypy
 )
-from .sse_routes.weather import warm_timezone_finder
 from .suppression import get_suppression_reason, should_suppress_outbound
 from .system_converge import converge_watchdog
 from .udp_handler import UDPHandler
+from .wire_log import WireLog, mcproxy_node
 from .wire_monitor import WireMonitor
 
 # Optional imports for new features
@@ -75,6 +76,8 @@ from .qrz_service import QrzLookupService
 from .secret_box import SecretBox
 from .sqlite_storage import SQLiteStorage, create_sqlite_storage
 from .stalls import StallRecorder
+from .storage.uptime import gateway_mode_from_register
+from .text_decode import sanitize_outbound
 from .util import PLACEHOLDER_CALLSIGN_BASES as _PLACEHOLDER_CALLSIGN_BASES
 from .util import now_ms
 
@@ -2227,7 +2230,16 @@ class MessageRouter:
             return "BLE client not available"
 
         try:
-            sent = await client.send_message(normalized_data.get("msg"), normalized_data.get("dst"))
+            ble_msg = normalized_data.get("msg")
+            # CHARS-01: one filter at the BLE write point, covering API and internal callers.
+            if isinstance(ble_msg, str):
+                ble_msg = sanitize_outbound(ble_msg)
+                if not ble_msg:
+                    # Nothing left to send (only controls/bidi); UDP refuses 0 bytes too.
+                    reason = "msg is empty after removing unsupported characters"
+                    await self._publish_send_failed(normalized_data, reason)
+                    return reason
+            sent = await client.send_message(ble_msg, normalized_data.get("dst"))
         except Exception as e:
             self._logger.warning("BLE message send failed: %s", e)
             await self.publish(
@@ -2402,7 +2414,7 @@ class AppContext:
     message_router: MessageRouter
     command_handler: Any
     udp_handler: UDPHandler
-    sse_manager: Any  # SSEManager | None — Any here to avoid a hard fastapi import
+    sse_manager: Any  # SSEManager | None — Any here to avoid a hard web-stack import
     ble_client: Any
     ble_mode: BLEMode
     stall_recorder: StallRecorder
@@ -2471,6 +2483,25 @@ def _log_sn1_via_change(previous: Any, current: dict[str, Any]) -> None:
         logger.debug("BLE via-change logging failed", exc_info=True)
 
 
+async def _record_register_gateway_mode(
+    storage: SQLiteStorage | None, data: dict[str, Any], *, replayed: bool = False
+) -> None:
+    """Feed the `SN` register's `GW` flag to the uptime ledger. Never raises:
+    a failing ledger write must not break register caching. `replayed` marks a
+    frame from ble_service's age-less register cache (possibly stale): it only
+    seeds an unknown mode.
+    """
+    if storage is None:
+        return
+    enabled = gateway_mode_from_register(data)
+    if enabled is None:
+        return
+    try:
+        await storage.record_link_gateway_mode(enabled, now_ms(), seed_only=replayed)
+    except Exception:
+        logger.warning("Gateway-mode ledger write failed", exc_info=True)
+
+
 def _wire_ble_caches(message_router: MessageRouter) -> None:
     """Subscribe the BLE-register/GPS caching handlers used to serve SSE
     reconnects instantly instead of re-querying the device."""
@@ -2483,6 +2514,10 @@ def _wire_ble_caches(message_router: MessageRouter) -> None:
             if typ == "SN1":
                 _log_sn1_via_change(message_router.cached_ble_registers.get("SN1"), data)
             message_router.cached_ble_registers[typ] = data
+        if typ == "SN":
+            await _record_register_gateway_mode(
+                message_router.storage_handler, data, replayed=register_replay_active.get()
+            )
 
     message_router.subscribe("ble_notification", _cache_ble_register)
 
@@ -2730,6 +2765,13 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
 
     message_router = MessageRouter(storage_handler)
     message_router.stall_recorder = stall_recorder
+    # Raw-frame log (Wire record v1): persists every UDP/BLE frame, never pruned.
+    wire_log = WireLog(
+        cfg.storage.wire_log_dir,
+        enabled=cfg.storage.wire_log_enabled,
+        node_provider=lambda: mcproxy_node(message_router.my_callsign or cfg.call_sign),
+    )
+    set_wire_log(wire_log)
     # RF Monitor (docs/rf-monitor-plan.md): one WireMonitor per process,
     # reachable from both the router (TX capture, `_handle_outbound`) and
     # the SSE manager (REST + live `wire:frame` broadcast, wired below once
@@ -2926,6 +2968,7 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
         target_port=MESHCOM_UDP_PORT,
         message_router=message_router,
         runtime_state_path=RUNTIME_PATH,
+        wire_log=wire_log,
     )
     message_router.register_protocol("udp", udp_handler)
 
@@ -2953,7 +2996,7 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
                 sse_manager.set_classifier(classifier)
             classifier.set_event_bus(_ClassifierBus(sse_manager))
     else:
-        logger.warning("FastAPI/Uvicorn not installed — SSE transport unavailable")
+        logger.warning("Starlette/Uvicorn not installed — SSE transport unavailable")
 
     # Start UDP early — before BLE init which can block for seconds on Pi,
     # ensuring the health check finds port 1799 listening promptly.
@@ -3313,19 +3356,8 @@ class _BackgroundTasks:
     sperrliste_task: asyncio.Task[None]
     converge_task: asyncio.Task[None]
     link_uptime_heartbeat_task: asyncio.Task[None]
-    tz_warm_task: asyncio.Task[None]
     qrz_task: asyncio.Task[None]
     internet_feed_task: asyncio.Task[None] | None
-
-
-async def _warm_timezone_finder_later(delay_s: float = 30.0) -> None:
-    """F3a (doc/2026-09-16_0800-stall-data-report.md): the first `/api/timezone`
-    call paid ~3.9 s constructing `TimezoneFinder`. Construct it off the request
-    path, in the thread pool, after startup has settled — the delay keeps it
-    from competing with the BLE hydration and backfills on the Pi Zero's CPU.
-    """
-    await asyncio.sleep(delay_s)
-    await asyncio.to_thread(warm_timezone_finder)
 
 
 def _start_background_tasks(
@@ -3366,7 +3398,6 @@ def _start_background_tasks(
     link_uptime_heartbeat_task = asyncio.create_task(
         _link_uptime_heartbeat(ctx.storage_handler, stop_event)
     )
-    tz_warm_task = asyncio.create_task(_warm_timezone_finder_later())
     # QRZ.com callsign lookup loop (issue #14): idles until credentials exist.
     qrz_task = asyncio.create_task(ctx.qrz_service.run(stop_event))
     # Internet feed loop (meshmap): idles until enabled in Settings > Internet.
@@ -3384,17 +3415,13 @@ def _start_background_tasks(
         sperrliste_task=sperrliste_task,
         converge_task=converge_task,
         link_uptime_heartbeat_task=link_uptime_heartbeat_task,
-        tz_warm_task=tz_warm_task,
         qrz_task=qrz_task,
         internet_feed_task=internet_feed_task,
     )
 
 
 async def _cancel_background_tasks(tasks: _BackgroundTasks) -> None:
-    """Cancel the six long-running loops; backfill tasks are one-shots, left alone.
-    The timezone warm-up is cancelled too: it may still be in its start delay.
-    """
-    tasks.tz_warm_task.cancel()
+    """Cancel the long-running loops; backfill tasks are one-shots, left alone."""
     tasks.prune_task.cancel()
     tasks.classifier_stats_task.cancel()
     tasks.sperrliste_task.cancel()
@@ -3413,8 +3440,6 @@ async def _cancel_background_tasks(tasks: _BackgroundTasks) -> None:
         await tasks.converge_task
     with contextlib.suppress(asyncio.CancelledError):
         await tasks.link_uptime_heartbeat_task
-    with contextlib.suppress(asyncio.CancelledError):
-        await tasks.tz_warm_task
     with contextlib.suppress(asyncio.CancelledError):
         await tasks.qrz_task
     if tasks.internet_feed_task is not None:
@@ -3484,6 +3509,8 @@ async def _shutdown_services(ctx: AppContext) -> None:
         await asyncio.wait_for(ctx.udp_handler.stop_listening(), timeout=SHUTDOWN_TIMEOUT_UDP_S)
     except TimeoutError:
         logger.warning("UDP stop timeout")
+    if ctx.udp_handler.wire_log is not None:
+        await asyncio.to_thread(ctx.udp_handler.wire_log.close)
 
     # Step 4: Stop SSE server if running
     if ctx.sse_manager:

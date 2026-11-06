@@ -40,7 +40,8 @@ import json
 from typing import TYPE_CHECKING, Any, cast
 
 import httpx
-from fastapi import FastAPI, Request
+
+from mcapp.weblite import FastAPI, Request
 
 from .commands.constants import has_console
 from .sse_routes.stalls import build_stalls_router

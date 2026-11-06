@@ -12,7 +12,8 @@ import json
 from typing import Any, cast
 
 import httpx
-from fastapi import FastAPI
+
+from mcapp.weblite import FastAPI
 
 from .classifier import Classifier
 from .classifier_contract import DEFAULT_CONTRACT_PATH, contract_id, load_engine

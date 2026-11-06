@@ -8,9 +8,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, HTTPException
-
 from ..schemas import QrzCredentialsRequest, QrzEnabledRequest
+from ..weblite import APIRouter, HTTPException
 
 if TYPE_CHECKING:
     from ..qrz_service import QrzLookupService

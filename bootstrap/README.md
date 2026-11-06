@@ -162,7 +162,7 @@ sudo journalctl -u mcapp -n 50
 jq '.' /etc/mcapp/config.json
 
 # Check Python venv
-~/mcapp/.venv/bin/python -c "import fastapi, aiohttp; print('OK')"
+~/mcapp/.venv/bin/python -c "import starlette, httpx; print('OK')"
 ```
 
 ### Cannot access web UI

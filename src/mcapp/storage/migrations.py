@@ -946,6 +946,25 @@ class MigrationsMixin(StorageBase):
                     )
                     _set_schema_version(conn, 39)
 
+                if current_version < 40:  # noqa: PLR2004 - schema migration step
+                    # Gateway mode from the SN register's GW flag: NULL = never
+                    # reported; disabled_since_ms is set while the node's gateway
+                    # mode is off (the `disabled` stretch is still open).
+                    conn.execute(
+                        "CREATE TABLE IF NOT EXISTS link_uptime_state ("
+                        "id INTEGER PRIMARY KEY CHECK (id = 1), first_observed_ms INTEGER,"
+                        " last_beacon_ms INTEGER, last_tick_ms INTEGER, open_up_start_ms INTEGER)"
+                    )
+                    have = {r[1] for r in conn.execute("PRAGMA table_info(link_uptime_state)")}
+                    for col in ("gateway_enabled", "disabled_since_ms"):
+                        if col not in have:
+                            conn.execute(f"ALTER TABLE link_uptime_state ADD COLUMN {col} INTEGER")
+                    logger.info(
+                        "Migration v%d → v40: link_uptime_state.gateway_enabled, disabled_since_ms",
+                        current_version,
+                    )
+                    _set_schema_version(conn, 40)
+
         await asyncio.to_thread(_init_db)
 
         # Initialize bucket accumulators from existing signal_log

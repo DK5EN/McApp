@@ -17,7 +17,8 @@ import json
 from typing import Any, cast
 
 import httpx
-from fastapi import FastAPI
+
+from mcapp.weblite import FastAPI
 
 from .commands.constants import has_console
 from .internet_feed_types import InternetFeedSettingsError

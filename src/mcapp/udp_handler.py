@@ -24,13 +24,14 @@ from .ble_protocol import (
 from .commands.parsing import strip_relay_path
 from .logging_setup import get_logger
 from .runtime_state import save_runtime_state
-from .text_decode import decode_and_filter
+from .text_decode import decode_and_filter, filter_unsafe, sanitize_outbound
 from .util import (
     FEET_TO_METERS,
     now_ms,
     undouble_aprs_symbol_escapes,
     unescape_firmware_msg_body,
 )
+from .wire_log import WireLog
 
 logger = get_logger(__name__)
 
@@ -205,6 +206,18 @@ def _strip_non_scalar_fields(message: dict[str, Any]) -> list[str]:
     for key in dropped:
         del message[key]
     return dropped
+
+
+def _filter_parsed_text_fields(message: dict[str, Any]) -> None:
+    """Run `filter_unsafe` over the top-level string values of a parsed datagram.
+
+    The pre-parse pass cannot see JSON escapes (\\u202e, \\u0000, \\n): they only
+    become the real character in json.loads. Idempotent, so filtering twice is
+    harmless.
+    """
+    for key, value in message.items():
+        if isinstance(value, str):
+            message[key] = filter_unsafe(value)
 
 
 def try_repair_json(text: str) -> dict[str, Any]:
@@ -384,14 +397,29 @@ def _is_trusted_node_source(ip_str: str) -> bool:
     return ip.is_private and not ip.is_loopback
 
 
+def _is_empty_text_msg(message: dict[str, Any]) -> bool:
+    """True (and logged at DEBUG) for a `type == "msg"` datagram whose `msg` is
+    empty once the charset filter has run (only zero-width/bidi/C0 characters
+    sent) -- not a chat line. Other frame types are never affected."""
+    if message.get("type") != "msg" or message["msg"].strip():
+        return False
+    logger.debug(
+        "UDP: dropped text message with empty body after charset filter (src=%s dst=%s)",
+        message.get("src"),
+        message.get("dst"),
+    )
+    return True
+
+
 class UDPHandler:
-    def __init__(
+    def __init__(  # noqa: PLR0913, PLR0917 - wire_log is the only addition to a fixed signature
         self,
         listen_port: int,
         target_host: str,
         target_port: int,
         message_router: Any = None,
         runtime_state_path: Path | None = None,
+        wire_log: WireLog | None = None,
     ) -> None:
         """`runtime_state_path=None` (the default) means DO NOT PERSIST a
         learned target — learning, anti-flap and `/api/status` reporting all
@@ -407,6 +435,7 @@ class UDPHandler:
         touches production state says so in its own source
         (`main.build_app`, `runtime_state_path=RUNTIME_PATH`).
         """
+        self.wire_log = wire_log
         self.listen_port = listen_port
         self.target_host = target_host
         self.target_port = target_port
@@ -521,9 +550,17 @@ class UDPHandler:
             if self.listen_socket:
                 self.listen_socket.close()
 
+    def _wire_log_rx(self, data: bytes, addr: tuple[str, int]) -> None:
+        """Persist the raw datagram (Wire record v1) before any decoding."""
+        if self.wire_log is not None:
+            self.wire_log.log("rx", "udp1799", data, f"{addr[0]}:{addr[1]}")
+
     async def _process_received_message(self, data: bytes, addr: tuple[str, int]) -> None:
+        self._wire_log_rx(data, addr)
         text = decode_and_filter(data)
         message: dict[str, Any] = try_repair_json(text)
+
+        _filter_parsed_text_fields(message)
 
         await self._learn_target_from_source(addr, message.get("src") if message else None)
 
@@ -615,6 +652,7 @@ class UDPHandler:
         if (
             isinstance(message, dict)
             and isinstance(message.get("msg"), str)
+            and not _is_empty_text_msg(message)
             and self.message_router
         ):
             await self.message_router.publish("udp", "mesh_message", message)
@@ -958,6 +996,11 @@ class UDPHandler:
         `send_message` directly, so they all route through this same
         try/except, never around it).
         """
+        # CHARS-01: same charset policy as the API model, applied before the
+        # length guard so internal callers (which bypass SendMessageRequest)
+        # are covered and the guard measures what is sent.
+        if isinstance(message_data.get("msg"), str):
+            message_data = {**message_data, "msg": sanitize_outbound(message_data["msg"])}
         violation = _dst_msg_wire_violation(message_data.get("dst"), message_data.get("msg"))
         if violation is not None:
             logger.warning(
@@ -977,6 +1020,10 @@ class UDPHandler:
         )
         try:
             self._ensure_send_socket().sendto(json_data, self.target_address)
+            if self.wire_log is not None:
+                self.wire_log.log(
+                    "tx", "udp1799", json_data, f"{self.target_address[0]}:{self.target_address[1]}"
+                )
         except OSError:
             logger.exception("UDP_SEND failed to %s", self.target_address)
             raise

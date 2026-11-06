@@ -49,7 +49,8 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import httpx
-from fastapi import FastAPI
+
+from mcapp.weblite import FastAPI
 
 from . import command_echo
 from .commands.constants import has_console

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
-from fastapi import APIRouter, HTTPException, Query
+from ..weblite import APIRouter, HTTPException, Query
 
 if TYPE_CHECKING:
     from ..node_console import NodeConsoleSession

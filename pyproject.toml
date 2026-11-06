@@ -1,11 +1,13 @@
 [project]
 name = "mcapp"
-version = "2.1.22"
+version = "2.1.23"
 requires-python = ">=3.11"
 dependencies = [
     "timezonefinder>=6.5.0",
     "httpx>=0.27",
-    "fastapi>=0.115.0",
+    # Not fastapi: +11.5 MB RSS per process over Starlette. src/mcapp/weblite.py is the
+    # small compatible layer the routes use.
+    "starlette>=1.0.0",
     "uvicorn>=0.53.0",
     # uvloop + httptools are what uvicorn's loop/http="auto" picks; listed
     # explicitly instead of the [standard] extra, which also pulls

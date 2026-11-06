@@ -2,7 +2,7 @@
 
 Centralises body validation so each endpoint in ``sse_handler.py`` declares a
 typed model instead of hand-parsing ``request.json()``. Validation errors are
-returned by FastAPI as HTTP 422.
+returned by weblite as HTTP 422.
 """
 
 import re
@@ -18,6 +18,8 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+from .text_decode import sanitize_outbound
 
 _BLE_PIN_MIN = 100_000
 _BLE_PIN_MAX = 999_999
@@ -153,6 +155,19 @@ class SendMessageRequest(BaseModel):
         if match:
             raise ValueError(f"dst contains forbidden character {match.group()!r}")
         return v
+
+    @model_validator(mode="after")
+    def _sanitize_msg_charset(self) -> "SendMessageRequest":
+        """CHARS-01: apply the shared charset policy to chat text BEFORE the
+        byte-length check below, so that check measures what is sent. Only
+        types that put `msg` on the wire as text; "command"/"page_request"
+        are left untouched."""
+        if self.type in _FRAME_SIZE_EXEMPT_TYPES:
+            return self
+        self.msg = sanitize_outbound(self.msg)
+        if not self.msg:
+            raise ValueError("msg is empty after removing unsupported characters")
+        return self
 
     @model_validator(mode="after")
     def _validate_wire_frame_size(self) -> "SendMessageRequest":

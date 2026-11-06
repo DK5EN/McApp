@@ -98,6 +98,9 @@ def _read_text(path: Path) -> str | None:
         return None
 
 
+_MAC_RE = re.compile(r"[0-9A-Fa-f]{2}([:-])(?:[0-9A-Fa-f]{2}\1){4}[0-9A-Fa-f]{2}")
+
+
 def build_identity(
     inputs: IdentityInputs,
     wlan_mac_path: Path = WLAN_MAC_PATH,
@@ -114,8 +117,12 @@ def build_identity(
         identity = {
             "idKind": "ble",
             "call": node_call.strip().upper(),
-            "mac": inputs.ble_mac.strip().upper(),
         }
+        # A CoreBluetooth UUID (macOS) is a per-host handle, never a MAC: omit the key, so
+        # the identity key is `CALL|BLE|` for such hosts. Linux MACs are sent unchanged.
+        ble_addr = inputs.ble_mac.strip()
+        if _MAC_RE.fullmatch(ble_addr):
+            identity["mac"] = ble_addr.upper()
         node_id = reg_i.get("ID")
         if isinstance(node_id, int) and not isinstance(node_id, bool) and node_id >= 0:
             identity["nodeId"] = f"0x{node_id:X}"

@@ -26,7 +26,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter
 from pydantic import BaseModel, Field, field_validator
 
 from ..internet_feed_types import WWW_MESSAGE_TOPIC
@@ -34,6 +33,7 @@ from ..push_delivery import PushDispatcher, load_or_create_vapid
 from ..rm1_shape import is_rm1_frame
 from ..storage.www import www_push_allowed
 from ..util import now_ms
+from ..weblite import APIRouter
 
 if TYPE_CHECKING:
     from ..sse_handler import SSEManager

@@ -1,0 +1,8 @@
+# Generate the hash:  docker run --rm authelia/authelia:4.39.28 authelia crypto hash generate argon2 --password '<pw>'
+users:
+  ct:
+    disabled: false
+    displayname: "Container Test"
+    password: "$argon2id$v=19$m=65536,t=3,p=4$REPLACE"
+    email: ct@air-maxx.net
+    groups: []

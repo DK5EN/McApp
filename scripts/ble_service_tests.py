@@ -85,8 +85,8 @@ from contextlib import suppress
 from typing import Any, cast
 
 from dbus_next.errors import DBusError, InterfaceNotFoundError
-from fastapi import HTTPException
-from fastapi.testclient import TestClient
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.testclient import TestClient
 
 # `ble_service` is an editable workspace member whose .pth does not put it on
 # sys.path globally, and sys.path[0] is this script's own directory whether the
@@ -97,7 +97,7 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from ble_service.src import ble_adapter, node_tz  # noqa: E402 - needs the sys.path bootstrap above
+from ble_service.src import ble_adapter, ble_session, node_tz  # noqa: E402 - needs the sys.path bootstrap above
 from ble_service.src import main as ble_main  # noqa: E402 - same
 from ble_service.src.ble_adapter import (  # noqa: E402 - same
     ADAPTER_INTERFACE,
@@ -111,6 +111,8 @@ from ble_service.src.ble_adapter import (  # noqa: E402 - same
     BLEAdapter,
     ConnectionState,
 )
+from ble_service.src.ble_types import BackendUnsupportedError  # noqa: E402 - same
+from ble_service.src.weblite import HTTPException  # noqa: E402 - same
 
 # Imported directly (not as `ble_main.ConnectionState`/`ble_main.BLEAdapter`)
 # because ble_adapter.py re-exports both into main.py's namespace without an
@@ -160,7 +162,11 @@ class _FakeAdapter:
         connected: bool = False,
         address: str = "AA:BB:CC:DD:EE:FF",
         conn_state: ConnectionState | None = None,
+        identity: tuple[str, str, bool] = ("bluez", "mac", False),
     ) -> None:
+        # identity = (backend name, address kind, pair/unpair unsupported)
+        backend, address_kind, unsupported = identity
+        self._unsupported = unsupported
         resolved_state = conn_state
         if resolved_state is None:
             resolved_state = (
@@ -172,6 +178,32 @@ class _FakeAdapter:
         )
         self.is_connected = connected
         self.is_busy = False  # no test needs a busy adapter; scan/pair routes aren't exercised here
+        # BleBackend identity members the routes read since the macOS backend W4.
+        self.name = backend
+        self.address_kind = address_kind
+        self.capabilities = {"pair": not unsupported, "unpair": not unsupported}
+
+    async def pair(self, address: str) -> bool:
+        if self._unsupported:
+            raise BackendUnsupportedError("pair")
+        return True
+
+    async def unpair(self, address: str) -> bool:
+        if self._unsupported:
+            raise BackendUnsupportedError("unpair")
+        return True
+
+    async def scan(self, timeout: float = 5.0, prefix: str = "") -> list[Any]:  # noqa: ASYNC109 - mirrors BLEAdapter.scan
+        return [_FakeScanned("MC-b878-DK5EN-98", _UUID_ADDR, -70)]
+
+
+class _FakeScanned:
+    def __init__(self, name: str, address: str, rssi: int) -> None:
+        self.name = name
+        self.address = address
+        self.rssi = rssi
+        self.paired = False
+        self.known = False
 
 
 def _with_adapter(name: str | None) -> Callable[[], BLEAdapter]:
@@ -345,6 +377,32 @@ def _test_state_round_trip(record: Any) -> None:
             record(
                 "ble_state: an unresolved name persists as null (honest, not empty string)",
                 stored_null.get("device_name") is None,
+            )
+        finally:
+            ble_main.BLE_STATE_FILE = original_file
+
+
+def _test_state_save_creates_parent_dir(record: Any) -> None:
+    """REGRESSION (CT4a, 2026-10-31): the macOS default state path
+    (`~/Library/Application Support/mcapp-ble/`) does not exist on a fresh
+    host, and both writers opened `<file>.tmp` without creating it, so every
+    connect logged "Failed to save BLE state" and restart auto-connect never
+    worked on macOS. Both writers must create the parent directory.
+    """
+    original_file = ble_main.BLE_STATE_FILE
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        try:
+            ble_main.BLE_STATE_FILE = pathlib.Path(tmp_dir) / "a" / "mcapp-ble" / "ble_state.json"
+            ble_main._save_ble_state("F4FAC724-A414-5DD6-1B9A-EE2C75A723EB", "MC-8968-DK5EN-1")
+            record(
+                "ble_state: _save_ble_state creates a missing parent directory",
+                ble_main._load_ble_state() == "F4FAC724-A414-5DD6-1B9A-EE2C75A723EB",
+            )
+            ble_main.BLE_STATE_FILE = pathlib.Path(tmp_dir) / "b" / "mcapp-ble" / "ble_state.json"
+            ble_main._save_ble_pin(123456)
+            record(
+                "ble_state: _save_ble_pin creates a missing parent directory",
+                ble_main._load_ble_pin() == 123456,
             )
         finally:
             ble_main.BLE_STATE_FILE = original_file
@@ -3567,6 +3625,73 @@ async def _test_ensure_connected_recovers_stale_bond_end_to_end(record: Any) -> 
         await adapter2.disconnect()
 
 
+async def _test_scan_reports_names_resolved_during_scan(record: Any) -> None:
+    """REGRESSION (CT4b, 2026-10-31): the BlueZ scan only reported a device
+    whose Name was already present when GetManagedObjects ran before the scan,
+    or in the InterfacesAdded signal. On rpizero DK5EN-1 (-43 dBm) was missed
+    by every service scan while bluetoothctl saw it at once: a stale nameless
+    object never fires InterfacesAdded again, and a Name that arrives later
+    (scan response, PropertiesChanged) was never read. The scan must re-read
+    the managed objects after discovery and report what got named meanwhile.
+    """
+    adapter = BLEAdapter()
+    path_a = adapter._mac_to_dbus_path("48:CA:43:3A:89:69")
+    path_b = adapter._mac_to_dbus_path("08:F9:E0:D0:41:BA")
+    path_c = adapter._mac_to_dbus_path("B0:81:84:9C:5B:25")
+
+    def dev(name: str, addr: str, rssi: int | None = None) -> dict[str, dict[str, Any]]:
+        props: dict[str, Any] = {
+            "Name": _FakeVariant(name),
+            "Address": _FakeVariant(addr),
+            "Paired": _FakeVariant(False),
+        }
+        if rssi is not None:
+            props["RSSI"] = _FakeVariant(rssi)
+        return {DEVICE_INTERFACE: props}
+
+    obj_mgr = _FakeIface()
+    obj_mgr.returns["call_get_managed_objects"] = {
+        path_a: dev("", "48:CA:43:3A:89:69"),  # stale object, no name yet
+        path_c: dev("MC-5b24-DK5EN-99", "B0:81:84:9C:5B:25"),  # cached, known
+    }
+
+    def _named_during_scan(_n: int) -> None:
+        obj_mgr.returns["call_get_managed_objects"] = {
+            path_a: dev("MC-8968-DK5EN-1", "48:CA:43:3A:89:69", -43),
+            path_b: dev("MC-41b8-DK5EN-92", "08:F9:E0:D0:41:BA", -70),
+            path_c: dev("MC-5b24-DK5EN-99", "B0:81:84:9C:5B:25"),
+        }
+
+    adapter_iface = _FakeIface()
+    adapter_iface.raises["call_start_discovery"] = _named_during_scan
+    adapter.bus = cast(
+        "Any",
+        _FakeBus(
+            {
+                "/": {OBJECT_MANAGER_INTERFACE: obj_mgr},
+                ADAPTER_PATH: {ADAPTER_INTERFACE: adapter_iface},
+            }
+        ),
+    )
+    devices = await adapter.scan(timeout=0.01)
+    by_name = {d.name: d for d in devices}
+    record(
+        "scan: a device named during the scan is reported (stale nameless object)",
+        "MC-8968-DK5EN-1" in by_name
+        and by_name["MC-8968-DK5EN-1"].rssi == -43
+        and not by_name["MC-8968-DK5EN-1"].known,
+    )
+    record(
+        "scan: a device whose Name arrived without InterfacesAdded is reported",
+        "MC-41b8-DK5EN-92" in by_name and by_name["MC-41b8-DK5EN-92"].rssi == -70,
+    )
+    record(
+        "scan: a cached known device is listed once, still known",
+        sum(1 for d in devices if d.name == "MC-5b24-DK5EN-99") == 1
+        and by_name["MC-5b24-DK5EN-99"].known,
+    )
+
+
 async def _test_connect_with_scan_retry(record: Any) -> None:
     """`_connect_with_scan_retry`: device-not-found triggers exactly one
     scan-then-retry; any other failure does not scan at all.
@@ -5973,12 +6098,14 @@ async def _test_mcapp_ensure_connected_forward_route(record: Any) -> None:
     )
 
     disabled_endpoint = _route(_StubManager(_NoEnsureBLE()))
-    raised: HTTPException | None = None
+    # mcapp's route raises mcapp.weblite.HTTPException, a different class from
+    # ble_service's copy; both share this Starlette base.
+    raised: StarletteHTTPException | None = None
     try:
         await disabled_endpoint(
             mcapp_schemas.BleEnsureConnectRequest(device_address=_ENSURE_CONNECTED_TEST_MAC)
         )
-    except HTTPException as e:
+    except StarletteHTTPException as e:
         raised = e
     record(
         "mcapp /api/ble/ensure_connected: a BLE client without ensure_connected() gets a "
@@ -6063,13 +6190,13 @@ class _TzRig:
         self._state = _snapshot_state("ble_adapter")
         self._cache = dict(ble_main.state.register_cache)
         self._env = {k: os.environ.get(k) for k in _TZ_ENV_VARS}
-        self._consts = {k: getattr(ble_adapter, k) for k in _TZ_TIMING_CONSTANTS}
+        self._consts = {k: getattr(ble_session, k) for k in _TZ_TIMING_CONSTANTS}
         for key in _TZ_ENV_VARS:
             os.environ.pop(key, None)
         os.environ.update(self.env)
-        ble_adapter.NODE_TZ_PROBE_TIMEOUT_S = self.probe_timeout
-        ble_adapter.NODE_TZ_VERIFY_TIMEOUT_S = self.verify_timeout
-        ble_adapter.TIME_SYNC_SETTLE_S = 0.0
+        ble_session.NODE_TZ_PROBE_TIMEOUT_S = self.probe_timeout
+        ble_session.NODE_TZ_VERIFY_TIMEOUT_S = self.verify_timeout
+        ble_session.TIME_SYNC_SETTLE_S = 0.0
         ble_main.state.register_cache.clear()
         ble_main.state.ble_adapter = self.adapter
         self.adapter._status.state = ConnectionState.CONNECTED
@@ -6085,7 +6212,7 @@ class _TzRig:
             else:
                 os.environ[key] = value
         for key, const in self._consts.items():
-            setattr(ble_adapter, key, const)
+            setattr(ble_session, key, const)
         ble_main.state.register_cache.clear()
         ble_main.state.register_cache.update(self._cache)
         _restore_state(self._state)
@@ -6193,15 +6320,15 @@ async def _test_node_tz_rule_set_sends_time_only(record: Any) -> None:
         record("node TZ T3: branch is 'rule'", rig.adapter.last_time_sync_branch == "rule")
 
         # The DST loop, ticking fast, must not send anything for this node.
-        original_interval = ble_adapter.DST_CHECK_INTERVAL_S
-        ble_adapter.DST_CHECK_INTERVAL_S = 0.01  # type: ignore[assignment]  # test: tick fast
+        original_interval = ble_session.DST_CHECK_INTERVAL_S
+        ble_session.DST_CHECK_INTERVAL_S = 0.01  # type: ignore[assignment]  # test: tick fast
         try:
             task = asyncio.create_task(rig.adapter._dst_check_loop())
             await asyncio.sleep(0.1)
             rig.adapter._status.state = ConnectionState.DISCONNECTED
             await asyncio.wait_for(task, timeout=2)
         finally:
-            ble_adapter.DST_CHECK_INTERVAL_S = original_interval
+            ble_session.DST_CHECK_INTERVAL_S = original_interval
         record(
             "node TZ T3: the DST loop sends nothing to a node with a rule",
             len(rig.wire) == 1,
@@ -6248,7 +6375,7 @@ async def _test_node_tz_settz_unverified_sends_time_only(record: Any) -> None:
             rig.push("SN1", VIA=True, TZ="")
 
     with _TzRig(registers, env={"MCAPP_NODE_TZ": _CET_RULE}, on_command=node) as rig:
-        adapter_logs, restore_a = _capture_logs(ble_adapter.logger)
+        adapter_logs, restore_a = _capture_logs(ble_session.logger)
         tz_logs, restore_t = _capture_logs(node_tz.logger)
         try:
             ok = await rig.adapter.set_time()
@@ -6331,7 +6458,7 @@ async def _test_node_tz_unclassifiable_sends_time_only(record: Any) -> None:
     """T8: empty cache, the node answers nothing: unknown. 0x20 only, no
     `--utcoff` (UTC is always right), a warning, DST watcher left idle."""
     with _TzRig({}) as rig:
-        logs, restore = _capture_logs(ble_adapter.logger)
+        logs, restore = _capture_logs(ble_session.logger)
         try:
             ok = await rig.adapter.set_time()
         finally:
@@ -6433,7 +6560,7 @@ async def _test_node_tz_failed_probe_write_is_unknown_not_unsupported(record: An
     failing_rig = _TzRig({"SN": {"UTCOF": 2.0}})
     failing_rig.fail_a0 = True
     with failing_rig as rig:
-        logs, restore = _capture_logs(ble_adapter.logger)
+        logs, restore = _capture_logs(ble_session.logger)
         try:
             ok = await rig.adapter.set_time()
         finally:
@@ -6627,6 +6754,178 @@ def _test_node_tz_settime_route_names_branch(record: Any) -> None:
         ble_main.API_KEY = original_key
 
 
+# --- macOS backend W4: main.py integration (bind guard, unsupported ops, address kind) ---
+
+_UUID_ADDR = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
+_MAC_ADDR = "AC:A7:04:06:B8:79"
+
+
+def _test_check_bind_security(record: Any) -> None:
+    """B13: loopback needs no key; a non-loopback bind needs a real (>= 16 char) key."""
+
+    def refused(host: str, key: str) -> bool:
+        try:
+            ble_main._check_bind_security(host, key)
+        except SystemExit:
+            return True
+        return False
+
+    for host in ("127.0.0.1", "localhost", "::1"):
+        record(f"bind guard: loopback {host} allowed with no key", not refused(host, ""))
+    record("bind guard: loopback allowed with 'disabled'", not refused("127.0.0.1", "disabled"))
+    record("bind guard: 0.0.0.0 refused with an empty key", refused("0.0.0.0", ""))  # noqa: S104 - guard input, not a bind
+    record("bind guard: LAN host refused with 'disabled'", refused("192.168.1.5", "disabled"))
+    record("bind guard: LAN host refused with 'DISABLED'", refused("192.168.1.5", "DISABLED"))
+    record("bind guard: LAN host refused with a 15-char key", refused("192.168.1.5", "a" * 15))
+    record("bind guard: LAN host allowed with a 16-char key", not refused("192.168.1.5", "a" * 16))
+    record(
+        "bind guard: 0.0.0.0 allowed with a long key",
+        not refused("0.0.0.0", "supersecretkey1234567"),  # noqa: S104 - guard input, not a bind
+    )
+
+
+def _test_pair_unpair_unsupported_is_http_200(record: Any) -> None:
+    """A backend that cannot pair/unpair answers 200 + success:false + unsupported_on_backend."""
+    original_adapter = _install_fake_adapter(name=None, identity=("bleak", "uuid", True))
+    original_key = ble_main.API_KEY
+    ble_main.API_KEY = ""
+    try:
+        client = TestClient(ble_main.app)
+        for route in ("pair", "unpair"):
+            response = client.post(f"/api/ble/{route}", json={"device_address": _UUID_ADDR})
+            body = response.json()
+            record(f"/api/ble/{route} (unsupported backend): HTTP 200", response.status_code == 200)
+            record(
+                f"/api/ble/{route} (unsupported backend): success false, "
+                "error_code unsupported_on_backend",
+                body.get("success") is False and body.get("error_code") == "unsupported_on_backend",
+            )
+        # A supporting backend is unaffected: plain success, no error_code.
+        ble_main._adapter = cast("Callable[[], BLEAdapter]", lambda: _FakeAdapter(None))
+        body = client.post("/api/ble/pair", json={"device_address": _MAC_ADDR}).json()
+        record(
+            "/api/ble/pair (supporting backend): success true, no error_code",
+            body.get("success") is True and body.get("error_code") is None,
+        )
+    finally:
+        ble_main._adapter = original_adapter
+        ble_main.API_KEY = original_key
+
+
+def _test_load_ble_state_ignores_wrong_address_kind(record: Any) -> None:
+    """A saved address of the other kind (MAC vs CoreBluetooth UUID) is ignored, a match kept."""
+    original_file = ble_main.BLE_STATE_FILE
+    original_adapter = ble_main.state.ble_adapter
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        ble_main.BLE_STATE_FILE = pathlib.Path(tmp_dir) / "ble_state.json"
+        try:
+            for kind, saved, other_saved in (
+                ("mac", _MAC_ADDR, _UUID_ADDR),
+                ("uuid", _UUID_ADDR, _MAC_ADDR),
+            ):
+                ble_main.state.ble_adapter = cast(
+                    "BLEAdapter",
+                    _FakeAdapter(
+                        None, identity=("bluez" if kind == "mac" else "bleak", kind, False)
+                    ),
+                )
+                ble_main._save_ble_state(saved, "MC-node")
+                record(
+                    f"_load_ble_state: a saved {kind} address is kept on a {kind} backend",
+                    ble_main._load_ble_state() == saved,
+                )
+                ble_main._save_ble_state(other_saved, "MC-node")
+                record(
+                    f"_load_ble_state: a saved address of the wrong kind is ignored on a {kind} "
+                    "backend",
+                    ble_main._load_ble_state() is None,
+                )
+        finally:
+            ble_main.BLE_STATE_FILE = original_file
+            ble_main.state.ble_adapter = original_adapter
+
+
+def _test_backend_identity_keys_and_legacy_keys(record: Any) -> None:
+    """/health, status and devices carry the new backend keys, and every old key survives."""
+    legacy_health = {"status", "ble_connected", "timestamp"}
+    legacy_status = {
+        "connected",
+        "state",
+        "device_address",
+        "device_name",
+        "last_activity",
+        "error",
+        "reconnecting",
+        "reconnect_attempt",
+        "reconnect_max_attempts",
+    }
+    legacy_device = {"name", "address", "rssi", "paired", "known"}
+    original_adapter = _install_fake_adapter(
+        name="MC-b878-DK5EN-98", identity=("bleak", "uuid", False), address=_UUID_ADDR
+    )
+    original_state_adapter = ble_main.state.ble_adapter
+    ble_main.state.ble_adapter = cast(
+        "BLEAdapter",
+        _FakeAdapter(
+            "MC-b878-DK5EN-98",
+            identity=("bleak", "uuid", True),
+            address=_UUID_ADDR,
+        ),
+    )
+    original_key = ble_main.API_KEY
+    ble_main.API_KEY = ""
+    try:
+        client = TestClient(ble_main.app)
+
+        health = client.get("/health").json()
+        record("/health: every pre-existing key still present", legacy_health <= set(health))
+        record(
+            "/health: backend / platform / address_kind / capabilities present and correct",
+            health.get("backend") == "bleak"
+            and health.get("platform") == sys.platform
+            and health.get("address_kind") == "uuid"
+            and health.get("capabilities") == {"pair": False, "unpair": False},
+        )
+
+        status = client.get("/api/ble/status").json()
+        record(
+            "/api/ble/status: every pre-existing key still present", legacy_status <= set(status)
+        )
+        record(
+            "/api/ble/status: address_kind present and correct",
+            status.get("address_kind") == "uuid",
+        )
+
+        devices = client.get("/api/ble/devices").json()
+        record(
+            "/api/ble/devices: count and devices keys kept", {"devices", "count"} <= set(devices)
+        )
+        entry = (devices.get("devices") or [{}])[0]
+        record(
+            "/api/ble/devices: every pre-existing device key still present",
+            legacy_device <= set(entry),
+        )
+        record(
+            "/api/ble/devices: address_kind present and correct on each device",
+            entry.get("address_kind") == "uuid",
+        )
+
+        # No adapter yet (before lifespan): health must not crash and reports nulls.
+        ble_main.state.ble_adapter = None
+        bare = client.get("/health").json()
+        record(
+            "/health: no adapter yet reports backend/address_kind None, capabilities {}",
+            bare.get("backend") is None
+            and bare.get("address_kind") is None
+            and bare.get("capabilities") == {}
+            and legacy_health <= set(bare),
+        )
+    finally:
+        ble_main._adapter = original_adapter
+        ble_main.state.ble_adapter = original_state_adapter
+        ble_main.API_KEY = original_key
+
+
 async def run_ble_service_tests() -> bool:
     """Run the ble_service suite. True iff every case passed.
 
@@ -6644,9 +6943,14 @@ async def run_ble_service_tests() -> bool:
         if has_console:
             print(f"{'✅ PASS' if ok else '❌ FAIL'} | {label}")
 
-    _test_resolved_device_name(_record)
-    _test_state_round_trip(_record)
-    _test_auto_reconnect_persists_the_name(_record)
+    # Tuple loop (sync cases) to stay under ruff's PLR0915 statement cap.
+    for state_case in (
+        _test_resolved_device_name,
+        _test_state_round_trip,
+        _test_state_save_creates_parent_dir,
+        _test_auto_reconnect_persists_the_name,
+    ):
+        state_case(_record)
     _test_api_key_valid(_record)
     _test_auth_boundary_via_testclient(_record)
     # D{...} register-frame decode/repair coverage. Tuple loop (all sync
@@ -6714,6 +7018,7 @@ async def run_ble_service_tests() -> bool:
         _test_set_callsign_golden_bytes,
         _test_set_callsign_length_validation,
         _test_connect_with_scan_retry,
+        _test_scan_reports_names_resolved_during_scan,
         _test_ensure_connected_already_connected_is_noop,
         _test_ensure_connected_happy_path_sets_trusted,
         _test_ensure_connected_gatt_security_pairs_then_resumes,
@@ -6765,7 +7070,12 @@ async def run_ble_service_tests() -> bool:
         await case(_record)
 
     # Node time zone (TZ-01 firmware): node_tz.py + set_time() branching.
+    # Also macOS backend W4: main.py integration (bind guard, unsupported ops, address kind).
     for sync_case in (
+        _test_check_bind_security,
+        _test_pair_unpair_unsupported_is_http_200,
+        _test_load_ble_state_ignores_wrong_address_kind,
+        _test_backend_identity_keys_and_legacy_keys,
         _test_node_tz_host_posix_tz_reads_footer,
         _test_node_tz_validate_vectors,
         _test_node_tz_env_override_and_policy,

@@ -365,6 +365,33 @@ class _FakeBLEClient:
         return self._result
 
 
+async def _test_ble_send_charset_filtered(record: Callable[[str, bool], None]) -> None:
+    """CHARS-01: an internal BLE send (published straight to `ble_message`,
+    bypassing SendMessageRequest) reaches the BLE write path filtered."""
+    router = MessageRouter(None)
+    router.set_callsign("DK5EN")
+    client = _FakeBLEClient(result=True)
+    router.register_protocol("ble_client", client)
+    await router.publish(
+        "sse", "ble_message", {"src": "DK5EN", "dst": "20", "msg": "Hi\nthe\x00re\u202e Zażółć €"}
+    )
+    record(
+        "BLE internal send: NUL/U+202E removed, newline -> space at the BLE write path",
+        client.calls == [("Hi there Zażółć €", "20")],
+    )
+
+
+async def _test_ble_send_empty_after_filter_not_sent(record: Callable[[str, bool], None]) -> None:
+    """CHARS-01: an internal BLE send that is empty after the filter never reaches
+    the BLE write path (UDP refuses 0-byte msgs the same way)."""
+    router = MessageRouter(None)
+    router.set_callsign("DK5EN")
+    client = _FakeBLEClient(result=True)
+    router.register_protocol("ble_client", client)
+    await router.publish("sse", "ble_message", {"src": "DK5EN", "dst": "20", "msg": "\x00\u202e"})
+    record("BLE internal send: empty after filter is not written to BLE", client.calls == [])
+
+
 async def _test_ble_send_failure_surfaces_and_preserves_fanout(
     record: Callable[[str, bool], None],
 ) -> None:
@@ -672,6 +699,8 @@ async def run_send_path_tests() -> bool:
     # 13. TX-04: a failing BLE send (False return, exception, or no client)
     #     surfaces the same way the UDP path does; a successful send stays silent.
     await _test_ble_send_failure_surfaces_and_preserves_fanout(_record)
+    await _test_ble_send_charset_filtered(_record)
+    await _test_ble_send_empty_after_filter_not_sent(_record)
 
     passed = sum(1 for _, ok in results if ok)
     total = len(results)

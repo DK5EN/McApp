@@ -429,14 +429,288 @@ def _test_probe() -> None:
     _check(not _probe(dead), "probe rejects a closed port")
 
 
+def _block(text: str, header: str) -> str | None:
+    """Body of the first `<header> {` block (brace-matched), or None."""
+    m = re.search(re.escape(header) + r"\s*\{", text)
+    if m is None:
+        return None
+    depth = 1
+    i = m.end()
+    while i < len(text) and depth:
+        depth += {"{": 1, "}": -1}.get(text[i], 0)
+        i += 1
+    return text[m.end() : i - 1]
+
+
+def _test_webapp_routes() -> None:
+    """Caddy serves the SPA itself: pre-compressed, immutable assets, no-cache shell."""
+    templates = sorted(_TEMPLATE.parent.glob("Caddyfile.*"))
+    _check(len(templates) == 4, f"four Caddyfile templates exist (found {len(templates)})")
+    for tmpl in templates:
+        text = tmpl.read_text(encoding="utf-8")
+        name = tmpl.name
+        _check("precompressed br gzip" in text, f"{name}: file_server uses `precompressed br gzip`")
+        _check(
+            "reverse_proxy 127.0.0.1:8082" not in text,
+            f"{name}: no reverse_proxy to lighttpd on 127.0.0.1:8082 remains",
+        )
+        _check(
+            not re.search(r"^\s*encode\b", text, re.MULTILINE),
+            f"{name}: no on-the-fly `encode` directive (sidecars only)",
+        )
+        assets = _block(text, "handle /webapp/assets/*")
+        if _check(assets is not None, f"{name}: has a /webapp/assets/* handler") and assets:
+            _check(
+                "public, max-age=31536000, immutable" in assets,
+                f"{name}: assets are Cache-Control immutable",
+            )
+            _check(
+                "try_files" not in assets,
+                f"{name}: assets have NO SPA fallback (a missing asset is a real 404)",
+            )
+            # Seen on real Caddy: a bare `header` also stamps the 404, so a browser could
+            # keep a missing asset's failure for a year.
+            _check(
+                re.search(r"@asset_exists file\s", assets) is not None
+                and 'header @asset_exists Cache-Control "public' in assets,
+                f"{name}: immutable applies only to an asset that exists",
+            )
+        shell = _block(text, "handle @spa")
+        if _check(shell is not None, f"{name}: has a shell (@spa) handler") and shell:
+            _check('Cache-Control "no-cache"' in shell, f"{name}: shell is Cache-Control no-cache")
+            # Seen on real Caddy: Go's MIME table has no .webmanifest on this box, so
+            # file_server sent no Content-Type where lighttpd sent the right one.
+            _check(
+                "@manifest path *.webmanifest" in shell
+                and 'header @manifest Content-Type "application/manifest+json"' in shell,
+                f"{name}: the web manifest has an explicit Content-Type",
+            )
+            _check(
+                re.search(r"try_files\s+\{path\}\s+/webapp/index\.html", shell) is not None,
+                f"{name}: shell falls back to /webapp/index.html via try_files",
+            )
+        _check(
+            re.search(r"@spa path /webapp /webapp/\*", text) is not None,
+            f"{name}: @spa matches /webapp and every deep route under it",
+        )
+        _check(
+            re.search(r"handle\s*\{\s*respond [^\n]*404", text) is not None,
+            f"{name}: anything else is a plain 404",
+        )
+        for route in ("/api/*", "/events*", "/health*", "/update-stream"):
+            _check(f"handle {route}" in text, f"{name}: still has the {route} handler")
+    mcapp = _TEMPLATE.read_text(encoding="utf-8")
+    _check("handle /root.crt" in mcapp, "Caddyfile.mcapp keeps the /root.crt handler")
+    _check("redir * /webapp/" in mcapp, "Caddyfile.mcapp redirects / to /webapp/")
+    _check(
+        _declared_version() == "4"
+        and re.search(r"mcapp-caddy-config-version:\s*4\b", mcapp) is not None,
+        "Caddyfile.mcapp marker and CADDY_CONFIG_VERSION are both 4",
+    )
+
+
+# ── 4. configure_caddy() must roll back a restart that fails after validate ──
+
+_ROLLBACK_DRIVER = """set -eo pipefail
+set -u
+T="$1"; OLD="$2"; TLS="$3"; MODE="$4"
+source "{packages_sh}"
+fn=$(cat "$T/configure_caddy.sh")
+eval "$fn"
+CONFIG_FILE="$T/config.json"
+caddy() {{
+  if [[ -f "$T/installed_invalid" && "$*" == *"etc/caddy/Caddyfile"* ]]; then return 1; fi
+  return 0
+}}
+journalctl() {{ return 0; }}
+log_info() {{ :; }}; log_ok() {{ :; }}; log_warn() {{ :; }}
+log_error() {{ echo "ERROR: $*" >&2; }}
+caddy_render_host() {{ echo mcapp; }}
+pick_caddy_template() {{ echo "$T/tmpl"; }}
+publish_caddy_root_crt() {{ :; }}
+systemctl() {{
+  case "$1" in
+    restart)
+      echo r >> "$T/restarts"
+      if [[ ! -f "$T/allow_new" ]] && grep -q NEWCONF "$T/etc/caddy/Caddyfile"; then
+        rm -f "$T/active"; return 1
+      fi
+      touch "$T/active"; return 0 ;;
+    is-active) [[ -f "$T/active" ]] ;;
+    *) return 0 ;;
+  esac
+}}
+mkdir -p "$T/etc/caddy"
+if [[ "$OLD" != "-" ]]; then printf '%s\\n' "$OLD" > "$T/etc/caddy/Caddyfile"; fi
+if [[ "$TLS" == "tls" ]]; then echo '{{"TLS_ENABLED": true}}' > "$T/config.json"; fi
+case "$MODE" in
+  # The real caller at mcapp.sh --skip runs it bare, with errexit live.
+  bare) trap 'echo "rc=$?"' EXIT; configure_caddy; exit 0 ;;
+  second-run) configure_caddy || true; touch "$T/allow_new" ;;
+  installed-invalid) touch "$T/installed_invalid" ;;
+esac
+rc=0
+configure_caddy || rc=$?
+echo "rc=$rc"
+"""
+
+
+def _run_configure_caddy(
+    old: str | None, *, restart_fails: bool, tls: bool = False, mode: str = "guarded"
+) -> tuple[int, str | None, int, bool] | None:
+    """Drive the real configure_caddy() against a sandbox instead of /etc/caddy.
+
+    Returns (rc, Caddyfile content afterwards, restart count, leftover backup).
+    The new template carries the NEWCONF marker the restart stub refuses.
+    """
+    assert _BASH is not None
+    current = _declared_version()
+    source = _PACKAGES_SH.read_text(encoding="utf-8")
+    match = re.search(r"^configure_caddy\(\) \{\n.*?^\}$", source, re.MULTILINE | re.DOTALL)
+    if match is None or current is None:
+        return None
+    with tempfile.TemporaryDirectory() as raw:
+        t = Path(raw)
+        (t / "configure_caddy.sh").write_text(
+            match.group(0).replace("/etc/caddy", f"{t}/etc/caddy"), encoding="utf-8"
+        )
+        body = "NEWCONF" if restart_fails else "FRESHCONF"
+        (t / "tmpl").write_text(
+            f"# mcapp-caddy-config-version: {current} host=@@HOST@@\n{body}\n", encoding="utf-8"
+        )
+        driver = t / "driver.sh"
+        driver.write_text(_ROLLBACK_DRIVER.format(packages_sh=_PACKAGES_SH), encoding="utf-8")
+        res = subprocess.run(  # noqa: S603 - fixed argv, _BASH is a resolved absolute path
+            [
+                _BASH,
+                str(driver),
+                str(t),
+                old if old is not None else "-",
+                "tls" if tls else "lan",
+                mode,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        m = re.search(r"rc=(\d+)", res.stdout)
+        if m is None:
+            print(f"    driver output: {res.stdout!r} {res.stderr[-300:]!r}")
+            return None
+        conf = t / "etc" / "caddy" / "Caddyfile"
+        restarts = (t / "restarts").read_text().count("r") if (t / "restarts").exists() else 0
+        leftovers = any(f.name != "Caddyfile" for f in conf.parent.iterdir())
+        return (
+            int(m.group(1)),
+            conf.read_text(encoding="utf-8") if conf.exists() else None,
+            restarts,
+            leftovers,
+        )
+
+
+def _test_rollback() -> None:
+    if not _check(_BASH is not None, "bash is available to drive configure_caddy()"):
+        return
+    current = _declared_version()
+    if current is None:
+        _check(False, "CADDY_CONFIG_VERSION is readable from packages.sh")
+        return
+    old = f"# mcapp-caddy-config-version: {int(current) - 1} host=mcapp\nOLDCONF"
+
+    bare = _run_configure_caddy(old, restart_fails=True, mode="bare")
+    _check(
+        bare is not None
+        and bare[0] == 1
+        and bare[1] is not None
+        and "OLDCONF" in bare[1]
+        and bare[2] == 2
+        and not bare[3],
+        "a failed restart rolls back with errexit live (the bare mcapp.sh caller)",
+    )
+    second = _run_configure_caddy(old, restart_fails=True, mode="second-run")
+    _check(
+        second is not None
+        and second[0] == 0
+        and second[1] is not None
+        and "NEWCONF" in second[1]
+        and second[2] == 3
+        and not second[3],
+        "after a rollback the next run retries the upgrade",
+    )
+    damaged = _run_configure_caddy(old, restart_fails=False, mode="installed-invalid")
+    _check(
+        damaged is not None
+        and damaged[0] == 1
+        and damaged[1] is not None
+        and "OLDCONF" in damaged[1]
+        and damaged[2] == 0
+        and not damaged[3],
+        "a damaged install is rolled back and fails, so the epoch does not advance",
+    )
+
+    failed = _run_configure_caddy(old, restart_fails=True)
+    _check(
+        failed is not None
+        and failed[0] == 1
+        and failed[1] is not None
+        and "OLDCONF" in failed[1]
+        and "NEWCONF" not in failed[1]
+        and failed[2] == 2
+        and not failed[3],
+        "failed restart: old Caddyfile restored, Caddy restarted again, still rc=1, "
+        f"backup removed ({failed})",
+    )
+
+    ok = _run_configure_caddy(old, restart_fails=False)
+    _check(
+        ok is not None
+        and ok[0] == 0
+        and ok[1] is not None
+        and "FRESHCONF" in ok[1]
+        and ok[2] == 1
+        and not ok[3],
+        f"successful restart: new Caddyfile kept, backup removed ({ok})",
+    )
+
+    first = _run_configure_caddy(None, restart_fails=False)
+    _check(
+        first is not None and first[0] == 0 and first[1] is not None and "FRESHCONF" in first[1],
+        f"first install with no old Caddyfile still works ({first})",
+    )
+
+    first_bad = _run_configure_caddy(None, restart_fails=True)
+    _check(
+        first_bad is not None and first_bad[0] == 1 and first_bad[2] == 1 and not first_bad[3],
+        f"first install with a failing restart: rc=1, no restore attempt, no backup ({first_bad})",
+    )
+
+    if shutil.which("jq") is None:
+        print("    (jq not on PATH - TLS_ENABLED check skipped: NOT VERIFIED here)")
+        return
+    tls_conf = "TLSPROVIDERCONF"
+    tls = _run_configure_caddy(tls_conf, restart_fails=True, tls=True)
+    _check(
+        tls is not None
+        and tls[0] == 0
+        and tls[1] is not None
+        and tls[1].strip() == tls_conf
+        and tls[2] == 0
+        and not tls[3],
+        f"TLS_ENABLED box: Caddyfile untouched, no restart, no backup ({tls})",
+    )
+
+
 def run_caddy_config_tests() -> bool:
     """Run the suite. Returns True when every check passed."""
     print("\n🧪 Testing Caddy front-door config (template, caddy_site, probe):")
     _failures.clear()
     _test_template()
+    _test_webapp_routes()
     _test_caddy_site()
     _test_template_pick()
     _test_probe()
+    _test_rollback()
     if _failures:
         print(f"\n  {len(_failures)} check(s) failed:")
         for failure in _failures:

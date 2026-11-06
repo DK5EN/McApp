@@ -36,7 +36,8 @@ from pathlib import Path
 from typing import Any, cast
 
 import httpx
-from fastapi import FastAPI
+
+from mcapp.weblite import FastAPI
 
 from .commands.constants import has_console
 from .node_admin_service import NodeAdminService

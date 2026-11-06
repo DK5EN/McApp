@@ -37,6 +37,7 @@ import contextlib
 import hmac
 import json
 import logging
+import sys
 import tempfile
 import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -712,6 +713,40 @@ async def _status(manager: Any) -> dict[str, Any]:
     return result
 
 
+_DRAIN_PROBE = """
+import asyncio
+from types import SimpleNamespace
+from mcapp.node_admin_service import NodeAdminService
+
+async def main() -> None:
+    tasks = set()
+    done = asyncio.get_running_loop().create_future()
+    done.set_result(None)
+    tasks.add(done)
+    done.add_done_callback(tasks.discard)  # finished, its discard still queued
+    await NodeAdminService.drain(SimpleNamespace(_tasks=tasks))
+    print("drained")
+
+asyncio.run(main())
+"""
+
+
+async def case_w9_drain_yields(record: Record) -> None:
+    """gather() over finished tasks returns without yielding, so a drain loop that never
+    yields cannot let the queued discard run and hangs the suite. It spins on the event
+    loop, so wait_for cannot stop it: the probe needs its own process."""
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", _DRAIN_PROBE, stdout=asyncio.subprocess.PIPE
+    )
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
+    except TimeoutError:
+        proc.kill()
+        await proc.wait()
+        out = b"hung"
+    record("W9 drain finishes when a done task's callback is still queued", b"drained" in out)
+
+
 async def case_w6_features(record: Record) -> None:
     router = MessageRouter(None)
     router.set_callsign(ATTACHED)
@@ -823,6 +858,7 @@ async def run_node_admin_wiring_tests() -> bool:
         case_w6_features,
         case_w7_monitor_and_debug,
         case_w8_always_on,
+        case_w9_drain_yields,
     ]
     for case in cases:
         try:

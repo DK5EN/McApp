@@ -688,6 +688,30 @@ download_webapp() {
 # PYTHON ENVIRONMENT (uv sync --all-packages --no-dev)
 #──────────────────────────────────────────────────────────────────
 
+# uv sync does not compile bytecode, and the /api/timezone worker is a fresh
+# child per lookup (src/mcapp/tz_lookup_worker.py): measured on the Pi, the
+# first run costs 6.56 s (numpy + timezonefinder compiled on import) against
+# 1.64 s once the .pyc files exist, with an 8 s request deadline. Run it once
+# here, as the slot user, so the first real request is already the fast one.
+# BEST EFFORT: never fails the deploy. No timezonefinder (container, trimmed
+# install) just makes the worker exit 3, which is harmless.
+warm_tz_worker_bytecode() {
+  local deploy_target="$1"
+  local run_user="$2"
+  local py="${deploy_target}/.venv/bin/python"
+  local worker="src/mcapp/tz_lookup_worker.py"
+
+  [[ -x "$py" && -f "${deploy_target}/${worker}" ]] || return 0
+
+  if [[ "$run_user" != "root" ]]; then
+    sudo -u "$run_user" bash -c "cd '${deploy_target}' && '${py}' -I '${worker}' 48 11" \
+      >/dev/null 2>&1 || true
+  else
+    (cd "$deploy_target" && "$py" -I "$worker" 48 11) >/dev/null 2>&1 || true
+  fi
+  return 0
+}
+
 setup_python_env() {
   local deploy_target="${1:-$INSTALL_DIR}"
 
@@ -760,6 +784,7 @@ setup_python_env() {
 
   if [[ "$sync_ok" == "true" ]]; then
     log_ok "  Python environment ready (including workspace members)"
+    warm_tz_worker_bytecode "$deploy_target" "$run_user"
   else
     log_error "  uv sync --all-packages --no-dev failed"
     return 1

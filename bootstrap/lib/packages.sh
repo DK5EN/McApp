@@ -366,7 +366,7 @@ install_uv() {
 # changes, so upgraded installs actually pick up the new config (see
 # configure_lighttpd() below for why this replaced a "contains
 # Cache-Control" substring check).
-readonly LIGHTTPD_MCAPP_CONF_VERSION=3
+readonly LIGHTTPD_MCAPP_CONF_VERSION=4
 
 install_lighttpd() {
   log_info "Installing lighttpd..."
@@ -477,6 +477,11 @@ configure_lighttpd() {
 # ports 80/443 (see install_caddy()/configure_caddy() below and
 # bootstrap/templates/caddy/Caddyfile.mcapp) and passes headers through
 # unchanged — Cache-Control policy is owned here, not in Caddy.
+#
+# v4: Caddy (Caddyfile.mcapp v4) now serves the webapp itself and no longer
+# proxies here. lighttpd is deliberately kept installed and running because
+# public-TLS Caddyfiles on existing boxes and an older slot's mcapp.sh still
+# proxy to it. This file only matters for that legacy path.
 
 server.modules += ("mod_rewrite", "mod_redirect", "mod_proxy", "mod_setenv")
 
@@ -503,10 +508,11 @@ $HTTP["url"] =~ "^/webapp/" {
     )
 }
 
-# index.html, sw.js, manifest.webmanifest, version.html must always
+# /webapp/ (the bare directory URL, rewritten to index.html below), index.html,
+# sw.js, manifest.webmanifest, version.html must always
 # revalidate so new hashed bundles / PWA manifest / version marker are
 # picked up on deploy
-$HTTP["url"] =~ "/webapp/(index\.html|sw\.js|manifest\.webmanifest|version\.html)$" {
+$HTTP["url"] =~ "/webapp/(index\.html|sw\.js|manifest\.webmanifest|version\.html)?$" {
     setenv.add-response-header += ( "Cache-Control" => "no-cache" )
 }
 # content-hashed assets are safe to cache hard
@@ -566,7 +572,7 @@ EOF
 # LIGHTTPD_MCAPP_CONF_VERSION above). Keep this number in sync with the
 # "mcapp-caddy-config-version:" comment in
 # bootstrap/templates/caddy/Caddyfile.mcapp.
-readonly CADDY_CONFIG_VERSION=3
+readonly CADDY_CONFIG_VERSION=4
 
 # Short hostname the Caddyfile template is rendered with (@@HOST@@). Falls back
 # to "mcapp" when `hostname -s` is empty or is not a valid DNS label: an empty
@@ -782,6 +788,12 @@ configure_caddy() {
   # only an explicit `caddy validate` failure or removal brings this
   # default back, see remove_tls() in ssl-tunnel-setup.sh.
   local rewrote=false
+  # Copy of the Caddyfile we are about to replace, so a restart that fails AFTER
+  # validate (port clash, an older caddy build, a runtime-only error) can be
+  # rolled back instead of leaving the site down with the only good config
+  # overwritten. A fixed sibling path: a leak is overwritten, never accumulates.
+  local caddy_backup="${caddy_conf}.mcapp-prev"
+  rm -f "$caddy_backup"
   if [[ -f "$caddy_conf" ]] && grep -qF "$version_marker" "$caddy_conf" 2>/dev/null; then
     log_info "  Caddyfile already up to date (${version_marker})"
   else
@@ -842,6 +854,10 @@ configure_caddy() {
       return 0
     fi
 
+    # First install: no old file, nothing to back up (and nothing to roll back to).
+    if [[ -f "$caddy_conf" ]]; then
+      cp -p "$caddy_conf" "$caddy_backup" 2>/dev/null || rm -f "$caddy_backup"
+    fi
     install -m 644 "$staged" "$caddy_conf"
     rm -f "$staged"
     rewrote=true
@@ -855,6 +871,16 @@ configure_caddy() {
   if ! HOME=/root caddy validate --config "$caddy_conf" --adapter caddyfile &>/dev/null; then
     log_warn "  Caddy config validation failed — leaving caddy service as-is"
     log_warn "  Run: caddy validate --config ${caddy_conf} --adapter caddyfile"
+    # The staged copy validated, so the installed one is damaged (partial install,
+    # full disk). Keep the old file and fail: returning 0 would advance the epoch
+    # and Caddy would die on this file at its next restart.
+    if [[ "$rewrote" == "true" && -f "$caddy_backup" ]]; then
+      log_warn "  Restoring the previous Caddyfile"
+      install -m 644 "$caddy_backup" "$caddy_conf"
+      rm -f "$caddy_backup"
+      return 1
+    fi
+    rm -f "$caddy_backup"
     return 0
   fi
 
@@ -876,10 +902,24 @@ configure_caddy() {
     # default Caddyfile is fully replaced.
     if systemctl restart caddy 2>/dev/null && systemctl is-active --quiet caddy; then
       log_ok "  Caddy (re)started — serving :80 + :443"
+      rm -f "$caddy_backup"
     else
       log_error "  Caddy failed to start / bind :80/:443 (is another server on :80?)"
       log_error "  Check: systemctl status caddy ; journalctl -u caddy -n 30"
       journalctl -u caddy --no-pager -n 20 2>/dev/null || true
+      # Roll back to the config that was serving before this run and bring Caddy
+      # up on it. Still a failure (return 1): the epoch must not advance on a
+      # box that did not take the new front door.
+      if [[ "$rewrote" == "true" && -f "$caddy_backup" ]]; then
+        log_warn "  Restoring the previous Caddyfile"
+        install -m 644 "$caddy_backup" "$caddy_conf"
+        if systemctl restart caddy 2>/dev/null && systemctl is-active --quiet caddy; then
+          log_warn "  Previous Caddyfile restored — Caddy is serving the old config again"
+        else
+          log_error "  Caddy did not start on the previous Caddyfile either"
+        fi
+      fi
+      rm -f "$caddy_backup"
       return 1
     fi
   else

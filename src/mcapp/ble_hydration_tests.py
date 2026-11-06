@@ -59,8 +59,7 @@ import warnings
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any, cast
 
-from fastapi import HTTPException
-from fastapi.routing import APIRoute
+from mcapp.weblite import APIRoute, HTTPException
 
 from . import ble_client_remote as ble_client_remote_module
 from . import main as main_module
@@ -1879,6 +1878,45 @@ async def _test_raw_format_fragment_dropped(record: _RecordFn) -> None:
     )
 
 
+async def _test_empty_text_frame_not_undecodable(record: _RecordFn) -> None:
+    """CHARS-01: a binary text frame whose body is empty after the charset
+    filter is dropped on purpose by the dispatcher. It must publish nothing AND
+    must not be counted (or WARNING-logged) as an undecodable notification."""
+    from . import ble_protocol_tests as bpt
+
+    stub_router = _RecordingRouter()
+    client = BLEClientRemote("http://127.0.0.1:9", message_router=stub_router)
+    frame = bpt._build_data_frame(
+        bpt.MSG_TYPE_BYTE,
+        bpt.MSG_MSG_ID,
+        bpt.MSG_MAX_HOP_RAW,
+        bpt.MSG_PATH.encode() + bpt.MSG_DEST.encode() + b":\xe2\x80\x8b\xe2\x81\xa6",
+        (
+            bpt.MSG_HARDWARE_ID,
+            bpt.MSG_LORA_MOD,
+            bpt.MSG_FW,
+            bpt.MSG_LASTHW,
+            bpt.MSG_FW_SUB_BYTE,
+            bpt.MSG_ENDING,
+            bpt.MSG_TIME_MS,
+        ),
+    )
+    before = _undecodable_count()
+    await client._handle_notification(
+        json.dumps(
+            {
+                "format": "binary",
+                "raw_base64": base64.b64encode(frame).decode("ascii"),
+                "timestamp": 1,
+            }
+        )
+    )
+    record(
+        "empty-after-filter text frame: nothing published, drop counter unchanged",
+        _ble_notification_publishes(stub_router) == [] and _undecodable_count() == before,
+    )
+
+
 async def _test_valid_frame_still_publishes(record: _RecordFn) -> None:
     """Guard against over-dropping: a genuinely decodable JSON notification
     (TYP the dispatcher recognizes) must still reach 'ble_notification'."""
@@ -2065,6 +2103,7 @@ async def run_ble_hydration_tests() -> bool:  # noqa: PLR0915 - sequential test-
         await _test_undecodable_binary_dropped(_record)
         await _test_raw_format_fragment_dropped(_record)
         await _test_valid_frame_still_publishes(_record)
+        await _test_empty_text_frame_not_undecodable(_record)
         await _test_unknown_typ_dropped(_record)
         await _test_finalize_transformed_output_node_rx_ts(_record)
         await _test_save_and_reboot_uses_save_endpoint(_record)

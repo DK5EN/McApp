@@ -1,0 +1,6 @@
+{
+  "CALL_SIGN": "DK5EN-1",
+  "MESHCOM_IOT_TARGET": "192.168.68.71",
+  "BLE_MODE": "disabled",
+  "DB_PATH": "/var/lib/mcapp/messages.db"
+}

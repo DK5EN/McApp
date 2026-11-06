@@ -27,6 +27,7 @@ left is a narrow rejection of what genuinely breaks something downstream.
 from __future__ import annotations
 
 import codecs
+import re
 import unicodedata
 
 from .logging_setup import get_logger
@@ -87,12 +88,20 @@ _TAG_RANGE_END = 0xE007F
 # Cf  format/zero-width — see above.
 # Cs  surrogates — unpaired ones break the SQLite and JSON round-trip.
 # Co  private use — no agreed meaning; renders as tofu on every client.
-# Cn  unassigned, which is also where the noncharacters (U+FFFE/U+FFFF in every
-#     plane) live. Note this is judged against the *running* Python's Unicode
-#     tables: a codepoint assigned after that release reads as Cn and is
-#     dropped. That is the one way this filter can still be wrong about a
-#     legitimate character, and it self-heals on a Python upgrade.
-_REJECTED_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Cn"})
+# Unassigned codepoints (Cn) are deliberately NOT rejected: Cn is judged against
+# the *running* Python's Unicode tables, so a Cn rejection would strip every
+# emoji newer than the interpreter (U+1FAE9 on 3.13; Unicode 15 emoji on 3.11).
+# Only the noncharacters are dropped, see `_is_noncharacter`.
+_REJECTED_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co"})
+
+
+_NONCHARACTER_BLOCK = range(0xFDD0, 0xFDF0)  # U+FDD0-U+FDEF
+_NONCHARACTER_PLANE_MASK = 0xFFFE  # U+xxFFFE and U+xxFFFF in every plane
+
+
+def _is_noncharacter(codepoint: int) -> bool:
+    """Unicode noncharacters: reserved for internal use, never valid interchange."""
+    return codepoint in _NONCHARACTER_BLOCK or (codepoint & 0xFFFE) == _NONCHARACTER_PLANE_MASK
 
 
 def is_safe_char(ch: str) -> bool:
@@ -112,7 +121,7 @@ def is_safe_char(ch: str) -> bool:
     if codepoint == _ZERO_WIDTH_JOINER or _TAG_RANGE_START <= codepoint <= _TAG_RANGE_END:
         return True
 
-    if unicodedata.category(ch) in _REJECTED_CATEGORIES:
+    if _is_noncharacter(codepoint) or unicodedata.category(ch) in _REJECTED_CATEGORIES:
         # Routine noise from a lossy RF link, not a real error — DEBUG only.
         logger.debug(
             "Dropping unsafe character: %r (U+%04X, %s)",
@@ -125,9 +134,31 @@ def is_safe_char(ch: str) -> bool:
     return True
 
 
+# CHARS-01: line breaks and tabs are layout, not noise. Deleting them glued the
+# neighbouring words together ("Hi\\nthere" -> "Hithere"); a whitespace run containing one, with its
+# plain spaces, becomes ONE space (plain space runs without a control char stay untouched).
+_WHITESPACE_CONTROLS_RE = re.compile(r"[ \t\r\n]*[\n\r\t][ \t\r\n]*")
+
+
 def filter_unsafe(text: str) -> str:
-    """Drop every codepoint `is_safe_char` rejects."""
-    return "".join(ch for ch in text if is_safe_char(ch))
+    """Drop every codepoint `is_safe_char` rejects (NUL, other C0/C1 controls,
+    DEL, bidi and zero-width format characters except ZWJ, surrogates, private
+    use, noncharacters), THEN turn runs of newline/CR/tab into one space — in
+    that order, so a stripped character between two newlines does not split
+    the run. Newline/CR/tab must survive the strip pass, hence the exception
+    below. National letters, symbols and all emoji pass unchanged."""
+    stripped = "".join(ch for ch in text if ch in "\n\r\t" or is_safe_char(ch))
+    return _WHITESPACE_CONTROLS_RE.sub(" ", stripped)
+
+
+def sanitize_outbound(text: str) -> str:
+    """The outbound charset policy (client -> proxy -> node, UDP and BLE).
+
+    The same policy as inbound (mirrors the firmware's charset_filter.h) — one
+    function, one policy. Run it BEFORE any byte-length check so the check
+    measures what is actually sent. Never transliterates or strips accents.
+    """
+    return filter_unsafe(text)
 
 
 def decode_and_filter(data: bytes) -> str:

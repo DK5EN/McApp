@@ -18,6 +18,38 @@ export BLE_SERVICE_API_KEY=your-secret-key
 uv run uvicorn ble_service.src.main:app --host 0.0.0.0 --port 8081
 ```
 
+### macOS (dev/test host only)
+
+Status: a dev/test bench tool (CoreBluetooth via bleak), **not** a supported production host
+(operator decision 2026-10-31). Production stays the Raspberry Pi with BlueZ.
+
+```bash
+BLE_SERVICE_API_KEY=<key> ble_service/scripts/run-macos.sh   # 127.0.0.1:8091 by default
+```
+
+- `BLE_HOST` / `BLE_PORT` override the script's bind (default `127.0.0.1:8091`). A non-loopback
+  host requires `BLE_SERVICE_API_KEY` (at least 16 characters, not `disabled`); the script and
+  the `__main__` start below refuse otherwise.
+- Without the script, from the repo root (note the different variable names and defaults,
+  `0.0.0.0:8081`):
+
+  ```bash
+  BLE_BACKEND=bleak BLE_SERVICE_HOST=127.0.0.1 BLE_SERVICE_PORT=8091 \
+    uv run --project ble_service python -m ble_service.src.main
+  ```
+
+  `python ble_service/src/main.py` does not work (relative imports).
+
+- Permission: macOS grants Bluetooth access to the terminal app, not to python or uv. If the
+  prompt was dismissed, quit the terminal with Cmd-Q and relaunch.
+- Addresses are CoreBluetooth peripheral UUIDs (`address_kind: "uuid"`), not MACs. They are
+  stable per Mac and node only; a saved address of the wrong kind is ignored at startup.
+- `POST /api/ble/pair` and `/api/ble/unpair` are unsupported: HTTP 200 with `success: false`
+  and `error_code: "unsupported_on_backend"`. Pair through the system dialog on first encrypted
+  access; remove a node in System Settings > Bluetooth.
+- `BLE_BACKEND=bluez|bleak` forces a backend; the default is `bleak` on macOS, `bluez` elsewhere.
+- State file default on macOS: `~/Library/Application Support/mcapp-ble/ble_state.json`.
+
 ### As systemd service
 
 The service file runs as non-root user, binds to `127.0.0.1:8081`, and automatically unblocks Bluetooth radio and powers on the adapter before starting.
@@ -62,8 +94,18 @@ curl -H "X-API-Key: your-secret-key" http://pi.local:8081/api/ble/status
 Response:
 
 ```json
-{ "status": "healthy", "ble_connected": false, "timestamp": 1706100000000 }
+{
+  "status": "healthy",
+  "ble_connected": false,
+  "timestamp": 1706100000000,
+  "backend": "bluez",
+  "platform": "linux",
+  "address_kind": "mac",
+  "capabilities": { "pair": true, "unpair": true }
+}
 ```
+
+`backend`, `platform`, `address_kind` and `capabilities` are additive (macOS reports `bleak`, `darwin`, `uuid`, pair/unpair `false`).
 
 ### Status & Discovery
 
