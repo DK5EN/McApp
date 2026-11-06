@@ -106,19 +106,24 @@ The bootstrap detects desktop Pi OS images (which ship with X11/Wayland) and abo
 
 The following ports are opened:
 
-| Port | Protocol | Service                                        |
-| ---- | -------- | ---------------------------------------------- |
-| 22   | TCP      | SSH (rate limited: 6/min external, LAN exempt) |
-| 80   | TCP      | HTTP (lighttpd webapp + API reverse proxy)     |
-| 1799 | UDP      | MeshCom node communication                     |
-| 5353 | UDP      | mDNS (.local, multicast only)                  |
+| Port  | Protocol | Service                                        |
+| ----- | -------- | ---------------------------------------------- |
+| 22    | TCP      | SSH (rate limited: 6/min external, LAN exempt) |
+| 80    | TCP      | Caddy (redirect to HTTPS)                      |
+| 443   | TCP, UDP | Caddy (webapp and API)                         |
+| 1799  | UDP      | MeshCom node communication                     |
+| 2985  | TCP      | Update runner                                  |
+| 5353  | UDP      | mDNS (.local, multicast only)                  |
+| 19532 | TCP      | Journal upload (LAN only, nftables path only)  |
+
+**Another service needs its own rule.** Put it in `/etc/mcapp/nftables.d/`, so updates keep it. A firewall file with your own rules and no McApp marker is never replaced. How to: [Running other software on the box](../doc/operations-reference.md#running-other-software-on-the-box).
 
 **Internal-only ports (NOT exposed to the network):**
 
-| Port | Protocol | Service                                            |
-| ---- | -------- | -------------------------------------------------- |
-| 2981 | TCP      | FastAPI SSE/REST (proxied via lighttpd on port 80) |
-| 8081 | TCP      | BLE service (localhost only)                       |
+| Port | Protocol | Service                                |
+| ---- | -------- | -------------------------------------- |
+| 2981 | TCP      | McApp API (loopback, proxied by Caddy) |
+| 8081 | TCP      | BLE service (localhost only)           |
 
 **LAN SSH exemption:** Connections from RFC 1918 private IP ranges (192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12) are NOT rate limited.
 

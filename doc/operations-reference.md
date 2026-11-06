@@ -132,7 +132,7 @@ bootstrap/
 │   ├── mcapp-ble.service  # BLE service systemd unit
 │   ├── mcapp-update.path   # systemd path trigger for OTA updates
 │   ├── mcapp-update.service # systemd oneshot service for update runner
-│   ├── nftables.conf      # Firewall rules (ports 22, 80, 1799, 2985)
+│   ├── nftables.conf      # Unused: the rules are generated in lib/system.sh
 │   ├── journald.conf      # Volatile journal config
 │   ├── caddy/             # TLS reverse proxy templates
 │   │   ├── Caddyfile.duckdns.tmpl
@@ -483,6 +483,8 @@ BLE service still running the previous slot's code; activation now handles all t
 
 `SYSTEM_EPOCH` is a single integer versioning the _system-level_ machine state (packages, firewall, web front door) — independent of the app version and of `FINAL_SCHEMA_VERSION`. Installed state is marked by `/var/lib/mcapp/system-epoch` (single integer line, written by root). Source of truth is `readonly SYSTEM_EPOCH=1` in `bootstrap/mcapp.sh`, mirrored by `REQUIRED_SYSTEM_EPOCH` in `src/mcapp/system_converge.py`; a gated startup test parses `mcapp.sh` and enforces the two stay equal.
 
+**`--converge` runs only what changed.** Each step in `bootstrap/lib/converge.sh` carries the epoch it last changed in and runs only if the installed epoch is below it. When you change a step, raise its row to the new epoch in the same commit. `ensure_web_frontend` always runs. A full `mcapp.sh` run still runs everything.
+
 The update runner (`scripts/update-runner.py`) has four modes:
 
 - `update` — deploy + activate + health check, rolls back (via activation) on failure
@@ -582,6 +584,70 @@ ssh mcapp.local "grep -i cma /proc/meminfo"
 ssh mcapp.local "cat /proc/cmdline"
 ```
 
+## Running other software on the box
+
+**McApp's firewall blocks every port it does not know, so another service needs its own rule. Updates keep your rules, your own firewall file and your log folders.**
+
+- **Symptom of a blocked port:** the browser times out. "Connection refused" means the service itself is down.
+- **Check:** every bootstrap and update ends with a health check that warns about listening ports the firewall blocks, and about faulty firewall or Caddy config. The kernel log shows `[nftables DROP]` with `DPT=<port>`.
+- **Tested on:** OrbStack VMs with Debian Trixie and Bookworm, 2026-11-06, including reboots. Not yet on a real Pi.
+
+### Open a port
+
+On Trixie, put the rule into its own file. This folder is included inside the input chain and updates never touch it:
+
+```bash
+echo 'tcp dport 8080 accept' | sudo tee /etc/mcapp/nftables.d/custom.nft
+sudo nft -c -f /etc/nftables.conf && sudo systemctl reload nftables
+```
+
+- **Use `reload`, not `restart`:** `restart` flushes every table on the box, including those of Docker or fail2ban.
+- **A faulty custom file:** a reload refuses it and the running firewall stays. At boot the box falls back to McApp's own rules and logs `McApp: nftables.conf failed`.
+- **Do not save a dump over the config:** `nft list ruleset > /etc/nftables.conf` removes McApp's marker, and the file then counts as your own firewall.
+
+On Bookworm, add the rule and save it. Updates add missing McApp rules and keep yours:
+
+```bash
+sudo iptables -A INPUT -p tcp --dport 8080 -j ACCEPT
+sudo sh -c "iptables-save > /etc/iptables/rules.v4"
+```
+
+### Use your own firewall
+
+A `/etc/nftables.conf` with real rules and no `# McApp firewall rules` marker is never replaced. McApp leaves it and warns.
+
+- **What it must allow:** loopback, 22, 80, 443 and 2985/tcp, 1799 and 5353/udp.
+- **What you give up:** new McApp rules do not reach this file, and neither the custom folder nor the boot fallback applies.
+- **A firewall in another table:** the port check cannot read it and says so.
+- **Switched off on purpose:** a stopped `nftables` service, or an open INPUT chain on Bookworm, stays that way.
+
+### Add your own web site
+
+Put each site into `/etc/caddy/conf.d/<name>.caddy`. Every Caddyfile imports that folder at its end, and McApp never edits it:
+
+```bash
+sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile && sudo systemctl restart caddy
+```
+
+- **Ports 80 and 443 stay McApp's:** a site claiming them makes the whole config invalid.
+- **A broken site:** Caddy will not start on its next restart, which takes the McApp web UI down too. During an upgrade McApp keeps the old config and names the folder.
+- **Public-TLS boxes:** the import arrives only when `ssl-tunnel-setup.sh` runs again.
+
+### Log folders
+
+`/var/log` is in RAM, so folders vanish at every reboot. An hourly timer (`mcapp-logdirs.timer`) writes `/etc/tmpfiles.d/mcapp-logdirs.conf`, so they come back with their owner and mode.
+
+- **A new service before the first timer run:** run `sudo /usr/local/sbin/mcapp-logdirs` once.
+- **A folder you removed for good:** delete its line from that file, otherwise it returns empty.
+- **A folder that was gone before this existed:** it comes back as `root:adm` if a package lists it, and not at all otherwise.
+- **Not on Armbian or Orange Pi ramlog boards:** their ramlog service keeps `/var/log` itself.
+
+### Config backups
+
+Before the bootstrap overwrites a config file, it copies it to `/var/lib/mcapp/config-backups/`: readable by root only, newest 5 per file, no copy when nothing changed. Names are the flattened path plus a UTC timestamp, for example `__etc__nftables.conf.20261106T203827Z-000`.
+
+Background: [campaign plan and field report](2026-11-06_2053-install-coexistence-plan.md).
+
 ## Firewall Configuration
 
 McApp uses host-based firewall to protect the Raspberry Pi. The bootstrap script automatically configures:
@@ -591,13 +657,15 @@ McApp uses host-based firewall to protect the Raspberry Pi. The bootstrap script
 
 ### Allowed Ports
 
-| Port | Protocol | Service       | Access                                    |
-| ---- | -------- | ------------- | ----------------------------------------- |
-| 22   | TCP      | SSH           | Rate limited (6/min external, LAN exempt) |
-| 80   | TCP      | lighttpd      | All traffic (serves webapp + proxies API) |
-| 1799 | UDP      | MeshCom       | All traffic (LoRa mesh communication)     |
-| 2985 | TCP      | Update Runner | All traffic (OTA update SSE stream)       |
-| 5353 | UDP      | mDNS          | Multicast only (224.0.0.251)              |
+| Port  | Protocol | Service        | Access                                    |
+| ----- | -------- | -------------- | ----------------------------------------- |
+| 22    | TCP      | SSH            | Rate limited (6/min external, LAN exempt) |
+| 80    | TCP      | Caddy          | All traffic (redirect to HTTPS)           |
+| 443   | TCP, UDP | Caddy          | All traffic (webapp and API)              |
+| 1799  | UDP      | MeshCom        | All traffic (LoRa mesh communication)     |
+| 2985  | TCP      | Update Runner  | All traffic (OTA update SSE stream)       |
+| 5353  | UDP      | mDNS           | Multicast only (224.0.0.251)              |
+| 19532 | TCP      | Journal upload | LAN only, nftables path only              |
 
 **LAN exemption for SSH:** Connections from RFC 1918 private IP ranges (192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12) are NOT rate limited.
 
@@ -605,7 +673,9 @@ McApp uses host-based firewall to protect the Raspberry Pi. The bootstrap script
 
 | Port | Protocol | Service          | Why Not Exposed                 |
 | ---- | -------- | ---------------- | ------------------------------- |
-| 2981 | TCP      | FastAPI SSE/REST | Proxied via lighttpd on port 80 |
+| 2981 | TCP      | McApp API        | Loopback, proxied by Caddy      |
+| 8081 | TCP      | BLE service      | Loopback                        |
+| 8082 | TCP      | lighttpd backend | Legacy, blocked by the firewall |
 
 **Note:** Older firewall configurations (before Feb 2026) exposed ports 2980 and 2981 directly. These are now internal-only. The bootstrap script automatically removes them during upgrade.
 
@@ -622,18 +692,18 @@ To prevent log spam, both nftables and iptables silently drop common broadcast/m
 - High UDP ports (> 30000)
 - IGMP protocol
 
-All other unmatched traffic is **rejected** (not dropped) — the catch-all rule uses `reject` to send TCP RST / ICMP port-unreachable so clients fail fast instead of timing out on silent drops.
+All other unmatched traffic is **dropped** silently, so a blocked port looks like a timeout in the browser, not a refused connection.
 
 ### Firewall Logs
 
 **Log format:**
 
-- nftables: `[nftables DROP] ` prefix (logged before reject)
-- iptables: `[iptables DROP] ` prefix (logged before reject)
+- nftables: `[nftables DROP] ` prefix (logged before the drop)
+- iptables: `[iptables DROP] ` prefix (logged before the drop)
 
-**Rate limiting:** 10 rejects per minute are logged (prevents log spam while maintaining visibility)
+**Rate limiting:** 10 drops per minute are logged (prevents log spam while maintaining visibility)
 
-**View rejected traffic:**
+**View dropped traffic:**
 
 ```bash
 # Watch firewall drops in real-time
@@ -651,31 +721,7 @@ sudo journalctl -k --since today | grep DROP
 
 ### Customizing the Firewall
 
-**To allow additional ports (example: custom service on port 8080):**
-
-For **nftables** (edit `/etc/nftables.conf`):
-
-```nft
-# Add before the log rule
-tcp dport 8080 accept
-```
-
-For **iptables** (edit `/etc/iptables/rules.v4`):
-
-```bash
-# Add before the log rule
-iptables -A INPUT -p tcp --dport 8080 -j ACCEPT
-```
-
-**Apply changes:**
-
-```bash
-# nftables
-sudo systemctl restart nftables
-
-# iptables
-sudo iptables-restore < /etc/iptables/rules.v4
-```
+See [Running other software on the box](#running-other-software-on-the-box) for how to open a port so that updates keep it.
 
 **To customize LAN exemption ranges** (e.g., for non-standard subnets), edit the IP ranges in both configurations and apply changes.
 

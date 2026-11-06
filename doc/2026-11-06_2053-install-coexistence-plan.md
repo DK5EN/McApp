@@ -2,7 +2,7 @@
 
 **Goal:** a McApp update must not break other services on the box, and operators get a supported way to open their own ports. Field report 2026-11-06: nginx on :8080 (iot4pi, Pi 3B) unreachable after the update to v2.1.24. There was no VPN change; the release only added gzip and an epoch bump.
 
-**Status:** W0 to W3 done. W5 approved. Commits stay on `development`; release and the `mcapp.local` test need separate approval.
+**Status:** W0 to W5 done. Commits stay on `development`; release and the `mcapp.local` test need separate approval.
 
 ## Root cause of the field report
 
@@ -65,7 +65,7 @@ Tested 2026-11-06 in OrbStack arm64 VMs (Debian trixie and bookworm), nft 1.1.3,
 | W2B  | Port warning                                               | 1            | `bootstrap/lib/health.sh`, new `scripts/bootstrap_port_warning_tests.py`                                                                     | Done  |
 | W3A  | Preserve `/var/log` folders                                | 1            | Tmpfs section of `bootstrap/lib/system.sh`, new timer and service templates, new `scripts/bootstrap_logdirs_tests.py`                        | Done  |
 | W3B  | Caddy import                                               | 1            | `configure_caddy` in `bootstrap/lib/packages.sh`, `bootstrap/templates/caddy/*`, `scripts/caddy_config_tests.py`                             | Done  |
-| W5   | Operator guide, `CLAUDE.md`, READMEs, operations reference | Orchestrator | Docs                                                                                                                                         | Open  |
+| W5   | Operator guide, `CLAUDE.md`, READMEs, operations reference | Orchestrator | Docs                                                                                                                                         | Done  |
 
 W1A and W1B run in parallel, W2A and W2B run in parallel, W3A and W3B run in parallel. Orchestrator only: `scripts/run_startup_tests.py`, `src/mcapp/system_converge.py`, this doc. Implementers run Sonnet medium, the advisor Opus medium.
 
@@ -74,14 +74,11 @@ W1A and W1B run in parallel, W2A and W2B run in parallel, W3A and W3B run in par
 - An 8 to 9 converge runs no `apt upgrade` and touches no step that did not change.
 - A custom 8080 rule survives a converge on both OS paths and SSH still connects. A faulty custom file leaves the running firewall unchanged, and at boot the box still comes up with McApp's rules.
 - A foreign nftables table survives a converge.
-- nginx comes up after a reboot with `/var/log` on tmpfs, tested in the OrbStack VMs `w0-reboot`, `w0-fw`, `w0-bw`. Delete them when the campaign ends.
+- nginx comes up after a reboot with `/var/log` on tmpfs, tested in OrbStack VMs.
 
-## Carried forward from the W1 advisor pass
+## Follow-ups
 
-- **W3B:** `bootstrap/ssl-tunnel-setup.sh` writes the Caddyfile, a unit and `nftables.conf` with no backup. It does not source `detect.sh`, so it needs its own handling.
-- **W5 backlog:** `bootstrap/ssl-tunnel-setup.sh` looks for templates in `bootstrap/bootstrap/templates`, so a first-time TLS setup likely stops with "Template not found", and it installs the Caddyfile before validating. `doc/tls-maintenance-SOP.md` still names the old `scripts/` path. The same script's nftables edits (`sed` on an unmarked file, `nft add rule` on `inet filter`) ignore the operator-file rule. A failed reload on a managed box is not retried on the next run.
-- **W5:** add a backlog item for lighttpd, which listens on `0.0.0.0:8082` or `[::]:8082` despite `server.bind = 127.0.0.1`, reachable where the firewall is off. Add a backlog item: the full `mcapp.sh` run still has `if ! install_packages`, which ignores a failed apt phase or link check and writes the epoch. `--converge` no longer does this. Update the System Epoch section of `CLAUDE.md`.
-- **Accepted, not fixed:** `bootstrap_ramlog_tests`, `bootstrap_network_safety_tests` and `caddy_config_tests` do not set `MCAPP_CONFIG_BACKUP_DIR`. Run as root on a dev box, they leave stray temp-path copies in the real backup folder; as non-root they only warn. The `migrate_config` backup has static test coverage only.
+Moved to `doc/backlog.md`, B18 to B21: the full run ignoring a failed apt phase, lighttpd's bind, `ssl-tunnel-setup.sh`, and small items.
 
 ## Limits
 
