@@ -531,6 +531,7 @@ def _test_webapp_routes() -> None:
 _ROLLBACK_DRIVER = """set -eo pipefail
 set -u
 T="$1"; OLD="$2"; TLS="$3"; MODE="$4"
+source "{detect_sh}"
 source "{packages_sh}"
 fn=$(cat "$T/configure_caddy.sh")
 eval "$fn"
@@ -596,7 +597,12 @@ def _run_configure_caddy(
             f"# mcapp-caddy-config-version: {current} host=@@HOST@@\n{body}\n", encoding="utf-8"
         )
         driver = t / "driver.sh"
-        driver.write_text(_ROLLBACK_DRIVER.format(packages_sh=_PACKAGES_SH), encoding="utf-8")
+        driver.write_text(
+            _ROLLBACK_DRIVER.format(
+                packages_sh=_PACKAGES_SH, detect_sh=_PACKAGES_SH.parent / "detect.sh"
+            ),
+            encoding="utf-8",
+        )
         res = subprocess.run(  # noqa: S603 - fixed argv, _BASH is a resolved absolute path
             [
                 _BASH,

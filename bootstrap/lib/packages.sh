@@ -399,6 +399,7 @@ configure_lighttpd_ktls_workaround() {
     log_info "  kTLS modprobe override already in place"
     return 0
   fi
+  backup_config_file "$modprobe_conf"
   printf '%s\n' "install tls /bin/true" > "$modprobe_conf"
   log_ok "  kTLS modprobe override written (${modprobe_conf})"
 }
@@ -414,6 +415,7 @@ configure_lighttpd() {
   # replace it with the clean template to avoid duplicate module conflicts
   if [[ -f "$main_conf" ]] && grep -q "webapp" "$main_conf" 2>/dev/null; then
     local backup="${main_conf}.bak.$(date +%s)"
+    backup_config_file "$main_conf"
     cp "$main_conf" "$backup"
 
     # Find template: installed copy, local script dir, or download from GitHub
@@ -445,6 +447,10 @@ configure_lighttpd() {
   # before the version-marker early-return so it reconciles the base regardless
   # of 99-mcapp.conf state. Idempotent: no-ops once the base already reads 8082.
   if [[ -f "$main_conf" ]]; then
+    if grep -qE '^server\.port[[:space:]]*=[[:space:]]*80[[:space:]]*$' "$main_conf" \
+      || ! grep -qE '^[[:space:]]*server\.bind[[:space:]]*=' "$main_conf"; then
+      backup_config_file "$main_conf"
+    fi
     sed -i -E 's/^(server\.port[[:space:]]*=[[:space:]]*)80([[:space:]]*)$/\18082\2/' "$main_conf"
     if ! grep -qE '^[[:space:]]*server\.bind[[:space:]]*=' "$main_conf"; then
       sed -i -E '/^server\.port[[:space:]]*=/a server.bind                 = "127.0.0.1"' "$main_conf"
@@ -467,6 +473,7 @@ configure_lighttpd() {
   # Create McApp-specific config
   # (heredoc is quoted to protect lighttpd's $HTTP[...] syntax from shell
   # expansion — the version marker is interpolated afterwards via sed)
+  backup_config_file "$conf_file"
   cat > "$conf_file" << 'EOF'
 # McApp SPA rewrite + redirect + API proxy configuration
 # Enables Vue.js SPA routing, root redirect, and reverse proxy to FastAPI
@@ -689,6 +696,7 @@ configure_caddy_sudo() {
       && grep -qF "update-ca-certificates" "$sudoers_file" 2>/dev/null; then
     log_info "  caddy sudoers rules already in place"
   else
+    backup_config_file "$sudoers_file"
     {
       printf '%s\n' "caddy ALL=(root) NOPASSWD: /usr/bin/tee /usr/local/share/ca-certificates/*"
       printf '%s\n' "caddy ALL=(root) NOPASSWD: /usr/sbin/update-ca-certificates"
@@ -712,6 +720,7 @@ configure_caddy_sudo() {
     log_info "  caddy systemd drop-in already in place"
   else
     mkdir -p "$dropin_dir"
+    backup_config_file "$dropin_file"
     cat > "$dropin_file" <<'DROPIN'
 [Service]
 # Allow Caddy and its subprocesses (sudo tee + sudo update-ca-certificates) to
@@ -736,6 +745,7 @@ DROPIN
     log_info "  caddy memory drop-in already in place"
   else
     mkdir -p "$dropin_dir"
+    backup_config_file "$mem_file"
     cat > "$mem_file" <<'DROPIN'
 [Service]
 # Go runtime memory ceiling for a 512 MB Pi (McApp backlog B4). GOMEMLIMIT is a
@@ -858,6 +868,7 @@ configure_caddy() {
     if [[ -f "$caddy_conf" ]]; then
       cp -p "$caddy_conf" "$caddy_backup" 2>/dev/null || rm -f "$caddy_backup"
     fi
+    backup_config_file "$caddy_conf"
     install -m 644 "$staged" "$caddy_conf"
     rm -f "$staged"
     rewrote=true

@@ -53,11 +53,13 @@ configure_locale() {
 
     # Uncomment in locale.gen if present but commented out
     if grep -qE "^#\s*${loc}" "$locale_gen" 2>/dev/null; then
+      backup_config_file "$locale_gen"
       sed -i "s/^#\s*\(${loc}\)/\1/" "$locale_gen"
       needs_generate=true
       log_info "  Enabled ${loc} in locale.gen"
     elif ! grep -q "^${loc}" "$locale_gen" 2>/dev/null; then
       # Not present at all — add it
+      backup_config_file "$locale_gen"
       echo "${loc} UTF-8" >> "$locale_gen"
       needs_generate=true
       log_info "  Added ${loc} to locale.gen"
@@ -221,6 +223,7 @@ configure_tmpfs() {
     local tmpfs_log_re='^tmpfs /var/log tmpfs'
     local in_block='/# McApp tmpfs - begin/ { inb = 1 } /# McApp tmpfs - end/ { inb = 0 }'
     if awk -v re="$tmpfs_log_re" "$in_block"' inb && $0 ~ re { found = 1 } END { exit !found }' "$fstab" 2>/dev/null; then
+      backup_config_file "$fstab"
       awk -v re="$tmpfs_log_re" "$in_block"' !(inb && $0 ~ re) { print }' \
         "$fstab" > "${fstab}.mcapp-tmp" && mv -f "${fstab}.mcapp-tmp" "$fstab"
       _mcapp_mark_reboot_required
@@ -228,6 +231,7 @@ configure_tmpfs() {
     elif grep -qE "(McApp tmpfs|MCProxy tmpfs|pi-harden)" "$fstab" 2>/dev/null; then
       log_info "  ${ramlog} owns /var/log: no /var/log tmpfs line to remove"
     else
+      backup_config_file "$fstab"
       cp "$fstab" "${fstab}.bak.$(date +%Y%m%d)"
       cat >> "$fstab" << EOF
 
@@ -242,6 +246,7 @@ EOF
     log_info "  tmpfs already configured in fstab"
   else
     # Backup fstab
+    backup_config_file "$fstab"
     cp "$fstab" "${fstab}.bak.$(date +%Y%m%d)"
 
     # Add tmpfs entries — nodev,noexec on /var/log for security
@@ -258,6 +263,7 @@ EOF
 
   # Create log directory structure in tmpfs after mount
   mkdir -p "$MCAPP_TMPFILES_DIR"
+  backup_config_file "${MCAPP_TMPFILES_DIR}/mcapp.conf"
   cat > "${MCAPP_TMPFILES_DIR}/mcapp.conf" << 'EOF'
 # McApp + system log directories (recreated on every boot in tmpfs)
 d /var/log/mcapp     0755 root     root     -
@@ -343,6 +349,7 @@ _mcapp_configure_config_txt() {
   rm -f "${tmp}.bak"
 
   if ! cmp -s "$file" "$tmp"; then
+    backup_config_file "$file"
     cat "$tmp" > "$file"
     rm -f "$tmp"
     return 0
@@ -363,6 +370,7 @@ _mcapp_configure_cmdline_txt() {
     return 1
   fi
 
+  backup_config_file "$file"
   printf '%s cgroup_enable=memory cgroup_memory=1\n' "$content" > "$file"
   return 0
 }
@@ -464,9 +472,11 @@ _mcapp_fstab_ensure_line() {
   grep -qxF "$line" "$fstab" 2>/dev/null && return 0
   if grep -qE "$after_regex" "$fstab" 2>/dev/null; then
     # sed -i differs between GNU and BSD; go through a temp file instead.
+    backup_config_file "$fstab"
     awk -v line="$line" -v re="$after_regex" 'BEGIN { done = 0 } { print } !done && $0 ~ re { print line; done = 1 }' \
       "$fstab" > "${fstab}.mcapp-tmp" && mv -f "${fstab}.mcapp-tmp" "$fstab"
   else
+    backup_config_file "$fstab"
     printf '%s\n' "$line" >> "$fstab"
   fi
   grep -qxF "$line" "$fstab"
@@ -483,6 +493,7 @@ _mcapp_journal_ramlog_cleanup() {
   local changed=false
 
   if grep -qxF "$MCAPP_JOURNAL_BIND_LINE" "$MCAPP_FSTAB" 2>/dev/null; then
+    backup_config_file "$MCAPP_FSTAB"
     grep -vxF "$MCAPP_JOURNAL_BIND_LINE" "$MCAPP_FSTAB" > "${MCAPP_FSTAB}.mcapp-tmp" || true
     mv -f "${MCAPP_FSTAB}.mcapp-tmp" "$MCAPP_FSTAB"
     changed=true
@@ -541,6 +552,7 @@ configure_journald() {
     return 0
   fi
 
+  backup_config_file "$conf_file"
   cat > "$conf_file" << 'EOF'
 # McApp: persistent journal, capped small. On a tmpfs /var/log, /var/log/journal
 # is a bind mount of /var/lib/mcapp/journal (see /etc/fstab, McApp tmpfs block);
@@ -608,6 +620,7 @@ EOF
     log_info "  wpasupplicant pin already in place"
   else
     mkdir -p "$MCAPP_APT_PREFERENCES_DIR"
+    backup_config_file "$file"
     printf '%s\n' "$content" > "$file"
     chmod 644 "$file"
     log_ok "  wpasupplicant pinned to 2:2.10-24 (${file})"
@@ -634,6 +647,7 @@ configure_logrotate() {
     return 0
   fi
 
+  backup_config_file /etc/logrotate.conf
   sed -i 's/^\s*rotate\s\+[0-9]\+/rotate 2/' /etc/logrotate.conf
   log_ok "  logrotate set to rotate 2"
 }
@@ -727,6 +741,7 @@ configure_nftables() {
   fi
 
   # Backup existing config
+  backup_config_file "$nft_conf"
   [[ -f "$nft_conf" ]] && cp "$nft_conf" "${nft_conf}.bak.$(date +%Y%m%d)"
 
   cat > "$nft_conf" << 'EOF'
@@ -938,6 +953,7 @@ configure_iptables_legacy() {
   iptables -A INPUT -m limit --limit 10/min -j LOG --log-prefix "[iptables DROP] " --log-level 7
 
   # Save rules
+  backup_config_file /etc/iptables/rules.v4
   iptables-save > /etc/iptables/rules.v4
 
   log_ok "  iptables firewall configured and saved"
@@ -967,6 +983,7 @@ configure_bluetooth() {
   fi
 
   # Write the service unit inline (no external template dependency)
+  backup_config_file "$service_file"
   cat > "$service_file" << 'EOF'
 # McApp: Unblock Bluetooth at boot
 # Some Pi images ship with rfkill default_state=0 which blocks all radios
@@ -1019,6 +1036,7 @@ disable_ipv6() {
   fi
 
   # Create sysctl config to disable IPv6
+  backup_config_file "$sysctl_conf"
   cat > "$sysctl_conf" << 'EOF'
 # McApp: Disable IPv6
 # Fixes mDNS advertisements and eliminates Happy Eyeballs timeout
@@ -1053,6 +1071,7 @@ configure_unattended_upgrades() {
   codename=$(get_debian_codename)
 
   # Configure which updates to apply
+  backup_config_file /etc/apt/apt.conf.d/50unattended-upgrades
   cat > /etc/apt/apt.conf.d/50unattended-upgrades << EOF
 // McApp: Automatic security updates
 Unattended-Upgrade::Origins-Pattern {
@@ -1074,6 +1093,7 @@ Unattended-Upgrade::SyslogEnable "true";
 EOF
 
   # Enable automatic updates
+  backup_config_file /etc/apt/apt.conf.d/20auto-upgrades
   cat > /etc/apt/apt.conf.d/20auto-upgrades << 'EOF'
 APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
@@ -1121,6 +1141,7 @@ configure_fast_ssh_login() {
   # Comment out pam_motd in sshd PAM config (avoids dynamic MOTD generation)
   if [[ -f /etc/pam.d/sshd ]]; then
     if grep -qE '^\s*session.*pam_motd' /etc/pam.d/sshd; then
+      backup_config_file /etc/pam.d/sshd
       sed -i 's/^\(\s*session.*pam_motd\)/#\1/' /etc/pam.d/sshd
       log_info "  Disabled pam_motd in /etc/pam.d/sshd"
     else
@@ -1149,6 +1170,7 @@ configure_ssh_hardening() {
     return 0
   fi
 
+  backup_config_file "$ssh_conf"
   cat > "$ssh_conf" << 'EOF'
 # McApp SSH hardening — crypto + access control
 HostKey /etc/ssh/ssh_host_ed25519_key

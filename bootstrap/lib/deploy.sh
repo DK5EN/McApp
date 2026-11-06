@@ -866,6 +866,7 @@ configure_systemd_service() {
   fi
 
   # Render mcapp.service from template
+  backup_config_file "$mcapp_service"
   sed -e "s|{{USER}}|${run_user}|g" \
       -e "s|{{HOME}}|${run_home}|g" \
       "${template_dir}/mcapp.service" > "$mcapp_service"
@@ -886,6 +887,7 @@ configure_systemd_service() {
     local ble_api_key_escaped="${ble_api_key//&/\\&}"
     ble_api_key_escaped="${ble_api_key_escaped//%/%%}"
 
+    backup_config_file "$ble_service"
     sed -e "s|{{USER}}|${run_user}|g" \
         -e "s|{{HOME}}|${run_home}|g" \
         -e "s|{{BLE_API_KEY}}|${ble_api_key_escaped}|g" \
@@ -901,12 +903,14 @@ configure_systemd_service() {
 
   # --- mcapp-update.path + mcapp-update.service (file-trigger update) ---
   if [[ -f "${template_dir}/mcapp-update.service" ]]; then
+    backup_config_file /etc/systemd/system/mcapp-update.service
     sed -e "s|{{USER}}|${run_user}|g" \
         -e "s|{{HOME}}|${run_home}|g" \
         "${template_dir}/mcapp-update.service" > /etc/systemd/system/mcapp-update.service
     log_info "  mcapp-update.service configured"
   fi
   if [[ -f "${template_dir}/mcapp-update.path" ]]; then
+    backup_config_file /etc/systemd/system/mcapp-update.path
     cp "${template_dir}/mcapp-update.path" /etc/systemd/system/mcapp-update.path
     log_info "  mcapp-update.path configured"
   fi
@@ -1025,6 +1029,7 @@ log_deployment_event() {
 deploy_shell_aliases() {
   local target="/etc/profile.d/mcapp.sh"
 
+  backup_config_file "$target"
   cat > "$target" << 'ALIASES'
 # /etc/profile.d/mcapp.sh - McApp convenience aliases
 # Deployed by McApp bootstrap — do not edit manually

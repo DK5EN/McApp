@@ -26,6 +26,8 @@ import sys
 from ble_bleak_tests import run_ble_bleak_tests
 from ble_service_tests import run_ble_service_tests
 from ble_unit_template_tests import run_ble_unit_template_tests
+from bootstrap_config_backup_tests import run_bootstrap_config_backup_tests
+from bootstrap_converge_steps_tests import run_bootstrap_converge_steps_tests
 from bootstrap_network_safety_tests import run_bootstrap_network_safety_tests
 from bootstrap_pinning_tests import run_bootstrap_pinning_tests
 from bootstrap_ramlog_tests import run_bootstrap_ramlog_tests
@@ -411,6 +413,12 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     bootstrap_ramlog_ok = run_bootstrap_ramlog_tests()
     print(f"bootstrap_ramlog: {'PASS' if bootstrap_ramlog_ok else 'FAIL'}")
 
+    bootstrap_config_backup_ok = run_bootstrap_config_backup_tests()
+    print(f"bootstrap_config_backup: {'PASS' if bootstrap_config_backup_ok else 'FAIL'}")
+
+    bootstrap_converge_steps_ok = run_bootstrap_converge_steps_tests()
+    print(f"bootstrap_converge_steps: {'PASS' if bootstrap_converge_steps_ok else 'FAIL'}")
+
     slot_info_ok = run_slot_info_tests()
     print(f"slot_info: {'PASS' if slot_info_ok else 'FAIL'}")
 
@@ -501,6 +509,8 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and node_admin_hook_ok
         and node_admin_state_ok
         and bootstrap_ramlog_ok
+        and bootstrap_config_backup_ok
+        and bootstrap_converge_steps_ok
         and slot_info_ok
         and ble_unit_template_ok
         and node_admin_service_ok
