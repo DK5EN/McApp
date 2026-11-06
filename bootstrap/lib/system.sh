@@ -930,7 +930,7 @@ _mcapp_nft_ensure_dropin() {
   cat > "$tmp" << EOF
 [Service]
 ExecStart=
-ExecStart=/bin/sh -c '/usr/sbin/nft -f ${MCAPP_NFT_CONF} || { echo "McApp: nftables.conf failed, retrying without custom rules" >&2; sed "\\#${MCAPP_NFT_CUSTOM_DIR}#d" ${MCAPP_NFT_CONF} | /usr/sbin/nft -f -; }'
+ExecStart=/bin/sh -c '/usr/sbin/nft -f ${MCAPP_NFT_CONF} || { echo "McApp: nftables.conf failed, retrying without custom rules" >&2; grep -vF "${MCAPP_NFT_CUSTOM_DIR}" ${MCAPP_NFT_CONF} | /usr/sbin/nft -f -; }'
 EOF
   if [[ -f "$file" ]] && cmp -s "$tmp" "$file"; then
     rm -f "$tmp"

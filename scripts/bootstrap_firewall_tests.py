@@ -761,11 +761,18 @@ def _test_dropin(tmp: Path, failures: list[str]) -> None:
     want = (
         "[Service]\nExecStart=\n"
         f"ExecStart=/bin/sh -c '/usr/sbin/nft -f {conf} || {{ echo \"McApp: nftables.conf failed, "
-        f'retrying without custom rules" >&2; sed "\\#{cdir}#d" {conf} | /usr/sbin/nft -f -; }}\'\n'
+        f'retrying without custom rules" >&2; grep -vF "{cdir}" {conf} | /usr/sbin/nft -f -; }}\'\n'
     )
     _check(
         drop.is_file() and drop.read_text() == want,
         f"dropin: expected ExecStart (got {drop.read_text() if drop.is_file() else None!r})",
+        failures,
+    )
+    # systemd warns "Ignoring unknown escape sequences" on every daemon-reload for a
+    # backslash it does not know, as a `sed "\\#...#d"` here did on the first real box.
+    _check(
+        drop.is_file() and "\\" not in drop.read_text(),
+        "dropin: no backslash in the unit",
         failures,
     )
     _check(
