@@ -572,7 +572,7 @@ EOF
 # LIGHTTPD_MCAPP_CONF_VERSION above). Keep this number in sync with the
 # "mcapp-caddy-config-version:" comment in
 # bootstrap/templates/caddy/Caddyfile.mcapp.
-readonly CADDY_CONFIG_VERSION=4
+readonly CADDY_CONFIG_VERSION=5
 
 # Short hostname the Caddyfile template is rendered with (@@HOST@@). Falls back
 # to "mcapp" when `hostname -s` is empty or is not a valid DNS label: an empty

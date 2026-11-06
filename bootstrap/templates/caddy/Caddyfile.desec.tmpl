@@ -37,12 +37,22 @@
     # used to ride through lighttpd (its 99-mcapp.conf re-proxied them); Caddy now
     # owns them so the webapp block below needs no lighttpd hop at all.
     handle /events* {
+        # gzip level 1 only, flushed per event. Measured on a Pi Zero 2 W: the connect burst
+        # drops from 781 KB to 129 KB, zstd would hold 7 MB more per 3 clients, and events
+        # still arrive within 1 ms. Plan: doc/2026-11-06_1400-runtime-compression-measurements.md
+        encode {
+            gzip 1
+        }
         reverse_proxy 127.0.0.1:2981 {
             flush_interval -1
         }
     }
 
     handle /api/* {
+        # Same gzip level as /events. Responses under the default 512 bytes stay plain.
+        encode {
+            gzip 1
+        }
         reverse_proxy 127.0.0.1:2981
     }
 
@@ -53,8 +63,9 @@
     # Webapp (SPA) served by Caddy itself from /var/www/html, pre-compressed.
     # Sidecars (.br/.gz) are produced at release time by scripts/precompress_webapp.mjs;
     # `precompressed br gzip` serves them when the client accepts the encoding and falls
-    # back to the plain file when no sidecar exists (old bundle). No on-the-fly `encode`:
-    # it costs RAM and CPU on a Pi Zero.
+    # back to the plain file when no sidecar exists (old bundle). No on-the-fly `encode`
+    # here: a sidecar costs no RAM or CPU at runtime. Runtime gzip is only for the
+    # dynamic /events and /api routes above.
 
     # Root -> webapp
     @root path /
