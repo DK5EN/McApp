@@ -9,6 +9,9 @@ It only issues GET requests and prints one markdown table row per measurement. T
 SSE row covers the connect burst: time from request start until `proxy:summary`
 appeared, which is the event right behind the large `proxy:initial`. Its wire bytes
 are read from curl over a fixed window, so they include any live traffic in that window.
+
+The --slow-rate rows are not a valid slow link for compressed responses: curl's limiter let 31 KB
+of gzip through in 110 ms at 125 KB/s. Use a throttling relay to compare encodings.
 """
 
 from __future__ import annotations

@@ -68,6 +68,41 @@ delay comes from a stub stream with a timestamp in every event. RSS and burst by
 - **Events are still delivered at once**, including a first event under the 512-byte minimum.
 - **`/api/status` (382 bytes) stays plain** in every variant.
 
-## After the change
+## After the change: v2.1.24-dev.1
 
-Not measured yet.
+**Result: compression saves 84% of the bytes and makes the connect burst 3 times faster at 1 Mbit/s.
+On the LAN, the burst barely changes, because about 1.5 s of it is server time.**
+
+Plain and gzip were requested alternately from the same box with the same payload, so only the
+encoding differs. A TCP relay on the Mac throttled the server-to-client bytes. Median of 5 runs,
+7 on the LAN, over h2.
+
+| Target                | Link      | Plain ms | Gzip ms | Faster by | Plain bytes | Gzip bytes |
+| --------------------- | --------- | -------- | ------- | --------- | ----------- | ---------- |
+| /events connect burst | 1 Mbit/s  | 6518     | 2161    | 67%       | 630692      | 103038     |
+| /events connect burst | 10 Mbit/s | 2081     | 1574    | 24%       | 630692      | 103038     |
+| /events connect burst | LAN       | 1605     | 1573    | 2%        | 630692      | 103038     |
+| /api/stalls?limit=200 | 1 Mbit/s  | 1794     | 381     | 79%       | 199894      | 31376      |
+| /api/stalls?limit=200 | 10 Mbit/s | 304      | 131     | 57%       | 199894      | 31376      |
+| /api/stalls?limit=200 | LAN       | 166      | 126     | 24%       | 199894      | 31376      |
+
+The burst's byte counts come from the 4 s window in `measure_front_door.py`. h3 sends the same number
+of bytes (103 KB).
+
+**Other checks**
+
+- **Live events:** 89 of 89 real events over 200 s arrived through Caddy with gzip 2.9 ms after the
+  direct connection (5.0 ms at worst). Plain through Caddy took 1.8 ms (4.1 ms at worst).
+- **RAM:** 8 SSE clients peaked at 28 MB of Caddy RSS for both plain and gzip, with 160 MB of memory
+  available. Idle Caddy RSS moves between 23 and 53 MB, so a single reading says nothing.
+- **Small responses:** `/api/status` (380 bytes) stays plain.
+- **Chrome:** `/events` and `/api/stalls` both arrive as gzip, 111 message elements render.
+
+**Measurement limits**
+
+- **`curl --limit-rate` is not a valid slow link for these responses.** 31 KB of gzip took 110 ms under
+  125 KB/s, while 31 KB of plain data took 280 ms. Do not use the 125k rows of the script for a
+  comparison; the relay above replaces them.
+- **`/api/monitor/frames` is not comparable before and after.** The restart emptied its in-memory ring.
+  The fair figure is the codec trial: 239950 to 33477 bytes.
+- **Not tested:** iPhone Safari over h3 with gzip, and a real slow link.
