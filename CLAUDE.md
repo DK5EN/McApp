@@ -917,6 +917,13 @@ RAM and front-door campaign, 2026-11-05: `doc/2026-11-05_2230-ram-and-front-door
   else under `/webapp` is `no-cache`. Go's MIME table lacks `.webmanifest` on the box, hence the
   explicit `Content-Type`. String tests cannot see these: render the template and run real Caddy on
   a high port with `admin off`.
+- **`/events*` and `/api/*` use `encode { gzip 1 }`, and nothing else does** (2026-11-06,
+  `doc/2026-11-06_1400-runtime-compression-measurements.md`). Static files stay on sidecars.
+  No zstd: it held 7 MB more than gzip with 3 SSE clients on the Pi. Compression does not buy
+  LAN speed, where the connect burst's 1.6 s is mostly server time; it helps slow links.
+  `--converge` rewrites only the LAN Caddyfile: a public-TLS box advances its epoch but keeps its
+  old Caddyfile until `ssl-tunnel-setup.sh` runs again. `/events` needs Caddy 2.11.5 or newer to
+  compress, and an older one just stays plain.
 - **lighttpd is still installed and running** for public-TLS Caddyfiles on existing boxes and an
   older slot's `mcapp.sh`, which rewrites Caddy to v3 until the next `--skip` from a new slot.
 

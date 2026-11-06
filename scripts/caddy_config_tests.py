@@ -454,9 +454,26 @@ def _test_webapp_routes() -> None:
             "reverse_proxy 127.0.0.1:8082" not in text,
             f"{name}: no reverse_proxy to lighttpd on 127.0.0.1:8082 remains",
         )
+        # Runtime gzip belongs on the two dynamic routes and nowhere else. Static files use
+        # sidecars, zstd holds more RAM per long-lived SSE client, and /update-stream is an
+        # install log nobody needs compressed.
+        for header in ("handle /events*", "handle /api/*"):
+            route = _block(text, header)
+            _check(
+                route is not None and re.search(r"encode \{\s+gzip 1\s+\}", route) is not None,
+                f"{name}: {header} uses `encode` with gzip level 1",
+            )
         _check(
-            not re.search(r"^\s*encode\b", text, re.MULTILINE),
-            f"{name}: no on-the-fly `encode` directive (sidecars only)",
+            len(re.findall(r"^\s*encode\b", text, re.MULTILINE)) == 2,
+            f"{name}: `encode` appears on exactly those two routes (static files use sidecars)",
+        )
+        _check(
+            not re.search(r"^\s*zstd\b", text, re.MULTILINE),
+            f"{name}: no zstd (holds more RAM per SSE client)",
+        )
+        _check(
+            "flush_interval -1" in (_block(text, "handle /events*") or ""),
+            f"{name}: /events still flushes per event",
         )
         assets = _block(text, "handle /webapp/assets/*")
         if _check(assets is not None, f"{name}: has a /webapp/assets/* handler") and assets:
@@ -503,9 +520,9 @@ def _test_webapp_routes() -> None:
     _check("handle /root.crt" in mcapp, "Caddyfile.mcapp keeps the /root.crt handler")
     _check("redir * /webapp/" in mcapp, "Caddyfile.mcapp redirects / to /webapp/")
     _check(
-        _declared_version() == "4"
-        and re.search(r"mcapp-caddy-config-version:\s*4\b", mcapp) is not None,
-        "Caddyfile.mcapp marker and CADDY_CONFIG_VERSION are both 4",
+        _declared_version() == "5"
+        and re.search(r"mcapp-caddy-config-version:\s*5\b", mcapp) is not None,
+        "Caddyfile.mcapp marker and CADDY_CONFIG_VERSION are both 5",
     )
 
 

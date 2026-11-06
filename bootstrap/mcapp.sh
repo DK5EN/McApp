@@ -40,7 +40,7 @@ readonly SCRIPT_VERSION="2.6.0"
 # persistent 16M journal on a /var/log/journal bind mount.
 # Epoch 6: ramlog boards (Armbian/Orange Pi) drop the McApp /var/log tmpfs and
 # journal bind; the board's ramlog owns /var/log and its native journal persistence.
-readonly SYSTEM_EPOCH=7
+readonly SYSTEM_EPOCH=8
 
 # Detect piped mode (curl | bash) — BASH_SOURCE is empty when piped
 # SCRIPT_DIR is intentionally NOT readonly: source_libs() overwrites it with

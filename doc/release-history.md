@@ -1,77 +1,58 @@
 # Release History
 
-## v2.1.23 (2026-11-06)
+## v2.1.24 (2026-11-06)
 
-**The Gateway Availability card now shows the truth for a month and a year, and knows when a node's
-gateway is switched off.** McApp also loads less into memory: FastAPI is gone, and Caddy serves the web
-app pre-compressed. Schema goes to 40, `SYSTEM_EPOCH` to 7.
+**On a slow connection, McApp now connects about 3 times faster and uses 84% less data.** Caddy gzips
+the live event stream and the large API responses. On a fast LAN you will barely notice a change.
 
-> Update from the Update page as usual. After this update, a slot from before schema 40 cannot be
-> activated: the slot guard refuses it.
+> Update from the Update page as usual. `SYSTEM_EPOCH` goes to 8, schema stays at 40. A box with public
+> TLS keeps its old Caddyfile until `ssl-tunnel-setup.sh` is run again, and works as before.
 
 ### Highlights
 
-- **Last Year is no longer all yellow.** The bar now shows true time.
-  - Cause: every outage was drawn at least 2 px wide, taken from the green. 131 short gaps erased
-    all green. The percentages were right all along.
-  - Now: month and year bars are made of 6 h and 1 day blocks. Green means 99% or more, amber 80% or
-    more, red below that.
-  - A single lost beacon still costs about 20 minutes, so it turns its day amber. That is intended.
-- **Gateway off is no longer an outage.** Time with the node's gateway off counts against Coverage,
-  not against Uptime, and the card shows a "Gateway off" badge.
-  - Older periods cannot be reclassified, because the gateway state was never recorded.
-  - A UDP-only box has no gateway state to read and measures as before.
-  - Not yet tried on a node with its gateway off.
-- **Less memory on the Pi.** Measured in a fresh process on the Pi Zero 2W, old against new:
-  - `mcapp` import 60.2 to 54.7 MB, BLE service import 45.0 to 38.0 MB.
-  - numpy and TimezoneFinder, 19.5 MB together, now load only during a timezone lookup.
-  - The saving in a long-running `mcapp` has not been measured at equal load yet.
-- **Smaller downloads.** Caddy serves the web app from Brotli and gzip files built at release time:
-  4.9 MB of text assets ship as 1.2 MB of Brotli, measured on this release. Hashed assets are cached
-  for good. lighttpd stays installed for boxes with public TLS.
-- **National characters in both directions.** Letters, the euro sign, typographic quotes and emoji
-  pass unchanged, and nothing is transliterated (MeshCom firmware CHARS-01). A message holding only
-  invisible characters no longer becomes an empty chat line.
-- **Map worker works.** Positions no longer logs "Worker failed to load" on every visit.
+- **Faster connect on a weak link.** Time until the message history has arrived, measured on the Pi
+  Zero 2W with `mcapp.local`'s real data, plain against gzip, median of 5 to 7 runs:
+  - 1 Mbit/s: 6.5 s to 2.2 s.
+  - 10 Mbit/s: 2.1 s to 1.6 s.
+  - LAN: 1.6 s in both cases, because that time is spent on the server, not on the network.
+- **Less data on every reconnect.** The burst of data a client gets when it connects shrinks from 631 KB
+  to 103 KB. A phone waking from sleep pays this each time.
+- **Live messages arrive as fast as before.** Over 200 s, 89 of 89 real events arrived 2.9 ms after a
+  direct connection, against 1.8 ms without gzip.
+- **No extra memory cost measured.** Caddy peaked at 28 MB with 8 connected clients, with and without
+  gzip.
 
 ### Backend (MCProxy)
 
-- FastAPI replaced by `weblite`, a small compatible layer on Starlette. `/docs` and `/openapi.json`
-  are gone. A 422 no longer echoes the rejected input.
-- `/api/uptime` adds `gateway_enabled`, `buckets` and the kind `disabled`; existing fields keep their
-  meaning. Silence the proxy watched before a restart is now stored as a gap instead of reading as
-  uptime.
-- `/api/timezone` runs in a short-lived child: one lookup at a time, at most 4 queued, 8 s limit,
-  400 for coordinates out of range.
-- New wire log: every raw UDP and BLE frame goes to `/var/lib/mcapp/wire/<day>.jsonl`, gzipped daily
-  and never pruned. Measured about 350 KB per day on `mcapp.local`, 2026-11-02 to 11-05. Switch:
-  `WIRE_LOG_ENABLED`.
-- The BLE device scan finds devices named during the scan. Before, a node could be missing from the
-  picker while `bluetoothctl` saw it.
-- The internet feed no longer sends a macOS CoreBluetooth UUID as the identity MAC. `ble_service`
-  gains a macOS backend for development hosts only.
-- `NodeAdminService.drain` could hang forever; fixed. Dependencies refreshed in both locks.
+- `encode { gzip 1 }` on `/events*` and `/api/*`, in all four Caddyfile templates. Caddyfile version 5.
+- Gzip level 1, because a trial on the Pi showed zstd holding 7 MB more with 3 clients, and level 5
+  costing about 50% more CPU for a smaller gain.
+- Responses under 512 bytes stay plain, and static files keep their pre-built Brotli and gzip files.
+- `/events` compresses only on Caddy 2.11.5 or newer, and stays plain and working on an older one.
+- New `scripts/measure_front_door.py` for wire bytes and timing. Full numbers:
+  `doc/2026-11-06_1400-runtime-compression-measurements.md`.
 
 ### Frontend (webapp)
 
-- Gateway Availability: new month and year bar, the legend gains "No data", "Gateway off" badge.
-- MapLibre worker shipped with a content hash and precached for offline use.
-- mc-chat admin views: month and year history, and the activity card shows classifier tags.
-- Security: `deepmerge` vendored with a fix for its prototype-poisoning alert, `glob` and `minimatch`
-  overrides. All are build-time only.
-- Dependencies refreshed, `jsdom` to 31. TypeScript deliberately stays on 6.
+- No code changes. Transitive dependencies refreshed in `package-lock.json`. Python locks were already
+  current.
 
 ### Upgrade notes
 
-- Nothing to do on the box. The update converges `SYSTEM_EPOCH` 7, which rewrites the Caddy
-  configuration.
-- Activating an older slot that still carries its own `mcapp.sh` can write the previous Caddy
-  configuration back until the next update.
+- No action needed. The update restarts Caddy once to load the new configuration.
+- Soak before this release was 67 minutes, on a dev build, with Chrome on a Mac.
+- Not tested: iPhone Safari over HTTP/3 with gzip, and a real slow link. The slow links above were
+  simulated with a throttling relay.
 
 ## Earlier releases, in brief
 
 One entry per release. The full notes as published are in
 [`doc/archive/release-history-full.md`](https://github.com/DK5EN/McApp/blob/development/doc/archive/release-history-full.md).
+
+### v2.1.23 (2026-11-06)
+
+- Gateway Availability bars show true time and a "Gateway off" state. FastAPI replaced by `weblite`, and Caddy serves the web app pre-compressed.
+- Schema 40, `SYSTEM_EPOCH` 7. A slot from before schema 40 can no longer be activated.
 
 ### v2.1.22 (2026-10-30)
 
