@@ -5,6 +5,74 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.1.23 (2026-11-06)
+
+**The Gateway Availability card now shows the truth for a month and a year, and knows when a node's
+gateway is switched off.** McApp also loads less into memory: FastAPI is gone, and Caddy serves the web
+app pre-compressed. Schema goes to 40, `SYSTEM_EPOCH` to 7.
+
+> Update from the Update page as usual. After this update, a slot from before schema 40 cannot be
+> activated: the slot guard refuses it.
+
+### Highlights
+
+- **Last Year is no longer all yellow.** The bar now shows true time.
+  - Cause: every outage was drawn at least 2 px wide, taken from the green. 131 short gaps erased
+    all green. The percentages were right all along.
+  - Now: month and year bars are made of 6 h and 1 day blocks. Green means 99% or more, amber 80% or
+    more, red below that.
+  - A single lost beacon still costs about 20 minutes, so it turns its day amber. That is intended.
+- **Gateway off is no longer an outage.** Time with the node's gateway off counts against Coverage,
+  not against Uptime, and the card shows a "Gateway off" badge.
+  - Older periods cannot be reclassified, because the gateway state was never recorded.
+  - A UDP-only box has no gateway state to read and measures as before.
+  - Not yet tried on a node with its gateway off.
+- **Less memory on the Pi.** Measured in a fresh process on the Pi Zero 2W, old against new:
+  - `mcapp` import 60.2 to 54.7 MB, BLE service import 45.0 to 38.0 MB.
+  - numpy and TimezoneFinder, 19.5 MB together, now load only during a timezone lookup.
+  - The saving in a long-running `mcapp` has not been measured at equal load yet.
+- **Smaller downloads.** Caddy serves the web app from Brotli and gzip files built at release time:
+  4.9 MB of text assets ship as 1.2 MB of Brotli, measured on this release. Hashed assets are cached
+  for good. lighttpd stays installed for boxes with public TLS.
+- **National characters in both directions.** Letters, the euro sign, typographic quotes and emoji
+  pass unchanged, and nothing is transliterated (MeshCom firmware CHARS-01). A message holding only
+  invisible characters no longer becomes an empty chat line.
+- **Map worker works.** Positions no longer logs "Worker failed to load" on every visit.
+
+### Backend (MCProxy)
+
+- FastAPI replaced by `weblite`, a small compatible layer on Starlette. `/docs` and `/openapi.json`
+  are gone. A 422 no longer echoes the rejected input.
+- `/api/uptime` adds `gateway_enabled`, `buckets` and the kind `disabled`; existing fields keep their
+  meaning. Silence the proxy watched before a restart is now stored as a gap instead of reading as
+  uptime.
+- `/api/timezone` runs in a short-lived child: one lookup at a time, at most 4 queued, 8 s limit,
+  400 for coordinates out of range.
+- New wire log: every raw UDP and BLE frame goes to `/var/lib/mcapp/wire/<day>.jsonl`, gzipped daily
+  and never pruned. Measured about 350 KB per day on `mcapp.local`, 2026-11-02 to 11-05. Switch:
+  `WIRE_LOG_ENABLED`.
+- The BLE device scan finds devices named during the scan. Before, a node could be missing from the
+  picker while `bluetoothctl` saw it.
+- The internet feed no longer sends a macOS CoreBluetooth UUID as the identity MAC. `ble_service`
+  gains a macOS backend for development hosts only.
+- `NodeAdminService.drain` could hang forever; fixed. Dependencies refreshed in both locks.
+
+### Frontend (webapp)
+
+- Gateway Availability: new month and year bar, the legend gains "No data", "Gateway off" badge.
+- MapLibre worker shipped with a content hash and precached for offline use.
+- mc-chat admin views: month and year history, and the activity card shows classifier tags.
+- Security: `deepmerge` vendored with a fix for its prototype-poisoning alert, `glob` and `minimatch`
+  overrides. All are build-time only.
+- Dependencies refreshed, `jsdom` to 31. TypeScript deliberately stays on 6.
+
+### Upgrade notes
+
+- Nothing to do on the box. The update converges `SYSTEM_EPOCH` 7, which rewrites the Caddy
+  configuration.
+- Activating an older slot that still carries its own `mcapp.sh` can write the previous Caddy
+  configuration back until the next update.
+
 ## v2.1.22 (2026-10-30)
 
 **The QRZ card now shows how many lookups are still waiting, and a recovered session no longer
