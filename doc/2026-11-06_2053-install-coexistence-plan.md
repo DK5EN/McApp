@@ -2,7 +2,16 @@
 
 **Goal:** a McApp update must not break other services on the box, and operators get a supported way to open their own ports. Field report 2026-11-06: nginx on :8080 (iot4pi, Pi 3B) unreachable after the update to v2.1.24. There was no VPN change; the release only added gzip and an epoch bump.
 
-**Status:** W0 and W1 done. W2 to W5 approved. Commits stay on `development`; release and the `mcapp.local` test need separate approval.
+**Status:** W0 to W2 done. W3 running, W5 approved. Commits stay on `development`; release and the `mcapp.local` test need separate approval.
+
+## Root cause of the field report
+
+Confirmed from the reporter's Pi (Trixie, epoch 8, `mcapp-debug` output, 2026-11-06):
+
+- **The firewall drops the traffic.** The kernel log shows `[nftables DROP]` with `DPT=8080` from the reporter's PC. nginx is running and answers locally.
+- **McApp overwrote the operator's firewall file.** `/etc/nftables.conf` was replaced on 2026-11-06 at 14:33 with McApp's 3304-byte file. The backup from that moment is 1273 bytes, which matches no McApp version checked, so it had no marker and was replaced. Who wrote it, and whether it opened 8080, is not confirmed yet.
+- **v2.1.24 is not the cause.** It was published at 16:37, and its converge logged `nftables rules already configured`. The 14:33 run was most likely the v2.1.23 update (epoch 6 to 7), though that is not proven and does not match the reporter's memory that v2.1.23 still worked.
+- **Ruled out on this box:** a lost temporary rule, since the file has no 8080 rule, and the nginx reboot failure, since `/var/log/nginx` exists. That failure stays a real defect for other boxes.
 
 ## Decisions
 
@@ -36,26 +45,27 @@ Tested 2026-11-06 in OrbStack arm64 VMs (Debian trixie and bookworm), nft 1.1.3,
 ## Design
 
 - **Converge runs only what changed.** Each step has a "last changed in epoch N" constant and runs only if the installed epoch is below N. No new state file. All existing steps start at 8, so boxes on epoch 7 or older behave as today and a box on 8 runs only the steps marked 9. The apt upgrade is gated too. `ensure_web_frontend` stays ungated because it is a no-op when current. A full `mcapp.sh` run still runs everything.
-- **Trixie firewall.** Existing boxes get one include line through a staged edit, checked with `nft -c -f`, so custom rules stay where they are. `flush ruleset` becomes `destroy table inet filter` only if the file defines no other table; otherwise reloads would duplicate that table's rules. Apply with `systemctl reload-or-restart nftables`, never `restart`.
+- **A file with real rules and no marker is never replaced.** It belongs to the operator: McApp keeps it byte-identical, applies nothing and warns which ports it needs. A rule-free stock file is still replaced. This reverses the first design, which would have repeated the field report.
+- **Trixie firewall.** Existing boxes get one include line through a staged edit, checked with `nft -c -f`, so custom rules stay where they are. `flush ruleset` becomes `table inet filter` plus `delete table inet filter` only if the file defines no other table and has no top-level include; otherwise reloads would duplicate rules. `destroy` is out because it needs kernel 6.3. Existing boxes reload and never restart; a stopped service stays stopped.
 - **Faulty custom file at boot.** `nft -f` would fail and leave the box with NO firewall. A drop-in for `nftables.service` retries without the include line, so the box comes up with McApp's own rules and the failure is logged.
-- **Bookworm firewall.** Flush on first install only, detected through McApp's `[iptables DROP]` rule in `rules.v4`. After that, `iptables -C || -A`, then save.
-- **Port warning.** Log and `health.sh` list non-loopback listening ports the firewall blocks and run the `nft -c` check. Runs at converge or health-check time only, so it does not catch a service at the moment it is installed.
+- **Bookworm firewall.** Flush only on a real first install: no `[iptables DROP]` rule in `rules.v4` and no epoch marker. After that, `iptables -C || -A`, then an atomic save. An open INPUT chain stays open. Non-22 SSH ports come from `sshd -T`, `ListenAddress` and the session.
+- **Port warning.** Custom rules live in `/etc/mcapp/nftables.d/*.nft`. Log and `health.sh` list non-loopback listening ports the firewall blocks and run the `nft -c` check. Runs at converge or health-check time only, so it does not catch a service at the moment it is installed.
 - **`/var/log` folders.** A timer writes a generated tmpfiles config from the folders present in `/var/log` (real owner and mode) and the packaged folders in `/var/lib/dpkg/info/*.list` (default owner `root:adm`, 0755), and writes only on change. Boards with a ramlog service are skipped. A folder for a non-root writer that is already gone comes back with the wrong owner.
 - **Caddy.** `import /etc/caddy/conf.d/*` at the end of all four templates, version bump, and a kept previous-config backup. Accepted risk: a broken custom site stops Caddy at its next restart, so the McApp web UI goes down. It fails closed, the guide has the validate command, and `health.sh` reports it.
 - **Config backups.** `backup_config_file` in `bootstrap/lib/detect.sh` copies a file to `/var/lib/mcapp/config-backups/` (folder 0700, files 0600, because `config.json` holds secrets) before a write. It skips a copy identical to the newest one, keeps the newest 5 per file, and warns rather than fails. Existing `.bak` files and the Caddy rollback copy stay.
 
 ## Waves
 
-| Wave | Content                                                    | Writers      | Exclusive files                                                                                                                              | State |
-| ---- | ---------------------------------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
-| W0   | Real-tool checks                                           | Orchestrator | None in the repo                                                                                                                             | Done  |
-| W1A  | Config backups                                             | 1            | `bootstrap/lib/detect.sh`, `system.sh`, `packages.sh`, `config.sh`, `deploy.sh`, new `scripts/bootstrap_config_backup_tests.py`              | Done  |
-| W1B  | Per-step converge, epoch 9                                 | 1            | `bootstrap/mcapp.sh`, new `bootstrap/lib/converge.sh`, `scripts/bootstrap_pinning_tests.py`, new `scripts/bootstrap_converge_steps_tests.py` | Done  |
-| W2A  | Firewall on both OS paths                                  | 1            | Firewall section of `bootstrap/lib/system.sh`, new `scripts/bootstrap_firewall_tests.py`                                                     | Open  |
-| W2B  | Port warning                                               | 1            | `bootstrap/lib/health.sh`, new `scripts/bootstrap_port_warning_tests.py`                                                                     | Open  |
-| W3A  | Preserve `/var/log` folders                                | 1            | Tmpfs section of `bootstrap/lib/system.sh`, new timer and service templates, new `scripts/bootstrap_logdirs_tests.py`                        | Open  |
-| W3B  | Caddy import                                               | 1            | `configure_caddy` in `bootstrap/lib/packages.sh`, `bootstrap/templates/caddy/*`, `scripts/caddy_config_tests.py`                             | Open  |
-| W5   | Operator guide, `CLAUDE.md`, READMEs, operations reference | Orchestrator | Docs                                                                                                                                         | Open  |
+| Wave | Content                                                    | Writers      | Exclusive files                                                                                                                              | State   |
+| ---- | ---------------------------------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| W0   | Real-tool checks                                           | Orchestrator | None in the repo                                                                                                                             | Done    |
+| W1A  | Config backups                                             | 1            | `bootstrap/lib/detect.sh`, `system.sh`, `packages.sh`, `config.sh`, `deploy.sh`, new `scripts/bootstrap_config_backup_tests.py`              | Done    |
+| W1B  | Per-step converge, epoch 9                                 | 1            | `bootstrap/mcapp.sh`, new `bootstrap/lib/converge.sh`, `scripts/bootstrap_pinning_tests.py`, new `scripts/bootstrap_converge_steps_tests.py` | Done    |
+| W2A  | Firewall on both OS paths                                  | 1            | Firewall section of `bootstrap/lib/system.sh`, new `scripts/bootstrap_firewall_tests.py`                                                     | Done    |
+| W2B  | Port warning                                               | 1            | `bootstrap/lib/health.sh`, new `scripts/bootstrap_port_warning_tests.py`                                                                     | Done    |
+| W3A  | Preserve `/var/log` folders                                | 1            | Tmpfs section of `bootstrap/lib/system.sh`, new timer and service templates, new `scripts/bootstrap_logdirs_tests.py`                        | Running |
+| W3B  | Caddy import                                               | 1            | `configure_caddy` in `bootstrap/lib/packages.sh`, `bootstrap/templates/caddy/*`, `scripts/caddy_config_tests.py`                             | Running |
+| W5   | Operator guide, `CLAUDE.md`, READMEs, operations reference | Orchestrator | Docs                                                                                                                                         | Open    |
 
 W1A and W1B run in parallel, W2A and W2B run in parallel, W3A and W3B run in parallel. Orchestrator only: `scripts/run_startup_tests.py`, `src/mcapp/system_converge.py`, this doc. Implementers run Sonnet medium, the advisor Opus medium.
 
@@ -69,7 +79,8 @@ W1A and W1B run in parallel, W2A and W2B run in parallel, W3A and W3B run in par
 ## Carried forward from the W1 advisor pass
 
 - **W3B:** `bootstrap/ssl-tunnel-setup.sh` writes the Caddyfile, a unit and `nftables.conf` with no backup. It does not source `detect.sh`, so it needs its own handling.
-- **W5:** add a backlog item: the full `mcapp.sh` run still has `if ! install_packages`, which ignores a failed apt phase or link check and writes the epoch. `--converge` no longer does this. Update the System Epoch section of `CLAUDE.md`.
+- **W5 backlog:** the same script's nftables edits (`sed` on an unmarked file, `nft add rule` on `inet filter`) ignore the operator-file rule. A failed reload on a managed box is not retried on the next run.
+- **W5:** add a backlog item for lighttpd, which listens on `0.0.0.0:8082` or `[::]:8082` despite `server.bind = 127.0.0.1`, reachable where the firewall is off. Add a backlog item: the full `mcapp.sh` run still has `if ! install_packages`, which ignores a failed apt phase or link check and writes the epoch. `--converge` no longer does this. Update the System Epoch section of `CLAUDE.md`.
 - **Accepted, not fixed:** `bootstrap_ramlog_tests`, `bootstrap_network_safety_tests` and `caddy_config_tests` do not set `MCAPP_CONFIG_BACKUP_DIR`. Run as root on a dev box, they leave stray temp-path copies in the real backup folder; as non-root they only warn. The `migrate_config` backup has static test coverage only.
 
 ## Limits

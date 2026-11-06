@@ -37,7 +37,7 @@ configure_tmpfs 8
 configure_boot_memory 8
 configure_journald 8
 configure_logrotate 8
-configure_firewall 8
+configure_firewall 9
 configure_bluetooth 8
 disable_ipv6 8
 configure_unattended_upgrades 8

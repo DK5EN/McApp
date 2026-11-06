@@ -115,12 +115,17 @@ def _check(ok: bool, label: str, failures: list[str]) -> None:
 
 def _test_runs(tmp: Path, failures: list[str]) -> None:
     order = _expected_order()
+    # A box on 8 runs only the steps that changed since, and never the apt upgrade.
+    changed = [name for name, since in _table_rows() if since > 8]
+    # Epoch 9 changed the firewall. Lowering this row would skip it on every existing box.
+    _check("configure_firewall" in changed, f"1: firewall not in epoch 9: {changed}", failures)
     rc, got, _ = _run(tmp, 8)
     _check(
-        rc == 0 and got == ["ensure_web_frontend", "REACHED_AFTER"],
+        rc == 0 and got == [*changed, "ensure_web_frontend", "REACHED_AFTER"],
         f"1: installed 8 -> {got}",
         failures,
     )
+    _check("install_apt_deps" not in got, f"1: installed 8 ran the apt phase: {got}", failures)
     full = [*order, "ensure_web_frontend", "REACHED_AFTER"]
     for installed in (7, 0):
         rc, got, _ = _run(tmp, installed)
@@ -149,9 +154,10 @@ def _test_failures(tmp: Path, failures: list[str]) -> None:
         _check(rc != 0, f"4: {step} failure exits non-zero (rc={rc})", failures)
         _check(got == order[: idx + 1], f"4: {step} failure stops later steps: {got}", failures)
     # The front door is what most epoch bumps exist for: its failure must not advance the epoch.
+    changed = [name for name, since in _table_rows() if since > 8]
     rc, got, _ = _run(tmp, 8, fail="ensure_web_frontend")
     _check(
-        rc != 0 and got == ["ensure_web_frontend"],
+        rc != 0 and got == [*changed, "ensure_web_frontend"],
         f"4a: ensure_web_frontend failure (rc={rc}): {got}",
         failures,
     )

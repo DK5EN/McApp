@@ -41,6 +41,9 @@ health_check() {
   # Check versions
   check_versions
 
+  # Coexistence warnings are advisory only (never flip all_passed).
+  check_coexistence || true
+
   echo "──────────────────────────────────────────────────────────"
 
   [[ "$all_passed" == "true" ]]
@@ -216,6 +219,156 @@ check_venv() {
   local python_version
   python_version=$("${venv_path}/bin/python" --version 2>&1 | cut -d' ' -f2)
   printf "  %-20s ${GREEN}[OK]${NC} Python ${python_version}\n" "python venv:"
+  return 0
+}
+
+#──────────────────────────────────────────────────────────────────
+# COEXISTENCE WARNINGS (advisory: always returns 0)
+#──────────────────────────────────────────────────────────────────
+
+# Listening non-loopback TCP ports, one "port process" line each, unique.
+# McApp's own internal ports are skipped: the firewall blocks them on purpose,
+# and lighttpd binds 0.0.0.0:8082 despite `server.bind = "127.0.0.1"`.
+_coex_listening() {
+  ss -H -tlnp 2>/dev/null | awk '
+    { a = $4; p = a; sub(/.*:/, "", p); h = a; sub(/:[0-9]+$/, "", h)
+      if (h ~ /^127\./ || h == "::1" || h == "[::1]" || p !~ /^[0-9]+$/) next
+      if (p == 2981 || p == 8081 || p == 8082) next   # API, BLE service, lighttpd backend
+      n = "-"; i = index($0, "users:((\"")
+      if (i > 0) { n = substr($0, i + 9); sub(/".*/, "", n) }
+      if (!(p in seen)) { seen[p] = 1; print p, n } }'
+}
+
+# Ordered "A|D lo hi" rules (stdin: nft chain dump) that decide a TCP port.
+# A rule counts only when the port is its sole condition besides a source
+# restriction: interface-bound, negated and non-NEW conntrack rules are skipped,
+# and a drop that is conditional (limit/meter) is not a block. A bare
+# accept/drop is the whole range. The verdict is the last word; quotes
+# (comment, log prefix) are stripped first so a comment cannot flip it.
+_coex_nft_rules() {
+  awk '{
+    s = $0; gsub(/"[^"]*"/, "", s); sub(/[ \t]+comment[ \t]*$/, "", s)
+    sub(/^[ \t]+/, "", s); sub(/[ \t;]+$/, "", s)
+    if (s ~ /(^|[ \t])accept$/) v = "A"
+    else if (s ~ /(^|[ \t])(drop|reject)([ \t]|$)/) v = "D"
+    else next
+    t = s; sub(/^counter( packets [0-9]+ bytes [0-9]+)?[ \t]*/, "", t)
+    if (t ~ /^(accept|drop|reject)([ \t]|$)/) { print v, 0, 65535; next }
+    if (s !~ /tcp dport / || s ~ /!/ || s ~ /(^|[ \t])(iif|iifname)[ \t]/) next
+    if (s ~ /ct state/ && s !~ /ct state[ {]+[a-z, ]*new/) next
+    if (v == "D" && s ~ /(limit|meter|ct count)/) next
+    r = s; sub(/.*tcp dport /, "", r)
+    if (r ~ /^\{/) { sub(/^\{/, "", r); sub(/\}.*/, "", r) } else { sub(/ .*/, "", r) }
+    gsub(/,/, " ", r); n = split(r, tk, " ")
+    for (i = 1; i <= n; i++) {
+      if (tk[i] !~ /^[0-9]+(-[0-9]+)?$/) continue
+      split(tk[i], pr, "-"); print v, pr[1], (pr[2] == "" ? pr[1] : pr[2]) } }'
+}
+
+# Same for `iptables -S INPUT` output (stdin).
+_coex_ipt_rules() {
+  awk '/^-A INPUT / {
+    if ($0 ~ /(^| )-i / || $0 ~ /!/) next
+    if ($0 ~ / -j ACCEPT/) v = "A"
+    else if ($0 ~ / -j (DROP|REJECT)/) v = "D"
+    else next
+    if ($0 ~ /^-A INPUT -j /) { print v, 0, 65535; next }
+    if ($0 ~ /-p udp/ || $0 !~ /--dports? /) next
+    if ($0 ~ /(--state|--ctstate) / && $0 !~ /(--state|--ctstate) [A-Z,]*NEW/) next
+    if (v == "D" && $0 ~ /-m (recent|limit|hashlimit|connlimit)/) next
+    s = $0; sub(/.*--dports? /, "", s); sub(/ .*/, "", s)
+    gsub(/,/, " ", s); n = split(s, tk, " ")
+    for (i = 1; i <= n; i++) {
+      split(tk[i], pr, ":"); print v, pr[1], (pr[2] == "" ? pr[1] : pr[2]) } }'
+}
+
+# First rule that covers the port wins; $2 is the chain policy (A or D).
+_coex_verdict() {
+  awk -v p="$1" -v d="$2" '$2 + 0 <= p + 0 && p + 0 <= $3 + 0 { print $1; f = 1; exit } END { if (!f) print d }'
+}
+
+check_coexistence() {
+  local nft_conf="${MCAPP_NFT_CONF:-/etc/nftables.conf}"
+  local caddy_conf="${MCAPP_CADDY_CONF:-/etc/caddy/Caddyfile}"
+  local caddy_env="${MCAPP_CADDY_ENV:-/etc/mcapp/caddy.env}"
+  local warned=0 chain="" ipt="" rules="" dflt="D" mode="" out="" line ruleset="" managed=false
+
+  # McApp's custom folder and boot fallback exist only on a file McApp manages.
+  if [ -f "$nft_conf" ] && grep -qF "# McApp firewall rules" "$nft_conf" 2>/dev/null; then
+    managed=true
+  fi
+  if command -v nft >/dev/null 2>&1; then
+    ruleset=$(nft list ruleset 2>/dev/null) || ruleset=""
+  fi
+
+  if command -v nft >/dev/null 2>&1 && chain=$(nft list chain inet filter input 2>/dev/null) && [ -n "$chain" ]; then
+    mode=nft
+    if printf '%s\n' "$chain" | grep -q 'policy accept'; then dflt=A; fi
+    rules=$(printf '%s\n' "$chain" | _coex_nft_rules)
+  elif printf '%s\n' "$ruleset" | grep -q 'hook input'; then
+    # A firewall in another table: neither "not active" nor safe to judge port by port.
+    mode=foreign
+  elif command -v iptables >/dev/null 2>&1 && ipt=$(iptables -S INPUT 2>/dev/null) && [ -n "$ipt" ]; then
+    mode=iptables
+    if printf '%s\n' "$ipt" | grep -q '^-P INPUT ACCEPT'; then dflt=A; fi
+    rules=$(printf '%s\n' "$ipt" | _coex_ipt_rules)
+  fi
+
+  if [ -z "$mode" ]; then
+    echo "  Firewall not active (no readable nftables/iptables ruleset); skipping port check"
+  elif [ "$mode" = "foreign" ]; then
+    warned=1
+    log_warn "An nftables firewall in another table is active and McApp cannot read it. For McApp to work it must allow loopback, 22, 80, 443 and 2985/tcp, and 1799 and 5353/udp. Any other service needs its own rule there."
+  else
+    local port name
+    while read -r port name; do
+      [ -n "$port" ] || continue
+      if [ "$(printf '%s\n' "$rules" | _coex_verdict "$port" "$dflt")" = "A" ]; then
+        continue
+      fi
+      [ "$name" = "-" ] && name="unknown process"
+      warned=1
+      if [ "$mode" = "nft" ] && [ "$managed" = "true" ]; then
+        log_warn "Port ${port}/tcp (${name}) is listening but blocked by the firewall. Add \"tcp dport ${port} accept\" to /etc/mcapp/nftables.d/custom.nft, check with \"sudo nft -c -f /etc/nftables.conf\", then \"sudo systemctl reload nftables\""
+      elif [ "$mode" = "nft" ]; then
+        log_warn "Port ${port}/tcp (${name}) is listening but blocked by the firewall. This firewall is your own: add \"tcp dport ${port} accept\" to its input chain in ${nft_conf}, check with \"sudo nft -c -f ${nft_conf}\", then \"sudo systemctl reload nftables\""
+      else
+        log_warn "Port ${port}/tcp (${name}) is listening but blocked by the firewall. Run: sudo iptables -A INPUT -p tcp --dport ${port} -j ACCEPT, then sudo sh -c \"iptables-save > /etc/iptables/rules.v4\""
+      fi
+    done < <(_coex_listening)
+  fi
+
+  if command -v nft >/dev/null 2>&1 && [ -f "$nft_conf" ]; then
+    if ! out=$(nft -c -f "$nft_conf" 2>&1); then
+      line=$(printf '%s\n' "$out" | grep -m1 -i error || printf '%s\n' "$out" | head -n 1)
+      if [ "$managed" = "true" ]; then
+        log_warn "Custom firewall rules are faulty (${line:-no detail}). A reload will refuse them; at boot the box falls back to McApp's own rules"
+      else
+        log_warn "${nft_conf} is faulty (${line:-no detail}). A reload will refuse it, and at boot the box could come up with no firewall"
+      fi
+      warned=1
+    fi
+  fi
+
+  if command -v caddy >/dev/null 2>&1 && [ -f "$caddy_conf" ]; then
+    # Validate in the environment the service sees: public-TLS Caddyfiles use
+    # {env.*_TOKEN} from caddy.env. Subshell, so a broken file stays contained.
+    if ! out=$(
+      set +u
+      set -a
+      [ -r "$caddy_env" ] && . "$caddy_env" 2>/dev/null || true
+      set +a
+      HOME=/root caddy validate --config "$caddy_conf" --adapter caddyfile 2>&1
+    ); then
+      line=$(printf '%s\n' "$out" | grep -m1 -i error || printf '%s\n' "$out" | head -n 1)
+      log_warn "Caddy config ${caddy_conf} is faulty (${line:-no detail}). Caddy would not start on its next restart, which takes the McApp web UI down"
+      warned=1
+    fi
+  fi
+
+  if [ "$warned" -eq 0 ] && [ -n "$mode" ]; then
+    log_ok "No port or config conflicts found"
+  fi
   return 0
 }
 
