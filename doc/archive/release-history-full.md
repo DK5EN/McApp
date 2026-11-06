@@ -5,6 +5,45 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.1.22 (2026-10-30)
+
+**The QRZ card now shows how many lookups are still waiting, and a recovered session no longer
+leaves a stale "Session Timeout" note behind.** Updates no longer warn about Caddy HTTPS on boxes
+that serve their own IP address as an extra site. Dependencies refreshed in both repos, ICSSW group
+list updated. Schema stays at 39, `SYSTEM_EPOCH` at 6.
+
+### Highlights
+
+- **Queued lookups on the QRZ card.** It shows how many callsigns wait for a first lookup and how
+  many wait for a refresh, counted from the same list the lookup loop works through.
+- **"Session Timeout" clears itself.** The first lookup that works after a re-login removes the
+  note, also when the note was written before a restart. Daily cap, QRZ refusal and backoff notes
+  stay until their own condition ends.
+- **No false Caddy warning after an update.** A box whose `:443` site line also lists its own IP,
+  e.g. `10.0.0.236:443`, got `[WARN] Caddy HTTPS not responding` after every update while HTTPS
+  worked fine.
+  - Cause: the health probe picked the IP as host name; a connection to an IP sends no server name,
+    so Caddy could not pick a certificate.
+  - Now: the probe uses the first host name on the line and skips IP addresses.
+- **Three more ICSSW groups.** 11 (WW-FR, French), 14 (WW-SP, Spanish), 16 (WW-IT, Italian).
+
+### Backend (MCProxy)
+
+- QRZ status reports `pending_new` and `pending_refresh`; a working lookup clears any stored
+  session note, never a cap, refusal or login reason.
+- Bootstrap `caddy_site()` returns the first host name of a site line, never an IP literal.
+- ICSSW group label snapshot refreshed.
+- Dependencies refreshed: pydantic 2.14.2, sse-starlette 3.6.0, ruff 0.17.3.
+
+### Frontend (webapp)
+
+- QRZ card: the "QRZ reports" row is gone, queued new and refresh lookups are shown instead.
+- Dependencies refreshed.
+
+### Upgrade notes
+
+- Nothing to do on the box.
+
 ## v2.1.21 (2026-10-25)
 
 **Every node setting the new firmware reports is now on the BLE page, and the message details show
