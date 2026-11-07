@@ -2,7 +2,7 @@
 
 **Goal:** the 30-day and yearly WX views load in about a second on the Pi Zero and never block the event loop, now that the gap fill roughly doubled the stored telemetry.
 
-**Status (2026-11-07):** Waves 5, 6 and 7a committed. Wave 7a (Python medians, stale-while-revalidate cache) after the Pi measurements below; Pi cold reads: 744 h 4.2 s, yearly 8.2 s, both cached (5 min fresh, 60 min stale). Next: dev release and measurement on mcapp.local. Deferred: expression index `(callsign, timestamp / bucket_ms)` (yearly cold 5.5 to 3 s, needs a migration); mc-chat mock shape; advisor nice-to-haves (sidebar shows the bucket start on 30 d; a ~10 h old station qualifies by raw rows but has under 6 buckets to chart; the Kalman gate sees 2 h means; a temp2/hum2/gas-only stats window yields no `stats`).
+**Status (2026-11-07):** Waves 5-7 done. `v2.1.26-dev.2` is live on mcapp.local (slot-0). Open: soak; follow-ups below.
 
 ## Measurements (mcapp.local, 2026-11-07 13:10, after the first fill cycle)
 
@@ -87,6 +87,25 @@ Decisions taken as recommended: 1B, 2a, 3i, 4 (hollow only if all), 5, 6. mc-cha
 - **Python medians** (`groupby` + `zip` transpose + `sorted`) take 1.28 s on the Pi with identical results.
 - **An expression index `(callsign, timestamp / bucket_ms)`** removes the GROUP BY temp B-tree: 744 h 1.5 to 1.1 s, yearly 5.5 to 3.0 s. It needs a schema migration; deferred.
 - **Conclusion:** about 3 s cold for 744 h is the floor without pre-aggregation. Wave 7a therefore adds Python medians plus a stale-while-revalidate cache for the bucketed responses (5 min fresh, served stale up to 60 min while one background refresh runs).
+
+## Wave 7 result (mcapp.local, v2.1.26-dev.2, 2026-11-07 14:25)
+
+| Request                | Cold   | Cached  | Size (gzip)       |
+| ---------------------- | ------ | ------- | ----------------- |
+| 48 h                   | 0.36 s | -       | 0.13 MB           |
+| 192 h                  | 0.92 s | -       | 0.50 MB           |
+| 744 h, stats_hours=720 | 5.2 s  | 0.009 s | 0.61 MB (0.14 MB) |
+| yearly                 | 9.7 s  | 0.013 s | 1.74 MB           |
+
+- **Before:** 744 h 4.9 s and 12.3 MB, with 1.5 s of `json.dumps` on the event loop on every request; yearly 8.2 s.
+- **A cold compute still lags the loop:** `loop_lag` 173 ms during the 744 h read and 521 ms during the yearly one. The worker thread holds the GIL for the Python grouping (and the 744 h medians). A cold compute happens after a restart and on each background refresh (at most every 5 min, only while someone views the 30 d or yearly page).
+
+## Follow-ups (not started)
+
+- **Build the columns in SQLite with `json_group_array`** per callsign, so Python only joins strings: removes the GIL-held grouping that causes the cold `loop_lag`, and most of the yearly cold time.
+- **Expression index `(callsign, timestamp / bucket_ms)`:** yearly cold 5.5 to 3 s in the GROUP BY; needs a migration.
+- **mc-chat mock:** port the columnar shape, or its WX page stays broken.
+- **Advisor nice-to-haves:** sidebar shows the bucket start on 30 d; a ~10 h old station qualifies by raw rows but has under 6 buckets to chart; the Kalman gate sees 2 h means; a temp2/hum2/gas-only stats window yields no `stats`.
 
 ## Cost and time
 
