@@ -2,7 +2,7 @@
 
 **Goal:** fill the gaps in the WX charts with samples from the central server and persist them, so the charts stay complete even when RF reception is not.
 
-**Status (2026-11-07):** Waves 0-3 done (MCProxy and webapp `c6028a5`). Next: Wave 4.
+**Status (2026-11-07):** Waves 0-4 done (MCProxy and webapp `c6028a5`). Open: the operator's decision on load, see Wave 4 results. Not released.
 
 ## Decisions (operator, 2026-11-07)
 
@@ -96,7 +96,7 @@ QFE differed from meshmap by a station-specific median of -1.3 to +0.5 hPa. The 
 | 1    | Migration v41, pure merge logic, write and cursor storage, `origin` handling in ingest, test suite | Implementer, then advisor | Done   |
 | 2    | Fetch job, status route, `origin` in `/api/telemetry`                                              | Implementer, then advisor | Done   |
 | 3    | Webapp: hollow points, line breaks, fill status in the Internet card                               | Implementer, then advisor | Done   |
-| 4    | Full gate in both repos, backfill test on a DB copy, read-time check                               | Orchestrator              | Open   |
+| 4    | Full gate in both repos, backfill test on a DB copy, read-time check                               | Orchestrator              | Done   |
 
 A release or deploy to mcapp.local is not part of this plan and needs a separate go.
 
@@ -110,6 +110,32 @@ A release or deploy to mcapp.local is not part of this plan and needs a separate
 - **Points:** RF points are now drawn solid on every raw series and meshmap points hollow. Some raw series had transparent points before, which would have looked like central samples. This is a visible change to RF-only charts.
 - **Line breaks** use `spanGaps: true` plus a scriptable `segment` style that goes transparent across a real gap. A numeric `spanGaps` breaks at every null on the merged axis in Chart.js 4.6.1.
 - **Older backends:** the card hides the fill block on a 404 and stops polling, without writing a stall row.
+
+## Wave 4 results (2026-11-07)
+
+Real fill against a copy of the 2026-10-20 backup, limited to the 7 visible stations of the measurement table (DG7RJ-11 is hidden). The live DB was not read.
+
+| Station   | Max gap, RF | Max gap, combined (Oct 13-20) | Filled rows, 365 d |
+| --------- | ----------- | ----------------------------- | ------------------ |
+| DB0MMR-12 | 41.7 h      | 0.7 h                         | 3,752              |
+| DF2KX-12  | 27.8 h      | 22.3 h                        | 3,789              |
+| DM6CS-12  | 11.6 h      | 1.0 h                         | 3,286              |
+| DL1RHS-24 | 7.1 h       | 0.7 h                         | 3,494              |
+| DG7RJ-8   | 3.4 h       | 1.0 h                         | 2,344              |
+| DB0ISM-1  | 2.6 h       | 1.6 h                         | 1,822              |
+| DL2UD-1   | 1.0 h       | 1.0 h                         | 1,147              |
+
+- **The merge works as measured in Wave 0.** Combined gaps match the estimate; DF2KX-12 keeps the 22 h gap that meshmap also has.
+- **Meshmap history starts 2026-08-06.** The first fill therefore covers about 3 months, not 365 days.
+- **First cycle: 913 s, 19,632 rows, about 13 requests per station.** A second cycle inserted only the 5 samples that had settled in the meantime.
+- **Read time on the Mac:** the 30-day `/api/telemetry` query went from 22 ms (10,850 rows) to 39 ms (19,592 rows), the yearly one from 215 to 264 ms. Not yet measured on the Pi Zero.
+
+### Open decision: load is about 12 times the plan
+
+- **The visible set is about 99 stations, not 8.** The picker shows every station with a non-zero temp, hum, QFE, QNH or **altitude** in 30 days, and most stations report a GPS altitude. Commit `3ed0d18` already drops battery-only and all-zero stations; that removed one.
+- **Per box that is about 1,300 requests for the first fill (about 3.6 h at one per 10 s), then about 99 requests every 30 min** (16 min of every cycle, about 4,750 a day).
+- **Options:** accept it; poll only stations with a real WX sensor (non-zero temp, hum, QFE or QNH; 53 of 153 on the backup DB); or lengthen the steady-state cycle.
+- **The read-time figure scales with it.** 7 filled stations nearly doubled the 30-day row count, so all 99 would need the server-side downsampling from "Open risks" before a release. Measure on the Pi first.
 
 ## Open risks
 
