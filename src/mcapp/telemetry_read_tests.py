@@ -12,6 +12,7 @@ import os
 import sqlite3
 import tempfile
 import time
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -21,6 +22,7 @@ from starlette.testclient import TestClient
 from .main import MessageRouter
 from .sqlite_storage import create_sqlite_storage
 from .sse_handler import SSEManager
+from .storage.query import _tm_bucketed_sql
 
 _H = 3_600_000
 _FIELDS = ("temp1", "temp2", "hum", "hum2", "qfe", "qnh", "gas", "alt")
@@ -226,6 +228,61 @@ async def _cases(results: list[tuple[str, bool]], storage: Any, db: Path) -> Non
     _check(results, "yearly: n and origin", ys.get("n") == [2, 1] and ys.get("origin") == [0, 1])
     _check(results, "yearly: no stats (the view has no stats table)", "stats" not in ys)
     _check(results, "yearly: alt-only station dropped", "DL4ALT-1" not in y["stations"])
+    # INDEX / PLAN (migration 42) ---------------------------------------------
+    conn = sqlite3.connect(db)
+    try:
+        names = {r[1] for r in conn.execute("PRAGMA index_list(telemetry)")}
+        _check(
+            results,
+            "migration 42: idx_telemetry_cs_b2h and idx_telemetry_cs_b4h exist",
+            {"idx_telemetry_cs_b2h", "idx_telemetry_cs_b4h"} <= names,
+        )
+        conn.execute("CREATE TEMP TABLE _st AS SELECT DISTINCT callsign FROM telemetry")
+        for bucket_s, index in ((7200, "idx_telemetry_cs_b2h"), (14400, "idx_telemetry_cs_b4h")):
+            plan = list(
+                conn.execute("EXPLAIN QUERY PLAN " + _tm_bucketed_sql(bucket_s).replace("?", "0"))
+            )
+            # Only the inner bucket GROUP BY is pinned: SQLite before ~3.50 (the Pi has
+            # 3.46.1) still sorts the outer per-callsign GROUP BY over the co-routine.
+            inner = {r[0] for r in plan if str(r[3]).startswith("CO-ROUTINE")}
+            for r in plan:
+                if r[1] in inner:
+                    inner.add(r[0])
+            inner_rows = [str(r[3]) for r in plan if r[1] in inner]
+            _check(
+                results,
+                f"plan: bucket {bucket_s} s read uses {index}",
+                any(f"USING INDEX {index}" in d for d in inner_rows),
+            )
+            _check(
+                results,
+                f"plan: bucket {bucket_s} s inner GROUP BY has no temp B-tree",
+                not any("TEMP B-TREE FOR GROUP BY" in d for d in inner_rows),
+            )
+    finally:
+        conn.close()
+    # ARRAY ORDER: arrays carry no aggregate ORDER BY and rely on the inner ORDER BY
+    # streaming into the outer GROUP BY. Rows inserted out of timestamp order must still
+    # come back ascending, on every read shape.
+    shuffled = [7, 2, 9, 0, 5, 3, 8, 1, 6, 4]
+    _insert(db, [("DL9ORD-1", now - (2 + k * 5) * _H, {"temp1": float(k)}, None) for k in shuffled])
+    for label, body in (
+        ("raw 192 h", await storage.get_telemetry_chart_data(192)),
+        ("2 h means", await storage.get_telemetry_chart_data(744)),
+        ("yearly", await storage.get_telemetry_chart_data_bucketed()),
+    ):
+        ts = _decode(body)["stations"].get("DL9ORD-1", {}).get("ts", [])
+        _check(
+            results,
+            f"order: {label} ts strictly ascending for shuffled inserts",
+            len(ts) >= 5 and all(a < b for a, b in pairwise(ts)),
+        )
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute("DELETE FROM telemetry WHERE callsign = 'DL9ORD-1'")
+        conn.commit()
+    finally:
+        conn.close()
     # ROUTES -----------------------------------------------------------------
     with patch.dict(os.environ, {"MESHCOM_VAPID_PATH": str(db.parent / "vapid.json")}):
         router = MessageRouter(storage)

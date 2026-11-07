@@ -2,7 +2,7 @@
 
 **Goal:** the 30-day and yearly WX views load in about a second on the Pi Zero and never block the event loop, now that the gap fill roughly doubled the stored telemetry.
 
-**Status (2026-11-07):** Waves 5-7 done. `v2.1.26-dev.2` is live on mcapp.local (slot-0). Open: soak; follow-ups below.
+**Status (2026-11-07):** Waves 5-9 done (8 and 9 committed, unreleased). Next: Wave 10, dev release and the Pi measurement.
 
 ## Measurements (mcapp.local, 2026-11-07 13:10, after the first fill cycle)
 
@@ -100,7 +100,25 @@ Decisions taken as recommended: 1B, 2a, 3i, 4 (hollow only if all), 5, 6. mc-cha
 - **Before:** 744 h 4.9 s and 12.3 MB, with 1.5 s of `json.dumps` on the event loop on every request; yearly 8.2 s.
 - **A cold compute still lags the loop:** `loop_lag` 173 ms during the 744 h read and 521 ms during the yearly one. The worker thread holds the GIL for the Python grouping (and the 744 h medians). A cold compute happens after a restart and on each background refresh (at most every 5 min, only while someone views the 30 d or yearly page).
 
-## Follow-ups (not started)
+## Waves 8-9 (follow-ups, dispatched 2026-11-07)
+
+| Wave | Content                                                                                                                                           | Files                                                                                                                                   |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| 8    | Backend: columns built with `json_group_array` in SQLite, stats medians in SQL if not slower, expression indexes (migration 42), same wire output | `storage/query.py` (WX section), `storage/migrations.py`, `storage/constants.py`, `migration_chain_tests.py`, `telemetry_read_tests.py` |
+| 9    | Webapp: sidebar shows the real last sample on 30 d, a bucketed station needs `MIN_WX_POINTS` buckets                                              | `WxDataStore.ts`, `WxData.vue`, `WxListPanel.vue`, `WxView.vue`, their specs                                                            |
+| 10   | Gate both repos, Pi measurement, dev release                                                                                                      | Orchestrator                                                                                                                            |
+
+Not done, by decision: mc-chat mock (it has no WX data), Kalman gate on 2 h means, stats for temp2/hum2/gas-only stations.
+
+**Wave 8 result:** output identical to b225591/a539515 on the live copy (parsed JSON at abs 1e-9, same byte counts). Mac: 744 h 163 to 118 ms, yearly 232 to 169 ms; Python share 744 h 31 to 15 ms (the stats transpose), yearly 38 to 1 ms.
+
+- **Stats medians stay in Python.** SQL `json_group_array(ORDER BY)` + `json_extract` was 111 ms against 45 ms.
+- **Arrays have no aggregate `ORDER BY`.** They rely on the inner `ORDER BY` streaming into the outer `GROUP BY callsign` (the flattener refuses this shape, restriction 16). All arrays of one station fill in one pass, so they can never misalign; the worst case is unsorted `ts`. Verified 0 unsorted stations on SQLite 3.44.2, 3.46.1 (on the Pi) and 3.50; pinned by a shuffled-insert test. An aggregate `ORDER BY` would cost about 25 %.
+- **On the Pi's 3.46.1 the outer per-callsign `GROUP BY` still sorts;** only the inner bucket `GROUP BY` uses the new indexes there. The test pins the inner one only.
+
+**Wave 9 result:** webapp `6ba3e92`. The sidebar shows `stats.last_ms` (else the last bucket end, clamped to now), and a bucketed station needs `MIN_WX_POINTS` plottable buckets. No advisor pass (15 lines, reviewed by the orchestrator).
+
+## Follow-ups (Waves 8-9 cover these)
 
 - **Build the columns in SQLite with `json_group_array`** per callsign, so Python only joins strings: removes the GIL-held grouping that causes the cold `loop_lag`, and most of the yearly cold time.
 - **Expression index `(callsign, timestamp / bucket_ms)`:** yearly cold 5.5 to 3 s in the GROUP BY; needs a migration.
