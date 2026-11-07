@@ -2,7 +2,7 @@
 
 **Goal:** the 30-day and yearly WX views load in about a second on the Pi Zero and never block the event loop, now that the gap fill roughly doubled the stored telemetry.
 
-**Status (2026-11-07):** Waves 5-9 done (8 and 9 committed, unreleased). Next: Wave 10, dev release and the Pi measurement.
+**Status (2026-11-07):** Waves 5-10 done. `v2.1.26-dev.3` is live on mcapp.local (slot-2, schema v42). Open: soak.
 
 ## Measurements (mcapp.local, 2026-11-07 13:10, after the first fill cycle)
 
@@ -117,6 +117,18 @@ Not done, by decision: mc-chat mock (it has no WX data), Kalman gate on 2 h mean
 - **On the Pi's 3.46.1 the outer per-callsign `GROUP BY` still sorts;** only the inner bucket `GROUP BY` uses the new indexes there. The test pins the inner one only.
 
 **Wave 9 result:** webapp `6ba3e92`. The sidebar shows `stats.last_ms` (else the last bucket end, clamped to now), and a bucketed station needs `MIN_WX_POINTS` plottable buckets. No advisor pass (15 lines, reviewed by the orchestrator).
+
+## Wave 10 result (mcapp.local, v2.1.26-dev.3, 2026-11-07 15:18)
+
+| Request                | Cold (dev.2) | Cold (dev.3) | Cached  |
+| ---------------------- | ------------ | ------------ | ------- |
+| 48 h                   | 0.36 s       | 0.13 s       | -       |
+| 192 h                  | 0.92 s       | 0.45 s       | -       |
+| 744 h, stats_hours=720 | 5.2 s        | 3.5 s        | 0.006 s |
+| yearly                 | 9.7 s        | 4.1 s        | 0.008 s |
+
+- **No `loop_lag` row (100 ms threshold) during the cold reads.** dev.2 logged 173 ms (744 h) and 521 ms (yearly).
+- Migration 42 ran at start (`Migration v41 → v42`), no warnings; payload sizes unchanged.
 
 ## Follow-ups (Waves 8-9 cover these)
 
