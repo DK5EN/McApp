@@ -125,6 +125,7 @@ from mcapp.storage.uptime_gateway_tests import run_uptime_gateway_tests
 from mcapp.storage.uptime_tests import run_uptime_tests
 from mcapp.storage.www_ingest_tests import run_www_ingest_tests
 from mcapp.telemetry_fill_service_tests import run_telemetry_fill_service_tests
+from mcapp.telemetry_read_tests import run_telemetry_read_tests
 from mcapp.template_override_tests import run_template_override_tests
 from mcapp.udp_handler import run_startup_tests as run_udp_handler_tests
 from mcapp.udp_parsing_tests import run_udp_parsing_tests
@@ -237,6 +238,8 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     telemetry_fill_service_ok = await run_telemetry_fill_service_tests()
     print(f"telemetry_fill_service: {'PASS' if telemetry_fill_service_ok else 'FAIL'}")
+    telemetry_read_ok = await run_telemetry_read_tests()
+    print(f"telemetry_read: {'PASS' if telemetry_read_ok else 'FAIL'}")
 
     linkcheck_ingest_ok = await run_linkcheck_ingest_tests()
     print(f"linkcheck_ingest: {'PASS' if linkcheck_ingest_ok else 'FAIL'}")
@@ -512,6 +515,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and migration_chain_ok
         and telemetry_fill_ok
         and telemetry_fill_service_ok
+        and telemetry_read_ok
         and signal_via_ok
         and mheard_attribution_ok
         and hey_path_ok

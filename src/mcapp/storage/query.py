@@ -1746,14 +1746,21 @@ class QueryMixin(StorageBase):
         logger.info("Saved %d messages to %s", len(data), filename)
         return len(data)
 
-    async def get_telemetry_chart_data(self, hours: int = 48) -> list[dict[str, Any]]:
-        """Return telemetry data for chart display, limited to recent data."""
-        cutoff = int((time.time() - hours * 3600) * 1000)
-        return await self._query(
-            "SELECT callsign, timestamp, temp1, temp2, hum, hum2,"
-            " qfe, qnh, gas, co2, alt, batt, extras, origin"
-            " FROM telemetry WHERE timestamp > ? ORDER BY callsign, timestamp",
-            (cutoff,),
+    async def get_telemetry_chart_data(
+        self, hours: int = 48, stats_hours: int | None = None
+    ) -> bytes:
+        """WX chart payload as JSON bytes: raw rows up to 192 h, 2 h means beyond.
+
+        Built and encoded in one worker thread without per-row dicts (wire contract in
+        doc/2026-11-07_1400-telemetry-downsampling-plan.md).
+        """
+        bucket_s = 0 if hours <= TELEMETRY_RAW_MAX_HOURS else TELEMETRY_MEAN_BUCKET_S
+        return await asyncio.to_thread(
+            _telemetry_payload,
+            self.db_path,
+            bucket_s,
+            hours,
+            hours if stats_hours is None else stats_hours,
         )
 
     async def get_telemetry_stations(self, since_ms: int) -> list[str]:
@@ -1790,33 +1797,10 @@ class QueryMixin(StorageBase):
         )
         return {str(r["callsign"]): int(r["n"]) for r in rows}
 
-    async def get_telemetry_chart_data_bucketed(
-        self, hours: int = HOURS_PER_YEAR
-    ) -> list[dict[str, Any]]:
-        """Return telemetry aggregated into 4-hour buckets with min/max."""
-        cutoff = int((time.time() - hours * 3600) * 1000)
-        bucket_ms = TELEMETRY_BUCKET_MS
-        return await self._query(
-            f"""
-            SELECT
-                callsign,
-                (timestamp / {bucket_ms}) * {bucket_ms} AS bucket_ts,
-                MIN(temp1) AS temp1_min, MAX(temp1) AS temp1_max,
-                MIN(temp2) AS temp2_min, MAX(temp2) AS temp2_max,
-                MIN(hum) AS hum_min, MAX(hum) AS hum_max,
-                MIN(hum2) AS hum2_min, MAX(hum2) AS hum2_max,
-                MIN(qfe) AS qfe_min, MAX(qfe) AS qfe_max,
-                MIN(gas) AS gas_min, MAX(gas) AS gas_max,
-                MIN(alt) AS alt_min, MAX(alt) AS alt_max,
-                COUNT(*) AS count
-            FROM telemetry
-            WHERE timestamp > ?
-              AND (temp1 IS NOT NULL OR hum IS NOT NULL OR qfe IS NOT NULL
-                   OR gas IS NOT NULL)
-            GROUP BY callsign, bucket_ts
-            ORDER BY callsign, bucket_ts
-            """,  # noqa: S608 - identifiers from fixed set; values parameterized
-            (cutoff,),
+    async def get_telemetry_chart_data_bucketed(self, hours: int = HOURS_PER_YEAR) -> bytes:
+        """Yearly WX payload as JSON bytes: 4 h min/max buckets, no stats."""
+        return await asyncio.to_thread(
+            _telemetry_payload, self.db_path, TELEMETRY_BUCKET_MS // 1000, hours, hours
         )
 
     async def get_message_acks(self, msg_id: str, since: int | None = None) -> list[dict[str, Any]]:
@@ -1909,3 +1893,134 @@ class QueryMixin(StorageBase):
             }
             for row in rows
         ]
+
+
+# --- WX telemetry readers (wire contract: doc/2026-11-07_1400-telemetry-downsampling-plan.md)
+
+TELEMETRY_RAW_MAX_HOURS = 192
+TELEMETRY_MEAN_BUCKET_S = 7200
+_TM_FIELDS = ("temp1", "temp2", "hum", "hum2", "qfe", "qnh", "gas", "alt")
+_TM_ZERO_NULL = frozenset({"temp2", "hum2", "gas"})  # a 0 means "no sensor"
+_TM_MINMAX_FIELDS = ("temp1", "temp2", "hum", "hum2", "qfe", "gas", "alt")
+_TM_ANY = "(" + " OR ".join(f"{f} IS NOT NULL" for f in _TM_FIELDS) + ")"
+_TM_WX = "(" + " OR ".join(f"COALESCE({f}, 0) != 0" for f in _TM_FIELDS if f != "alt") + ")"
+_TM_COUNT_FIELDS = ("temp1", "hum", "qfe", "qnh", "alt")
+
+
+def _tm_expr(field: str) -> str:
+    return f"NULLIF({field}, 0)" if field in _TM_ZERO_NULL else field
+
+
+def _tm_put(obj: dict[str, Any], key: str, values: list[Any]) -> None:
+    """Add an array only if it carries at least one value (absent field is omitted)."""
+    if any(v is not None for v in values):
+        obj[key] = values
+
+
+def _tm_stats(conn: sqlite3.Connection, stations: dict[str, dict[str, Any]]) -> None:
+    """Attach `stats` (count/first/last/[min, median, max]) from temp table `_w`."""
+    present = " OR ".join(f"{f} IS NOT NULL" for f in _TM_COUNT_FIELDS)
+    for cs, n, first, last in conn.execute(
+        f"SELECT callsign, COUNT(DISTINCT timestamp), MIN(timestamp), MAX(timestamp)"  # noqa: S608 - fixed identifiers
+        f" FROM _w WHERE {present} GROUP BY callsign"
+    ):
+        stations[cs]["stats"] = {"count": n, "first_ms": first, "last_ms": last}
+    union = " UNION ALL ".join(
+        f"SELECT callsign, '{f}' AS f, MIN(x), MAX(x),"  # noqa: S608 - fixed identifiers
+        f" MAX(CASE WHEN rn = (cnt + 1) / 2 THEN x END)"
+        f" FROM (SELECT callsign, {f} AS x,"
+        f" ROW_NUMBER() OVER (PARTITION BY callsign ORDER BY {f}) AS rn,"
+        f" COUNT(*) OVER (PARTITION BY callsign) AS cnt"
+        f" FROM _w WHERE {f} IS NOT NULL) GROUP BY callsign"
+        for f in _TM_FIELDS
+    )
+    for cs, f, lo, hi, med in conn.execute(union):
+        st = stations[cs].get("stats")
+        if st is not None:
+            st[f] = [lo, med, hi]
+
+
+_TM_BASE = (
+    "WHERE timestamp > ? AND callsign IN (SELECT callsign FROM _st) AND " + _TM_ANY  # noqa: S608 - fixed identifiers
+)
+
+
+def _tm_columns(cur: sqlite3.Cursor, width: int) -> dict[str, list[list[Any]]]:
+    """Group result tuples (callsign first) into per-station column lists."""
+    acc: dict[str, list[list[Any]]] = {}
+    for row in cur:
+        cols = acc.get(row[0])
+        if cols is None:
+            cols = acc[row[0]] = [[] for _ in range(width)]
+        for i, v in enumerate(row[1:]):
+            cols[i].append(v)
+    return acc
+
+
+def _tm_raw(conn: sqlite3.Connection, cutoff: int) -> dict[str, dict[str, Any]]:
+    cur = conn.execute(
+        f"SELECT callsign, timestamp, {', '.join(_TM_FIELDS)},"  # noqa: S608 - fixed identifiers
+        f" COALESCE(origin, '') = 'meshmap' FROM telemetry {_TM_BASE}"
+        " ORDER BY callsign, timestamp",
+        (cutoff,),
+    )
+    stations: dict[str, dict[str, Any]] = {}
+    for cs, cols in _tm_columns(cur, len(_TM_FIELDS) + 2).items():
+        obj: dict[str, Any] = {"ts": cols[0]}
+        for i, f in enumerate(_TM_FIELDS):
+            _tm_put(obj, f, cols[1 + i])
+        obj["origin"] = cols[-1]
+        stations[cs] = obj
+    return stations
+
+
+def _tm_bucketed(conn: sqlite3.Connection, bucket_s: int, cutoff: int) -> dict[str, dict[str, Any]]:
+    bucket_ms = bucket_s * 1000
+    if bucket_s == TELEMETRY_MEAN_BUCKET_S:
+        agg = ", ".join(f"ROUND(AVG({_tm_expr(f)}), 2)" for f in _TM_FIELDS)
+        names = list(_TM_FIELDS)
+    else:
+        agg = ", ".join(f"MIN({_tm_expr(f)}), MAX({_tm_expr(f)})" for f in _TM_MINMAX_FIELDS)
+        names = [f"{f}_{s}" for f in _TM_MINMAX_FIELDS for s in ("min", "max")]
+    cur = conn.execute(
+        f"SELECT callsign, (timestamp / {bucket_ms}) * {bucket_ms} AS b, {agg}, COUNT(*),"  # noqa: S608 - fixed identifiers
+        f" MIN(COALESCE(origin, '') = 'meshmap') FROM telemetry {_TM_BASE}"
+        " GROUP BY callsign, b ORDER BY callsign, b",
+        (cutoff,),
+    )
+    stations: dict[str, dict[str, Any]] = {}
+    for cs, cols in _tm_columns(cur, len(names) + 3).items():
+        obj: dict[str, Any] = {"ts": cols[0]}
+        for i, name in enumerate(names):
+            _tm_put(obj, name, cols[1 + i])
+        obj["n"] = cols[-2]
+        obj["origin"] = cols[-1]
+        stations[cs] = obj
+    return stations
+
+
+def _telemetry_payload(db_path: Path | str, bucket_s: int, hours: int, stats_hours: int) -> bytes:
+    """One worker-thread call: reduce in SQL, group tuples, return encoded JSON."""
+    now = int(time.time() * 1000)
+    cutoff = now - hours * 3_600_000
+    with db_read(db_path) as conn:
+        # One read snapshot for every statement: a dedup delete or retention prune landing
+        # between the station filter and the stats query must not KeyError the response.
+        conn.execute("BEGIN")
+        conn.execute(
+            "CREATE TEMP TABLE _st AS SELECT DISTINCT callsign FROM telemetry"  # noqa: S608
+            f" WHERE timestamp > ? AND {_TM_WX}",
+            (cutoff,),
+        )
+        stations = _tm_raw(conn, cutoff) if bucket_s == 0 else _tm_bucketed(conn, bucket_s, cutoff)
+        # Stats only for the 30-day means: the yearly view shows no stats table, and an
+        # 8760 h window-function pass is the most expensive read on a Pi Zero.
+        if bucket_s == TELEMETRY_MEAN_BUCKET_S and stations:
+            cols = ", ".join(f"{_tm_expr(f)} AS {f}" for f in _TM_FIELDS)
+            conn.execute(
+                f"CREATE TEMP TABLE _w AS SELECT callsign, timestamp, {cols} FROM telemetry"  # noqa: S608
+                " WHERE timestamp > ? AND callsign IN (SELECT callsign FROM _st)",
+                (now - stats_hours * 3_600_000,),
+            )
+            _tm_stats(conn, stations)
+    return json.dumps({"bucket_s": bucket_s, "stations": stations}, separators=(",", ":")).encode()

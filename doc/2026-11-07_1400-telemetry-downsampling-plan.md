@@ -2,7 +2,7 @@
 
 **Goal:** the 30-day and yearly WX views load in about a second on the Pi Zero and never block the event loop, now that the gap fill roughly doubled the stored telemetry.
 
-**Status (2026-11-07):** plan for review. Nothing dispatched. Follows `doc/2026-11-07_1000-telemetry-gap-fill-plan.md` (Waves 0-4 done, `v2.1.26-dev.1` live on mcapp.local).
+**Status (2026-11-07):** Waves 5 and 6 done and committed (both advisors approved after small fixes). Next: Wave 7 (measure on a Pi-sized DB copy, dev release, measure on mcapp.local). Open advisor nice-to-haves for Wave 7 or later: sidebar "latest" shows a bucket start (up to 2 h old) on 30 d; a ~10 h old station qualifies by raw rows but has under 6 buckets to chart; the Kalman gate's `stddev > 2` sees 2 h means (smaller spread), so a jittery station may stabilize on 7 d but not on 30 d; a station whose stats window holds only temp2/hum2/gas gets no `stats` object. Follows `doc/2026-11-07_1000-telemetry-gap-fill-plan.md` (Waves 0-4 done, `v2.1.26-dev.1` live on mcapp.local).
 
 ## Measurements (mcapp.local, 2026-11-07 13:10, after the first fill cycle)
 
@@ -53,19 +53,24 @@ Waves 5 and 6 run in parallel once the wire contract below is fixed: separate re
 
 ### File ownership
 
-| Wave | Files                                                                                                                                                                            |
-| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 5    | `src/mcapp/storage/query.py` (telemetry readers only), `src/mcapp/sse_routes/weather.py`, NEW `src/mcapp/telemetry_read_tests.py`, `scripts/run_startup_tests.py` (orchestrator) |
-| 6    | `src/stores/WxDataStore.ts`, `src/components/stats/WxData.vue`, `src/components/stats/WxListPanel.vue`, `src/utils/wxGaps.ts`, `src/utils/wxPhysics.ts` (gate only), their specs |
+| Wave | Files                                                                                                                                                                                                                                                                                                             |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 5    | `src/mcapp/storage/query.py` (telemetry readers only), `src/mcapp/sse_routes/weather.py`, NEW `src/mcapp/telemetry_read_tests.py`, `scripts/run_startup_tests.py` (orchestrator)                                                                                                                                  |
+| 6    | `src/stores/WxDataStore.ts`, `src/components/stats/WxData.vue`, `src/components/stats/WxListPanel.vue`, `src/views/WxView.vue`, `src/utils/wxGaps.ts`, `src/utils/wxPhysics.ts`, `src/utils/wxChartConfig.ts`, `src/utils/wxDataHygiene.ts`, their specs, NEW `src/stores/__tests__/WxDataStore.columnar.spec.ts` |
 
-### Wire contract (fixed before dispatch)
+### Wire contract (fixed 2026-11-07, at dispatch)
 
-- **One shape for every range:** `GET /api/telemetry?hours=48|192|744` and `GET /api/telemetry/yearly` return `{"bucket_s": <0 = raw>, "stations": {<callsign>: {...}}}`.
-- **Per station, parallel arrays:** `ts` (ms; bucket start when bucketed), one array per field that has any value (`temp1 temp2 hum hum2 qfe qnh gas co2 alt batt`, `extras`), `origin` (`1` = meshmap, `0` = RF; hollow only if every sample in the bucket was meshmap), and `n` when bucketed. A field with no value at all is omitted. Yearly sends `<field>_min` / `<field>_max` arrays instead.
-- **The server picks the bucket from `hours`:** raw up to 192 h, 2 h (or the chosen size) for 744 h, 4 h for yearly. The webapp does not choose.
-- **Exact stats ride along** (if 2a): `stats: {count, first_ms, last_ms, <field>: [min, median, max]}` per station, from the raw rows.
-- **Station filter** (if 3i) applies to every telemetry read. Hidden stations stay in, because the picker needs them to unhide.
-- **Built without per-row Python dicts:** reduction and grouping in SQL, the JSON encoded in a worker thread and returned as bytes.
+Decisions taken as recommended: 1B, 2a, 3i, 4 (hollow only if all), 5, 6. mc-chat's mock is deferred.
+
+- **One shape for every range:** `GET /api/telemetry?hours=48|192|744[&stats_hours=N]` and `GET /api/telemetry/yearly` return `{"bucket_s": int, "stations": {<callsign>: {...}}}`. `bucket_s` is `0` (raw) for `hours <= 192`, `7200` for `hours > 192`, `14400` for yearly. The webapp never chooses a bucket.
+- **Fields on the wire are exactly the charted ones:** `temp1 temp2 hum hum2 qfe qnh gas alt`. `co2`, `batt` and `extras` are dropped (the webapp never charts them).
+- **Raw (`bucket_s == 0`), per station:** `ts` (ms), one array per field (entries may be `null`), `origin` (`1` = meshmap, `0` = RF). Rows where all eight fields are NULL are not sent. No `stats`, no `n`; the webapp keeps computing stats itself from raw rows.
+- **Mean buckets (`bucket_s == 7200`), per station:** `ts` (bucket start, `timestamp / 7200000 * 7200000`), one array per field = `ROUND(AVG(...), 2)`, with zeros ignored (`NULLIF(x, 0)`) for `temp2 hum2 gas`, `n` (raw rows in the bucket), `origin` (`1` only if every row in the bucket is meshmap), and `stats` (below).
+- **Yearly (`bucket_s == 14400`), per station:** `ts`, `<field>_min` / `<field>_max` for `temp1 temp2 hum hum2 qfe gas alt` (zeros ignored for `temp2 hum2 gas`), `n`, `origin`. No `stats`: the yearly view has no stats table, and an 8760 h median pass is the most expensive read on the Pi (advisor, Wave 5).
+- **`stats`** (mean buckets only): `{"count": int, "first_ms": int, "last_ms": int, "<field>": [min, median, max]}` from the RAW rows in the last `stats_hours` (default: `hours`). The webapp ignores `stats.qnh` and derives the QNH row from its local qfe + alt series, so the table matches the chart (advisor, Wave 6). `count` = distinct raw timestamps where any of `temp1 hum qfe qnh alt` is non-NULL (mirrors the webapp's datapoint union). Median = lower-middle value for an even count. Zeros ignored for `temp2 hum2 gas`. A field with no value is omitted from `stats`.
+- **A field with no value at all for a station is omitted** from that station's object (arrays and stats).
+- **Station filter on every read:** a station is sent iff some row in the window has a non-NULL, non-zero value in one of `temp1 temp2 hum hum2 qfe qnh gas` (any origin). Altitude/battery-only stations disappear. Webapp-hidden stations are unaffected (the server does not know them).
+- **Built without per-row Python dicts:** reduction and grouping in SQL, the JSON encoded in the same worker thread and returned as `bytes` (`Response(content=..., media_type="application/json")`).
 
 ## Cost and time
 

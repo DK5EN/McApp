@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 from ..logging_setup import get_logger
 from ..meteo import is_valid_position
 from ..util import now_ms
-from ..weblite import APIRouter, HTTPException
+from ..weblite import APIRouter, HTTPException, Response
 
 if TYPE_CHECKING:
     from ..sse_handler import SSEManager
@@ -199,10 +199,16 @@ def build_weather_router(manager: SSEManager) -> APIRouter:
 
     # Telemetry data endpoint (for WX charts)
     @router.get("/api/telemetry")
-    async def get_telemetry(hours: int = 48) -> Any:
-        """Get telemetry data for weather charts."""
+    async def get_telemetry(hours: int = 48, stats_hours: int | None = None) -> Response:
+        """Columnar telemetry for weather charts (raw up to 192 h, 2 h means beyond)."""
         storage = manager.require_storage()
-        return await storage.get_telemetry_chart_data(hours=min(hours, TELEMETRY_MAX_HOURS))
+        return Response(
+            content=await storage.get_telemetry_chart_data(
+                hours=min(hours, TELEMETRY_MAX_HOURS),
+                stats_hours=None if stats_hours is None else min(stats_hours, TELEMETRY_MAX_HOURS),
+            ),
+            media_type="application/json",
+        )
 
     @router.get("/api/telemetry/fill")
     async def get_telemetry_fill() -> Any:
@@ -210,10 +216,13 @@ def build_weather_router(manager: SSEManager) -> APIRouter:
         return await _fill_payload(manager)
 
     @router.get("/api/telemetry/yearly")
-    async def get_telemetry_yearly() -> Any:
-        """Get telemetry data aggregated into 4h buckets for yearly charts."""
+    async def get_telemetry_yearly() -> Response:
+        """Telemetry aggregated into 4h min/max buckets for yearly charts."""
         storage = manager.require_storage()
-        return await storage.get_telemetry_chart_data_bucketed()
+        return Response(
+            content=await storage.get_telemetry_chart_data_bucketed(),
+            media_type="application/json",
+        )
 
     @router.get("/api/timezone")
     async def get_timezone(lat: float, lon: float) -> dict[str, str | float]:

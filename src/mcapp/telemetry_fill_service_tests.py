@@ -770,13 +770,14 @@ async def _routes(results: list[tuple[str, bool]]) -> None:
             )
 
             data = client.get("/api/telemetry?hours=48").json()
-            by_origin = {(r["callsign"], r["timestamp"]): r["origin"] for r in data}
+            cols = data["stations"].get(vis, {})
+            by_origin = dict(zip(cols.get("ts", []), cols.get("origin", []), strict=True))
             _check(
                 results,
-                "telemetry: rows carry origin (null for RF, 'meshmap' for filled)",
-                by_origin.get((vis, now - 3_600_000)) is None
-                and (vis, now - 3_600_000) in by_origin
-                and by_origin.get((vis, now - 7_200_000)) == "meshmap",
+                "telemetry: columns carry origin (0 for RF, 1 for filled)",
+                data["bucket_s"] == 0
+                and by_origin.get(now - 3_600_000) == 0
+                and by_origin.get(now - 7_200_000) == 1,
             )
         finally:
             await storage.close()
