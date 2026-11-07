@@ -451,6 +451,25 @@ async def _rework(results: list[tuple[str, bool]]) -> None:  # noqa: PLR0915 - o
                 not server.calls(old) and len(server.calls(new)) > 0,
             )
 
+            # B2. Station set mirrors the webapp picker (stationHasRealData): a station
+            #     whose RF rows carry no non-zero temp/hum/qfe/qnh/alt is never polled.
+            batt = "DL1BATT-1"
+            await storage.store_telemetry(
+                batt, {"timestamp": _NOW - 2 * _DAY, "src_type": "ble_remote", "batt": 80}
+            )
+            await storage.set_fill_cursor(batt, _NOW - 3 * _DAY)
+            stored = await storage._query(
+                "SELECT COUNT(*) AS n FROM telemetry WHERE callsign = ?", (batt,)
+            )
+            server = _Meshmap({})
+            svc = _service(storage, server, [], is_blocked=_only(batt))
+            await svc.run_cycle()
+            _check(
+                results,
+                "stations: a battery-only station (no WX reading) is not polled",
+                int(stored[0]["n"]) == 1 and not server.calls(batt),
+            )
+
             # C. Minimum-chunk guard: a response that is ALWAYS capped must terminate.
             call = "DL2CAP-1"
             await _rf(storage, call, _RF_OLD)

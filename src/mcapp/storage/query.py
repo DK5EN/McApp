@@ -1757,14 +1757,20 @@ class QueryMixin(StorageBase):
         )
 
     async def get_telemetry_stations(self, since_ms: int) -> list[str]:
-        """Distinct callsigns with a local (RF) telemetry row newer than `since_ms`.
+        """Distinct callsigns with a real WX reading over RF newer than `since_ms`.
 
-        The fill service passes now - 30 days, the webapp picker's window. Full scan of
-        `idx_telemetry_cs_ts`: call it once per fill cycle, never per request.
+        Mirrors the webapp picker: a 30-day window (the fill service passes
+        now - 30 days) and `stationHasRealData`, a non-zero temp/hum/qfe/qnh/alt.
+        Battery-only and all-zero stations never reach the sidebar, so polling
+        them is pure load (the 2026-10-20 DB: 153 stations with any row, 53 WX).
+        Full scan of `idx_telemetry_cs_ts`: once per fill cycle, never per request.
         """
         rows = await self._query(
             "SELECT DISTINCT callsign FROM telemetry"
-            " WHERE timestamp > ? AND origin IS NULL ORDER BY callsign",
+            " WHERE timestamp > ? AND origin IS NULL AND ("
+            " COALESCE(temp1, 0) != 0 OR COALESCE(hum, 0) != 0 OR COALESCE(qfe, 0) != 0"
+            " OR COALESCE(qnh, 0) != 0 OR COALESCE(alt, 0) != 0)"
+            " ORDER BY callsign",
             (since_ms,),
         )
         return [str(r["callsign"]) for r in rows]
