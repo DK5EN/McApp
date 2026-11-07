@@ -451,11 +451,13 @@ async def _rework(results: list[tuple[str, bool]]) -> None:  # noqa: PLR0915 - o
                 not server.calls(old) and len(server.calls(new)) > 0,
             )
 
-            # B2. Station set mirrors the webapp picker (stationHasRealData): a station
-            #     whose RF rows carry no non-zero temp/hum/qfe/qnh/alt is never polled.
+            # B2. Only stations with a real WX sensor: a station whose RF rows carry
+            #     nothing but altitude and battery is never polled (most stations
+            #     report a GPS altitude; on the 2026-10-20 DB that was 94 of 139).
             batt = "DL1BATT-1"
             await storage.store_telemetry(
-                batt, {"timestamp": _NOW - 2 * _DAY, "src_type": "ble_remote", "batt": 80}
+                batt,
+                {"timestamp": _NOW - 2 * _DAY, "src_type": "ble_remote", "batt": 80, "alt": 493.0},
             )
             await storage.set_fill_cursor(batt, _NOW - 3 * _DAY)
             stored = await storage._query(
@@ -466,7 +468,7 @@ async def _rework(results: list[tuple[str, bool]]) -> None:  # noqa: PLR0915 - o
             await svc.run_cycle()
             _check(
                 results,
-                "stations: a battery-only station (no WX reading) is not polled",
+                "stations: an altitude + battery only station (no WX sensor) is not polled",
                 int(stored[0]["n"]) == 1 and not server.calls(batt),
             )
 

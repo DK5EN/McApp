@@ -2,7 +2,7 @@
 
 **Goal:** fill the gaps in the WX charts with samples from the central server and persist them, so the charts stay complete even when RF reception is not.
 
-**Status (2026-11-07):** Waves 0-4 done (MCProxy and webapp `c6028a5`). Open: the operator's decision on load, see Wave 4 results. Not released.
+**Status (2026-11-07):** Waves 0-4 done (MCProxy and webapp `c6028a5`). Station filter decided (WX sensors only). Open: read time on the Pi. Not released.
 
 ## Decisions (operator, 2026-11-07)
 
@@ -130,12 +130,14 @@ Real fill against a copy of the 2026-10-20 backup, limited to the 7 visible stat
 - **First cycle: 913 s, 19,632 rows, about 13 requests per station.** A second cycle inserted only the 5 samples that had settled in the meantime.
 - **Read time on the Mac:** the 30-day `/api/telemetry` query went from 22 ms (10,850 rows) to 39 ms (19,592 rows), the yearly one from 215 to 264 ms. Not yet measured on the Pi Zero.
 
-### Open decision: load is about 12 times the plan
+### Station filter: WX sensors only (operator, 2026-11-07)
 
-- **The visible set is about 99 stations, not 8.** The picker shows every station with a non-zero temp, hum, QFE, QNH or **altitude** in 30 days, and most stations report a GPS altitude. Commit `3ed0d18` already drops battery-only and all-zero stations; that removed one.
-- **Per box that is about 1,300 requests for the first fill (about 3.6 h at one per 10 s), then about 99 requests every 30 min** (16 min of every cycle, about 4,750 a day).
-- **Options:** accept it; poll only stations with a real WX sensor (non-zero temp, hum, QFE or QNH; 53 of 153 on the backup DB); or lengthen the steady-state cycle.
-- **The read-time figure scales with it.** 7 filled stations nearly doubled the 30-day row count, so all 99 would need the server-side downsampling from "Open risks" before a release. Measure on the Pi first.
+- **The picker's set was about 99 stations, not 8**, because a non-zero GPS altitude counts as real data there.
+- **Decision: a station that sends only altitude and battery is not filled.** It needs a non-zero temp, temp2, hum, hum2, QFE, QNH, gas or CO2, or a water sensor in `extras`.
+- **Meshmap holds nothing more for those stations.** DB0ISM-1, DL2UD-1 and DL1RHS-24 from the measurement table are altitude and battery only, locally and centrally.
+- **Result on the backup DB: 45 of 139 visible stations** over its own 30-day window. The webapp picker is unchanged and still lists the others.
+- **Load per box:** a first fill of about 590 requests (about 1.6 h at one per 10 s), then about 45 requests every 30 min (about 2,200 a day).
+- **Read time still needs a Pi measurement before a release.** 7 filled stations nearly doubled the 30-day row count, so 45 may need the server-side downsampling from "Open risks".
 
 ## Open risks
 

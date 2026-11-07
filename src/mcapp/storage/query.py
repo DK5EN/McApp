@@ -1757,19 +1757,23 @@ class QueryMixin(StorageBase):
         )
 
     async def get_telemetry_stations(self, since_ms: int) -> list[str]:
-        """Distinct callsigns with a real WX reading over RF newer than `since_ms`.
+        """Distinct callsigns with a real WX sensor reading over RF newer than `since_ms`.
 
-        Mirrors the webapp picker: a 30-day window (the fill service passes
-        now - 30 days) and `stationHasRealData`, a non-zero temp/hum/qfe/qnh/alt.
-        Battery-only and all-zero stations never reach the sidebar, so polling
-        them is pure load (the 2026-10-20 DB: 153 stations with any row, 53 WX).
+        The fill service passes now - 30 days, the webapp picker's window. A station
+        counts only with a non-zero temp/temp2/hum/hum2/qfe/qnh/gas/co2 or a water
+        sensor in `extras`. Altitude and battery alone do not count: most stations
+        report a GPS altitude, and meshmap holds nothing more for them either (the
+        2026-10-20 DB: 45 WX stations of 139 visible, the rest altitude + battery).
         Full scan of `idx_telemetry_cs_ts`: once per fill cycle, never per request.
         """
         rows = await self._query(
             "SELECT DISTINCT callsign FROM telemetry"
             " WHERE timestamp > ? AND origin IS NULL AND ("
-            " COALESCE(temp1, 0) != 0 OR COALESCE(hum, 0) != 0 OR COALESCE(qfe, 0) != 0"
-            " OR COALESCE(qnh, 0) != 0 OR COALESCE(alt, 0) != 0)"
+            " COALESCE(temp1, 0) != 0 OR COALESCE(temp2, 0) != 0"
+            " OR COALESCE(hum, 0) != 0 OR COALESCE(hum2, 0) != 0"
+            " OR COALESCE(qfe, 0) != 0 OR COALESCE(qnh, 0) != 0"
+            " OR COALESCE(gas, 0) != 0 OR COALESCE(co2, 0) != 0"
+            " OR COALESCE(extras, '') NOT IN ('', '{}'))"
             " ORDER BY callsign",
             (since_ms,),
         )
