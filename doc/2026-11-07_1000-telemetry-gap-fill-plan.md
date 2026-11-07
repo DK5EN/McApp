@@ -2,7 +2,7 @@
 
 **Goal:** fill the gaps in the WX charts with samples from the central server and persist them, so the charts stay complete even when RF reception is not.
 
-**Status (2026-11-07):** Waves 0 and 1 done. Next: Wave 2.
+**Status (2026-11-07):** Waves 0-3 done (MCProxy and webapp `c6028a5`). Next: Wave 4.
 
 ## Decisions (operator, 2026-11-07)
 
@@ -94,11 +94,22 @@ QFE differed from meshmap by a station-specific median of -1.3 to +0.5 hPa. The 
 | ---- | -------------------------------------------------------------------------------------------------- | ------------------------- | ------ |
 | 0    | Pressure cause, field mapping, this plan                                                           | Orchestrator              | Done   |
 | 1    | Migration v41, pure merge logic, write and cursor storage, `origin` handling in ingest, test suite | Implementer, then advisor | Done   |
-| 2    | Fetch job, status route, `origin` in `/api/telemetry`                                              | Implementer, then advisor | Open   |
-| 3    | Webapp: hollow points, line breaks, fill status in the Internet card                               | Implementer, then advisor | Open   |
+| 2    | Fetch job, status route, `origin` in `/api/telemetry`                                              | Implementer, then advisor | Done   |
+| 3    | Webapp: hollow points, line breaks, fill status in the Internet card                               | Implementer, then advisor | Done   |
 | 4    | Full gate in both repos, backfill test on a DB copy, read-time check                               | Orchestrator              | Open   |
 
 A release or deploy to mcapp.local is not part of this plan and needs a separate go.
+
+## As built (Waves 2-3)
+
+- **Service:** `telemetry_fill_service.py`, started next to the Internet feed in `main.py`. It checks the feed switch before every request, so turning the feed off stops a running first fill after at most one more request.
+- **Visible stations** are those with an RF row in the last 30 days, which is the webapp picker's window, minus hidden and blocked. A station silent for longer is not polled. Its first fill still reaches back 365 days.
+- **Failures stop one station, never the cycle.** A fetch or storage error is shown on that station and leaves its cursor where it was.
+- **Off the loop:** the response parse and the merge run in a worker thread. A capped 5000-row chunk is about 0.5 s of CPU on the Pi Zero.
+- **Status route** `GET /api/telemetry/fill` serves from memory (stations, row counts, cursors), refreshed once per cycle and on insert. The webapp polls it every 60 s, so it must never scan `telemetry`.
+- **Points:** RF points are now drawn solid on every raw series and meshmap points hollow. Some raw series had transparent points before, which would have looked like central samples. This is a visible change to RF-only charts.
+- **Line breaks** use `spanGaps: true` plus a scriptable `segment` style that goes transparent across a real gap. A numeric `spanGaps` breaks at every null on the merged axis in Chart.js 4.6.1.
+- **Older backends:** the card hides the fill block on a 404 and stops polling, without writing a stall row.
 
 ## Open risks
 

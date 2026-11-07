@@ -1751,10 +1751,34 @@ class QueryMixin(StorageBase):
         cutoff = int((time.time() - hours * 3600) * 1000)
         return await self._query(
             "SELECT callsign, timestamp, temp1, temp2, hum, hum2,"
-            " qfe, qnh, gas, co2, alt, batt, extras"
+            " qfe, qnh, gas, co2, alt, batt, extras, origin"
             " FROM telemetry WHERE timestamp > ? ORDER BY callsign, timestamp",
             (cutoff,),
         )
+
+    async def get_telemetry_stations(self, since_ms: int) -> list[str]:
+        """Distinct callsigns with a local (RF) telemetry row newer than `since_ms`.
+
+        The fill service passes now - 30 days, the webapp picker's window. Full scan of
+        `idx_telemetry_cs_ts`: call it once per fill cycle, never per request.
+        """
+        rows = await self._query(
+            "SELECT DISTINCT callsign FROM telemetry"
+            " WHERE timestamp > ? AND origin IS NULL ORDER BY callsign",
+            (since_ms,),
+        )
+        return [str(r["callsign"]) for r in rows]
+
+    async def get_fill_row_counts(self) -> dict[str, int]:
+        """Rows filled from meshmap (origin = 'meshmap') per callsign.
+
+        Full scan of `idx_telemetry_cs_ts`: once per fill cycle, never per request.
+        """
+        rows = await self._query(
+            "SELECT callsign, COUNT(*) AS n FROM telemetry"
+            " WHERE origin = 'meshmap' GROUP BY callsign"
+        )
+        return {str(r["callsign"]): int(r["n"]) for r in rows}
 
     async def get_telemetry_chart_data_bucketed(
         self, hours: int = HOURS_PER_YEAR

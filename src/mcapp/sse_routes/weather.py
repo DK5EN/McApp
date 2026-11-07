@@ -23,6 +23,16 @@ logger = get_logger(__name__)
 
 TELEMETRY_MAX_HOURS = 744
 
+# /api/telemetry/fill body while no fill service exists (tests, embedded setups).
+_FILL_IDLE: dict[str, Any] = {
+    "enabled": False,
+    "running": False,
+    "last_cycle_ms": None,
+    "next_cycle_ms": None,
+    "rows_total": 0,
+    "stations": [],
+}
+
 # Time-zone lookup runs in a short-lived child (numpy + TimezoneFinder are ~20 MB
 # resident; the child peaks at ~33 MB for 1.2-2 s and is gone afterwards).
 TZ_WORKER_PATH = Path(__file__).resolve().parent.parent / "tz_lookup_worker.py"
@@ -36,6 +46,14 @@ _EXIT_NOT_INSTALLED = 3
 _tz_cache: dict[tuple[float, float], str] = {}
 _tz_sem: asyncio.Semaphore | None = None
 _tz_waiting = 0
+
+
+async def _fill_payload(manager: SSEManager) -> dict[str, Any]:
+    service = manager.telemetry_fill_service
+    if service is None:
+        return dict(_FILL_IDLE)
+    payload: dict[str, Any] = await service.route_payload()
+    return payload
 
 
 class TzLookupError(Exception):
@@ -185,6 +203,11 @@ def build_weather_router(manager: SSEManager) -> APIRouter:
         """Get telemetry data for weather charts."""
         storage = manager.require_storage()
         return await storage.get_telemetry_chart_data(hours=min(hours, TELEMETRY_MAX_HOURS))
+
+    @router.get("/api/telemetry/fill")
+    async def get_telemetry_fill() -> Any:
+        """Status of the meshmap gap fill (read-only; telemetry is already public)."""
+        return await _fill_payload(manager)
 
     @router.get("/api/telemetry/yearly")
     async def get_telemetry_yearly() -> Any:
