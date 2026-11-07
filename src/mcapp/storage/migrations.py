@@ -965,6 +965,24 @@ class MigrationsMixin(StorageBase):
                     )
                     _set_schema_version(conn, 40)
 
+                if current_version < 41:  # noqa: PLR2004 - schema migration step
+                    # Telemetry gap fill (doc/2026-11-07_1000-telemetry-gap-fill-plan.md):
+                    # origin NULL = RF, 'meshmap' = filled from the central server.
+                    # Existing rows are not rewritten. telemetry_fill_state holds
+                    # one resumable cursor per station (ms).
+                    have = {r[1] for r in conn.execute("PRAGMA table_info(telemetry)")}
+                    if have and "origin" not in have:
+                        conn.execute("ALTER TABLE telemetry ADD COLUMN origin TEXT")
+                    conn.execute(
+                        "CREATE TABLE IF NOT EXISTS telemetry_fill_state ("
+                        "callsign TEXT PRIMARY KEY, filled_until_ms INTEGER NOT NULL)"
+                    )
+                    logger.info(
+                        "Migration v%d → v41: telemetry.origin, telemetry_fill_state",
+                        current_version,
+                    )
+                    _set_schema_version(conn, 41)
+
         await asyncio.to_thread(_init_db)
 
         # Initialize bucket accumulators from existing signal_log

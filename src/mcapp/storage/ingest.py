@@ -13,6 +13,7 @@ import contextlib
 import json
 import re
 import sqlite3
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from statistics import mean
 from typing import TYPE_CHECKING, Any
@@ -34,6 +35,8 @@ from ..util import (
 )
 from ._base import StorageBase
 from .constants import (
+    _QFE_PLAUSIBLE_HPA_RANGE,
+    _QNH_PLAUSIBLE_HPA_RANGE,
     ACK_DIAG_WINDOW_MS,
     ACK_MSG_ID_WINDOW_MS,
     BARO_EXPONENT,
@@ -52,8 +55,11 @@ from .constants import (
     VALID_SNR_RANGE,
     BucketTuple,
     compute_conversation_key,
+    db_read,
+    db_write,
     sender_base_sql,
 )
+from .telemetry_fill import ORIGIN_MESHMAP, FillRow
 from .telemetry_reconcile import (
     ALL_FIELDS,
     Action,
@@ -74,36 +80,6 @@ if TYPE_CHECKING:
     from ..node_admin_types import ReplyHook
 
 _MAX_FORENSIC_HOPS = 4  # log raw data for messages routed over more hops
-
-# Physical sanity range (hPa) for a GENUINE qfe reading — src_type == "node" tele's
-# `node_press`, or BLE `/P=` via `parse_aprs_position`. This is a garbage-value floor
-# and ceiling only; it plays NO role in telling a real pressure from the `lora`-variant
-# tele's `/F=`-sourced barometric ALTITUDE (see the src_type dispatch in
-# store_telemetry — verdict V4/V4a: magnitude cannot do that job in either direction,
-# because an altitude above 850 m passes a >850 floor and a genuine high-altitude QFE
-# fails it). Bounds: recorded sea-level pressure extremes run ~870-1085 hPa (deepest
-# cyclone to strongest anticyclone); station-level QFE drops further before any
-# sea-level correction, and this mesh already has stations as high as ~1750 m
-# (DO9ALM-5, true QFE ~820 hPa; DB0HOB-12 1543 m, ~841 hPa) that a tighter floor would
-# discard. 300 hPa corresponds to roughly 9000 m — no station on this network is
-# remotely close, so it is a plausibility check, not an active constraint on real
-# traffic; 1100 hPa gives the same margin above the recorded high.
-_QFE_PLAUSIBLE_HPA_RANGE = (300, 1100)
-
-# QNH gets its OWN, much tighter range, and must never be folded back into the QFE one.
-# QNH is sea-level-normalised BY DEFINITION, so altitude never pushes it down — the
-# whole V4a argument for a wide QFE floor does not apply to it, and a tight bound here
-# costs nothing. This existed as a `> 850` floor until the QFE constant was renamed and
-# this line was migrated to its lower bound (300) along with it: one constant, two users,
-# two different physical quantities. That opened (300, 850] to junk, and the classic
-# wrong-unit bug lands squarely in it — an Extern-UDP feeder sending mmHg (~760) for hPa
-# is stored, unvalidated, straight into `node_press_asl` (`extudp_functions.cpp:180-183`)
-# and reaches us on all three qnh paths. Reproduced: qnh=760 at alt=500 fabricated a
-# 716.0 hPa "pressure", and for a feeder station this derivation is the ONLY qfe source
-# (the firmware emits `/Q=` precisely for nodes with no real sensor), so nothing ever
-# corrects it. An upper bound is included for free: Pa-unit junk (101325) would otherwise
-# sail through a bare floor.
-_QNH_PLAUSIBLE_HPA_RANGE = (850, 1100)
 
 # A `pos` frame is a weather beacon if it carries any sensor reading. Every APRS
 # weather extension the firmware emits is listed, not just the `/P=`+`/T=`+`/H=`
@@ -2683,9 +2659,12 @@ class IngestMixin(StorageBase):
         # this window — that would silently swallow the replayed observation
         # instead of recording it as history (verdict V1 prerequisite 3).
         recent = await self._query(
-            "SELECT id, timestamp, temp1, temp2, hum, hum2, qfe, qnh, gas, co2, batt, extras"
+            "SELECT id, timestamp, temp1, temp2, hum, hum2, qfe, qnh, gas, co2, batt, extras,"
+            " origin"
             " FROM telemetry WHERE callsign = ? AND timestamp > ? AND timestamp < ?"
-            " ORDER BY timestamp DESC LIMIT 1",
+            # An RF row beats a filled one inside the window, then newest first. Identical
+            # to `timestamp DESC` while every origin is NULL.
+            " ORDER BY origin IS NULL DESC, timestamp DESC LIMIT 1",
             (
                 callsign,
                 timestamp - TELEMETRY_DEDUP_WINDOW_MS,
@@ -2715,7 +2694,10 @@ class IngestMixin(StorageBase):
         # Equal timestamps count as NOT newer (reconcile()'s documented rule).
         # Derived from the two STORED timestamps, never from which frame arrived
         # second — that assumption is the whole of V1.
-        incoming_is_newer = existing_row is None or timestamp > existing_ts
+        # A filled row (origin set) is a stand-in for an RF sample that was never heard:
+        # a live frame wins it whatever the timestamp order, so it counts as newer.
+        existing_is_filled = existing_row is not None and existing_row.get("origin") is not None
+        incoming_is_newer = existing_row is None or timestamp > existing_ts or existing_is_filled
 
         action, merged = reconcile(existing, incoming, incoming_is_newer=incoming_is_newer)
         merged_extras_json = merge_extras(existing_extras_json, incoming_extras_json)
@@ -2759,7 +2741,9 @@ class IngestMixin(StorageBase):
             assert existing_row is not None  # noqa: S101 - reconcile() guarantees this
             await self._mutate(
                 "UPDATE telemetry SET temp1 = ?, temp2 = ?, hum = ?, hum2 = ?,"
-                " qfe = ?, qnh = ?, gas = ?, co2 = ?, batt = ?, extras = ? WHERE id = ?",
+                " qfe = ?, qnh = ?, gas = ?, co2 = ?, batt = ?, extras = ?,"
+                # RF wins: a live frame over a filled row makes the point real RF.
+                " origin = NULL WHERE id = ?",
                 (
                     vals["temp1"],
                     vals["temp2"],
@@ -2802,7 +2786,13 @@ class IngestMixin(StorageBase):
                     merged_extras_json,
                 ),
             )
-        # Action.SKIP: no telemetry ROW write — see Action.SKIP's docstring. The
+        elif action is Action.SKIP and existing_row is not None and existing_row.get("origin"):
+            # Values stay (SKIP), but a live RF frame matched a filled row: RF wins,
+            # so only the provenance changes. RF rows (origin NULL) never get here.
+            await self._mutate(
+                "UPDATE telemetry SET origin = NULL WHERE id = ?", (existing_row["id"],)
+            )
+        # Action.SKIP: no telemetry ROW value write — see Action.SKIP's docstring. The
         # station_positions upsert below still runs, per Action's class docstring.
 
         # Update station_positions with latest telemetry values. Bind the RECONCILED
@@ -2824,6 +2814,14 @@ class IngestMixin(StorageBase):
         # row already cached there. Python-side `max(existing_ts, timestamp)` handles
         # the in-window case; the SQL-side MAX() covers the no-existing-row case too.
         telemetry_ts = max(existing_ts, timestamp)
+        sp_vals = vals
+        sp_extras_json = merged_extras_json
+        if existing_is_filled:
+            # A filled row is not something this station ever sent: the sidebar cache
+            # carries only what the live frame says, and only its timestamp.
+            sp_vals = dict(zip(ALL_FIELDS, values_for(incoming), strict=True))
+            sp_extras_json = incoming_extras_json
+            telemetry_ts = timestamp
         await self._mutate(
             """INSERT INTO station_positions
                    (callsign, temp1, temp2, hum, hum2, qfe, qnh, gas, co2, batt,
@@ -2847,20 +2845,101 @@ class IngestMixin(StorageBase):
             """,
             (
                 callsign,
-                vals["temp1"],
-                vals["temp2"],
-                vals["hum"],
-                vals["hum2"],
-                vals["qfe"],
-                vals["qnh"],
-                vals["gas"],
-                vals["co2"],
-                vals["batt"],
+                sp_vals["temp1"],
+                sp_vals["temp2"],
+                sp_vals["hum"],
+                sp_vals["hum2"],
+                sp_vals["qfe"],
+                sp_vals["qnh"],
+                sp_vals["gas"],
+                sp_vals["co2"],
+                sp_vals["batt"],
                 telemetry_ts,
                 timestamp,
-                merged_extras_json,
+                sp_extras_json,
             ),
         )
+
+    # ── Telemetry gap fill (Wave 1; plan doc/2026-11-07_1000-telemetry-gap-fill-plan.md) ──
+    # Deliberately NOT routed through store_telemetry: that path upserts
+    # station_positions, so an old filled sample would regress the sidebar's latest
+    # value. No blocklist logic here either; the caller filters.
+
+    async def get_telemetry_timestamps(
+        self, callsign: str, start_ms: int, end_ms: int
+    ) -> tuple[list[int], list[int]]:
+        """(rf, filled) timestamps (ms, ascending) in [start_ms, end_ms], split by origin."""
+        rows = await self._query(
+            "SELECT timestamp, origin IS NULL AS is_rf FROM telemetry WHERE callsign = ?"
+            " AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp",
+            (callsign, start_ms, end_ms),
+        )
+        rf = [int(r["timestamp"]) for r in rows if r["is_rf"]]
+        filled = [int(r["timestamp"]) for r in rows if not r["is_rf"]]
+        return rf, filled
+
+    async def insert_filled_telemetry(self, callsign: str, rows: Sequence[FillRow]) -> int:
+        """Insert filled rows (origin='meshmap') in ONE transaction; return the count."""
+        if not rows:
+            return 0
+        params = [
+            (
+                callsign,
+                r.timestamp_ms,
+                r.temp1,
+                r.temp2,
+                r.hum,
+                r.qfe,
+                r.qnh,
+                r.gas,
+                r.co2,
+                r.alt,
+                r.batt,
+                r.extras_json,
+                ORIGIN_MESHMAP,
+            )
+            for r in rows
+        ]
+
+        def _run() -> int:
+            with db_write(self.db_path) as conn:
+                conn.executemany(
+                    "INSERT INTO telemetry"
+                    " (callsign, timestamp, temp1, temp2, hum, qfe, qnh, gas, co2,"
+                    "  alt, batt, extras, origin)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    params,
+                )
+            return len(params)
+
+        return await asyncio.to_thread(_run)
+
+    async def get_fill_cursor(self, callsign: str) -> int | None:
+        """The station's `filled_until_ms`, or None if it has no cursor yet."""
+
+        def _run() -> int | None:
+            with db_read(self.db_path) as conn:
+                row = conn.execute(
+                    "SELECT filled_until_ms FROM telemetry_fill_state WHERE callsign = ?",
+                    (callsign,),
+                ).fetchone()
+                return int(row[0]) if row else None
+
+        return await asyncio.to_thread(_run)
+
+    async def set_fill_cursor(self, callsign: str, filled_until_ms: int) -> None:
+        """Advance the cursor; monotonic (MAX of stored and incoming) in the SQL."""
+
+        def _run() -> None:
+            with db_write(self.db_path) as conn:
+                conn.execute(
+                    "INSERT INTO telemetry_fill_state (callsign, filled_until_ms)"
+                    " VALUES (?, ?) ON CONFLICT(callsign) DO UPDATE SET"
+                    " filled_until_ms = MAX(filled_until_ms, excluded.filled_until_ms)",
+                    (callsign, filled_until_ms),
+                )
+
+        await asyncio.to_thread(_run)
 
     def _should_filter_message(self, message: dict[str, Any]) -> bool:  # noqa: PLR0911 - complex handler kept intact
         """Check if message should be filtered out."""

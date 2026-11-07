@@ -265,7 +265,7 @@ async def _test_legacy_row(results: Results, tmp: Path) -> None:
             )
         )
         results.append(
-            ("LATEST_SCHEMA_VERSION is 40", LATEST_SCHEMA_VERSION == 40),
+            ("LATEST_SCHEMA_VERSION is 40 or later", LATEST_SCHEMA_VERSION >= 40),
         )
     finally:
         await storage.close()

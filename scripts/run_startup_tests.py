@@ -118,6 +118,7 @@ from mcapp.storage.read_cursor_tests import run_read_cursor_tests
 from mcapp.storage.signal_via_tests import run_signal_via_tests
 from mcapp.storage.store_notice_tests import run_store_notice_tests
 from mcapp.storage.suppression_tests import run_suppression_predicate_tests
+from mcapp.storage.telemetry_fill_tests import run_telemetry_fill_tests
 from mcapp.storage.telemetry_reconcile_tests import run_telemetry_reconcile_tests
 from mcapp.storage.unread_suppression_tests import run_unread_suppression_tests
 from mcapp.storage.uptime_gateway_tests import run_uptime_gateway_tests
@@ -229,6 +230,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     migration_chain_ok = await run_migration_chain_tests()
     print(f"migration_chain: {'PASS' if migration_chain_ok else 'FAIL'}")
+
+    telemetry_fill_ok = await run_telemetry_fill_tests()
+    print(f"telemetry_fill: {'PASS' if telemetry_fill_ok else 'FAIL'}")
 
     linkcheck_ingest_ok = await run_linkcheck_ingest_tests()
     print(f"linkcheck_ingest: {'PASS' if linkcheck_ingest_ok else 'FAIL'}")
@@ -502,6 +506,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and conversation_key_ok
         and query_ok
         and migration_chain_ok
+        and telemetry_fill_ok
         and signal_via_ok
         and mheard_attribution_ok
         and hey_path_ok

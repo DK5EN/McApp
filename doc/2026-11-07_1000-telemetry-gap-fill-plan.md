@@ -2,7 +2,7 @@
 
 **Goal:** fill the gaps in the WX charts with samples from the central server and persist them, so the charts stay complete even when RF reception is not.
 
-**Status (2026-11-07):** Wave 0 done. Next: Wave 1.
+**Status (2026-11-07):** Waves 0 and 1 done. Next: Wave 2.
 
 ## Decisions (operator, 2026-11-07)
 
@@ -51,12 +51,15 @@ QFE differed from meshmap by a station-specific median of -1.3 to +0.5 hPa. The 
 | Rule                                                                           | Why                                                                                              |
 | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
 | Collapse central rows closer than 60 s, keeping the first                      | The upstream hub re-emits frames seconds apart                                                   |
-| Fill only if no local row sits within ±15 min                                  | Local arrival runs up to about 14 min late                                                       |
+| Fill only if no RF row sits within ±15 min                                     | Local arrival runs up to about 14 min late                                                       |
+| A filled row blocks only within 60 s, and counts as a kept twin                | Otherwise the result depends on chunk boundaries and poll phase                                  |
+| An exact 0 is absent for every field except `alt`                              | Stations without a second probe send `temp2: 0`; the RF path drops zeros the same way            |
+| QFE and QNH outside the RF plausibility ranges are absent                      | Same junk filter as RF ingest                                                                    |
 | Only samples at least 30 min old                                               | A late RF copy gets the chance to arrive first                                                   |
 | Write directly to `telemetry`, never through `store_telemetry`                 | That path upserts `station_positions`, so an old sample would regress the sidebar's latest value |
 | Skip blocked callsigns                                                         | The blocklist applies to every source                                                            |
 | Keep `origin = NULL` for RF rows, `'meshmap'` for filled rows                  | No rewrite of existing rows; one `DELETE` undoes the whole feature                               |
-| A live RF frame matching a filled row within 60 s clears its `origin`          | RF wins: the reconcile path merges into the row, and the point is then real RF                   |
+| A live RF frame matching a filled row within 60 s clears its `origin`          | RF wins: its values replace the filled ones, and only its own values reach `station_positions`   |
 | Chunk 30 days per request, and halve the chunk when a response reaches the cap | A capped response drops its oldest rows without an error                                         |
 
 ## Field mapping
@@ -90,7 +93,7 @@ QFE differed from meshmap by a station-specific median of -1.3 to +0.5 hPa. The 
 | Wave | Content                                                                                            | Owner                     | Status |
 | ---- | -------------------------------------------------------------------------------------------------- | ------------------------- | ------ |
 | 0    | Pressure cause, field mapping, this plan                                                           | Orchestrator              | Done   |
-| 1    | Migration v41, pure merge logic, write and cursor storage, `origin` handling in ingest, test suite | Implementer, then advisor | Open   |
+| 1    | Migration v41, pure merge logic, write and cursor storage, `origin` handling in ingest, test suite | Implementer, then advisor | Done   |
 | 2    | Fetch job, status route, `origin` in `/api/telemetry`                                              | Implementer, then advisor | Open   |
 | 3    | Webapp: hollow points, line breaks, fill status in the Internet card                               | Implementer, then advisor | Open   |
 | 4    | Full gate in both repos, backfill test on a DB copy, read-time check                               | Orchestrator              | Open   |

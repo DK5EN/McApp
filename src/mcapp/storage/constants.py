@@ -20,7 +20,7 @@ from ..commands.parsing import is_group, is_hashtag, resolve_dst_target
 # passing suite for a reason unrelated to the change being made. This is not
 # circular with migrations.py: the step numbers there are independent literals,
 # so forgetting either half fails loudly.
-LATEST_SCHEMA_VERSION = 40
+LATEST_SCHEMA_VERSION = 41
 
 # Legacy filter category -> engine tag (classifier unification, issue #17 / Q2).
 # `directed` and `other` have no tag and are dropped on migration.
@@ -135,6 +135,36 @@ ACK_MSG_ID_WINDOW_MS = 4 * 3600 * 1000  # 4 h
 # cannot recur inside it and the slack cannot pull in another message's acks.
 ACK_SINCE_SLACK_MS = 60_000
 TELEMETRY_DEDUP_WINDOW_MS = 60_000
+
+# Physical sanity range (hPa) for a GENUINE qfe reading — src_type == "node" tele's
+# `node_press`, or BLE `/P=` via `parse_aprs_position`. This is a garbage-value floor
+# and ceiling only; it plays NO role in telling a real pressure from the `lora`-variant
+# tele's `/F=`-sourced barometric ALTITUDE (see the src_type dispatch in
+# store_telemetry — verdict V4/V4a: magnitude cannot do that job in either direction,
+# because an altitude above 850 m passes a >850 floor and a genuine high-altitude QFE
+# fails it). Bounds: recorded sea-level pressure extremes run ~870-1085 hPa (deepest
+# cyclone to strongest anticyclone); station-level QFE drops further before any
+# sea-level correction, and this mesh already has stations as high as ~1750 m
+# (DO9ALM-5, true QFE ~820 hPa; DB0HOB-12 1543 m, ~841 hPa) that a tighter floor would
+# discard. 300 hPa corresponds to roughly 9000 m — no station on this network is
+# remotely close, so it is a plausibility check, not an active constraint on real
+# traffic; 1100 hPa gives the same margin above the recorded high.
+_QFE_PLAUSIBLE_HPA_RANGE = (300, 1100)
+
+# QNH gets its OWN, much tighter range, and must never be folded back into the QFE one.
+# QNH is sea-level-normalised BY DEFINITION, so altitude never pushes it down — the
+# whole V4a argument for a wide QFE floor does not apply to it, and a tight bound here
+# costs nothing. This existed as a `> 850` floor until the QFE constant was renamed and
+# this line was migrated to its lower bound (300) along with it: one constant, two users,
+# two different physical quantities. That opened (300, 850] to junk, and the classic
+# wrong-unit bug lands squarely in it — an Extern-UDP feeder sending mmHg (~760) for hPa
+# is stored, unvalidated, straight into `node_press_asl` (`extudp_functions.cpp:180-183`)
+# and reaches us on all three qnh paths. Reproduced: qnh=760 at alt=500 fabricated a
+# 716.0 hPa "pressure", and for a feeder station this derivation is the ONLY qfe source
+# (the firmware emits `/Q=` precisely for nodes with no real sensor), so nothing ever
+# corrects it. An upper bound is included for free: Pa-unit junk (101325) would otherwise
+# sail through a bare floor.
+_QNH_PLAUSIBLE_HPA_RANGE = (850, 1100)
 
 # Gateway-uptime ledger (schema v25) — see
 # doc/2026-08-21_2350-gateway-uptime-plan.md §4/§5/§6. `storage/uptime.py` is
