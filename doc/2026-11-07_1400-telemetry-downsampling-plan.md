@@ -2,7 +2,7 @@
 
 **Goal:** the 30-day and yearly WX views load in about a second on the Pi Zero and never block the event loop, now that the gap fill roughly doubled the stored telemetry.
 
-**Status (2026-11-07):** Waves 5 and 6 done and committed (both advisors approved after small fixes). Next: Wave 7 (measure on a Pi-sized DB copy, dev release, measure on mcapp.local). Open advisor nice-to-haves for Wave 7 or later: sidebar "latest" shows a bucket start (up to 2 h old) on 30 d; a ~10 h old station qualifies by raw rows but has under 6 buckets to chart; the Kalman gate's `stddev > 2` sees 2 h means (smaller spread), so a jittery station may stabilize on 7 d but not on 30 d; a station whose stats window holds only temp2/hum2/gas gets no `stats` object. Follows `doc/2026-11-07_1000-telemetry-gap-fill-plan.md` (Waves 0-4 done, `v2.1.26-dev.1` live on mcapp.local).
+**Status (2026-11-07):** Waves 5, 6 and 7a committed. Wave 7a (Python medians, stale-while-revalidate cache) after the Pi measurements below; Pi cold reads: 744 h 4.2 s, yearly 8.2 s, both cached (5 min fresh, 60 min stale). Next: dev release and measurement on mcapp.local. Deferred: expression index `(callsign, timestamp / bucket_ms)` (yearly cold 5.5 to 3 s, needs a migration); mc-chat mock shape; advisor nice-to-haves (sidebar shows the bucket start on 30 d; a ~10 h old station qualifies by raw rows but has under 6 buckets to chart; the Kalman gate sees 2 h means; a temp2/hum2/gas-only stats window yields no `stats`).
 
 ## Measurements (mcapp.local, 2026-11-07 13:10, after the first fill cycle)
 
@@ -71,6 +71,22 @@ Decisions taken as recommended: 1B, 2a, 3i, 4 (hollow only if all), 5, 6. mc-cha
 - **A field with no value at all for a station is omitted** from that station's object (arrays and stats).
 - **Station filter on every read:** a station is sent iff some row in the window has a non-NULL, non-zero value in one of `temp1 temp2 hum hum2 qfe qnh gas` (any origin). Altitude/battery-only stations disappear. Webapp-hidden stations are unaffected (the server does not know them).
 - **Built without per-row Python dicts:** reduction and grouping in SQL, the JSON encoded in the same worker thread and returned as `bytes` (`Response(content=..., media_type="application/json")`).
+
+## Wave 7 measurements (live DB copy, 199,530 rows, 61,340 in 744 h)
+
+| Read                 | Mac    | Pi Zero 2W | Size    |
+| -------------------- | ------ | ---------- | ------- |
+| old 744 h            | 0.18 s | 6.1 s      | 15.2 MB |
+| new 48 h             | 0.01 s | 0.28 s     | 0.12 MB |
+| new 192 h            | 0.02 s | 0.71 s     | 0.46 MB |
+| new 744 h (b225591)  | 0.30 s | 9.3 s      | 0.58 MB |
+| new yearly (b225591) | 0.22 s | 8.6 s      | 1.71 MB |
+
+- **The Pi is about 30 times slower than the Mac in SQLite**, roughly 20 µs per row. A plain scan of the 61k rows costs 0.37 s.
+- **744 h breakdown on the Pi:** station filter 0.25 s, 2 h GROUP BY 1.5 s, `_w` copy 0.45 s, window-function medians 6.4 s.
+- **Python medians** (`groupby` + `zip` transpose + `sorted`) take 1.28 s on the Pi with identical results.
+- **An expression index `(callsign, timestamp / bucket_ms)`** removes the GROUP BY temp B-tree: 744 h 1.5 to 1.1 s, yearly 5.5 to 3.0 s. It needs a schema migration; deferred.
+- **Conclusion:** about 3 s cold for 744 h is the floor without pre-aggregation. Wave 7a therefore adds Python medians plus a stale-while-revalidate cache for the bucketed responses (5 min fresh, served stale up to 60 min while one background refresh runs).
 
 ## Cost and time
 

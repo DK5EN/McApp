@@ -124,6 +124,7 @@ from mcapp.storage.unread_suppression_tests import run_unread_suppression_tests
 from mcapp.storage.uptime_gateway_tests import run_uptime_gateway_tests
 from mcapp.storage.uptime_tests import run_uptime_tests
 from mcapp.storage.www_ingest_tests import run_www_ingest_tests
+from mcapp.telemetry_cache_tests import run_telemetry_cache_tests
 from mcapp.telemetry_fill_service_tests import run_telemetry_fill_service_tests
 from mcapp.telemetry_read_tests import run_telemetry_read_tests
 from mcapp.template_override_tests import run_template_override_tests
@@ -240,6 +241,8 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     print(f"telemetry_fill_service: {'PASS' if telemetry_fill_service_ok else 'FAIL'}")
     telemetry_read_ok = await run_telemetry_read_tests()
     print(f"telemetry_read: {'PASS' if telemetry_read_ok else 'FAIL'}")
+    telemetry_cache_ok = await run_telemetry_cache_tests()
+    print(f"telemetry_cache: {'PASS' if telemetry_cache_ok else 'FAIL'}")
 
     linkcheck_ingest_ok = await run_linkcheck_ingest_tests()
     print(f"linkcheck_ingest: {'PASS' if linkcheck_ingest_ok else 'FAIL'}")
@@ -516,6 +519,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and telemetry_fill_ok
         and telemetry_fill_service_ok
         and telemetry_read_ok
+        and telemetry_cache_ok
         and signal_via_ok
         and mheard_attribution_ok
         and hey_path_ok

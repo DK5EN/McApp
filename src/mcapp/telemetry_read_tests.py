@@ -179,6 +179,21 @@ async def _cases(results: list[tuple[str, bool]], storage: Any, db: Path) -> Non
         "stats_hours narrows the stats window only",
         n["DL3ODD-1"]["stats"]["count"] == 2 and n["DL3ODD-1"]["stats"]["temp1"] == [3.0, 3.0, 7.0],
     )
+    # A station whose stats window holds only temp2/gas rows (outside count fields) has no
+    # stats key at all; removing the `if st is None` guard in _tm_stats crashes the read.
+    _insert(
+        db,
+        [
+            ("DL3SEN-1", now - 30 * _H, {"temp2": 4.5}, None),
+            ("DL3SEN-1", now - 29 * _H, {"gas": 120.0}, None),
+        ],
+    )
+    sen = _decode(await storage.get_telemetry_chart_data(hours=744))["stations"].get("DL3SEN-1")
+    _check(
+        results,
+        "stats: station with only temp2/gas rows is listed without a stats key",
+        sen is not None and "stats" not in sen and sen.get("temp2") is not None,
+    )
     # YEARLY ---------------------------------------------------------------
     y0 = (now - 200 * _H) // 14_400_000 * 14_400_000
     _insert(

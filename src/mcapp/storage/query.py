@@ -12,6 +12,8 @@ import time
 from collections import defaultdict
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from itertools import groupby
+from operator import itemgetter
 from pathlib import Path
 from statistics import mean
 from typing import Any, cast
@@ -1925,19 +1927,19 @@ def _tm_stats(conn: sqlite3.Connection, stations: dict[str, dict[str, Any]]) -> 
         f" FROM _w WHERE {present} GROUP BY callsign"
     ):
         stations[cs]["stats"] = {"count": n, "first_ms": first, "last_ms": last}
-    union = " UNION ALL ".join(
-        f"SELECT callsign, '{f}' AS f, MIN(x), MAX(x),"  # noqa: S608 - fixed identifiers
-        f" MAX(CASE WHEN rn = (cnt + 1) / 2 THEN x END)"
-        f" FROM (SELECT callsign, {f} AS x,"
-        f" ROW_NUMBER() OVER (PARTITION BY callsign ORDER BY {f}) AS rn,"
-        f" COUNT(*) OVER (PARTITION BY callsign) AS cnt"
-        f" FROM _w WHERE {f} IS NOT NULL) GROUP BY callsign"
-        for f in _TM_FIELDS
-    )
-    for cs, f, lo, hi, med in conn.execute(union):
+    # min/median/max by Python transpose: window-function medians cost 6.4 s on the Pi.
+    rows = conn.execute(
+        f"SELECT callsign, {', '.join(_TM_FIELDS)} FROM _w ORDER BY callsign"  # noqa: S608 - fixed identifiers
+    ).fetchall()
+    for cs, group in groupby(rows, key=itemgetter(0)):
         st = stations[cs].get("stats")
-        if st is not None:
-            st[f] = [lo, med, hi]
+        if st is None:
+            continue
+        cols = list(zip(*group, strict=True))
+        for f, col in zip(_TM_FIELDS, cols[1:], strict=True):
+            v = sorted(x for x in col if x is not None)
+            if v:
+                st[f] = [v[0], v[(len(v) - 1) // 2], v[-1]]
 
 
 _TM_BASE = (

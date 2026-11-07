@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Any
 
 from ..logging_setup import get_logger
 from ..meteo import is_valid_position
+from ..storage.query import TELEMETRY_RAW_MAX_HOURS
+from ..telemetry_cache import TelemetryResponseCache
 from ..util import now_ms
 from ..weblite import APIRouter, HTTPException, Response
 
@@ -150,9 +152,28 @@ async def _run_tz_worker(
     return out.decode("utf-8", "replace").strip()
 
 
+async def _telemetry_content(
+    cache: TelemetryResponseCache, storage: Any, hours: int, stats_hours: int | None
+) -> bytes:
+    """Raw reads go straight to storage; bucketed (> 192 h) ones through the cache."""
+    h = min(hours, TELEMETRY_MAX_HOURS)
+    sh = h if stats_hours is None else min(stats_hours, TELEMETRY_MAX_HOURS)
+
+    async def compute() -> bytes:
+        data: bytes = await storage.get_telemetry_chart_data(
+            hours=h, stats_hours=None if stats_hours is None else sh
+        )
+        return data
+
+    if h <= TELEMETRY_RAW_MAX_HOURS:
+        return await compute()
+    return await cache.get(("telemetry", h, sh), compute)
+
+
 def build_weather_router(manager: SSEManager) -> APIRouter:
     """Build the /api/weather, /api/telemetry, /api/timezone router."""
     router = APIRouter()
+    telemetry_cache = TelemetryResponseCache()
 
     # Weather data endpoint
     @router.get("/api/weather")
@@ -201,11 +222,9 @@ def build_weather_router(manager: SSEManager) -> APIRouter:
     @router.get("/api/telemetry")
     async def get_telemetry(hours: int = 48, stats_hours: int | None = None) -> Response:
         """Columnar telemetry for weather charts (raw up to 192 h, 2 h means beyond)."""
-        storage = manager.require_storage()
         return Response(
-            content=await storage.get_telemetry_chart_data(
-                hours=min(hours, TELEMETRY_MAX_HOURS),
-                stats_hours=None if stats_hours is None else min(stats_hours, TELEMETRY_MAX_HOURS),
+            content=await _telemetry_content(
+                telemetry_cache, manager.require_storage(), hours, stats_hours
             ),
             media_type="application/json",
         )
@@ -220,7 +239,9 @@ def build_weather_router(manager: SSEManager) -> APIRouter:
         """Telemetry aggregated into 4h min/max buckets for yearly charts."""
         storage = manager.require_storage()
         return Response(
-            content=await storage.get_telemetry_chart_data_bucketed(),
+            content=await telemetry_cache.get(
+                ("yearly",), storage.get_telemetry_chart_data_bucketed
+            ),
             media_type="application/json",
         )
 
