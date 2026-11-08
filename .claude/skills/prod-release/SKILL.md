@@ -17,7 +17,8 @@ it leaves one push undone that silently breaks the _next_ release.
 ## The one-screen version
 
 ```bash
-# 0. is the thing you are promoting actually healthy in the field?
+# 0. read RESUME.md (if present) and run its checklist; then: is it healthy in the field?
+cat RESUME.md; git log --oneline -5                # the plan and the soak gate live here
 /ai-ops                                            # then read doc/ops-mcapp-health-log.md
 
 # 1. update dependencies in BOTH repos — mandatory, not opportunistic
@@ -32,10 +33,7 @@ diff -rq src/mcapp/classifier  ../mc-chat/meshcom_mock/classifier
 uv run python scripts/refresh_group_labels.py && git diff --stat src/mcapp/group_labels_icssw.json
 
 # 3. gate BOTH repos — release.sh gates nothing, and step 1 invalidated your last run
-uvx ruff check && uvx ruff format --check . \
-  && uv run mypy src/mcapp ble_service/src \
-  && uv run python scripts/run_startup_tests.py    # exit 0
-cd ../webapp && npm run typecheck && npm run lint && npm run format:check && npm test
+./scripts/gate.sh > /tmp/gate.out 2>&1; echo "GATE_EXIT=$?"; cat /tmp/gate.out   # GATE: PASS
 
 # 4. pre-conditions (see Stops 1 and 2), then commit the dependency bumps
 for d in . ../webapp; do git -C $d rev-list --count development..origin/main; done   # both 0
@@ -48,16 +46,25 @@ git commit -m "[docs] Add release notes for vX.Y.Z" && git push origin developme
 printf '\n' | ./scripts/release.sh 2 > /tmp/release.log 2>&1; echo "EXIT=$?"
 
 # 6. deploy: webapp → version chip (bottom right) → Update to vX.Y.Z → Start Update
-# 7. verify against the ACTIVE slot, not the banner
+#    then check the runner's Finished line: version == vX.Y.Z (Step 6)
+# 7. verify against the ACTIVE slot, not the banner; /ai-ops + health-log entry (mandatory)
 ```
 
 ## Step 0 — Decide whether it is fit to promote
 
-Run `/ai-ops` and read its verdict. A production cut needs more than a green suite:
+**Read `RESUME.md` first, if it exists, and the newest commits.** It carries the plan for this
+release and, usually, the soak checklist that gates it. Run every check in it before anything else,
+and stop if one fails: note the failure where the file says, fix it, cut a new dev release, and
+the soak restarts. On 2026-11-08 the v2.1.26 promotion skipped this file: five of its seven soak
+checks ran only after the release, and the operator had to interrupt to get the overnight checks run.
+
+Then run `/ai-ops` and read its verdict. A production cut needs more than a green suite:
 
 - the dev tag has **soaked on the box** — hours, not minutes, with `NRestarts` still 0
 - zero journal warnings over the soak window
-- CI green on the exact commit you are promoting (`gh run list --branch development --limit 3`)
+- `./scripts/gate.sh` ends with `GATE: PASS` on the exact tree you are promoting (Step 3). CI's
+  `tests` workflow is disabled (`disabled_manually` since 2026-08-31) and signs off nothing; the
+  gate script is the release gate, by operator decision 2026-11-08.
 - the working trees are the tag: `git rev-parse HEAD` == `git rev-parse vX.Y.Z-dev.N` in both repos
 
 Append the sweep to `doc/ops-mcapp-health-log.md` **before** releasing. It is the record of what the
@@ -184,10 +191,21 @@ git diff src/mcapp/group_labels_icssw.json         # read it: renamed groups, ne
 `release.sh` runs `npm run build:strict` and **nothing else**. No ruff, no mypy, no backend suite,
 no eslint, no vitest. A red tree releases silently.
 
+```bash
+./scripts/gate.sh > /tmp/gate.out 2>&1; echo "GATE_EXIT=$?"; cat /tmp/gate.out
+```
+
+It runs ruff check, ruff format, mypy and `run_startup_tests.py` here, then the webapp's typecheck,
+lint, format check and tests, every step even after a failure, and ends with one line:
+`GATE: PASS`, or `GATE: FAIL (<steps>)` with each failing step's log path and tail. **Read
+`GATE_EXIT`, never an exit code through `| tail`**: the pipe reports tail's. Scope it with
+`./scripts/gate.sh mcproxy` or `webapp` while iterating; the release needs the full run.
+
 `config_migration` reports `SKIPPED — NOT VERIFIED` on macOS (the suite is bash-4-only by design and
-macOS ships bash 3.2). That is an instrument gap, not a coverage gap — it runs on every CI push and
-can be run for real on the Pi. Do not treat the skip as a failure, and do not treat it as coverage
-either: check that CI is green.
+macOS ships bash 3.2). That is an instrument gap, not a coverage gap. CI no longer runs it, so run it
+for real on the Pi against the dev tag (`/dev-release`, "A dev build can run the real gate on the
+box") when a release touches `bootstrap/` config migration. Do not treat the skip as a failure, and
+do not treat it as coverage either.
 
 ## The version is not a parameter
 
@@ -405,7 +423,9 @@ one for a production tag.
 5. the modal streams `PREPARE → DEPLOY → ACTIVATE → HEALTH → DONE` over SSE
 
 The deploy takes several minutes on a Pi Zero 2W. **Do not poll it turn by turn.** Arm one
-background wait with a terminal condition and do something else until it fires.
+background wait with a terminal condition and do something else until it fires. The loop below runs
+up to 20 minutes, longer than a foreground tool call may take: start it with the Bash tool's
+`run_in_background: true` and wait for its completion notice. Never chain `sleep` calls to wait.
 
 **Record the old state BEFORE you click Start Update**, because the terminal condition is "the
 service moved off it":
@@ -457,6 +477,22 @@ dev tag from its release — which is why it stays in the condition, just not al
 Auto-rollback is armed: if the health checks fail the previous slot stays active and the service
 keeps running the old code.
 
+### Then read the runner's own result — "Update completed successfully" is not evidence
+
+```bash
+ssh mcapp.local 'sudo journalctl -u mcapp-update --since "-30min" --no-pager | grep -E "Finished:|WARN.*(unresolved|Cannot determine)"'
+# want: [UPDATE-RUNNER] Finished: {"status": "success", "version": "vX.Y.Z", "slot": N, ...}
+```
+
+**`version` must be the tag you released and `slot` must be the slot `current` points to.** Anything
+else stops the flow: do not start Step 7, do not call the release deployed. On 2026-11-08 (F14,
+health log §59) the Pi could not reach the GitHub API, the bootstrap rebuilt the old slot in place,
+and the runner still logged `"status": "success", "version": "v2.1.26-dev.3", "slot": 2` and pointed
+`current` at that stale slot, while the modal showed DONE. The fix (the runner now reports
+`"status": "failed", "reason": "version_unresolved"` instead) only takes effect once a slot carrying
+it drives an update, because the runner and bootstrap that run are the ACTIVE slot's. A `failed` with
+`version_unresolved` means: nothing was deployed, wait for GitHub, start the update again.
+
 ## Step 7 — Verify
 
 The modal's DONE is not verification. Check the box:
@@ -491,7 +527,13 @@ discipline are pinned by `scripts/webapp_deploy_tests.py`, which drives the real
 - If the release changed the schema, confirm the migration ran: the DB's `schema_version` must equal
   `LATEST_SCHEMA_VERSION` in the **active slot**. A mismatch is the loudest finding there is.
 
-Then run `/ai-ops` once the box has settled and append the post-release sweep to the health log.
+### Post-release sweep — mandatory, the release is not done without it
+
+Run `/ai-ops` once the box has settled and append the post-release sweep to
+`doc/ops-mcapp-health-log.md` as a new numbered section, banner updated, before you report the
+release as done. Record anything the deploy got wrong as a finding (`F<n>`) even if a second run
+fixed it. Then, if `RESUME.md` exists and nothing in it is left open, delete it in the same commit
+as the health-log entry; if something is left open, keep it and say what.
 
 ## Rollback
 
