@@ -118,11 +118,15 @@ from mcapp.storage.read_cursor_tests import run_read_cursor_tests
 from mcapp.storage.signal_via_tests import run_signal_via_tests
 from mcapp.storage.store_notice_tests import run_store_notice_tests
 from mcapp.storage.suppression_tests import run_suppression_predicate_tests
+from mcapp.storage.telemetry_fill_tests import run_telemetry_fill_tests
 from mcapp.storage.telemetry_reconcile_tests import run_telemetry_reconcile_tests
 from mcapp.storage.unread_suppression_tests import run_unread_suppression_tests
 from mcapp.storage.uptime_gateway_tests import run_uptime_gateway_tests
 from mcapp.storage.uptime_tests import run_uptime_tests
 from mcapp.storage.www_ingest_tests import run_www_ingest_tests
+from mcapp.telemetry_cache_tests import run_telemetry_cache_tests
+from mcapp.telemetry_fill_service_tests import run_telemetry_fill_service_tests
+from mcapp.telemetry_read_tests import run_telemetry_read_tests
 from mcapp.template_override_tests import run_template_override_tests
 from mcapp.udp_handler import run_startup_tests as run_udp_handler_tests
 from mcapp.udp_parsing_tests import run_udp_parsing_tests
@@ -229,6 +233,16 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     migration_chain_ok = await run_migration_chain_tests()
     print(f"migration_chain: {'PASS' if migration_chain_ok else 'FAIL'}")
+
+    telemetry_fill_ok = await run_telemetry_fill_tests()
+    print(f"telemetry_fill: {'PASS' if telemetry_fill_ok else 'FAIL'}")
+
+    telemetry_fill_service_ok = await run_telemetry_fill_service_tests()
+    print(f"telemetry_fill_service: {'PASS' if telemetry_fill_service_ok else 'FAIL'}")
+    telemetry_read_ok = await run_telemetry_read_tests()
+    print(f"telemetry_read: {'PASS' if telemetry_read_ok else 'FAIL'}")
+    telemetry_cache_ok = await run_telemetry_cache_tests()
+    print(f"telemetry_cache: {'PASS' if telemetry_cache_ok else 'FAIL'}")
 
     linkcheck_ingest_ok = await run_linkcheck_ingest_tests()
     print(f"linkcheck_ingest: {'PASS' if linkcheck_ingest_ok else 'FAIL'}")
@@ -502,6 +516,10 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and conversation_key_ok
         and query_ok
         and migration_chain_ok
+        and telemetry_fill_ok
+        and telemetry_fill_service_ok
+        and telemetry_read_ok
+        and telemetry_cache_ok
         and signal_via_ok
         and mheard_attribution_ok
         and hey_path_ok

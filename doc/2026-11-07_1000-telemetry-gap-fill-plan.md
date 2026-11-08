@@ -1,0 +1,146 @@
+# Telemetry gap fill from meshmap
+
+**Goal:** fill the gaps in the WX charts with samples from the central server and persist them, so the charts stay complete even when RF reception is not.
+
+**Status (2026-11-07):** Waves 0-4 done (MCProxy and webapp `c6028a5`). Station filter decided (WX sensors only). Open: read time on the Pi. Not released.
+
+## Decisions (operator, 2026-11-07)
+
+- **Method:** fill and persist in `telemetry`, marked by a new `origin` column.
+- **Switch:** none of its own. While the Internet feed is enabled, data is ingested. While it is off, nothing new goes into the charts and stored rows stay.
+- **Stations:** visible stations only, meaning not in `wx_sidebar.hidden`.
+- **First fill:** the full history. Local retention is 365 days, so the fill stops there: older rows would be pruned the same night.
+- **Chart:** hollow points for central samples, and the line breaks at real gaps. No separate RF statistic.
+- **Load on meshmap:** accepted. The operator checks the impact later on SmokePing (baseline 2026-11-07: 0% loss, about 550 ms).
+
+## Measurements
+
+Local backup of 2026-10-20 against `GET https://meshmap.oevsv.at/api/v2/telemetry`, window 2026-10-13 to 10-20. The live DB was not read.
+
+| Station   | Samples, local | Samples, meshmap | Max gap, local | Max gap, combined |
+| --------- | -------------- | ---------------- | -------------- | ----------------- |
+| DB0MMR-12 | 52             | 415              | 41.7 h         | 2.3 h             |
+| DF2KX-12  | 94             | 216              | 27.8 h         | 22.3 h            |
+| DM6CS-12  | 84             | 381              | 11.6 h         | 0.6 h             |
+| DL1RHS-24 | 113            | 419              | 7.1 h          | 0.6 h             |
+| DG7RJ-11  | 152            | 277              | 5.7 h          | 2.0 h             |
+| DG7RJ-8   | 271            | 369              | 3.4 h          | 0.5 h             |
+| DB0ISM-1  | 300            | 383              | 2.6 h          | 1.6 h             |
+| DL2UD-1   | 306            | 422              | 1.0 h          | 1.0 h             |
+
+- **Meshmap counts are after collapsing twin rows** closer than 60 s. Raw counts are up to 1.8 times higher.
+- **Central is not complete.** DF2KX-12 keeps a 22 h gap, and 2-13% of local samples had no central twin in 3 of the 5 stations checked.
+- **Row identity is estimated.** It was matched on identical temperature and humidity within 20 min, which is weak for slow sensors.
+
+## Why this is not a plain merge
+
+- **Local timestamps run late.** They are arrival times, a median of 16-305 s per station behind the server's, up to about 14 min at p90. A 60 s match would duplicate.
+- **There is no shared identity.** The API returns no `msg_id`, and meshmap's `timestamp` is its own receive time, in seconds.
+- **The API caps a response at 5000 rows, keeping the newest.** A busy station has about 85 raw rows a day, so 90-day chunks would silently lose their oldest rows.
+
+## The pressure offset is ours
+
+QFE differed from meshmap by a station-specific median of -1.3 to +0.5 hPa. The cause is on the local side:
+
+- **Rows with a real `/P=` match meshmap exactly** (median, p10 and p90 all 0.00) on all four stations checked.
+- **The others hold a derived QFE.** Without `/P=`, `store_telemetry` computes it from QNH and altitude with the standard atmosphere. Worked example, DF2KX-12: `qnh=1026.4`, `alt=425` gives 975.7, the stored value, while meshmap has the measured 977.1.
+- **Consequence:** central `press` is a measured value and is safe to fill. The local QFE chart already mixes measured and derived values, up to about 1.3 hPa apart on a 70 hPa axis. Filling makes that no worse in kind, so local rows are left alone.
+
+## Rules for the fill
+
+| Rule                                                                           | Why                                                                                              |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| Collapse central rows closer than 60 s, keeping the first                      | The upstream hub re-emits frames seconds apart                                                   |
+| Fill only if no RF row sits within ±15 min                                     | Local arrival runs up to about 14 min late                                                       |
+| A filled row blocks only within 60 s, and counts as a kept twin                | Otherwise the result depends on chunk boundaries and poll phase                                  |
+| An exact 0 is absent for every field except `alt`                              | Stations without a second probe send `temp2: 0`; the RF path drops zeros the same way            |
+| QFE and QNH outside the RF plausibility ranges are absent                      | Same junk filter as RF ingest                                                                    |
+| Only samples at least 30 min old                                               | A late RF copy gets the chance to arrive first                                                   |
+| Write directly to `telemetry`, never through `store_telemetry`                 | That path upserts `station_positions`, so an old sample would regress the sidebar's latest value |
+| Skip blocked callsigns                                                         | The blocklist applies to every source                                                            |
+| Keep `origin = NULL` for RF rows, `'meshmap'` for filled rows                  | No rewrite of existing rows; one `DELETE` undoes the whole feature                               |
+| A live RF frame matching a filled row within 60 s clears its `origin`          | RF wins: its values replace the filled ones, and only its own values reach `station_positions`   |
+| Chunk 30 days per request, and halve the chunk when a response reaches the cap | A capped response drops its oldest rows without an error                                         |
+
+## Field mapping
+
+| Meshmap      | `telemetry` | Note                                                                    |
+| ------------ | ----------- | ----------------------------------------------------------------------- |
+| `temp`       | `temp1`     |                                                                         |
+| `temp2`      | `temp2`     |                                                                         |
+| `hum`        | `hum`       |                                                                         |
+| `press`      | `qfe`       | Measured                                                                |
+| `qnh`        | `qnh`       | Only a stored value                                                     |
+| `qnhReduced` | not stored  | Depends on the request window's median temperature, so it is not stable |
+| `alt`        | `alt`       |                                                                         |
+| `batt`       | `batt`      |                                                                         |
+| `gas_res`    | `gas`       |                                                                         |
+| `eco2`       | `co2`       |                                                                         |
+| `wlevel`     | `extras`    | Only when present                                                       |
+| `wtemp`      | `extras`    | Only when present                                                       |
+
+## Behaviour
+
+- **Polling:** every 30 min per visible station, while the Internet feed is enabled.
+- **After the feed was off:** each station's cursor catches up when it is enabled again, so that period is filled too.
+- **Newly visible station:** it has no cursor yet, so it starts its first fill on the next cycle.
+- **Newly hidden station:** polling stops and its rows stay.
+- **First fill:** background, resumable after a restart, one request every 10 s, with a random start delay per box.
+- **Line break:** at more than 3 times the station's median interval, at least 90 min. The yearly view keeps its 4 h buckets.
+
+## Waves
+
+| Wave | Content                                                                                            | Owner                     | Status |
+| ---- | -------------------------------------------------------------------------------------------------- | ------------------------- | ------ |
+| 0    | Pressure cause, field mapping, this plan                                                           | Orchestrator              | Done   |
+| 1    | Migration v41, pure merge logic, write and cursor storage, `origin` handling in ingest, test suite | Implementer, then advisor | Done   |
+| 2    | Fetch job, status route, `origin` in `/api/telemetry`                                              | Implementer, then advisor | Done   |
+| 3    | Webapp: hollow points, line breaks, fill status in the Internet card                               | Implementer, then advisor | Done   |
+| 4    | Full gate in both repos, backfill test on a DB copy, read-time check                               | Orchestrator              | Done   |
+
+A release or deploy to mcapp.local is not part of this plan and needs a separate go.
+
+## As built (Waves 2-3)
+
+- **Service:** `telemetry_fill_service.py`, started next to the Internet feed in `main.py`. It checks the feed switch before every request, so turning the feed off stops a running first fill after at most one more request.
+- **Visible stations** are those with an RF row in the last 30 days, which is the webapp picker's window, minus hidden and blocked. A station silent for longer is not polled. Its first fill still reaches back 365 days.
+- **Failures stop one station, never the cycle.** A fetch or storage error is shown on that station and leaves its cursor where it was.
+- **Off the loop:** the response parse and the merge run in a worker thread. A capped 5000-row chunk is about 0.5 s of CPU on the Pi Zero.
+- **Status route** `GET /api/telemetry/fill` serves from memory (stations, row counts, cursors), refreshed once per cycle and on insert. The webapp polls it every 60 s, so it must never scan `telemetry`.
+- **Points:** RF points are now drawn solid on every raw series and meshmap points hollow. Some raw series had transparent points before, which would have looked like central samples. This is a visible change to RF-only charts.
+- **Line breaks** use `spanGaps: true` plus a scriptable `segment` style that goes transparent across a real gap. A numeric `spanGaps` breaks at every null on the merged axis in Chart.js 4.6.1.
+- **Older backends:** the card hides the fill block on a 404 and stops polling, without writing a stall row.
+
+## Wave 4 results (2026-11-07)
+
+Real fill against a copy of the 2026-10-20 backup, limited to the 7 visible stations of the measurement table (DG7RJ-11 is hidden). The live DB was not read.
+
+| Station   | Max gap, RF | Max gap, combined (Oct 13-20) | Filled rows, 365 d |
+| --------- | ----------- | ----------------------------- | ------------------ |
+| DB0MMR-12 | 41.7 h      | 0.7 h                         | 3,752              |
+| DF2KX-12  | 27.8 h      | 22.3 h                        | 3,789              |
+| DM6CS-12  | 11.6 h      | 1.0 h                         | 3,286              |
+| DL1RHS-24 | 7.1 h       | 0.7 h                         | 3,494              |
+| DG7RJ-8   | 3.4 h       | 1.0 h                         | 2,344              |
+| DB0ISM-1  | 2.6 h       | 1.6 h                         | 1,822              |
+| DL2UD-1   | 1.0 h       | 1.0 h                         | 1,147              |
+
+- **The merge works as measured in Wave 0.** Combined gaps match the estimate; DF2KX-12 keeps the 22 h gap that meshmap also has.
+- **Meshmap history starts 2026-08-06.** The first fill therefore covers about 3 months, not 365 days.
+- **First cycle: 913 s, 19,632 rows, about 13 requests per station.** A second cycle inserted only the 5 samples that had settled in the meantime.
+- **Read time on the Mac:** the 30-day `/api/telemetry` query went from 22 ms (10,850 rows) to 39 ms (19,592 rows), the yearly one from 215 to 264 ms. Not yet measured on the Pi Zero.
+
+### Station filter: WX sensors only (operator, 2026-11-07)
+
+- **The picker's set was about 99 stations, not 8**, because a non-zero GPS altitude counts as real data there.
+- **Decision: a station that sends only altitude and battery is not filled.** It needs a non-zero temp, temp2, hum, hum2, QFE, QNH, gas or CO2, or a water sensor in `extras`.
+- **Meshmap holds nothing more for those stations.** DB0ISM-1, DL2UD-1 and DL1RHS-24 from the measurement table are altitude and battery only, locally and centrally.
+- **Result on the backup DB: 45 of 139 visible stations** over its own 30-day window. The webapp picker is unchanged and still lists the others.
+- **Load per box:** a first fill of about 590 requests (about 1.6 h at one per 10 s), then about 45 requests every 30 min (about 2,200 a day).
+- **Read time still needs a Pi measurement before a release.** 7 filled stations nearly doubled the 30-day row count, so 45 may need the server-side downsampling from "Open risks".
+
+## Open risks
+
+- **Read time on the Pi Zero.** `/api/telemetry` has no row limit, so filled data can slow the 30-day chart. Wave 4 measures it. The fix would be server-side downsampling, which is not planned yet.
+- **Row growth.** At most about 17,500 rows per visible station per year.
+- **Data quality upstream.** The hub re-emits one station's frame under another station's call. mcmap filters this, but a filled row can inherit a miss. Marked rows make that traceable.

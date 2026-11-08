@@ -59,6 +59,7 @@ if TYPE_CHECKING:
     from .node_admin_types import NodeAdminService
     from .node_console import NodeConsoleSession
     from .qrz_service import QrzLookupService
+    from .telemetry_fill_service import TelemetryFillService
     from .wire_monitor import WireMonitor
 
 SSE_CLIENT_QUEUE_SIZE = 256
@@ -336,6 +337,9 @@ class SSEManager:
         # Internet feed (meshmap). Set by build_app (main.py); None keeps
         # /api/internet-feed at a 503 and omits the "internet_feed" feature.
         self.internet_feed_service: InternetFeedApi | None = None
+        # Telemetry gap fill from meshmap (main.py); None keeps
+        # /api/telemetry/fill at its idle payload.
+        self.telemetry_fill_service: TelemetryFillService | None = None
         # meshmap positions held in RAM (main.py); replayed to every new client.
         self.internet_position_cache: InternetPositionCache | None = None
         # (sender, msg_id) -> broadcast time of www frames (_www_broadcast_handler).

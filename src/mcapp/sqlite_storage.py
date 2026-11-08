@@ -32,6 +32,7 @@ from .storage._base import StorageBase
 from .storage.callsign_info import CallsignInfoMixin
 from .storage.classifier_api import ClassifierApiMixin
 from .storage.constants import (
+    _QFE_PLAUSIBLE_HPA_RANGE,
     BARO_EXPONENT,
     BARO_LAPSE_RATE_K_PER_M,
     BARO_STD_TEMP_K,
@@ -44,7 +45,7 @@ from .storage.constants import (
     db_read,
     db_write,
 )
-from .storage.ingest import _QFE_PLAUSIBLE_HPA_RANGE, IngestMixin
+from .storage.ingest import IngestMixin
 from .storage.internet_feed_state import InternetFeedStateMixin
 from .storage.migrations import MigrationsMixin
 from .storage.node_admin import NodeAdminMixin

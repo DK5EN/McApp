@@ -1,0 +1,152 @@
+# Telemetry downsampling for the WX charts
+
+**Goal:** the 30-day and yearly WX views load in about a second on the Pi Zero and never block the event loop, now that the gap fill roughly doubled the stored telemetry.
+
+**Status (2026-11-07):** Waves 5-10 done. `v2.1.26-dev.3` is live on mcapp.local (slot-2, schema v42). Open: soak.
+
+## Measurements (mcapp.local, 2026-11-07 13:10, after the first fill cycle)
+
+| View                  | Time  | Size    | Rows   |
+| --------------------- | ----- | ------- | ------ |
+| 24 h (fetches 48 h)   | 0.2 s | 0.4 MB  | 1,783  |
+| 7 d (fetches 192 h)   | 1.2 s | 2.8 MB  | 12,483 |
+| 30 d (fetches 744 h)  | 4.9 s | 12.3 MB | 57,398 |
+| 1 y (4 h min/max SQL) | 8.2 s | 6.8 MB  | -      |
+
+- **Python row handling dominates, not the scan.** Counting the 30-day rows takes 44 ms. Fetching them as dicts takes 4.1 s, `json.dumps` another 1.5 s, and that 1.5 s runs on the event loop.
+- **Time buckets only help from 1 h up.** WX stations report every 30 min (median; p90 91 min). 15- or 30-min buckets remove almost nothing; 1 h halves the rows (33k), 2 h quarters them (19k).
+- **SQL bucketing alone is not enough.** A 1 h `AVG` query still took 3.7 s plus 0.9 s encoding; 2 h took 2.6 s plus 0.5 s. The rows have to leave SQLite already reduced and the JSON has to be built off the loop.
+- **89 of 139 stations in the 30-day response have no WX sensor** (altitude and battery only), about 16k of the 57k rows.
+- **Columnar JSON is 3.6 times smaller** (14.3 MB to 4.0 MB).
+
+## Constraints
+
+- **No backward compatibility (operator, 2026-11-07).** Backend and webapp ship in one release, so the response shape may change. mc-chat's mock also serves `/api/telemetry` (`meshcom_mock/api.py:756`); the WX page breaks against it until it gets the same shape.
+- **The webapp has cadence-dependent logic:** the Kalman altitude gate (24 h stddev, per-row steps), the "N datapoints (X/h)" header, the min/median/max table, `MIN_WX_POINTS`, and the gap threshold (`max(3 x median interval, 90 min)`). Each must be told when it gets buckets.
+- **Zero means "sensor absent"** for temp2, hum2 and gas, so averages must ignore zeros, as RF ingest does.
+
+## Decisions for the operator
+
+1. **What the 30-day chart draws.**
+   - A. 1 h mean line. Looks like today; halves the rows.
+   - B. 2 h mean line. Smoother; a quarter of the rows. Outages under 6 h no longer break the line. **Recommended.**
+   - C. 2 h min/max band like the yearly view. Shows extremes; the 30-day view changes style.
+2. **The stats table (min/median/max, "N datapoints").**
+   - a. Exact, computed by the server from the raw rows in a small separate response. **Recommended.**
+   - b. From the buckets: min and max narrow, the count becomes buckets.
+3. **Stations without a WX sensor** (altitude and battery only) in the WX views.
+   - i. Drop them from the WX views, as the fill already does. The sidebar loses about 89 altitude-only stations. **Recommended.**
+   - ii. Keep them.
+4. **Hollow points on a bucket:** hollow only if every sample in it came from the central server. **Recommended**; the alternative is "hollow if any".
+5. **7-day view:** stays raw (it is already near native cadence) but gets the off-loop encoding. **Recommended.**
+6. **Yearly view:** keep the 4 h min/max shape, add the WX-sensor filter and off-loop encoding, and build it the same reduced way. **Recommended.**
+
+## Waves
+
+| Wave | Content                                                                                                                                                                          | Owner                     |
+| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| 5    | Backend: new columnar response for all telemetry routes, server-side bucketing per range, exact stats in the same response, station filter, JSON built in a worker thread, tests | Implementer, then advisor |
+| 6    | Webapp: read the columnar response, tell the Kalman gate, stats, gap threshold and point count about buckets                                                                     | Implementer, then advisor |
+| 7    | Gate both repos, measure on a Pi-sized DB copy, dev release, measure on mcapp.local                                                                                              | Orchestrator              |
+
+Waves 5 and 6 run in parallel once the wire contract below is fixed: separate repos, disjoint files.
+
+### File ownership
+
+| Wave | Files                                                                                                                                                                                                                                                                                                             |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 5    | `src/mcapp/storage/query.py` (telemetry readers only), `src/mcapp/sse_routes/weather.py`, NEW `src/mcapp/telemetry_read_tests.py`, `scripts/run_startup_tests.py` (orchestrator)                                                                                                                                  |
+| 6    | `src/stores/WxDataStore.ts`, `src/components/stats/WxData.vue`, `src/components/stats/WxListPanel.vue`, `src/views/WxView.vue`, `src/utils/wxGaps.ts`, `src/utils/wxPhysics.ts`, `src/utils/wxChartConfig.ts`, `src/utils/wxDataHygiene.ts`, their specs, NEW `src/stores/__tests__/WxDataStore.columnar.spec.ts` |
+
+### Wire contract (fixed 2026-11-07, at dispatch)
+
+Decisions taken as recommended: 1B, 2a, 3i, 4 (hollow only if all), 5, 6. mc-chat's mock is deferred.
+
+- **One shape for every range:** `GET /api/telemetry?hours=48|192|744[&stats_hours=N]` and `GET /api/telemetry/yearly` return `{"bucket_s": int, "stations": {<callsign>: {...}}}`. `bucket_s` is `0` (raw) for `hours <= 192`, `7200` for `hours > 192`, `14400` for yearly. The webapp never chooses a bucket.
+- **Fields on the wire are exactly the charted ones:** `temp1 temp2 hum hum2 qfe qnh gas alt`. `co2`, `batt` and `extras` are dropped (the webapp never charts them).
+- **Raw (`bucket_s == 0`), per station:** `ts` (ms), one array per field (entries may be `null`), `origin` (`1` = meshmap, `0` = RF). Rows where all eight fields are NULL are not sent. No `stats`, no `n`; the webapp keeps computing stats itself from raw rows.
+- **Mean buckets (`bucket_s == 7200`), per station:** `ts` (bucket start, `timestamp / 7200000 * 7200000`), one array per field = `ROUND(AVG(...), 2)`, with zeros ignored (`NULLIF(x, 0)`) for `temp2 hum2 gas`, `n` (raw rows in the bucket), `origin` (`1` only if every row in the bucket is meshmap), and `stats` (below).
+- **Yearly (`bucket_s == 14400`), per station:** `ts`, `<field>_min` / `<field>_max` for `temp1 temp2 hum hum2 qfe gas alt` (zeros ignored for `temp2 hum2 gas`), `n`, `origin`. No `stats`: the yearly view has no stats table, and an 8760 h median pass is the most expensive read on the Pi (advisor, Wave 5).
+- **`stats`** (mean buckets only): `{"count": int, "first_ms": int, "last_ms": int, "<field>": [min, median, max]}` from the RAW rows in the last `stats_hours` (default: `hours`). The webapp ignores `stats.qnh` and derives the QNH row from its local qfe + alt series, so the table matches the chart (advisor, Wave 6). `count` = distinct raw timestamps where any of `temp1 hum qfe qnh alt` is non-NULL (mirrors the webapp's datapoint union). Median = lower-middle value for an even count. Zeros ignored for `temp2 hum2 gas`. A field with no value is omitted from `stats`.
+- **A field with no value at all for a station is omitted** from that station's object (arrays and stats).
+- **Station filter on every read:** a station is sent iff some row in the window has a non-NULL, non-zero value in one of `temp1 temp2 hum hum2 qfe qnh gas` (any origin). Altitude/battery-only stations disappear. Webapp-hidden stations are unaffected (the server does not know them).
+- **Built without per-row Python dicts:** reduction and grouping in SQL, the JSON encoded in the same worker thread and returned as `bytes` (`Response(content=..., media_type="application/json")`).
+
+## Wave 7 measurements (live DB copy, 199,530 rows, 61,340 in 744 h)
+
+| Read                 | Mac    | Pi Zero 2W | Size    |
+| -------------------- | ------ | ---------- | ------- |
+| old 744 h            | 0.18 s | 6.1 s      | 15.2 MB |
+| new 48 h             | 0.01 s | 0.28 s     | 0.12 MB |
+| new 192 h            | 0.02 s | 0.71 s     | 0.46 MB |
+| new 744 h (b225591)  | 0.30 s | 9.3 s      | 0.58 MB |
+| new yearly (b225591) | 0.22 s | 8.6 s      | 1.71 MB |
+
+- **The Pi is about 30 times slower than the Mac in SQLite**, roughly 20 µs per row. A plain scan of the 61k rows costs 0.37 s.
+- **744 h breakdown on the Pi:** station filter 0.25 s, 2 h GROUP BY 1.5 s, `_w` copy 0.45 s, window-function medians 6.4 s.
+- **Python medians** (`groupby` + `zip` transpose + `sorted`) take 1.28 s on the Pi with identical results.
+- **An expression index `(callsign, timestamp / bucket_ms)`** removes the GROUP BY temp B-tree: 744 h 1.5 to 1.1 s, yearly 5.5 to 3.0 s. It needs a schema migration; deferred.
+- **Conclusion:** about 3 s cold for 744 h is the floor without pre-aggregation. Wave 7a therefore adds Python medians plus a stale-while-revalidate cache for the bucketed responses (5 min fresh, served stale up to 60 min while one background refresh runs).
+
+## Wave 7 result (mcapp.local, v2.1.26-dev.2, 2026-11-07 14:25)
+
+| Request                | Cold   | Cached  | Size (gzip)       |
+| ---------------------- | ------ | ------- | ----------------- |
+| 48 h                   | 0.36 s | -       | 0.13 MB           |
+| 192 h                  | 0.92 s | -       | 0.50 MB           |
+| 744 h, stats_hours=720 | 5.2 s  | 0.009 s | 0.61 MB (0.14 MB) |
+| yearly                 | 9.7 s  | 0.013 s | 1.74 MB           |
+
+- **Before:** 744 h 4.9 s and 12.3 MB, with 1.5 s of `json.dumps` on the event loop on every request; yearly 8.2 s.
+- **A cold compute still lags the loop:** `loop_lag` 173 ms during the 744 h read and 521 ms during the yearly one. The worker thread holds the GIL for the Python grouping (and the 744 h medians). A cold compute happens after a restart and on each background refresh (at most every 5 min, only while someone views the 30 d or yearly page).
+
+## Waves 8-9 (follow-ups, dispatched 2026-11-07)
+
+| Wave | Content                                                                                                                                           | Files                                                                                                                                   |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| 8    | Backend: columns built with `json_group_array` in SQLite, stats medians in SQL if not slower, expression indexes (migration 42), same wire output | `storage/query.py` (WX section), `storage/migrations.py`, `storage/constants.py`, `migration_chain_tests.py`, `telemetry_read_tests.py` |
+| 9    | Webapp: sidebar shows the real last sample on 30 d, a bucketed station needs `MIN_WX_POINTS` buckets                                              | `WxDataStore.ts`, `WxData.vue`, `WxListPanel.vue`, `WxView.vue`, their specs                                                            |
+| 10   | Gate both repos, Pi measurement, dev release                                                                                                      | Orchestrator                                                                                                                            |
+
+Not done, by decision: mc-chat mock (it has no WX data), Kalman gate on 2 h means, stats for temp2/hum2/gas-only stations.
+
+**Wave 8 result:** output identical to b225591/a539515 on the live copy (parsed JSON at abs 1e-9, same byte counts). Mac: 744 h 163 to 118 ms, yearly 232 to 169 ms; Python share 744 h 31 to 15 ms (the stats transpose), yearly 38 to 1 ms.
+
+- **Stats medians stay in Python.** SQL `json_group_array(ORDER BY)` + `json_extract` was 111 ms against 45 ms.
+- **Arrays have no aggregate `ORDER BY`.** They rely on the inner `ORDER BY` streaming into the outer `GROUP BY callsign` (the flattener refuses this shape, restriction 16). All arrays of one station fill in one pass, so they can never misalign; the worst case is unsorted `ts`. Verified 0 unsorted stations on SQLite 3.44.2, 3.46.1 (on the Pi) and 3.50; pinned by a shuffled-insert test. An aggregate `ORDER BY` would cost about 25 %.
+- **On the Pi's 3.46.1 the outer per-callsign `GROUP BY` still sorts;** only the inner bucket `GROUP BY` uses the new indexes there. The test pins the inner one only.
+
+**Wave 9 result:** webapp `6ba3e92`. The sidebar shows `stats.last_ms` (else the last bucket end, clamped to now), and a bucketed station needs `MIN_WX_POINTS` plottable buckets. No advisor pass (15 lines, reviewed by the orchestrator).
+
+## Wave 10 result (mcapp.local, v2.1.26-dev.3, 2026-11-07 15:18)
+
+| Request                | Cold (dev.2) | Cold (dev.3) | Cached  |
+| ---------------------- | ------------ | ------------ | ------- |
+| 48 h                   | 0.36 s       | 0.13 s       | -       |
+| 192 h                  | 0.92 s       | 0.45 s       | -       |
+| 744 h, stats_hours=720 | 5.2 s        | 3.5 s        | 0.006 s |
+| yearly                 | 9.7 s        | 4.1 s        | 0.008 s |
+
+- **No `loop_lag` row (100 ms threshold) during the cold reads.** dev.2 logged 173 ms (744 h) and 521 ms (yearly).
+- Migration 42 ran at start (`Migration v41 → v42`), no warnings; payload sizes unchanged.
+
+## Follow-ups (Waves 8-9 cover these)
+
+- **Build the columns in SQLite with `json_group_array`** per callsign, so Python only joins strings: removes the GIL-held grouping that causes the cold `loop_lag`, and most of the yearly cold time.
+- **Expression index `(callsign, timestamp / bucket_ms)`:** yearly cold 5.5 to 3 s in the GROUP BY; needs a migration.
+- **mc-chat mock:** port the columnar shape, or its WX page stays broken.
+- **Advisor nice-to-haves:** sidebar shows the bucket start on 30 d; a ~10 h old station qualifies by raw rows but has under 6 buckets to chart; the Kalman gate sees 2 h means; a temp2/hum2/gas-only stats window yields no `stats`.
+
+## Cost and time
+
+- **Waves 5 and 6:** one Sonnet implementer each at medium, about 25 min and $4-6 each; one Opus advisor each, about $2-3.
+- **Rework round, if needed:** about $5 and 20 min per repo.
+- **Wave 7:** orchestrator, about 30 min plus the deploy.
+- **Total:** about $20-30 and 1.5-2 h of wall-clock to a dev release.
+
+## Open questions
+
+- Decisions 1-6 above.
+- mc-chat's mock: port the new shape there too (a third, small brief in that repo), or leave its WX page broken for now?
+- Is a 30-day load of about 1 s on the Pi the right target, or is 2 s acceptable?
+- Release: does this go into v2.1.26 together with the gap fill (recommended, since the fill makes the problem acute), or separately?

@@ -965,6 +965,47 @@ class MigrationsMixin(StorageBase):
                     )
                     _set_schema_version(conn, 40)
 
+                if current_version < 41:  # noqa: PLR2004 - schema migration step
+                    # Telemetry gap fill (doc/2026-11-07_1000-telemetry-gap-fill-plan.md):
+                    # origin NULL = RF, 'meshmap' = filled from the central server.
+                    # Existing rows are not rewritten. telemetry_fill_state holds
+                    # one resumable cursor per station (ms).
+                    have = {r[1] for r in conn.execute("PRAGMA table_info(telemetry)")}
+                    if have and "origin" not in have:
+                        conn.execute("ALTER TABLE telemetry ADD COLUMN origin TEXT")
+                    conn.execute(
+                        "CREATE TABLE IF NOT EXISTS telemetry_fill_state ("
+                        "callsign TEXT PRIMARY KEY, filled_until_ms INTEGER NOT NULL)"
+                    )
+                    logger.info(
+                        "Migration v%d → v41: telemetry.origin, telemetry_fill_state",
+                        current_version,
+                    )
+                    _set_schema_version(conn, 41)
+
+                if current_version < 42:  # noqa: PLR2004 - schema migration step
+                    # Telemetry reads (doc/2026-11-07_1400-telemetry-downsampling-plan.md,
+                    # Wave 8): GROUP BY callsign, timestamp / bucket_ms walks these
+                    # expression indexes instead of building a temp B-tree. The
+                    # expressions must match query.py's GROUP BY text exactly.
+                    # Hand-built partial fixtures have no telemetry table (as in v41).
+                    if conn.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'telemetry'"
+                    ).fetchone():
+                        conn.execute(
+                            "CREATE INDEX IF NOT EXISTS idx_telemetry_cs_b2h"
+                            " ON telemetry(callsign, timestamp / 7200000)"
+                        )
+                        conn.execute(
+                            "CREATE INDEX IF NOT EXISTS idx_telemetry_cs_b4h"
+                            " ON telemetry(callsign, timestamp / 14400000)"
+                        )
+                    logger.info(
+                        "Migration v%d → v42: telemetry bucket expression indexes",
+                        current_version,
+                    )
+                    _set_schema_version(conn, 42)
+
         await asyncio.to_thread(_init_db)
 
         # Initialize bucket accumulators from existing signal_log

@@ -77,6 +77,7 @@ from .secret_box import SecretBox
 from .sqlite_storage import SQLiteStorage, create_sqlite_storage
 from .stalls import StallRecorder
 from .storage.uptime import gateway_mode_from_register
+from .telemetry_fill_service import TelemetryFillService
 from .text_decode import sanitize_outbound
 from .util import PLACEHOLDER_CALLSIGN_BASES as _PLACEHOLDER_CALLSIGN_BASES
 from .util import now_ms
@@ -2422,6 +2423,7 @@ class AppContext:
     qrz_service: QrzLookupService
     node_admin_service: NodeAdminService | None = None
     internet_feed_service: InternetFeedService | None = None
+    telemetry_fill_service: TelemetryFillService | None = None
 
 
 class _ClassifierBus:
@@ -2880,6 +2882,10 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
         station_position=_station_position,
         on_positions=_internet_positions,
     )
+    telemetry_fill_service = TelemetryFillService(
+        storage=storage_handler,
+        is_blocked=message_router._is_callsign_blocked,  # noqa: SLF001 - injected predicate, service cannot import main
+    )
 
     async def _internet_feed_identity_hint(routed_message: dict[str, Any]) -> None:
         """BLE link changes, the identity registers and the node's GPS fix (`G`)
@@ -2987,6 +2993,7 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
             sse_manager.node_admin_service = node_admin_service
             sse_manager.node_admin_allowed_origins = list(cfg.node_admin.allowed_origins)
             sse_manager.internet_feed_service = internet_feed_service
+            sse_manager.telemetry_fill_service = telemetry_fill_service
             sse_manager.internet_position_cache = internet_position_cache
             qrz_service.set_info_listener(
                 functools.partial(sse_manager.broadcast_event, "proxy:callsign_info")
@@ -3075,6 +3082,7 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
         qrz_service=qrz_service,
         node_admin_service=node_admin_service,
         internet_feed_service=internet_feed_service,
+        telemetry_fill_service=telemetry_fill_service,
     )
 
 
@@ -3358,6 +3366,7 @@ class _BackgroundTasks:
     link_uptime_heartbeat_task: asyncio.Task[None]
     qrz_task: asyncio.Task[None]
     internet_feed_task: asyncio.Task[None] | None
+    telemetry_fill_task: asyncio.Task[None] | None
 
 
 def _start_background_tasks(
@@ -3406,6 +3415,12 @@ def _start_background_tasks(
         if ctx.internet_feed_service is not None
         else None
     )
+    # Telemetry gap fill (meshmap): runs a cycle only while the Internet feed is enabled.
+    telemetry_fill_task = (
+        asyncio.create_task(ctx.telemetry_fill_service.run(stop_event))
+        if ctx.telemetry_fill_service is not None
+        else None
+    )
     return _BackgroundTasks(
         prune_task=prune_task,
         classifier_stats_task=classifier_stats_task,
@@ -3417,6 +3432,7 @@ def _start_background_tasks(
         link_uptime_heartbeat_task=link_uptime_heartbeat_task,
         qrz_task=qrz_task,
         internet_feed_task=internet_feed_task,
+        telemetry_fill_task=telemetry_fill_task,
     )
 
 
@@ -3430,6 +3446,8 @@ async def _cancel_background_tasks(tasks: _BackgroundTasks) -> None:
     tasks.qrz_task.cancel()
     if tasks.internet_feed_task is not None:
         tasks.internet_feed_task.cancel()
+    if tasks.telemetry_fill_task is not None:
+        tasks.telemetry_fill_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await tasks.prune_task
     with contextlib.suppress(asyncio.CancelledError):
@@ -3445,6 +3463,9 @@ async def _cancel_background_tasks(tasks: _BackgroundTasks) -> None:
     if tasks.internet_feed_task is not None:
         with contextlib.suppress(asyncio.CancelledError):
             await tasks.internet_feed_task
+    if tasks.telemetry_fill_task is not None:
+        with contextlib.suppress(asyncio.CancelledError):
+            await tasks.telemetry_fill_task
 
 
 async def _shutdown_services(ctx: AppContext) -> None:

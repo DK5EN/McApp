@@ -13,8 +13,10 @@ from typing import TYPE_CHECKING, Any
 
 from ..logging_setup import get_logger
 from ..meteo import is_valid_position
+from ..storage.query import TELEMETRY_RAW_MAX_HOURS
+from ..telemetry_cache import TelemetryResponseCache
 from ..util import now_ms
-from ..weblite import APIRouter, HTTPException
+from ..weblite import APIRouter, HTTPException, Response
 
 if TYPE_CHECKING:
     from ..sse_handler import SSEManager
@@ -22,6 +24,16 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 TELEMETRY_MAX_HOURS = 744
+
+# /api/telemetry/fill body while no fill service exists (tests, embedded setups).
+_FILL_IDLE: dict[str, Any] = {
+    "enabled": False,
+    "running": False,
+    "last_cycle_ms": None,
+    "next_cycle_ms": None,
+    "rows_total": 0,
+    "stations": [],
+}
 
 # Time-zone lookup runs in a short-lived child (numpy + TimezoneFinder are ~20 MB
 # resident; the child peaks at ~33 MB for 1.2-2 s and is gone afterwards).
@@ -36,6 +48,14 @@ _EXIT_NOT_INSTALLED = 3
 _tz_cache: dict[tuple[float, float], str] = {}
 _tz_sem: asyncio.Semaphore | None = None
 _tz_waiting = 0
+
+
+async def _fill_payload(manager: SSEManager) -> dict[str, Any]:
+    service = manager.telemetry_fill_service
+    if service is None:
+        return dict(_FILL_IDLE)
+    payload: dict[str, Any] = await service.route_payload()
+    return payload
 
 
 class TzLookupError(Exception):
@@ -132,9 +152,28 @@ async def _run_tz_worker(
     return out.decode("utf-8", "replace").strip()
 
 
+async def _telemetry_content(
+    cache: TelemetryResponseCache, storage: Any, hours: int, stats_hours: int | None
+) -> bytes:
+    """Raw reads go straight to storage; bucketed (> 192 h) ones through the cache."""
+    h = min(hours, TELEMETRY_MAX_HOURS)
+    sh = h if stats_hours is None else min(stats_hours, TELEMETRY_MAX_HOURS)
+
+    async def compute() -> bytes:
+        data: bytes = await storage.get_telemetry_chart_data(
+            hours=h, stats_hours=None if stats_hours is None else sh
+        )
+        return data
+
+    if h <= TELEMETRY_RAW_MAX_HOURS:
+        return await compute()
+    return await cache.get(("telemetry", h, sh), compute)
+
+
 def build_weather_router(manager: SSEManager) -> APIRouter:
     """Build the /api/weather, /api/telemetry, /api/timezone router."""
     router = APIRouter()
+    telemetry_cache = TelemetryResponseCache()
 
     # Weather data endpoint
     @router.get("/api/weather")
@@ -181,16 +220,30 @@ def build_weather_router(manager: SSEManager) -> APIRouter:
 
     # Telemetry data endpoint (for WX charts)
     @router.get("/api/telemetry")
-    async def get_telemetry(hours: int = 48) -> Any:
-        """Get telemetry data for weather charts."""
-        storage = manager.require_storage()
-        return await storage.get_telemetry_chart_data(hours=min(hours, TELEMETRY_MAX_HOURS))
+    async def get_telemetry(hours: int = 48, stats_hours: int | None = None) -> Response:
+        """Columnar telemetry for weather charts (raw up to 192 h, 2 h means beyond)."""
+        return Response(
+            content=await _telemetry_content(
+                telemetry_cache, manager.require_storage(), hours, stats_hours
+            ),
+            media_type="application/json",
+        )
+
+    @router.get("/api/telemetry/fill")
+    async def get_telemetry_fill() -> Any:
+        """Status of the meshmap gap fill (read-only; telemetry is already public)."""
+        return await _fill_payload(manager)
 
     @router.get("/api/telemetry/yearly")
-    async def get_telemetry_yearly() -> Any:
-        """Get telemetry data aggregated into 4h buckets for yearly charts."""
+    async def get_telemetry_yearly() -> Response:
+        """Telemetry aggregated into 4h min/max buckets for yearly charts."""
         storage = manager.require_storage()
-        return await storage.get_telemetry_chart_data_bucketed()
+        return Response(
+            content=await telemetry_cache.get(
+                ("yearly",), storage.get_telemetry_chart_data_bucketed
+            ),
+            media_type="application/json",
+        )
 
     @router.get("/api/timezone")
     async def get_timezone(lat: float, lon: float) -> dict[str, str | float]:

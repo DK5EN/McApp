@@ -12,6 +12,8 @@ import time
 from collections import defaultdict
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from itertools import groupby
+from operator import itemgetter
 from pathlib import Path
 from statistics import mean
 from typing import Any, cast
@@ -1746,43 +1748,61 @@ class QueryMixin(StorageBase):
         logger.info("Saved %d messages to %s", len(data), filename)
         return len(data)
 
-    async def get_telemetry_chart_data(self, hours: int = 48) -> list[dict[str, Any]]:
-        """Return telemetry data for chart display, limited to recent data."""
-        cutoff = int((time.time() - hours * 3600) * 1000)
-        return await self._query(
-            "SELECT callsign, timestamp, temp1, temp2, hum, hum2,"
-            " qfe, qnh, gas, co2, alt, batt, extras"
-            " FROM telemetry WHERE timestamp > ? ORDER BY callsign, timestamp",
-            (cutoff,),
+    async def get_telemetry_chart_data(
+        self, hours: int = 48, stats_hours: int | None = None
+    ) -> bytes:
+        """WX chart payload as JSON bytes: raw rows up to 192 h, 2 h means beyond.
+
+        Built and encoded in one worker thread without per-row dicts (wire contract in
+        doc/2026-11-07_1400-telemetry-downsampling-plan.md).
+        """
+        bucket_s = 0 if hours <= TELEMETRY_RAW_MAX_HOURS else TELEMETRY_MEAN_BUCKET_S
+        return await asyncio.to_thread(
+            _telemetry_payload,
+            self.db_path,
+            bucket_s,
+            hours,
+            hours if stats_hours is None else stats_hours,
         )
 
-    async def get_telemetry_chart_data_bucketed(
-        self, hours: int = HOURS_PER_YEAR
-    ) -> list[dict[str, Any]]:
-        """Return telemetry aggregated into 4-hour buckets with min/max."""
-        cutoff = int((time.time() - hours * 3600) * 1000)
-        bucket_ms = TELEMETRY_BUCKET_MS
-        return await self._query(
-            f"""
-            SELECT
-                callsign,
-                (timestamp / {bucket_ms}) * {bucket_ms} AS bucket_ts,
-                MIN(temp1) AS temp1_min, MAX(temp1) AS temp1_max,
-                MIN(temp2) AS temp2_min, MAX(temp2) AS temp2_max,
-                MIN(hum) AS hum_min, MAX(hum) AS hum_max,
-                MIN(hum2) AS hum2_min, MAX(hum2) AS hum2_max,
-                MIN(qfe) AS qfe_min, MAX(qfe) AS qfe_max,
-                MIN(gas) AS gas_min, MAX(gas) AS gas_max,
-                MIN(alt) AS alt_min, MAX(alt) AS alt_max,
-                COUNT(*) AS count
-            FROM telemetry
-            WHERE timestamp > ?
-              AND (temp1 IS NOT NULL OR hum IS NOT NULL OR qfe IS NOT NULL
-                   OR gas IS NOT NULL)
-            GROUP BY callsign, bucket_ts
-            ORDER BY callsign, bucket_ts
-            """,  # noqa: S608 - identifiers from fixed set; values parameterized
-            (cutoff,),
+    async def get_telemetry_stations(self, since_ms: int) -> list[str]:
+        """Distinct callsigns with a real WX sensor reading over RF newer than `since_ms`.
+
+        The fill service passes now - 30 days, the webapp picker's window. A station
+        counts only with a non-zero temp/temp2/hum/hum2/qfe/qnh/gas/co2 or a water
+        sensor in `extras`. Altitude and battery alone do not count: most stations
+        report a GPS altitude, and meshmap holds nothing more for them either (the
+        2026-10-20 DB: 45 WX stations of 139 visible, the rest altitude + battery).
+        Full scan of `idx_telemetry_cs_ts`: once per fill cycle, never per request.
+        """
+        rows = await self._query(
+            "SELECT DISTINCT callsign FROM telemetry"
+            " WHERE timestamp > ? AND origin IS NULL AND ("
+            " COALESCE(temp1, 0) != 0 OR COALESCE(temp2, 0) != 0"
+            " OR COALESCE(hum, 0) != 0 OR COALESCE(hum2, 0) != 0"
+            " OR COALESCE(qfe, 0) != 0 OR COALESCE(qnh, 0) != 0"
+            " OR COALESCE(gas, 0) != 0 OR COALESCE(co2, 0) != 0"
+            " OR COALESCE(extras, '') NOT IN ('', '{}'))"
+            " ORDER BY callsign",
+            (since_ms,),
+        )
+        return [str(r["callsign"]) for r in rows]
+
+    async def get_fill_row_counts(self) -> dict[str, int]:
+        """Rows filled from meshmap (origin = 'meshmap') per callsign.
+
+        Full scan of `idx_telemetry_cs_ts`: once per fill cycle, never per request.
+        """
+        rows = await self._query(
+            "SELECT callsign, COUNT(*) AS n FROM telemetry"
+            " WHERE origin = 'meshmap' GROUP BY callsign"
+        )
+        return {str(r["callsign"]): int(r["n"]) for r in rows}
+
+    async def get_telemetry_chart_data_bucketed(self, hours: int = HOURS_PER_YEAR) -> bytes:
+        """Yearly WX payload as JSON bytes: 4 h min/max buckets, no stats."""
+        return await asyncio.to_thread(
+            _telemetry_payload, self.db_path, TELEMETRY_BUCKET_MS // 1000, hours, hours
         )
 
     async def get_message_acks(self, msg_id: str, since: int | None = None) -> list[dict[str, Any]]:
@@ -1875,3 +1895,151 @@ class QueryMixin(StorageBase):
             }
             for row in rows
         ]
+
+
+# --- WX telemetry readers (wire contract: doc/2026-11-07_1400-telemetry-downsampling-plan.md)
+
+TELEMETRY_RAW_MAX_HOURS = 192
+TELEMETRY_MEAN_BUCKET_S = 7200
+_TM_FIELDS = ("temp1", "temp2", "hum", "hum2", "qfe", "qnh", "gas", "alt")
+_TM_ZERO_NULL = frozenset({"temp2", "hum2", "gas"})  # a 0 means "no sensor"
+_TM_MINMAX_FIELDS = ("temp1", "temp2", "hum", "hum2", "qfe", "gas", "alt")
+_TM_ANY = "(" + " OR ".join(f"{f} IS NOT NULL" for f in _TM_FIELDS) + ")"
+_TM_WX = "(" + " OR ".join(f"COALESCE({f}, 0) != 0" for f in _TM_FIELDS if f != "alt") + ")"
+_TM_COUNT_FIELDS = ("temp1", "hum", "qfe", "qnh", "alt")
+
+
+def _tm_expr(field: str) -> str:
+    return f"NULLIF({field}, 0)" if field in _TM_ZERO_NULL else field
+
+
+def _tm_arr(col: str) -> str:
+    """Outer aggregate: the column as a JSON array, NULL (omitted) if it is all NULL."""
+    return f"CASE WHEN COUNT({col}) > 0 THEN json_group_array({col}) END"
+
+
+def _tm_stats(conn: sqlite3.Connection, stations: dict[str, list[str]], cutoff: int) -> None:
+    """Append `stats` (count/first/last/[min, median, max]) from the RAW rows since `cutoff`.
+
+    count/first/last in SQLite; min/median/max by a Python transpose of the raw rows.
+    Measured against pure-SQL json_group_array(ORDER BY) arrays read back with json_extract:
+    45 ms vs 111 ms on the 744 h copy (the arrays round-trip every double through text), and
+    window-function medians cost 6.4 s on the Pi. Reading `telemetry` directly also drops the
+    `_w` temp-table copy.
+    """
+    present = " OR ".join(f"{f} IS NOT NULL" for f in _TM_COUNT_FIELDS)
+    stats: dict[str, dict[str, Any]] = {}
+    for cs, n, first, last in conn.execute(
+        f"SELECT callsign, COUNT(DISTINCT timestamp), MIN(timestamp), MAX(timestamp)"  # noqa: S608 - fixed identifiers
+        f" FROM telemetry WHERE timestamp > ? AND callsign IN (SELECT callsign FROM _st)"
+        f" AND ({present}) GROUP BY callsign",
+        (cutoff,),
+    ):
+        stats[cs] = {"count": n, "first_ms": first, "last_ms": last}
+    rows = conn.execute(
+        f"SELECT callsign, {', '.join(_tm_expr(f) for f in _TM_FIELDS)} FROM telemetry"  # noqa: S608 - fixed identifiers
+        " WHERE timestamp > ? AND callsign IN (SELECT callsign FROM _st) ORDER BY callsign",
+        (cutoff,),
+    ).fetchall()
+    for cs, group in groupby(rows, key=itemgetter(0)):
+        st = stats.get(cs)
+        if st is None:
+            continue
+        cols = list(zip(*group, strict=True))
+        for f, col in zip(_TM_FIELDS, cols[1:], strict=True):
+            v = sorted(x for x in col if x is not None)
+            if v:
+                st[f] = [v[0], v[(len(v) - 1) // 2], v[-1]]
+    for cs, st in stats.items():
+        if cs in stations:
+            stations[cs].append('"stats":' + json.dumps(st, separators=(",", ":")))
+
+
+_TM_BASE = (
+    "WHERE timestamp > ? AND callsign IN (SELECT callsign FROM _st) AND " + _TM_ANY  # noqa: S608 - fixed identifiers
+)
+
+
+def _tm_station(row: tuple[Any, ...], names: list[str], tail: tuple[str, ...]) -> list[str]:
+    """One station's JSON members from an outer row: ts, name arrays (None = omitted), tail."""
+    parts = ['"ts":' + row[1]]
+    parts.extend(
+        f'"{name}":{arr}'
+        for name, arr in zip(names, row[2 : 2 + len(names)], strict=True)
+        if arr is not None
+    )
+    parts.extend(f'"{name}":{arr}' for name, arr in zip(tail, row[2 + len(names) :], strict=True))
+    return parts
+
+
+def _tm_raw(conn: sqlite3.Connection, cutoff: int) -> dict[str, list[str]]:
+    # The inner ORDER BY lets the outer GROUP BY stream (no temp B-tree, no per-array sort).
+    arrs = ", ".join(_tm_arr(f) for f in _TM_FIELDS)
+    rows = conn.execute(
+        f"SELECT callsign, json_group_array(ts), {arrs}, json_group_array(og) FROM ("  # noqa: S608 - fixed identifiers
+        f"SELECT callsign, timestamp AS ts, {', '.join(_TM_FIELDS)},"
+        f" COALESCE(origin, '') = 'meshmap' AS og FROM telemetry {_TM_BASE}"
+        " ORDER BY callsign, timestamp) GROUP BY callsign",
+        (cutoff,),
+    )
+    names = list(_TM_FIELDS)
+    return {r[0]: _tm_station(tuple(r), names, ("origin",)) for r in rows}
+
+
+def _tm_bucketed_sql(bucket_s: int) -> str:
+    """Mean (7200 s) or min/max (14400 s) buckets, one row per callsign with JSON arrays.
+
+    The inner GROUP BY text must equal the expression of idx_telemetry_cs_b2h / _b4h
+    (migration 42), and the redundant `timestamp / B >= ? / B` lets it range-scan that index.
+    The inner ORDER BY lets the outer GROUP BY stream.
+    """
+    b = bucket_s * 1000
+    if bucket_s == TELEMETRY_MEAN_BUCKET_S:
+        agg = ", ".join(f"ROUND(AVG({_tm_expr(f)}), 2) AS {f}" for f in _TM_FIELDS)
+        names = list(_TM_FIELDS)
+    else:
+        agg = ", ".join(
+            f"MIN({_tm_expr(f)}) AS {f}_min, MAX({_tm_expr(f)}) AS {f}_max"
+            for f in _TM_MINMAX_FIELDS
+        )
+        names = [f"{f}_{s}" for f in _TM_MINMAX_FIELDS for s in ("min", "max")]
+    arrs = ", ".join(_tm_arr(n) for n in names)
+    return (
+        f"SELECT callsign, json_group_array(k * {b}), {arrs}, json_group_array(n),"  # noqa: S608 - fixed identifiers
+        " json_group_array(og) FROM ("
+        f"SELECT callsign, timestamp / {b} AS k, {agg}, COUNT(*) AS n,"
+        " MIN(COALESCE(origin, '') = 'meshmap') AS og"
+        f" FROM telemetry {_TM_BASE} AND timestamp / {b} >= ? / {b}"
+        f" GROUP BY callsign, timestamp / {b} ORDER BY callsign, timestamp / {b})"
+        " GROUP BY callsign"
+    )
+
+
+def _tm_bucketed(conn: sqlite3.Connection, bucket_s: int, cutoff: int) -> dict[str, list[str]]:
+    if bucket_s == TELEMETRY_MEAN_BUCKET_S:
+        names = list(_TM_FIELDS)
+    else:
+        names = [f"{f}_{s}" for f in _TM_MINMAX_FIELDS for s in ("min", "max")]
+    rows = conn.execute(_tm_bucketed_sql(bucket_s), (cutoff, cutoff))
+    return {r[0]: _tm_station(tuple(r), names, ("n", "origin")) for r in rows}
+
+
+def _telemetry_payload(db_path: Path | str, bucket_s: int, hours: int, stats_hours: int) -> bytes:
+    """One worker-thread call: SQLite builds the per-station JSON arrays, Python joins strings."""
+    now = int(time.time() * 1000)
+    cutoff = now - hours * 3_600_000
+    with db_read(db_path) as conn:
+        # One read snapshot for every statement: a dedup delete or retention prune landing
+        # between the station filter and the stats query must not drop a station mid-response.
+        conn.execute("BEGIN")
+        conn.execute(
+            "CREATE TEMP TABLE _st AS SELECT DISTINCT callsign FROM telemetry"  # noqa: S608
+            f" WHERE timestamp > ? AND {_TM_WX}",
+            (cutoff,),
+        )
+        stations = _tm_raw(conn, cutoff) if bucket_s == 0 else _tm_bucketed(conn, bucket_s, cutoff)
+        # Stats only for the 30-day means: the yearly view shows no stats table.
+        if bucket_s == TELEMETRY_MEAN_BUCKET_S and stations:
+            _tm_stats(conn, stations, now - stats_hours * 3_600_000)
+    body = ",".join(f"{json.dumps(cs)}:{{{','.join(parts)}}}" for cs, parts in stations.items())
+    return f'{{"bucket_s":{bucket_s},"stations":{{{body}}}}}'.encode()
