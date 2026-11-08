@@ -5,6 +5,64 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.1.25 (2026-11-06)
+
+**A McApp update no longer breaks other software on the box.** Your own firewall rules, the log folders
+of other services and your own Caddy sites now survive an update. Before McApp overwrites a config file,
+it keeps a backup.
+
+> Update from the Update page as usual. `SYSTEM_EPOCH` goes to 9, schema stays at 40. If you run other
+> software next to McApp, read "Running other software on the box" in `doc/operations-reference.md`.
+
+### Highlights
+
+- **Your firewall rules stay.** A firewall file with real rules and no McApp marker counts as yours. It
+  stays byte-identical, and McApp applies nothing to it.
+  - Cause: a saved `nft list ruleset` dump lost McApp's marker, so the next bootstrap run replaced the
+    file and a port opened by hand was closed again.
+- **A place for your own rules.** On Trixie, put a rule into `/etc/mcapp/nftables.d/custom.nft`, for
+  example `tcp dport 8080 accept`. Updates never touch that folder.
+- **A faulty custom file cannot leave the box open.** A reload refuses it and the running firewall stays.
+  At boot the box retries without your rules, so McApp's own rules stay active, and logs that it did.
+- **Docker and fail2ban keep their firewall tables.** McApp edits its own table and reloads, and never
+  flushes the whole ruleset.
+- **Other services' log folders survive a reboot.** `/var/log` is on tmpfs, so a service whose folder
+  vanished, such as nginx, could fail after a reboot. McApp now recreates those folders at boot.
+- **A warning instead of a silent block.** Every update and health check lists listening ports the
+  firewall blocks and any port or config conflict. It only warns and never fails the update.
+- **Config backups.** McApp copies a config file to `/var/lib/mcapp/config-backups` before it overwrites
+  it. Copies are readable by root only, because `config.json` and `caddy.env` hold secrets.
+- **Updates do less.** A converge now runs only the steps that changed since the box's installed epoch,
+  and no longer runs a system-wide `apt upgrade`.
+
+### Backend (MCProxy)
+
+- `bootstrap/lib/converge.sh`: a table of steps, each with the epoch it last changed in. `ensure_web_frontend`
+  always runs. A full `mcapp.sh` run still runs everything.
+- Firewall on Bookworm: flushes only on a real first install. Otherwise it adds missing rules with
+  `iptables -C || -A`.
+- SSH ports other than 22 stay open on the paths that write the whole firewall file, taken from `sshd -T`
+  and `SSH_CONNECTION`.
+- Caddy imports `/etc/caddy/conf.d/*.caddy`, so your own sites have a home that updates do not rewrite.
+  A public-TLS box gets this only when `ssl-tunnel-setup.sh` runs again.
+- Python locks refreshed: click 8.5.1, regex 2026.11.7.
+
+### Frontend (webapp)
+
+- No code changes. Transitive dependencies refreshed in `package-lock.json`, mainly Rollup 4.68.0.
+
+### Upgrade notes
+
+- No action needed on a box with only McApp on it.
+- **Your firewall file may be left alone on purpose.** If it holds real rules and no McApp marker, it is
+  not updated. McApp's newer rules then do not reach it, and the update tells you.
+- **Soak before this release was minutes, by operator decision.** `v2.1.25-dev.1` ran from 22:59,
+  including one reboot, and `v2.1.25-dev.2` from 23:19, with Chrome on a Mac.
+- **Tested in VMs only:** the 8 to 9 converge that this update runs on an existing box, a custom rule
+  surviving it, a faulty custom file at boot, and the Bookworm path. These ran in OrbStack VMs with Debian
+  Trixie and Bookworm, not on a real Pi. The test box, a Pi Zero 2W, took the full bootstrap run instead.
+- **Not tested at all:** Docker or fail2ban on a real box, and the Orange Pi.
+
 ## v2.1.24 (2026-11-06)
 
 **On a slow connection, McApp now connects about 3 times faster and uses 84% less data.** Caddy gzips
