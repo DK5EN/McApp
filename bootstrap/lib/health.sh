@@ -379,7 +379,20 @@ check_coexistence() {
 check_versions() {
   local webapp_version
   webapp_version=$(cat "${INSTALL_DIR}/webapp/version.html" 2>/dev/null || echo "unknown")
-  printf "  %-20s ${GREEN}[OK]${NC} %s\n" "webapp version:" "$webapp_version"
+  # Inside a deploy, deploy_app records the release it was asked to install.
+  # A different version means the deploy did not land (F14, health log §59).
+  # Warn only: the update runner's own check is the hard gate.
+  local target="${MCAPP_DEPLOY_TARGET_VERSION:-}"
+  if [[ -z "$target" ]]; then
+    printf "  %-20s ${GREEN}[OK]${NC} %s\n" "webapp version:" "$webapp_version"
+  elif [[ "$target" == "unknown" ]]; then
+    printf "  %-20s ${YELLOW}[WARN]${NC} %s (target release unknown, GitHub API unreachable?)\n" \
+      "webapp version:" "$webapp_version"
+  elif [[ "${webapp_version#v}" != "${target#v}" ]]; then
+    printf "  %-20s ${YELLOW}[WARN]${NC} %s, expected %s\n" "webapp version:" "$webapp_version" "$target"
+  else
+    printf "  %-20s ${GREEN}[OK]${NC} %s\n" "webapp version:" "$webapp_version"
+  fi
   printf "  %-20s ${GREEN}[OK]${NC} McApp Bootstrap v%s\n" "bootstrap:" "$SCRIPT_VERSION"
 
   # Show active slot info if slot layout exists

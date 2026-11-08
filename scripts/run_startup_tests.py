@@ -37,6 +37,7 @@ from bootstrap_ramlog_tests import run_bootstrap_ramlog_tests
 from bootstrap_tmpdir_tests import run_bootstrap_tmpdir_tests
 from bootstrap_tunnel_backup_tests import run_bootstrap_tunnel_backup_tests
 from bootstrap_venv_tests import run_bootstrap_venv_tests
+from bootstrap_version_check_tests import run_bootstrap_version_check_tests
 from caddy_config_tests import run_caddy_config_tests
 from config_migration_tests import run_config_migration_tests
 from health_probe_tests import run_health_probe_tests
@@ -398,6 +399,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     update_runner_ok = run_update_runner_tests()
     print(f"update_runner: {'PASS' if update_runner_ok else 'FAIL'}")
 
+    bootstrap_version_check_ok = run_bootstrap_version_check_tests()
+    print(f"bootstrap_version_check: {'PASS' if bootstrap_version_check_ok else 'FAIL'}")
+
     system_converge_ok = run_system_converge_tests()
     print(f"system_converge: {'PASS' if system_converge_ok else 'FAIL'}")
 
@@ -572,6 +576,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and ble_protocol_ok
         and ble_hydration_ok
         and update_runner_ok
+        and bootstrap_version_check_ok
         and system_converge_ok
         and caddy_config_ok
         and bootstrap_pinning_ok

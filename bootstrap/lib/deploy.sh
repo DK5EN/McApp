@@ -225,6 +225,9 @@ deploy_app() {
   if [[ -z "$remote_version" ]]; then
     remote_version=$(resolve_target_version "$dev_mode" "$pin_tag")
   fi
+  # The release this run is meant to install, for check_versions (lib/health.sh)
+  # to compare against. Set only here, so a plain health check compares nothing.
+  MCAPP_DEPLOY_TARGET_VERSION="$remote_version"
   active_slot=$(get_active_slot)
   active_version=$(slot_recorded_version "$active_slot")
 
