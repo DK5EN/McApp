@@ -291,7 +291,7 @@ wheels = [
 
 [[package]]
 name = "mcapp-ble-service"
-version = "2.1.26"
+version = "2.1.27"
 source = { editable = "." }
 dependencies = [
     { name = "bleak", marker = "sys_platform == 'darwin'" },
