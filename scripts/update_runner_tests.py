@@ -70,6 +70,9 @@ def run_update_runner_tests() -> bool:
     failures.extend(_test_run_converge_failure_path(runner))
     failures.extend(_test_run_converge_success_path(runner))
     failures.extend(_test_run_update_converge_integration(runner))
+    failures.extend(_test_run_update_unresolved_version_fails_closed(runner))
+    failures.extend(_test_run_update_in_place_follows_bootstrap(runner))
+    failures.extend(_test_bootstrap_output_captured(runner))
     failures.extend(_test_activate_swaps_and_installs_webapp(runner))
     failures.extend(_test_activate_bidirectional(runner))
     failures.extend(_test_activate_invalid_slot(runner))
@@ -169,6 +172,48 @@ def _health_check_names(runner: Any) -> list[str]:
     finally:
         runner._check_systemd, runner._check_http, runner._check_ble = originals
     return recorded
+
+
+class _FakeDeploy:
+    """Stands in for `get_active_slot` + `_run_bootstrap_streaming` in run_update.
+
+    Models what the REAL bootstrap does: the deploy call (`--skip`) moves
+    `current` to the slot it deployed (`deploy_to`), and may print lines. A
+    fixture that pins `get_active_slot` to a constant cannot express that the
+    bootstrap activates its own slot, which is exactly what F14 hinged on.
+    """
+
+    def __init__(
+        self,
+        active: int,
+        deploy_to: int,
+        lines: list[str] | None = None,
+        results: list[bool] | None = None,
+    ) -> None:
+        self.active = active
+        self.deploy_to = deploy_to
+        self.lines = lines or []
+        self.results = results or [True, True]
+        self.cmds: list[list[str]] = []
+
+    def get_active_slot(self) -> int:
+        return self.active
+
+    def streaming(
+        self, cmd: list[str], env: dict, bus: Any, output: list[str] | None = None
+    ) -> bool:
+        self.cmds.append(cmd)
+        ok = self.results[min(len(self.cmds), len(self.results)) - 1]
+        if "--skip" in cmd:
+            if output is not None:
+                output.extend(self.lines)
+            if ok:
+                self.active = self.deploy_to
+        return ok
+
+    def install(self, runner: Any) -> None:
+        runner.get_active_slot = self.get_active_slot
+        runner._run_bootstrap_streaming = self.streaming
 
 
 def _write_dummy_bootstrap(path: Path) -> None:
@@ -440,7 +485,6 @@ def _test_run_update_converge_integration(runner: Any) -> list[str]:
         runner.SLOTS_DIR = slots_dir
         runner.META_DIR = meta_dir
         runner.home = Path("/home/testuser")
-        runner.get_active_slot = lambda: 0
         runner.get_oldest_slot = lambda: 1
         runner.snapshot_etc = lambda slot_id: None
         runner._read_version = lambda slot_id: "vtest"
@@ -448,15 +492,11 @@ def _test_run_update_converge_integration(runner: Any) -> list[str]:
         runner.run_health_checks = lambda bus: True
         runner._check_http = lambda url: True
 
-        recorded_cmds: list[list[str]] = []
-
-        def fake_streaming(cmd: list[str], env: dict, bus: Any) -> bool:
-            recorded_cmds.append(cmd)
-            # First call is the deploy (--skip) -- succeeds. Second call is
-            # the post-deploy converge (--converge) -- fails.
-            return len(recorded_cmds) == 1
-
-        runner._run_bootstrap_streaming = fake_streaming
+        # The deploy (--skip) succeeds and activates slot-1, as the real
+        # bootstrap does. The post-deploy converge (--converge) fails.
+        fake = _FakeDeploy(active=0, deploy_to=1, results=[True, False])
+        fake.install(runner)
+        recorded_cmds = fake.cmds
 
         try:
             result = runner.run_update(runner.EventBus(), dev_mode=False)
@@ -486,6 +526,120 @@ def _test_run_update_converge_integration(runner: Any) -> list[str]:
         finally:
             for name, value in originals.items():
                 setattr(runner, name, value)
+    return failures
+
+
+def _run_update_with(runner: Any, fake: _FakeDeploy) -> tuple[dict, list[int]]:
+    """Run run_update with `fake` as the bootstrap; return (result, swapped slots).
+
+    Active slot 0, runner target slot 1, health checks pass. Everything the
+    runner would touch on a real box is stubbed and restored afterwards.
+    """
+    names = (
+        "SLOTS_DIR",
+        "META_DIR",
+        "home",
+        "get_active_slot",
+        "get_oldest_slot",
+        "snapshot_etc",
+        "_read_version",
+        "swap_symlink",
+        "set_slot_meta",
+        "run_health_checks",
+        "_check_http",
+        "_run_bootstrap_streaming",
+    )
+    originals = {name: getattr(runner, name) for name in names}
+    swapped: list[int] = []
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        slots_dir = Path(tmp_dir) / "mcapp-slots"
+        for slot in (0, 1):
+            _write_dummy_bootstrap(slots_dir / f"slot-{slot}" / "bootstrap" / "mcapp.sh")
+        try:
+            runner.SLOTS_DIR = slots_dir
+            runner.META_DIR = slots_dir / "meta"
+            runner.home = Path("/home/testuser")
+            runner.get_oldest_slot = lambda: 1
+            runner.snapshot_etc = lambda slot_id: None
+            runner._read_version = lambda slot_id: f"v-slot-{slot_id}"
+            runner.swap_symlink = lambda slot_id, symlink_dir, name="current": swapped.append(
+                slot_id
+            )
+            runner.set_slot_meta = lambda slot_id, meta: None
+            runner.run_health_checks = lambda bus: True
+            runner._check_http = lambda url: True
+            fake.install(runner)
+            result = runner.run_update(runner.EventBus(), dev_mode=False)
+        finally:
+            for name, value in originals.items():
+                setattr(runner, name, value)
+    return result, swapped
+
+
+def _test_run_update_unresolved_version_fails_closed(runner: Any) -> list[str]:
+    """F14 (health log §59): GitHub API unreachable, the bootstrap rebuilds the
+    active slot in place and exits 0. The runner must report failed and must
+    never point `current` at the slot it picked but nobody deployed.
+    """
+    failures: list[str] = []
+    lines = [
+        "[WARN] GitHub API unreachable — could not resolve a pinned app version.",
+        "[WARN] App version is left unresolved; deploy_app() will leave the current slot as-is.",
+        "[INFO]   Active slot-0 already at unknown — deploying in place (no rotation)",
+        "[WARN]   Cannot determine remote version — leaving target slot as-is",
+    ]
+    fake = _FakeDeploy(active=0, deploy_to=0, lines=lines)
+    result, swapped = _run_update_with(runner, fake)
+    if result.get("status") != "failed" or result.get("reason") != "version_unresolved":
+        failures.append(f"unresolved version: expected failed/version_unresolved, got {result!r}")
+    if 1 in swapped:
+        failures.append(f"unresolved version: swapped `current` to untouched slot-1: {swapped!r}")
+    if any("--converge" in cmd for cmd in fake.cmds):
+        failures.append(f"unresolved version: converge must not run, got {fake.cmds!r}")
+    return failures
+
+
+def _test_run_update_in_place_follows_bootstrap(runner: Any) -> list[str]:
+    """A bootstrap that resolved the release but deployed in place (the active
+    slot already holds it) is not a failure, but the runner must report and
+    converge the slot the bootstrap used, never its own untouched pick.
+    """
+    failures: list[str] = []
+    fake = _FakeDeploy(active=0, deploy_to=0, lines=["[INFO]   Deploy target: slot-0"])
+    result, swapped = _run_update_with(runner, fake)
+    if result.get("status") != "success" or result.get("slot") != 0:
+        failures.append(f"in-place deploy: expected success on slot 0, got {result!r}")
+    if result.get("version") != "v-slot-0":
+        failures.append(f"in-place deploy: version must come from slot-0, got {result!r}")
+    if 1 in swapped:
+        failures.append(f"in-place deploy: swapped `current` to untouched slot-1: {swapped!r}")
+    converge = [cmd for cmd in fake.cmds if "--converge" in cmd]
+    if len(converge) != 1 or "slot-0" not in converge[0][1]:
+        failures.append(f"in-place deploy: converge must use slot-0's bootstrap, got {converge!r}")
+    return failures
+
+
+def _test_bootstrap_output_captured(runner: Any) -> list[str]:
+    """`_run_bootstrap_streaming(output=...)` records the cleaned lines of a
+    REAL subprocess, ANSI codes stripped, so the marker match sees plain text.
+    """
+    failures: list[str] = []
+    captured: list[str] = []
+    script = "printf '\\033[1;33m[WARN]\\033[0m Cannot determine remote version\\nsecond\\n'"
+    ok = runner._run_bootstrap_streaming(
+        ["bash", "-c", script],
+        {"PATH": os.environ.get("PATH", "")},
+        runner.EventBus(),
+        output=captured,
+    )
+    if not ok:
+        failures.append("output capture: the subprocess must exit 0")
+    if captured != ["[WARN] Cannot determine remote version", "second"]:
+        failures.append(f"output capture: unexpected lines {captured!r}")
+    if not runner._version_unresolved(captured):
+        failures.append("output capture: the unresolved marker must be detected")
+    if runner._version_unresolved(["[INFO]   Remote:    v2.1.26", "[OK] deployed"]):
+        failures.append("marker match: a resolved deploy must not read as unresolved")
     return failures
 
 
@@ -840,13 +994,12 @@ def _test_run_update_health_failure_calls_activate(runner: Any) -> list[str]:
         runner.META_DIR = meta_dir
         runner.home = Path("/home/testuser")
         runner.DB_PATH = tmp / "absent.db"
-        runner.get_active_slot = lambda: 0
         runner.get_oldest_slot = lambda: 1
         runner.snapshot_etc = lambda slot_id: None
         runner._read_version = lambda slot_id: "vtest"
         runner.swap_symlink = lambda slot_id, symlink_dir, name="current": None
         runner.run_health_checks = lambda bus: False
-        runner._run_bootstrap_streaming = lambda cmd, env, bus: True
+        _FakeDeploy(active=0, deploy_to=1).install(runner)
         runner.get_slot_meta = lambda slot_id: {"version": "v-active"}
 
         activate_calls: list[int] = []
@@ -1025,12 +1178,11 @@ def _test_rollback_refused_when_previous_blocked(runner: Any) -> list[str]:
             _make_db(db_path, 38)
             activate_calls.clear()
             runner._activate_slot = lambda t, b: activate_calls.append(t)
-            runner.get_active_slot = lambda: 0
             runner.get_oldest_slot = lambda: 1
             runner.snapshot_etc = lambda s: None
             runner._read_version = lambda s: "vtest"
             runner.swap_symlink = lambda s, d, name="current": None
-            runner._run_bootstrap_streaming = lambda cmd, env, bus: True
+            _FakeDeploy(active=0, deploy_to=1).install(runner)
             result = runner.run_update(runner.EventBus(), dev_mode=False)
             if result.get("status") != "failed" or result.get("reason") != want:
                 failures.append(f"update rollback refused: unexpected result {result!r}")

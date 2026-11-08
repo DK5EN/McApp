@@ -464,9 +464,13 @@ def run_update(bus: EventBus, dev_mode: bool = False) -> dict:  # noqa: PLR0912,
 
         print(f"[UPDATE-RUNNER] bootstrap cmd: {cmd}", flush=True)
         print(f"[UPDATE-RUNNER] bootstrap HOME={env.get('HOME')}", flush=True)
-        success = _run_bootstrap_streaming(cmd, env, bus)
+        deploy_output: list[str] = []
+        success = _run_bootstrap_streaming(cmd, env, bus, output=deploy_output)
 
-        if not success:
+        refusal: dict | None = None
+        if success:
+            target_slot, refusal = _deployed_slot_or_refusal(deploy_output, target_slot, bus)
+        else:
             # Bootstrap may have deployed + activated before crashing (e.g. in summary)
             # Check if the target slot is now active
             current_active = get_active_slot()
@@ -500,11 +504,11 @@ def run_update(bus: EventBus, dev_mode: bool = False) -> dict:  # noqa: PLR0912,
                 bus.publish(
                     "phase", {"phase": "failed", "progress": 100, "message": "Bootstrap failed"}
                 )
-                return {
-                    "status": "failed",
-                    "reason": "bootstrap_error",
-                    "duration_s": int(time.time() - start_time),
-                }
+                refusal = {"status": "failed", "reason": "bootstrap_error"}
+
+        if refusal is not None:
+            refusal["duration_s"] = int(time.time() - start_time)
+            return refusal
 
         # Phase 4: Activate slot
         bus.publish(
@@ -979,8 +983,71 @@ def _activate_slot(target_slot: int, bus: EventBus) -> None:
     )
 
 
-def _run_bootstrap_streaming(cmd: list[str], env: dict, bus: EventBus) -> bool:
-    """Run bootstrap subprocess, streaming output as SSE log events."""
+# Lines a bootstrap prints when it could not resolve the release to install. Both
+# exist in every shipped bootstrap, which matters: the runner drives the ACTIVE
+# slot's (older) bootstrap, so a new marker would not be printed by it.
+_VERSION_UNRESOLVED_MARKERS = (
+    "Cannot determine remote version",
+    "App version is left unresolved",
+)
+
+
+def _version_unresolved(lines: list[str]) -> bool:
+    """True if the bootstrap output says the release version was never resolved."""
+    return any(marker in line for line in lines for marker in _VERSION_UNRESOLVED_MARKERS)
+
+
+def _deployed_slot_or_refusal(
+    output: list[str], target_slot: int, bus: EventBus
+) -> tuple[int, dict | None]:
+    """After a bootstrap that exited 0: the slot it really deployed, or a refusal.
+
+    F14 (health log §59): the bootstrap picks and activates its OWN deploy slot.
+    When it cannot resolve the release version it rebuilds the active slot in
+    place and exits 0, so trusting the exit code and swapping to the slot the
+    runner picked pointed `current` at stale code while reporting success.
+    Returns (slot, None) to continue, or (target_slot, failed-result) to stop.
+    """
+    if _version_unresolved(output):
+        msg = (
+            "Release version could not be resolved (GitHub API unreachable?). "
+            "Nothing was deployed; the box stays on its current slot. Try again later."
+        )
+        print(f"[UPDATE-RUNNER] {msg}", flush=True)
+        bus.publish("phase", {"phase": "failed", "progress": 100, "message": msg})
+        return target_slot, {"status": "failed", "reason": "version_unresolved", "message": msg}
+    deployed_slot = get_active_slot()
+    if deployed_slot is None:
+        msg = "Bootstrap left no active slot; refusing to activate an untouched slot."
+        bus.publish("phase", {"phase": "failed", "progress": 100, "message": msg})
+        return target_slot, {
+            "status": "failed",
+            "reason": "no_active_slot_after_bootstrap",
+            "message": msg,
+        }
+    if deployed_slot != target_slot:
+        # In-place re-deploy (active slot already at the release): continue
+        # against the slot the bootstrap actually used, never the runner's pick.
+        bus.publish(
+            "log",
+            {
+                "line": f"Bootstrap deployed in place to slot-{deployed_slot}; "
+                f"slot-{target_slot} left untouched",
+                "phase": "bootstrap",
+            },
+        )
+    return deployed_slot, None
+
+
+def _run_bootstrap_streaming(
+    cmd: list[str], env: dict, bus: EventBus, output: list[str] | None = None
+) -> bool:
+    """Run bootstrap subprocess, streaming output as SSE log events.
+
+    When `output` is given, every cleaned line is also appended to it, so the
+    caller can inspect what the bootstrap reported (the SSE bus drops lines for
+    slow clients and is bounded, so it is not a reliable record).
+    """
     try:
         process = subprocess.Popen(  # noqa: S603 - fixed internal command
             cmd,
@@ -1022,6 +1089,8 @@ def _run_bootstrap_streaming(cmd: list[str], env: dict, bus: EventBus) -> bool:
                 continue
             print(f"[BOOTSTRAP] {line}", flush=True)
             bus.publish("log", {"line": line, "phase": "bootstrap"})
+            if output is not None:
+                output.append(line)
 
         process.wait()
         if process.returncode != 0:
