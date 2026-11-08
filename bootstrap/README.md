@@ -87,6 +87,10 @@ The bootstrap applies comprehensive hardening to protect the SD card and secure 
 
 - Ed25519-only host key
 - Modern ciphers (AES-256-GCM, ChaCha20-Poly1305)
+- Post-quantum key exchange first (mlkem768, sntrup761, as far as the box's OpenSSH has them),
+  curve25519 as fallback
+- RSA user keys below 3072 bits rejected (OpenSSH 9.1 and later)
+- The drop-in is brought up to date on every run, not just created once
 - Root login disabled, max 3 auth tries, 30s login grace time
 - MOTD scripts disabled for fast login
 

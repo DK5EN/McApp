@@ -44,7 +44,9 @@ readonly SCRIPT_VERSION="2.6.0"
 # Epoch 8: gzip on /events and /api at the Caddy front door.
 # Epoch 9: per-step convergence (lib/converge.sh); steps now carry their own
 # last-changed epoch, this one is the first bump that ran only what changed.
-readonly SYSTEM_EPOCH=9
+# Epoch 10: SSH hardening drop-in is brought up to date: post-quantum kex
+# (mlkem768/sntrup761), ed25519-only host key algorithm, RequiredRSASize 3072.
+readonly SYSTEM_EPOCH=10
 
 # Detect piped mode (curl | bash) — BASH_SOURCE is empty when piped
 # SCRIPT_DIR is intentionally NOT readonly: source_libs() overwrites it with

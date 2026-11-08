@@ -48,7 +48,9 @@ UPDATE_RUNNER_PORT = 2985  # must match scripts/update-runner.py's listen port
 # (Caddyfile.mcapp v4); lighttpd stays as a legacy backend.
 # Epoch 8: gzip on /events and /api at the Caddy front door.
 # Epoch 9: per-step convergence (bootstrap/lib/converge.sh).
-REQUIRED_SYSTEM_EPOCH = 9
+# Epoch 10: SSH hardening drop-in is brought up to date: post-quantum kex
+# (mlkem768/sntrup761), ed25519-only host key algorithm, RequiredRSASize 3072.
+REQUIRED_SYSTEM_EPOCH = 10
 
 SYSTEM_EPOCH_FILE = Path("/var/lib/mcapp/system-epoch")
 CONVERGE_ATTEMPT_FILE = Path("/var/lib/mcapp/converge-attempt")

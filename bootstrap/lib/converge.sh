@@ -44,7 +44,7 @@ disable_ipv6 8
 configure_unattended_upgrades 8
 configure_wpasupplicant_pin 8
 configure_fast_ssh_login 8
-configure_ssh_hardening 8
+configure_ssh_hardening 10
 install_apt_deps 8
 install_uv 8
 TABLE

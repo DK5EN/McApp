@@ -34,6 +34,7 @@ from bootstrap_network_safety_tests import run_bootstrap_network_safety_tests
 from bootstrap_pinning_tests import run_bootstrap_pinning_tests
 from bootstrap_port_warning_tests import run_bootstrap_port_warning_tests
 from bootstrap_ramlog_tests import run_bootstrap_ramlog_tests
+from bootstrap_ssh_hardening_tests import run_bootstrap_ssh_hardening_tests
 from bootstrap_tmpdir_tests import run_bootstrap_tmpdir_tests
 from bootstrap_tunnel_backup_tests import run_bootstrap_tunnel_backup_tests
 from bootstrap_venv_tests import run_bootstrap_venv_tests
@@ -444,6 +445,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     bootstrap_firewall_ok = run_bootstrap_firewall_tests()
     print(f"bootstrap_firewall: {'PASS' if bootstrap_firewall_ok else 'FAIL'}")
 
+    bootstrap_ssh_hardening_ok = run_bootstrap_ssh_hardening_tests()
+    print(f"bootstrap_ssh_hardening: {'PASS' if bootstrap_ssh_hardening_ok else 'FAIL'}")
+
     bootstrap_port_warning_ok = run_bootstrap_port_warning_tests()
     print(f"bootstrap_port_warning: {'PASS' if bootstrap_port_warning_ok else 'FAIL'}")
 
@@ -550,6 +554,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and bootstrap_config_backup_ok
         and bootstrap_converge_steps_ok
         and bootstrap_firewall_ok
+        and bootstrap_ssh_hardening_ok
         and bootstrap_port_warning_ok
         and bootstrap_logdirs_ok
         and bootstrap_tunnel_backup_ok

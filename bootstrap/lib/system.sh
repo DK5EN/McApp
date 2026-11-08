@@ -1721,28 +1721,36 @@ configure_fast_ssh_login() {
 # SSH HARDENING (crypto + access control)
 #──────────────────────────────────────────────────────────────────
 
-configure_ssh_hardening() {
-  log_info "Configuring SSH hardening..."
+# KexAlgorithms for this box's OpenSSH: post-quantum hybrids first where the build
+# has them (mlkem768 from OpenSSH 9.9, sntrup761 from 8.5), curve25519 as fallback.
+# An algorithm sshd does not know fails `sshd -t`, so the list follows `ssh -Q kex`.
+_mcapp_ssh_kex() {
+  local supported alg kex=""
+  supported=$(ssh -Q kex 2> /dev/null || true)
+  for alg in mlkem768x25519-sha256 sntrup761x25519-sha512 sntrup761x25519-sha512@openssh.com; do
+    if grep -qxF "$alg" <<< "$supported"; then
+      kex+="${kex:+,}${alg}"
+    fi
+  done
+  echo "${kex:+${kex},}curve25519-sha256,curve25519-sha256@libssh.org"
+}
 
-  local ssh_conf_dir="/etc/ssh/sshd_config.d"
-  local ssh_conf="${ssh_conf_dir}/mcapp-hardening.conf"
-
-  mkdir -p "$ssh_conf_dir"
-
-  # Check if already configured (ours or pi-harden's)
-  if [[ -f "$ssh_conf" ]] || [[ -f "${ssh_conf_dir}/10-pi-harden.conf" ]]; then
-    log_info "  SSH hardening already configured"
-    return 0
+# The drop-in this box should have. RequiredRSASize exists from OpenSSH 9.1 on;
+# older builds would fail `sshd -t` on it, so it is added only where known.
+_mcapp_ssh_hardening_conf() {
+  local rsa_line=""
+  if ssh -F /dev/null -G mcapp-probe 2> /dev/null | grep -q '^requiredrsasize '; then
+    rsa_line="RequiredRSASize 3072"
   fi
-
-  backup_config_file "$ssh_conf"
-  cat > "$ssh_conf" << 'EOF'
+  cat << EOF
 # McApp SSH hardening — crypto + access control
 HostKey /etc/ssh/ssh_host_ed25519_key
+HostKeyAlgorithms ssh-ed25519
 Ciphers aes256-gcm@openssh.com,chacha20-poly1305@openssh.com
 MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
-KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org
-UseDNS no
+KexAlgorithms $(_mcapp_ssh_kex)
+${rsa_line:+${rsa_line}
+}UseDNS no
 X11Forwarding no
 PermitRootLogin no
 MaxAuthTries 3
@@ -1751,11 +1759,47 @@ LoginGraceTime 30
 ClientAliveInterval 300
 ClientAliveCountMax 2
 EOF
+}
 
-  # Validate sshd config before restarting
-  if sshd -t 2>/dev/null; then
+configure_ssh_hardening() {
+  log_info "Configuring SSH hardening..."
+
+  local ssh_conf_dir="${MCAPP_SSHD_CONF_DIR:-/etc/ssh/sshd_config.d}"
+  local ssh_conf="${ssh_conf_dir}/mcapp-hardening.conf"
+
+  mkdir -p "$ssh_conf_dir"
+
+  # pi-harden owns SSH hardening where it is installed
+  if [[ -f "${ssh_conf_dir}/10-pi-harden.conf" ]]; then
+    log_info "  SSH hardening managed by pi-harden"
+    return 0
+  fi
+
+  # Our own file is brought up to date, not just created: boxes from before epoch 10
+  # carry a curve25519-only KexAlgorithms that shuts out the post-quantum hybrids.
+  local desired
+  desired=$(_mcapp_ssh_hardening_conf)
+  if [[ -f "$ssh_conf" && "$(cat "$ssh_conf")" == "$desired" ]]; then
+    log_info "  SSH hardening already configured"
+    return 0
+  fi
+
+  local had_old=0 old=""
+  if [[ -f "$ssh_conf" ]]; then
+    had_old=1
+    old=$(cat "$ssh_conf")
+  fi
+
+  backup_config_file "$ssh_conf"
+  printf '%s\n' "$desired" > "$ssh_conf"
+
+  # Validate sshd config before restarting; on failure put back what was there
+  if sshd -t 2> /dev/null; then
     systemctl restart sshd || true
-    log_ok "  SSH hardening applied (ed25519-only, modern ciphers)"
+    log_ok "  SSH hardening applied (ed25519-only, post-quantum kex, modern ciphers)"
+  elif ((had_old)); then
+    printf '%s\n' "$old" > "$ssh_conf"
+    log_warn "  SSH config invalid, previous hardening kept"
   else
     rm -f "$ssh_conf"
     log_warn "  SSH config invalid, hardening skipped"
