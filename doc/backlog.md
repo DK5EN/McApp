@@ -219,3 +219,11 @@ With the shipped config it binds `0.0.0.0:8082` or `[::]:8082` despite `server.b
 - **Port warning noise:** `th dport`, `ip saddr ... drop` before an accept, and a `!` in an iptables comment can warn wrongly. Nothing common is read as allowed by mistake.
 - **`bootstrap/templates/nftables.conf` is unused:** the rules are generated in `bootstrap/lib/system.sh`. Remove the file.
 - **Stray backup copies in tests:** three bootstrap suites do not set `MCAPP_CONFIG_BACKUP_DIR`, so as root on a dev box they leave temp-path copies in the real folder.
+
+## B22 — close F14 on the box: drive one update through the runner
+
+Finding F14 (health log §59: the update runner reported success without deploying v2.1.26) is fixed in `539ed0e` (fail closed when the bootstrap did not deploy the target) and `36e29b9` (health check warns when the webapp version is not the deploy target), but stays **open** until a release has driven an update through the runner on mcapp.local. The v2.1.27-dev.1 deploy (2026-11-08) ran the bootstrap directly, so it does not count. Close it with the next webapp Update-page run, then record the result in the health log.
+
+## B23 — P6: confirm auto mode respects the `release.sh 2` allow rule
+
+`fc58264` allows `./scripts/release.sh 2` in the project settings. Whether auto mode honours it is untested: it shows only on the next real production release. Check it then; if it still prompts, the rule's pattern is wrong.
