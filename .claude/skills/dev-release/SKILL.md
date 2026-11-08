@@ -20,10 +20,7 @@ safety net: a failed deploy leaves the previous slot active and the service unto
 git fetch --tags && git -C ../webapp fetch --tags
 
 # 1. gate BOTH repos yourself — release.sh does not do this for you
-uvx ruff check && uvx ruff format --check . \
-  && uv run mypy src/mcapp ble_service/src \
-  && uv run python scripts/run_startup_tests.py          # exit 0 = all suites pass
-cd ../webapp && npm run typecheck && npm run lint && npm run format:check && npm test
+./scripts/gate.sh > /tmp/gate.out 2>&1; echo "GATE_EXIT=$?"; cat /tmp/gate.out   # GATE: PASS
 
 # 2. commit + push BOTH repos (explicit paths, never `git add -A`)
 git add <paths> && git commit && git push origin development     # in each repo
@@ -46,7 +43,11 @@ ssh mcapp.local 'sudo bash /tmp/mcapp-bootstrap.sh --dev --tag <tag> > ~/deploy-
 
 `release.sh` runs `npm run build:strict` (vue-tsc + vite build) and **nothing else**. It never runs
 the backend suite, never runs ruff or mypy, never runs eslint, prettier, or vitest. A red tree
-releases silently. Run the full gate yourself, in both repos, before you commit.
+releases silently. Run the full gate yourself, in both repos, before you commit:
+`./scripts/gate.sh` runs ruff check, ruff format, mypy and `run_startup_tests.py` here, then the
+webapp's typecheck, lint, format check and tests, and ends with `GATE: PASS` or
+`GATE: FAIL (<steps>)` plus one exit code. Read that exit code directly (`echo "GATE_EXIT=$?"`),
+never through `| tail`. CI's `tests` workflow is disabled and signs off nothing.
 
 Not verified until lint, typecheck, format-check and the real suite have all run — for dependency
 changes too, not just code.

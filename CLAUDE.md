@@ -23,10 +23,13 @@ uvx ruff check [--fix]                          # lint
 uvx ruff format [--check .]                     # format
 uv run mypy src/mcapp ble_service/src           # types
 uv run python scripts/run_startup_tests.py      # tests
+./scripts/gate.sh                               # all of the above + the webapp's gate, one exit code
 ./scripts/release.sh                            # release (interactive, from development branch)
 ```
 
-All four are enforced by CI (`.github/workflows/tests.yml`, Python 3.11) and must be clean before committing.
+All four must be clean before committing. CI's `tests` workflow (`.github/workflows/tests.yml`) is
+disabled and signs off nothing; `./scripts/gate.sh` is the gate both release skills require. It ends
+with `GATE: PASS` or `GATE: FAIL (<steps>)`; read its exit code directly, never through `| tail`.
 
 ## Code Quality
 
