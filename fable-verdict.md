@@ -9,7 +9,7 @@
 Opus agent reviews the implementation for issues, bugs, shortcomings, and model drift (Section 8).
 
 **Integrated feature track:** the UDP 2.0 Extern-UDP RSSI/SNR integration
-(`doc/UDP-2.0-impl.md`, waves U1–U4) is folded into this pipeline as **Track U** — see the
+(`doc/archive/UDP-2.0-impl.md`, waves U1–U4) is folded into this pipeline as **Track U** — see the
 master sequence at the top of Section 7. That document stays the authoritative spec for the
 feature (wire format, design principles, per-wave acceptance); this verdict governs ordering
 and the consistency couplings between feature and quality work.
@@ -92,7 +92,7 @@ Roughly 100 findings total: 8 CRITICAL, ~40 MAJOR, ~50 MINOR. None of this requi
 the fixes are surgical or mechanical, which is why the wave plan works.
 
 On top of the quality work, the **UDP 2.0 feature** (route Extern-UDP RSSI/SNR into the signal
-architecture, `doc/UDP-2.0-impl.md`) is scheduled as Track U directly after Wave 1: the feature
+architecture, `doc/archive/UDP-2.0-impl.md`) is scheduled as Track U directly after Wave 1: the feature
 *depends on* two Wave-1 fixes (C-01 — a UDP-only deployment cannot tolerate a listen loop that
 dies permanently; C-08 — signal ingestion adds a write per lora packet, so the missing busy
 timeout would bite harder), and it *pulls forward* one quality finding (ST-10 — the bucket
@@ -747,7 +747,7 @@ encodes a cross-service contract (marked ⚠), add a comment stating the invaria
 **Master sequence (quality waves + UDP 2.0 feature track):**
 
 1. **Wave 1** — critical fixes (below). Prerequisite for Track U (C-01, C-08).
-2. **Track U = UDP 2.0 waves U1–U4** per `doc/UDP-2.0-impl.md` — feature work lands on the
+2. **Track U = UDP 2.0 waves U1–U4** per `doc/archive/UDP-2.0-impl.md` — feature work lands on the
    stabilized base, *before* the mechanical/structural quality waves reshape the files it
    touches. Integration notes below.
 3. **Waves 2–7** — quality work as specified below. Wave 6's `store_message` extraction (ST-05)
@@ -769,7 +769,7 @@ startup-test case if feasible); for C-04 add test cases with winter+summer times
 command suite (weather validation is testable without network by calling the validators directly).
 
 **Track U — UDP 2.0 Extern-UDP signal integration (waves U1–U4, after Wave 1)**
-Authoritative spec: `doc/UDP-2.0-impl.md` (wire format §2, design principles §4, decisions §5
+Authoritative spec: `doc/archive/UDP-2.0-impl.md` (wire format §2, design principles §4, decisions §5
 with accepted defaults U-D1…U-D6, per-wave scope/acceptance §6). Consistency couplings with
 this verdict — binding for the fix agent:
 - **U1 × ST-05:** implement the new signal-ingestion path (`has_signal` predicate + signal_log
@@ -882,7 +882,7 @@ DOC-01 with any Wave-1 commit; DOC-03 after Wave 4; DOC-04 with Wave 3 (ST-01).
 
 Deferred / coordinate-with-webapp (do NOT do in these waves): BLE-14 (field whitelisting),
 SSE-07 `matches` rename, ST-12 if the webapp depends on the 4000 default, TODO-E1…E9 from
-doc/code-audit.md (multi-node BLE), CO-21 (per prior decision).
+doc/archive/code-audit.md (multi-node BLE), CO-21 (per prior decision).
 
 ---
 
@@ -922,7 +922,7 @@ Review checklist:
   EXPLAIN QUERY PLAN notes and result-equivalence evidence exist.
 - **Ruff config sync:** if any `[tool.ruff*]` section changed, verify all three pyprojects
   (root, ble_service, mc-chat) changed identically.
-- **Track U specifics (waves U1–U4):** verify against `doc/UDP-2.0-impl.md` §6 acceptance boxes,
+- **Track U specifics (waves U1–U4):** verify against `doc/archive/UDP-2.0-impl.md` §6 acceptance boxes,
   plus these invariants line-by-line in the diff:
   - **No SNR re-scaling** anywhere on the UDP path (firmware already ÷4) and **no RSSI scaling**
     — grep the diff for `/ 4`, `* 4`, `snr /`, `rssi /`.
@@ -937,7 +937,7 @@ Review checklist:
     a summary, re-run produces zero new rows.
   - The signal-ingestion code landed as an extracted helper (U1 × ST-05), not inline growth of
     `store_message`; the `PLR0912/PLR0915` noqa count on `store_message` did not grow.
-  - Per §6, after each U-wave the changelog table in `doc/UDP-2.0-impl.md` §9 is updated —
+  - Per §6, after each U-wave the changelog table in `doc/archive/UDP-2.0-impl.md` §9 is updated —
     check it happened.
 - Report per wave: findings-addressed list, defects found (with file:line), verdict
   (approve / fix-required), and any items moved to "Discovered during waves".
@@ -961,7 +961,7 @@ Review checklist:
   coordinated webapp change; keep on the deferred list.
 - **D-6 (CO-21) `route_command` dispatch table:** prior decision (tech-debt.md) says leave it.
   **Default: leave as-is**; revisit only if Wave 6's main.py work makes it trivial.
-- **Track U decisions:** U-D1…U-D6 live in `doc/UDP-2.0-impl.md` §5 with recommended defaults
+- **Track U decisions:** U-D1…U-D6 live in `doc/archive/UDP-2.0-impl.md` §5 with recommended defaults
   (same signal tables, msg packets count as observations, ingest both transports with `source`
   tag, schema v19, one-time backfill, backend-only). **All defaults accepted** unless Martin
   vetoes before U1 starts.
@@ -984,7 +984,7 @@ Review checklist:
   interface (per-response order is still preserved) — inherent to the fix the verdict
   requested, not a defect.
 
-- [2026-07-05] Track U waves U1+U2 complete (`doc/UDP-2.0-impl.md` §6 Wave 1/Wave 2 —
+- [2026-07-05] Track U waves U1+U2 complete (`doc/archive/UDP-2.0-impl.md` §6 Wave 1/Wave 2 —
   UDP-lora signal routing, dedup, `signal_log.source`, v18→v19 migration). Implemented
   together since U2's dedup-reorder fix directly touches code U1 introduced. Gates green;
   17 new storage regression cases in `sqlite_storage.run_startup_tests()`. Opus review:

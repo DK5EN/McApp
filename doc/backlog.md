@@ -1,9 +1,12 @@
 # Backlog
 
 Deferred tasks with a due date or a data-collection dependency. One section per item; move
-resolved items to `doc/archive/` with their outcome. Closed on 2026-09-28:
+resolved items to `doc/archive/` with their outcome.
+
+Verified 2026-11-10 against the code: B18 closed (see `archive/2026-11-10-backlog-closed.md`), B20 and B21 confirmed open,
+B15 confirmed open (lighttpd still installed and in the health checks). Verification record: `review-log.md`. Closed on 2026-09-28:
 `doc/archive/2026-09-28-backlog-closed.md` (B2, B3, B4 items 1, 2, 3, 4-8). Review and
-closing plan: `doc/2026-09-28_1035-backlog-review-verdict-and-plan.md`.
+closing plan: `archive/2026-09-28_1035-backlog-review-verdict-and-plan.md`.
 
 ## B4 — memory footprint on mcapp.local (one open question)
 
@@ -40,8 +43,8 @@ after the fact (RSS, not Pss — a trend source, not a substitute for the three 
 
 **Goal:** find out what of Winlink's APRSLink command set works over MeshCom from `DK5EN-98`, and
 what our stack does with the traffic. Runbook and campaign:
-`doc/2026-09-19_1300-winlink-account-and-test-campaign.md`; command reference and firmware
-findings: `doc/2026-09-19_1100-winlink-wlnk1-command-test-plan.md`.
+`plans/2026-09-19_1300-winlink-account-and-test-campaign.md`; command reference and firmware
+findings: `plans/2026-09-19_1100-winlink-wlnk1-command-test-plan.md`.
 
 ### B5a — first real traffic for shipped code (not blocked; operator on air, plan wave W7)
 
@@ -91,7 +94,7 @@ the node-TZ campaign.
 
 Operator decision 2026-10-25: parity deferred. mc-chat needs the same `proxy:group_labels` event,
 `/api/group_labels` and `/api/callsign_info/{call}/override` routes (wire contract in
-`doc/2026-10-25_0900-conversation-nav-group-labels-plan.md` §3) and the shipped ICSSW snapshot.
+`plans/2026-10-25_0900-conversation-nav-group-labels-plan.md` §3) and the shipped ICSSW snapshot.
 Until then the webapp on an mc-chat backend shows bare group numbers and the editor's writes fail.
 
 ## B9 — serialise label writes before their broadcast
@@ -116,7 +119,7 @@ The bootstrap refuses every desktop image (`check_desktop_image`, `bootstrap/lib
 which is right for a 512 MB Pi Zero 2W and wrong for a Pi 4/5 with 2-8 GB. Decided 2026-10-31:
 decide by `MemTotal` (< 1 GB refuse, 1-2 GB warn + confirm, >= 2 GB proceed), and skip the
 headless-only tuning (`gpu_mem=16`, `cma-64`, `audio=off`, service disables) on a desktop box.
-Concept: `doc/2026-10-31_0830-desktop-image-gate-concept.md`.
+Concept: `plans/2026-10-31_0830-desktop-image-gate-concept.md`.
 
 ## B12 — McApp as a container image (Alpine, GHCR, Traefik)
 
@@ -124,9 +127,9 @@ A single Alpine-based container for NAS owners and advanced admins on any Linux 
 uvicorn serves the SPA and the API, Traefik does TLS through labels, UDP 1799 is published
 directly, the database lives in a volume, and updates are new image tags from
 `ghcr.io/dk5en/mcapp`. Kubernetes is not a supported target (k3s recipe as an appendix).
-Concept: `doc/2026-10-31_0830-container-deployment-concept.md`.
+Concept: `plans/2026-10-31_0830-container-deployment-concept.md`.
 
-Follow-ups from the container test campaign (`doc/2026-10-31_1200-container-test-campaign.md`):
+Follow-ups from the container test campaign (`plans/2026-10-31_1200-container-test-campaign.md`):
 
 - **Gateway check is wrong as written.** Detect a rewritten source by "source equals the container's
   default gateway (`/proc/net/route`)", not `x.x.x.1` in `172.16/12`: CT4c learned and persisted the
@@ -153,7 +156,7 @@ the web GUI. Prerequisite for BLE with the container (B12), useful on bare metal
 Decided 2026-10-31: `mcapp-ble` ships as the first Debian package (signed APT repo); McApp itself
 stays on `mcapp.sh` until B12 has shipped. `avahi-daemon` and `libnss-mdns` become bootstrap
 dependencies.
-Concept: `doc/2026-10-31_0830-ble-service-and-lan-discovery-concept.md`.
+Concept: `plans/2026-10-31_0830-ble-service-and-lan-discovery-concept.md`.
 
 Follow-ups from the container test campaign:
 
@@ -168,7 +171,7 @@ Follow-ups from the container test campaign:
 The firmware gained `upd chan prod|dev` (fork-dev `636e681b`, benched over LoRa on 2026-10-31). McApp
 needs the backend shape check, the vectors, the reply handling, and a MAIN/DEV switch on the update
 card of the webapp. Work order with contract, file pointers and acceptance criteria:
-`doc/2026-10-31_1000-rm1-updchan-requirements.md`.
+`plans/2026-10-31_1000-rm1-updchan-requirements.md`.
 
 ## B15 — drop lighttpd
 
@@ -176,12 +179,12 @@ Caddy serves the SPA since `SYSTEM_EPOCH` 7 (2026-11-05, LAN template v4). light
 a LAN box and only still proxied by public-TLS Caddyfiles on existing boxes and an older slot's
 `mcapp.sh`. Removing it saves about 1.5 MB PSS, so this is simplification, not a RAM win. It needs
 those Caddyfiles re-rendered first, plus the health checks in `update-runner.py` and `health.sh`. Decided 2026-10-31 alongside it: no Ansible rewrite of the bootstrap, no nginx.
-Evaluation: `doc/2026-10-31_1100-ansible-and-web-server-evaluation.md`.
+Evaluation: `archive/2026-10-31_1100-ansible-and-web-server-evaluation.md`.
 
 ## B16 — webapp follow-ups from the container test campaign
 
 Webapp repo. Found while running McApp behind Traefik/Authelia in a container
-(`doc/2026-10-31_1200-container-test-campaign.md`).
+(`plans/2026-10-31_1200-container-test-campaign.md`).
 
 - **Load the Browser AI WASM on demand.** 107 MB of the 112 MB bundle are the `litertlm_*.wasm`
   variants, which put the image at 228 MB instead of the 60-80 MB target. Operator decision 2026-10-31.
@@ -198,10 +201,6 @@ Webapp repo. Found while running McApp behind Traefik/Authelia in a container
   `OSError: Directory not empty` in `TemporaryDirectory` cleanup (a DB write outliving `svc.stop()` /
   `storage.close()`); 0/10 failures alone.
 
-## B18 — the full `mcapp.sh` run ignores a failed apt phase
-
-`if ! install_packages` tests only the last function, so a failed `install_apt_deps`, including its link check, is ignored and the epoch is written. `--converge` already stops there (`bootstrap/lib/converge.sh`). Found by the coexistence campaign review, 2026-11-06.
-
 ## B19 — lighttpd listens beyond loopback
 
 With the shipped config it binds `0.0.0.0:8082` or `[::]:8082` despite `server.bind = "127.0.0.1"`: seen in a Trixie VM, and `[::]:8082` on a field box next to `127.0.0.1:8082`. `use-ipv6.pl` is the likely cause. The firewall blocks it, but on a box with the firewall off the backend is reachable. B15 removes it altogether; `health.sh` exempts the port from its warning.
@@ -209,7 +208,7 @@ With the shipped config it binds `0.0.0.0:8082` or `[::]:8082` despite `server.b
 ## B20 — `ssl-tunnel-setup.sh` does not fit the current layout
 
 - **Templates not found:** `TEMPLATE_DIR` is `${SCRIPT_DIR}/bootstrap/templates`, but the script lives in `bootstrap/` since `7613e4a`, so a first-time TLS setup likely stops with "Template not found". Read from the code, not run.
-- **Stale docs:** `doc/tls-maintenance-SOP.md` still names `scripts/ssl-tunnel-setup.sh`.
+- **Stale docs:** fixed 2026-11-10 (`sop/SOP-003-tls-maintenance.md` and `runbook/RB-011-tls-remote-access-setup.md` name `bootstrap/ssl-tunnel-setup.sh` now). RB-011's architecture pictures still show lighttpd on :80 and are flagged as stale.
 - **No staged validate:** it installs the Caddyfile before validating, so a broken `/etc/caddy/conf.d` file leaves the new config in place and the script exits.
 - **nftables edits:** `sed` on the file and `nft add rule` on `inet filter` ignore the rule that a file with no McApp marker belongs to the operator.
 

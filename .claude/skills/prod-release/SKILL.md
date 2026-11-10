@@ -550,7 +550,7 @@ version is already bumped and waiting in `pyproject.toml`.
 
 - `/dev-release` — cutting and installing the `vX.Y.Z-dev.N` that this skill promotes
 - `/ai-ops` — the health check that decides whether promotion is warranted, and its log
-- `doc/version-logic.md` — how dev/production versions and tags resolve
+- `doc/reference/version-logic.md` — how dev/production versions and tags resolve
 - `doc/release-history.md` — the notes file; only its top `## vX.Y.Z` section (plus a footer link)
   is published as the GitHub release body, see Stop 1
 - `doc/archive/release-history-full.md` — full text of every earlier release, archived verbatim at

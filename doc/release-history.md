@@ -55,7 +55,7 @@ One entry per release. The full notes as published are in
 - Your own firewall rules and other services' log folders survive an update. McApp backs up config
   files before overwriting them.
 - `SYSTEM_EPOCH` 9, schema 40. If you run other software on the box, read "Running other software on
-  the box" in `doc/operations-reference.md`.
+  the box" in `archive/operations-reference-pre-split-2026-11-10.md`.
 
 ### v2.1.24 (2026-11-06)
 

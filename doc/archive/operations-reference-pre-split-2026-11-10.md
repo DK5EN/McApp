@@ -1,0 +1,776 @@
+# Operations Reference
+
+Content preserved from CLAUDE.md — deployment, configuration, health checks, firewall, and troubleshooting.
+
+## BLE Testing Modes
+
+| Scenario                      | BLE Mode   | Setup                                     |
+| ----------------------------- | ---------- | ----------------------------------------- |
+| Non-BLE features              | `disabled` | `export MCAPP_BLE_MODE=disabled`          |
+| Production / Testing with BLE | `remote`   | Deploy BLE service on Pi, point URL to it |
+
+Remote BLE testing:
+
+```bash
+# On Pi: Start BLE service
+cd ble_service
+uvicorn src.main:app --host 0.0.0.0 --port 8081
+
+# On Mac/OrbStack/other: Connect to remote BLE
+export MCAPP_BLE_MODE=remote
+export MCAPP_BLE_URL=http://pi.local:8081
+export MCAPP_BLE_API_KEY=your-secret-key
+uv run mcapp
+```
+
+## Configuration
+
+Configuration lives in `/etc/mcapp/config.json`:
+
+- `UDP_PORT_list/send`: Port 1799 for MeshCom node
+- `SSE_ENABLED/SSE_HOST/SSE_PORT`: SSE/REST API (0.0.0.0:2981, proxied via lighttpd)
+- `CALL_SIGN`: Node callsign for command handling
+- `LAT/LONG/STAT_NAME`: Location for weather service
+- `PRUNE_HOURS`: Chat message retention (default 720h = 30 days)
+- `PRUNE_HOURS_POS`: Position data retention (default 192h = 8 days)
+- `PRUNE_HOURS_ACK`: ACK retention (default 192h = 8 days)
+- `MAX_STORAGE_SIZE_MB`: In-memory store limit
+- `NODE_CONSOLE_PASSWORD`: Password for the node's TCP debug console (port
+  2323, ESP32 only) — empty (default) means the node has no console password
+  set. Never logged, never surfaced in `/api/monitor/console` status.
+- `NODE_CONSOLE_PORT`: Debug console TCP port (default `2323`, matches the
+  firmware's `net_console.cpp`)
+- `NODE_CONSOLE_MAX_SESSION_S`: Auto-stop (with flag restore) after this many
+  seconds of a `/monitor` DBG session (default `1800` = 30 min)
+
+Dev config: `/etc/mcapp/config.dev.json` (auto-selected when `MCAPP_ENV=dev`)
+
+### UDP node target, learning, and NAT deployments
+
+`MESHCOM_IOT_TARGET` names the MeshCom node (default `<CALLSIGN>.local`). On a
+real LAN the exact value barely matters: the outbound target is **learned**
+from inbound node traffic (trust gate: private IPv4 sources only, see
+`_is_trusted_node_source` in `udp_handler.py`) — `/api/status` then reports
+`udp_target_kind: identified`.
+
+That self-healing does NOT work behind NAT/port-forwarding (OrbStack/Docker
+style), where every inbound datagram arrives with a loopback source that the
+trust gate deliberately refuses. Receiving works; sending silently dies with
+`UDP_SEND failed ... Temporary failure in name resolution` in the journal.
+Fix: set `MESHCOM_IOT_TARGET` to the node's real IP explicitly (outbound
+through NAT is fine). Verified 2026-08-09 in the OrbStack simulation.
+
+A failed UDP send is reported to the webapp as a `msg:status` SSE event
+(`send_failed: true` plus `src`/`dst`/`msg`/`reason` for content correlation
+— no msg_id exists before the firmware mints one), alongside the existing
+global error toast.
+
+### BLE Configuration
+
+```json
+{
+  "BLE_MODE": "remote", // "remote" | "disabled" (local mode removed, use BLE service)
+  "BLE_REMOTE_URL": "", // URL for remote BLE service (e.g., http://pi.local:8081)
+  "BLE_API_KEY": "auto-generated", // API key for remote service authentication
+  "BLE_DEVICE_NAME": "", // Auto-connect device name (e.g., "MC-XXXXXX")
+  "BLE_DEVICE_ADDRESS": "" // Auto-connect device MAC address
+}
+```
+
+**Migration note:** Local mode (`BLE_MODE="local"`) was removed in v1.01.1. For local BLE hardware access, deploy the standalone BLE service (`ble_service/`) and use `BLE_MODE="remote"` pointing to the service URL.
+
+**BLE API Key:** The bootstrap generates a random 16-char key (using `secrets` module) at install time. Both sides use it: McApp sends it as `X-API-Key` header, the BLE service validates it via `BLE_SERVICE_API_KEY` env var. The BLE service has no hardcoded fallback — if no key is set, it runs unauthenticated (with a startup warning).
+
+**Environment variable overrides** (useful for testing):
+
+- `MCAPP_BLE_MODE` - Override BLE mode without editing config
+- `MCAPP_BLE_URL` - Override remote BLE service URL
+- `MCAPP_BLE_API_KEY` - Override API key
+
+## GitHub Repository
+
+The GitHub repository is at **`github.com/DK5EN/McApp`**.
+
+## Deployment
+
+Target: Raspberry Pi Zero 2W running as systemd service (`mcapp.service`)
+
+### New Bootstrap System (Recommended)
+
+```bash
+# Single command for install, update, or repair
+curl -fsSL https://raw.githubusercontent.com/DK5EN/McApp/main/bootstrap/mcapp.sh | sudo bash
+```
+
+The bootstrap script:
+
+1. Auto-detects state (fresh/migrate/upgrade)
+2. Prompts for configuration on first install
+3. Creates Python venv in `~/mcapp-venv` using uv
+4. Configures SD card protection (tmpfs, volatile journal)
+5. Sets up firewall (nftables on Trixie, iptables on Bookworm)
+6. Disables IPv6 (fixes mDNS timeouts caused by Happy Eyeballs algorithm)
+7. Enables and starts systemd service
+
+See `bootstrap/README.md` for full documentation.
+
+### Bootstrap Directory Structure
+
+```
+bootstrap/
+├── mcapp.sh             # Main entry point (run with sudo)
+├── lib/
+│   ├── detect.sh        # State detection (fresh/migrate/upgrade)
+│   ├── config.sh        # Interactive configuration prompts
+│   ├── system.sh        # tmpfs, firewall, journald, hardening
+│   ├── packages.sh      # apt + uv package management
+│   ├── deploy.sh        # Webapp + Python script deployment
+│   └── health.sh        # Health checks and diagnostics
+├── templates/
+│   ├── config.json.tmpl   # Configuration template
+│   ├── mcapp.service      # systemd unit file
+│   ├── mcapp-ble.service  # BLE service systemd unit
+│   ├── mcapp-update.path   # systemd path trigger for OTA updates
+│   ├── mcapp-update.service # systemd oneshot service for update runner
+│   ├── nftables.conf      # Unused: the rules are generated in lib/system.sh
+│   ├── journald.conf      # Volatile journal config
+│   ├── caddy/             # TLS reverse proxy templates
+│   │   ├── Caddyfile.duckdns.tmpl
+│   │   ├── Caddyfile.cloudflare.tmpl
+│   │   ├── Caddyfile.desec.tmpl
+│   │   └── caddy.service
+│   └── cloudflared/       # Cloudflare Tunnel templates
+│       ├── config.yml.tmpl
+│       └── cloudflared.service
+└── README.md            # Installation documentation
+```
+
+### Bootstrap CLI Options
+
+```bash
+sudo ./mcapp.sh --check       # Dry-run, show what would change
+sudo ./mcapp.sh --force       # Force reinstall everything
+sudo ./mcapp.sh --fix         # Repair broken installation
+sudo ./mcapp.sh --reconfigure # Re-prompt for config values
+sudo ./mcapp.sh --quiet       # Minimal output (for cron)
+sudo ./mcapp.sh --converge    # Converge system-level state (packages, firewall, web front
+                               # door) to this release's epoch; deploys nothing; no-op when
+                               # /var/lib/mcapp/system-epoch is already current
+```
+
+### BLE Service Deployment (Optional)
+
+For distributed setups where McApp runs on a different machine than the Bluetooth hardware:
+
+```bash
+# On Pi with Bluetooth hardware
+cd ~/mcapp/ble_service
+uv sync
+
+# Configure API key
+export BLE_SERVICE_API_KEY=your-secret-key
+
+# Run directly
+uvicorn src.main:app --host 0.0.0.0 --port 8081
+
+# Or install as systemd service
+sudo cp mcapp-ble.service /etc/systemd/system/
+sudo systemctl edit mcapp-ble  # Add: Environment=BLE_SERVICE_API_KEY=...
+sudo systemctl enable --now mcapp-ble
+```
+
+The BLE service exposes:
+
+- `GET /api/ble/status` - Connection status
+- `GET /api/ble/devices` - Scan for devices
+- `POST /api/ble/connect` - Connect to device
+- `POST /api/ble/disconnect` - Disconnect
+- `POST /api/ble/send` - Send message/command
+- `GET /api/ble/notifications` - SSE notification stream
+- `GET /health` - Health check
+
+See `ble_service/README.md` for full API documentation.
+
+## TLS Remote Access (Optional)
+
+For internet access with TLS encryption, run the standalone setup script:
+
+```bash
+sudo ./scripts/ssl-tunnel-setup.sh
+```
+
+This adds Caddy as a TLS reverse proxy with automated Let's Encrypt DNS-01 certificates and DDNS updates. Supports DuckDNS, Cloudflare, deSEC.io, and Cloudflare Tunnel.
+
+**Architecture with TLS:**
+
+```
+Browser (HTTPS) → Caddy:443 (TLS) → lighttpd:80 → {
+    /webapp/  → static files
+    /events   → proxy to FastAPI:2981
+    /api/     → proxy to FastAPI:2981
+}
+```
+
+See `../reference/tls-architecture.md` for diagrams and `../sop/SOP-003-tls-maintenance.md` for maintenance procedures.
+
+## Remote Health Check Commands
+
+Commands for checking system health on the Pi via SSH. The Pi locale is German, so output labels may be in German.
+
+**IMPORTANT quoting rule:** When running `python3 -c` over SSH, use single quotes for the Python code and `\"` for strings inside Python. Never use f-strings with dict key access — use `%` formatting instead. Nested double quotes in f-strings break the SSH quoting.
+
+### System overview
+
+```bash
+ssh mcapp.local "uptime && echo '---' && free -h && echo '---' && df -h / /tmp /var/log && echo '---' && vcgencmd measure_temp && echo '---' && cat /proc/loadavg"
+```
+
+### Service statuses
+
+```bash
+ssh mcapp.local "sudo systemctl status mcapp.service --no-pager -l 2>&1 | head -20"
+ssh mcapp.local "sudo systemctl status lighttpd.service --no-pager 2>&1 | head -10"
+ssh mcapp.local "sudo systemctl status bluetooth.service --no-pager 2>&1 | head -10"
+```
+
+### Process memory usage
+
+```bash
+ssh mcapp.local "ps aux | grep -E 'mcapp|uv.*run' | grep -v grep"
+```
+
+### Database stats (use % formatting, NOT f-strings)
+
+```bash
+ssh mcapp.local "python3 -c '
+import sqlite3, os
+conn = sqlite3.connect(\"/var/lib/mcapp/messages.db\")
+print(\"Schema version:\", conn.execute(\"SELECT version FROM schema_version\").fetchone()[0])
+for r in conn.execute(\"SELECT type, COUNT(*) as cnt FROM messages GROUP BY type ORDER BY cnt DESC\"):
+    print(\"  messages/%s: %d\" % (r[0], r[1]))
+print(\"  station_positions: %d\" % conn.execute(\"SELECT COUNT(*) FROM station_positions\").fetchone()[0])
+print(\"  signal_log: %d\" % conn.execute(\"SELECT COUNT(*) FROM signal_log\").fetchone()[0])
+print(\"  signal_buckets: %d\" % conn.execute(\"SELECT COUNT(*) FROM signal_buckets\").fetchone()[0])
+sz = os.path.getsize(\"/var/lib/mcapp/messages.db\")
+print(\"DB size: %.2f MB\" % (sz/1024/1024))
+conn.close()
+'"
+```
+
+### Log checks
+
+```bash
+# Overnight logs (pruning runs at 04:00)
+ssh mcapp.local "sudo journalctl -u mcapp.service --since '2026-02-13 22:00' --until '2026-02-14 06:00' --no-pager | tail -100"
+
+# Today's logs
+ssh mcapp.local "sudo journalctl -u mcapp.service --since today --no-pager | tail -150"
+
+# Errors only (journald priority filter — may miss app-level [ERROR] lines)
+ssh mcapp.local "sudo journalctl -u mcapp.service --since today -p err --no-pager"
+
+# Grep for app-level errors/warnings
+ssh mcapp.local "sudo journalctl -u mcapp.service --since today --no-pager | grep -i 'error\|exception\|traceback\|warning\|WARN'"
+
+# Log volume count
+ssh mcapp.local "sudo journalctl -u mcapp.service --since today --no-pager | wc -l"
+```
+
+## BLE Connection Troubleshooting
+
+Diagnostic flow for "can't connect to the node" reports (webapp shows `Connect failed: ...` in the
+Bluetooth Connection dialog). Run top to bottom; stop as soon as a step explains the symptom.
+
+```bash
+# 1. Service health — mcapp, mcapp-ble, and the system bluetooth daemon must all be active
+ssh mcapp.local "systemctl status mcapp mcapp-ble bluetooth --no-pager -l | grep -E 'Active|●'"
+
+# 2. Adapter state — controller UP, powered on (rfkill is not installed on the Pi image)
+ssh mcapp.local "hciconfig -a; bluetoothctl show | grep -E 'Powered|Discoverable|Pairable'"
+
+# 3. Known/paired devices and live scan for the node (MC-xxxx prefix)
+ssh mcapp.local "bluetoothctl devices"
+K=$(ssh mcapp.local "sudo grep BLE_API_KEY /etc/mcapp/config.json | cut -d'\"' -f4")
+ssh mcapp.local "curl -s -H 'X-Api-Key: $K' 'http://127.0.0.1:8081/api/ble/devices?timeout=5.0&prefix=MC-'"
+
+# 4. Recent BLE service log — look for the specific dbus_error string
+ssh mcapp.local "sudo journalctl -u mcapp-ble --no-pager -n 60"
+
+# 5. If needed, force a fresh connect attempt directly against the service (bypasses the webapp)
+ssh mcapp.local "curl -s -X POST -H 'X-Api-Key: $K' -H 'Content-Type: application/json' \
+  -d '{\"device_address\":\"AC:XX:XX:XX:XX:XX\"}' http://127.0.0.1:8081/api/ble/ensure_connected"
+```
+
+Note: the header FastAPI binds to is `x_api_key` → sent/received as `X-Api-Key` (HTTP headers are
+case-insensitive; `operations-reference-pre-split-2026-11-10.md`'s config table above spells it `X-API-Key` — same
+header). `ensure_connected` requires a JSON body `{"device_address": "AA:BB:..."}`, not a bare
+`address` field.
+
+**Known error signatures** (from `ble_service.src.ble_adapter` log lines):
+
+- `dbus_error=org.bluez.Error.Failed text='le-connection-abort-by-local'` — the Pi's own
+  controller aborted while waiting for the connection-complete event; the node was discoverable
+  (check RSSI in step 3 — a strong value like -30 to -50 dBm rules out range). Restarting
+  `bluetooth.service` and `mcapp-ble.service` does **not** fix this pattern if it persists across
+  the restart — that points to the node side, most likely another BLE central already holding the
+  connection (e.g. the MeshCom phone app open at the same time; most nodes accept only one central).
+  Ask the user to close any other BLE client and retry, or power-cycle the node.
+- `dbus_error=InterfaceNotFoundError text='interface not found on this object: org.bluez.Device1'`
+  — BlueZ has no cached `Device1` object for that address (typical right after an unpair, or right
+  after `bluetooth.service`/`mcapp-ble.service` restarts). A scan (step 3, `GET /api/ble/devices`)
+  recreates the object; `ensure_connected` alone will not, because it does not scan first.
+
+Escalation: if the node is not found by the scan at all (0 discovered) and RSSI would otherwise be
+strong, the node itself is powered off, out of BLE range, or its firmware BLE stack is wedged —
+that requires physical access, which is outside what's reachable over SSH to the Pi.
+
+## Node Admin (RM1 remote admin)
+
+Remote administration of other MeshCom nodes (reboot, status, toggles, `txpower`, `setout`) from the McApp web UI,
+signed with an HMAC over LoRa. Design: `2026-10-05_1000-node-admin-ui-concept-and-plan.md`.
+
+**Always on, configured in the web GUI.** There is no config switch (operator decision 2026-10-05): open Settings >
+Remote nodes, add a node's callsign and its password, then use Node Admin > Remote Management. Until a node is stored the feature is
+inert; once a node's password is stored, any device on the LAN can use it through
+this API (the API has no authentication, so storing a password is the consent). The API has no authentication, so it is LAN-only by construction: `/api/node-admin/*` refuses any `Host` that is not
+a LAN name (`mcapp.local`, the short hostname, private/loopback IPs) and any foreign `Origin`. It is therefore NOT usable
+through the public TLS hostname. `GET /api/status` lists `"node_admin"` under `features`; the webapp shows the Remote nodes
+tab and the Node Admin > Remote Management sub-tab only when it does (an older backend shows neither; the Node Admin
+entry itself is always there because it also hosts the BLE page). A developer-only
+`"node_admin": {"allowed_origins": ["http://localhost:5173"]}` in `config.json` extends the Origin check for the Vite dev
+server; nothing needs it in normal use, and a leftover `"enabled"` key from an earlier dev build is ignored.
+
+**Prerequisites on every managed node:** `--remotemgmt on` and a non-empty `--passwd` (check `--info`: `RM: on`).
+Without both, an `RM1` DM is ordinary acked text and the node never answers. Use a random 14-character password
+(Settings > Remote nodes > Generate): the tag lets anyone who captured ONE frame on air guess a short password
+offline. Enter the same password in McApp once; it is stored encrypted (`secret.key` + board serial) and never shown.
+
+**CALL_SIGN must carry the attached node's SSID exactly as the node stores it** (`DK5EN-14`, not `DK5EN`). The tag is
+bound to the sender's call; a bare call produces a valid-looking frame the node silently ignores. On a BLE-attached box
+McApp adopts the call from the node's `I` register; on a UDP-only box set `CALL_SIGN` yourself. The managed node must hear
+the attached node over LoRa: a command that reaches a gateway node through the internet first is shown there as plain
+text and the later RF copy is dropped, so it is never executed.
+
+**Runbook: "no reply".** The node is silent for every one of these, so check in order: RM off or no password on the
+node; wrong stored password (a wrong password never produces a reply, not even `err`); the 10 s rate limit (one accepted
+frame per 10 s, per node, from any sender); the 5 min lockout (3 counted rejects in 90 s: bad tag, replayed counter,
+blocked command); the node did not hear McApp's node over LoRa; the reply is still on air (20-45 s). `bad tag` in the
+view means a reply arrived that McApp could not verify (password changed on the node, or a spoof). Counters:
+`ctr = MAX(ctr+1, last_hwm+1, unix time)`, so another SysOp or the firmware web UI using the node does not desync McApp.
+
+**Removing a node.** Settings > Remote nodes > Remove deletes the node from McApp completely (password, counter,
+max TX, command history); the node itself is not changed. It is refused for up to 5 minutes after a command that got
+no answer, or while a command is in flight; the message names the time it unblocks.
+
+**The remote view (2026-10-06).** Node Admin > Remote Management mirrors the BLE sub-tab next to it: register bar (Sync, Status), Info row,
+card grid, Switches (green = on in the last verified answer, amber = uncertain), Restart, and a collapsed Advanced
+section (output pin, Re-sync counter, raw command, history). Design: `2026-10-06_1100-node-admin-remote-view-concept.md`.
+
+- **Connect first.** Selecting a node sends nothing. `Connect` sends `sync`, then `status` (about 30-70 s). Every other
+  control stays disabled until a sync was verified in the running McApp process; a restart of McApp needs a new Connect.
+  A command that reaches the backend unsynced waits behind an automatic sync and is **dropped** if that sync gets no
+  answer ("command dropped: no answer to the counter sync").
+- **Cool-down after silence.** After a `no_reply` or `abandoned` row the node gets no new frame for 5 min from that
+  frame's hand-off (the node itself resends DMs up to 4 times; a late copy would be a counted replay strike). The page
+  shows the wait; the API answers 409 with the remaining seconds.
+- **Another station managing the node.** When McApp hears an RM1 frame to or from a stored node that is not its own,
+  it sends nothing to that node for 120 s ("Another station is managing ..."). The firmware shares its rate limit, counter
+  mark and reply cache between all senders.
+- **"The node reports counter mark N, below the last known M."** The node lost its counter mark (re-flashed or erased).
+  McApp ignores such a sync reply (it could be a replayed old one). Fix: enter the node's password again in Settings >
+  Remote nodes, which resets McApp's stored mark for that node; Connect then works.
+- **`GET /api/node-admin/targets/{target}/state`** returns the parsed last known state (concept Appendix A), folded in
+  send order from verified replies only. Values carry their age; after a verified Restart they are marked stale.
+- **Call blocklist card (2026-10-24).** Needs a fork build with BLK-01 (v4.40a.10.23 or newer); older firmware
+  shows "no call blocklist". `Read` fetches the list; `Save list` REPLACES the node's whole list and the node's answer
+  is the stored list, which the card compares with what was sent ("Node confirmed the new list." or the difference).
+  Refusals, all before anything is sent: an entry that would block this station or the node itself; a list over 39
+  characters (one RM1 frame, about 3-4 calls); a write before the list was read. A list the node holds that is longer
+  than one remote write (set on the node's own web page or console, up to 16 calls) is read-only here; only
+  `Clear all` works. A station on the blocklist is dropped as sender AND as relay, so blocking a relay between McApp
+  and the node makes remote replies vanish silently.
+
+**Secrets and logs.** The password is never logged, broadcast or stored in `stall_events` (the `/api/node-admin/keys`
+body is withheld by path prefix). An RM1 frame in logs, `send_failed` events and failed monitor captures has its tag
+cut (`_redact_rm1`), including the INFO/DEBUG "Processing" lines. A frame that did go out is public on air anyway.
+
+## Update Runner (OTA Deployment)
+
+The update runner (`scripts/update-runner.py`) is a standalone Python HTTP server (stdlib only, no dependencies) that manages OTA deployments and rollbacks from the webapp UI. It runs on **port 2985** and uses a slot-based architecture with 3 independent deployment slots.
+
+**Launch mechanism:** A systemd `.path` trigger watches for `/var/lib/mcapp/update-trigger`. When the frontend calls `POST /api/update/start`, the SSE handler writes an args file and trigger file, systemd detects the trigger and launches `mcapp-update.service`.
+
+**Systemd units** (templates in `bootstrap/templates/`):
+
+- `mcapp-update.path` — Watches for `/var/lib/mcapp/update-trigger`
+- `mcapp-update.service` — Oneshot service running `update-runner.py` with 15-minute timeout
+
+**Update runner endpoints (port 2985):**
+
+| Endpoint  | Method | Purpose                                                                             |
+| --------- | ------ | ----------------------------------------------------------------------------------- |
+| `/stream` | GET    | SSE stream — real-time bootstrap output (`phase`, `log`, `health`, `result` events) |
+| `/status` | GET    | JSON — mode, result, slot info, active slot, can_rollback flag                      |
+| `/slots`  | GET    | JSON — version, deployed_at, active flags for all 3 slots                           |
+
+**Main API endpoints (port 2981, proxied via port 80):**
+
+| Endpoint               | Method | Purpose                                                          |
+| ---------------------- | ------ | ---------------------------------------------------------------- |
+| `/api/update/check`    | GET    | Check GitHub for available releases (5-min cache)                |
+| `/api/update/start`    | POST   | Launch update runner (optional body: `{"dev": true}`)            |
+| `/api/update/activate` | POST   | Activate a specific slot: `{"slot": N}` (400 on an invalid slot) |
+| `/api/update/rollback` | POST   | Compat alias — activates the newest non-active slot              |
+| `/api/update/slots`    | GET    | Get slot metadata and active status                              |
+| `/api/update/converge` | POST   | Launch update runner in converge mode (system epoch)             |
+
+**Slot architecture on Pi:**
+
+```
+~/mcapp-slots/
+├── current → symlink to active slot-N
+├── slot-0/              # Independent deployment slot
+│   ├── .venv/           # Python venv for this slot
+│   ├── scripts/         # Includes update-runner.py
+│   ├── src/mcapp/       # Application code
+│   └── webapp/          # Frontend files + version.html
+├── slot-1/
+├── slot-2/
+└── meta/
+    ├── slot-N.json      # {"slot": N, "version": "v1.x.y", "deployed_at": "...", "active": true}
+    └── slot-N.etc.tar.gz # /etc config snapshot (backup only, never restored automatically)
+```
+
+**Update sequence:**
+
+1. **Prepare** — determine active vs target slot
+2. **Snapshot** — tar `/etc/mcapp/`, systemd units and lighttpd config into `meta/slot-N.etc.tar.gz` (backup only)
+3. **Bootstrap** — run `bootstrap/mcapp.sh --skip [--dev]` into target slot (15-min timeout)
+4. **Activate** — atomic symlink swap to the target slot (the bootstrap has already installed the webapp bundle and restarted the services)
+5. **Health check** — 8 retries × 3s: mcapp service, lighttpd, webapp HTTP, SSE health, lighttpd proxy
+6. **Auto-rollback** — on health failure: run the same activation routine against the previous slot (code + webapp + services; the database is never touched)
+
+### Activation
+
+Activating a slot N means: stop `mcapp`, swap the `current` symlink to `slot-N`, re-install that
+slot's `webapp/` bundle into `/var/www/html/webapp` (staged as `webapp.new`, the previous bundle
+kept as `webapp.old` until the move succeeds), `daemon-reload`, restart `lighttpd` + `mcapp` +
+`mcapp-ble`, refresh the slot's `deployed_at`, then run the health checks. It fails
+(`invalid_slot`) if the requested slot is already active, empty, out of range, or has no
+`pyproject.toml`. Result: `{status: success|warning, version, slot, health_ok}`.
+
+The runner has an `activate` mode (`--slot N`, or an args file
+`{"mode": "activate", "dev": false, "slot": N}`) that performs exactly this, driven by
+`POST /api/update/activate {"slot": N}`. `rollback` is a compatibility alias that activates the
+newest non-active slot; `POST /api/update/rollback` still calls it. The `update` mode's internal
+auto-rollback (triggered by a health-check failure) uses the same activation routine against the
+previously active slot.
+
+**The database is never restored as part of activation, on any path — deliberately.** The old
+rollback overwrote `/var/lib/mcapp/messages.db` with a `meta/slot-N.db` snapshot taken when slot N
+was last _left_ through the runner. Deploys made via `mcapp.sh` directly never refreshed that
+snapshot, so on mcapp.local the stored snapshots were found to be 4 days to 3 weeks stale
+(2026-09-10), before anyone had ever pressed the button in anger. Migrations are forward-only and
+additive, and the schema marker is never written downward, so older application code runs fine
+against a newer database — there is nothing for a database restore to fix, and every restore was a
+strictly regressive, silent data-loss risk. `snapshot_database`, `restore_database`, and
+`restore_etc` have been removed. The old code also never re-installed the webapp bundle (it served
+from a directory copied once at deploy time, not from the `current` symlink) and never restarted
+`mcapp-ble`, so a "rollback" could leave the previous code running against a stale frontend and a
+BLE service still running the previous slot's code; activation now handles all three.
+
+### System epoch & converge
+
+`SYSTEM_EPOCH` is a single integer versioning the _system-level_ machine state (packages, firewall, web front door) — independent of the app version and of `FINAL_SCHEMA_VERSION`. Installed state is marked by `/var/lib/mcapp/system-epoch` (single integer line, written by root). Source of truth is `readonly SYSTEM_EPOCH=1` in `bootstrap/mcapp.sh`, mirrored by `REQUIRED_SYSTEM_EPOCH` in `src/mcapp/system_converge.py`; a gated startup test parses `mcapp.sh` and enforces the two stay equal.
+
+**`--converge` runs only what changed.** Each step in `bootstrap/lib/converge.sh` carries the epoch it last changed in and runs only if the installed epoch is below it. When you change a step, raise its row to the new epoch in the same commit. `ensure_web_frontend` always runs. A full `mcapp.sh` run still runs everything.
+
+The update runner (`scripts/update-runner.py`) has four modes:
+
+- `update` — deploy + activate + health check, rolls back (via activation) on failure
+- `activate` — activate a specific slot (`--slot N`, or `{"mode": "activate", "slot": N}`); see Activation above
+- `rollback` — compat alias for `activate` against the newest non-active slot
+- `converge` — re-run the active slot's own `mcapp.sh --converge` to bring system-level state up to date; no slot swap, no rollback on failure
+
+`run_update` runs the newly deployed slot's `mcapp.sh --converge` after health checks pass, so every successful update also converges system state.
+
+**Fleet upgrade story:** pre-epoch boxes (<= v1.6.13) update via the OLD update runner driven by the OLD `bootstrap/mcapp.sh --skip`, which never installs Caddy or opens :443 — the box lands on new code with a degraded, HTTP-only front door. The new app's converge watchdog (`src/mcapp/system_converge.py`) detects the stale epoch, waits for the update runner to go idle (~1-2 min settle), and triggers `converge` mode automatically via the same trigger-file mechanism as the webapp's Update button. It makes one trigger attempt per boot and re-checks every 6 hours; on failure (e.g. no WAN) the box stays degraded-but-working over HTTP rather than retry-looping.
+
+**Troubleshooting:**
+
+```bash
+# Installed system epoch on the Pi
+ssh mcapp.local "cat /var/lib/mcapp/system-epoch"
+
+# Watchdog activity in the logs
+ssh mcapp.local "sudo journalctl -u mcapp.service | grep 'Converge watchdog'"
+
+# Manual trigger via the API (mirrors the webapp Update button)
+curl -X POST http://mcapp.local/api/update/converge
+
+# Manual fallback, run directly on the Pi
+sudo ~/mcapp-slots/current/bootstrap/mcapp.sh --converge
+```
+
+## Stall Tracking (`/api/stalls`)
+
+Records every server- and client-observed stall (HTTP request, SSE round trip, event-loop drift,
+thread-pool wait, publish-loop handler) into `stall_events`, retrievable by a coding agent through
+one endpoint — no UI. Design, kinds/thresholds and the record schema:
+`2026-09-15_1530-stall-tracking-plan.md`; the table itself: `../reference/database-reference.md`;
+load-bearing implementation facts: `CLAUDE.md` "Stall Tracking".
+
+**Endpoints:**
+
+```bash
+# Full records, newest first — what a coding agent reads to diagnose a specific slow call
+curl -s 'http://mcapp.local/api/stalls?limit=50' | python3 -m json.tool
+
+# Only critical HTTP stalls in the last hour
+curl -s "http://mcapp.local/api/stalls?kind=http&severity=critical&since=$(python3 -c 'import time; print(int(time.time()*1000) - 3600000)')"
+
+# Per-path p50/p95/p99/max baseline over recorded `http` rows
+curl -s 'http://mcapp.local/api/stalls/summary' | python3 -m json.tool
+
+# Webapp client upload (one record or an array); the endpoint this feeds, not a manual tool
+curl -s -X POST http://mcapp.local/api/stalls/client -H 'Content-Type: application/json' \
+  -d '{"kind":"client_error","severity":"critical","path":"/api/messages"}'
+```
+
+**Config** — `stalls` key in `/etc/mcapp/config.json` (nested object; absent key or absent
+sub-key = default):
+
+```json
+{
+  "stalls": {
+    "stall_ms": 500,
+    "critical_ms": 2000,
+    "sample_every": 50,
+    "loop_lag_ms": 100,
+    "pool_wait_ms": 100,
+    "handler_ms": 500,
+    "body_cap_bytes": 8192,
+    "max_rows": 5000
+  }
+}
+```
+
+**Replay a recorded stall** against a running instance:
+
+```bash
+# Re-issue row 42's exact request 10x, print p50/p95/max next to the recorded duration
+uv run python scripts/replay_stall.py --base http://mcapp.local --id 42
+
+# More iterations, or replay from a row saved locally (e.g. from a curl above)
+uv run python scripts/replay_stall.py --base http://mcapp.local --json saved_row.json --repeat 20
+
+# Just the per-path baseline table
+uv run python scripts/replay_stall.py --base http://mcapp.local --summary
+```
+
+**Boot memory settings (B4) — reboot required, check it landed:**
+
+```bash
+# Was a boot-config change written but not yet applied? (marker cleared by a reboot)
+ssh mcapp.local "test -f /var/lib/mcapp/reboot-required && echo 'reboot required' || echo 'up to date'"
+
+# GPU memory actually reserved (should read 16M after gpu_mem=16 + a reboot)
+ssh mcapp.local "vcgencmd get_mem arm; vcgencmd get_mem gpu"
+
+# CMA pool size actually in effect (should read ~64 MB after cma-64 + a reboot)
+ssh mcapp.local "grep -i cma /proc/meminfo"
+
+# cmdline.txt must be exactly one line, with cgroup_enable=memory present
+ssh mcapp.local "cat /proc/cmdline"
+```
+
+## Running other software on the box
+
+**McApp's firewall blocks every port it does not know, so another service needs its own rule. Updates keep your rules, your own firewall file and your log folders.**
+
+- **Symptom of a blocked port:** the browser times out. "Connection refused" means the service itself is down.
+- **Check:** every bootstrap and update ends with a health check that warns about listening ports the firewall blocks, and about faulty firewall or Caddy config. The kernel log shows `[nftables DROP]` with `DPT=<port>`.
+- **Tested on:** OrbStack VMs with Debian Trixie and Bookworm, 2026-11-06, including reboots. Not yet on a real Pi.
+
+### Open a port
+
+On Trixie, put the rule into its own file. This folder is included inside the input chain and updates never touch it:
+
+```bash
+echo 'tcp dport 8080 accept' | sudo tee /etc/mcapp/nftables.d/custom.nft
+sudo nft -c -f /etc/nftables.conf && sudo systemctl reload nftables
+```
+
+- **Use `reload`, not `restart`:** `restart` flushes every table on the box, including those of Docker or fail2ban.
+- **A faulty custom file:** a reload refuses it and the running firewall stays. At boot the box falls back to McApp's own rules and logs `McApp: nftables.conf failed`.
+- **Do not save a dump over the config:** `nft list ruleset > /etc/nftables.conf` removes McApp's marker, and the file then counts as your own firewall.
+
+On Bookworm, add the rule and save it. Updates add missing McApp rules and keep yours:
+
+```bash
+sudo iptables -A INPUT -p tcp --dport 8080 -j ACCEPT
+sudo sh -c "iptables-save > /etc/iptables/rules.v4"
+```
+
+### Use your own firewall
+
+A `/etc/nftables.conf` with real rules and no `# McApp firewall rules` marker is never replaced. McApp leaves it and warns.
+
+- **What it must allow:** loopback, 22, 80, 443 and 2985/tcp, 1799 and 5353/udp.
+- **What you give up:** new McApp rules do not reach this file, and neither the custom folder nor the boot fallback applies.
+- **A firewall in another table:** the port check cannot read it and says so.
+- **Switched off on purpose:** a stopped `nftables` service, or an open INPUT chain on Bookworm, stays that way.
+
+### Add your own web site
+
+Put each site into `/etc/caddy/conf.d/<name>.caddy`. Every Caddyfile imports that folder at its end, and McApp never edits it:
+
+```bash
+sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile && sudo systemctl restart caddy
+```
+
+- **Ports 80 and 443 stay McApp's:** a site claiming them makes the whole config invalid.
+- **A broken site:** Caddy will not start on its next restart, which takes the McApp web UI down too. During an upgrade McApp keeps the old config and names the folder.
+- **Public-TLS boxes:** the import arrives only when `ssl-tunnel-setup.sh` runs again.
+
+### Log folders
+
+`/var/log` is in RAM, so folders vanish at every reboot. An hourly timer (`mcapp-logdirs.timer`) writes `/etc/tmpfiles.d/mcapp-logdirs.conf`, so they come back with their owner and mode.
+
+- **A new service before the first timer run:** run `sudo /usr/local/sbin/mcapp-logdirs` once.
+- **A folder you removed for good:** delete its line from that file, otherwise it returns empty.
+- **A folder that was gone before this existed:** it comes back as `root:adm` if a package lists it, and not at all otherwise.
+- **Not on Armbian or Orange Pi ramlog boards:** their ramlog service keeps `/var/log` itself.
+
+### Config backups
+
+Before the bootstrap overwrites a config file, it copies it to `/var/lib/mcapp/config-backups/`: readable by root only, newest 5 per file, no copy when nothing changed. Names are the flattened path plus a UTC timestamp, for example `__etc__nftables.conf.20261106T203827Z-000`.
+
+Background: [campaign plan and field report](2026-11-06_2053-install-coexistence-plan.md).
+
+## Firewall Configuration
+
+McApp uses host-based firewall to protect the Raspberry Pi. The bootstrap script automatically configures:
+
+- **nftables** on Debian Trixie (and newer)
+- **iptables** on Debian Bookworm (legacy fallback)
+
+### Allowed Ports
+
+| Port  | Protocol | Service        | Access                                    |
+| ----- | -------- | -------------- | ----------------------------------------- |
+| 22    | TCP      | SSH            | Rate limited (6/min external, LAN exempt) |
+| 80    | TCP      | Caddy          | All traffic (redirect to HTTPS)           |
+| 443   | TCP, UDP | Caddy          | All traffic (webapp and API)              |
+| 1799  | UDP      | MeshCom        | All traffic (LoRa mesh communication)     |
+| 2985  | TCP      | Update Runner  | All traffic (OTA update SSE stream)       |
+| 5353  | UDP      | mDNS           | Multicast only (224.0.0.251)              |
+| 19532 | TCP      | Journal upload | LAN only, nftables path only              |
+
+**LAN exemption for SSH:** Connections from RFC 1918 private IP ranges (192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12) are NOT rate limited.
+
+### Internal-Only Ports (Not Exposed)
+
+| Port | Protocol | Service          | Why Not Exposed                 |
+| ---- | -------- | ---------------- | ------------------------------- |
+| 2981 | TCP      | McApp API        | Loopback, proxied by Caddy      |
+| 8081 | TCP      | BLE service      | Loopback                        |
+| 8082 | TCP      | lighttpd backend | Legacy, blocked by the firewall |
+
+**Note:** Older firewall configurations (before Feb 2026) exposed ports 2980 and 2981 directly. These are now internal-only. The bootstrap script automatically removes them during upgrade.
+
+### Silent Drops (Not Logged)
+
+To prevent log spam, both nftables and iptables silently drop common broadcast/multicast traffic:
+
+- Layer 2 broadcast packets
+- Multicast packets (224.0.0.0/4, 239.0.0.0/8)
+- Global broadcast (255.255.255.255)
+- SSDP/UPnP (port 1900)
+- NetBIOS (ports 137, 138)
+- LLMNR (port 5355)
+- High UDP ports (> 30000)
+- IGMP protocol
+
+All other unmatched traffic is **dropped** silently, so a blocked port looks like a timeout in the browser, not a refused connection.
+
+### Firewall Logs
+
+**Log format:**
+
+- nftables: `[nftables DROP] ` prefix (logged before the drop)
+- iptables: `[iptables DROP] ` prefix (logged before the drop)
+
+**Rate limiting:** 10 drops per minute are logged (prevents log spam while maintaining visibility)
+
+**View dropped traffic:**
+
+```bash
+# Watch firewall drops in real-time
+sudo journalctl -kf | grep DROP
+
+# Count drops by source IP (last hour)
+sudo journalctl -k --since "1 hour ago" | grep DROP | awk '{print $NF}' | sort | uniq -c | sort -rn | head -20
+
+# Count drops by destination port (last hour)
+sudo journalctl -k --since "1 hour ago" | grep DROP | grep -oP 'DPT=\K\d+' | sort | uniq -c | sort -rn | head -20
+
+# Show all firewall logs from today
+sudo journalctl -k --since today | grep DROP
+```
+
+### Customizing the Firewall
+
+See [Running other software on the box](#running-other-software-on-the-box) for how to open a port so that updates keep it.
+
+**To customize LAN exemption ranges** (e.g., for non-standard subnets), edit the IP ranges in both configurations and apply changes.
+
+## Troubleshooting
+
+### Uptime / API feels slow
+
+`GET /api/stalls/summary` first — it gives per-path p50/p95/p99/max without digging through
+journal logs. Follow up with `GET /api/stalls?severity=critical` for the specific rows, then
+`scripts/replay_stall.py --id <row>` to check whether it reproduces. See "Stall Tracking" above.
+
+### Bluetooth Blocked by rfkill
+
+**Symptom:** `bluetoothctl power on` fails with "Failed to set power on: org.bluez.Error.Failed"
+
+**Diagnosis:**
+
+```bash
+rfkill list bluetooth
+# Shows: Soft blocked: yes
+```
+
+**Root cause:** Some Raspberry Pi images ship with `/etc/modprobe.d/rfkill_default.conf` containing `options rfkill default_state=0`, which blocks all radios (Bluetooth, WiFi) at boot.
+
+**Solution:** The bootstrap script automatically installs `unblock-bluetooth.service` which runs `rfkill unblock bluetooth` after the Bluetooth service starts.
+
+**Manual fix (if not using bootstrap):**
+
+```bash
+# Create systemd service
+cat <<'EOF' | sudo tee /etc/systemd/system/unblock-bluetooth.service
+[Unit]
+Description=Unblock Bluetooth for McApp BLE
+After=bluetooth.service
+Before=mcapp.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/rfkill unblock bluetooth
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable and start
+sudo systemctl daemon-reload
+sudo systemctl enable --now unblock-bluetooth
+
+# Verify
+rfkill list bluetooth  # Should show: Soft blocked: no
+```

@@ -1,12 +1,12 @@
 # Backlog items closed 2026-09-28
 
-Outcome of the 2026-09-28 backlog review (`doc/2026-09-28_1035-backlog-review-verdict-and-plan.md`).
+Outcome of the 2026-09-28 backlog review (`2026-09-28_1035-backlog-review-verdict-and-plan.md`).
 Each entry below was re-checked against the current code and, where it applies, against
 mcapp.local before it was closed.
 
 ## B2 — delivery status flags
 
-The original item (written 2026-09-03, RCA `doc/2026-09-03_2300-delivery-status-rca.md`) was
+The original item (written 2026-09-03, RCA `2026-09-03_2300-delivery-status-rca.md`) was
 mostly resolved by later work; the remaining `msg_www` split shipped as webapp `6972088`
 (2026-09-28): `msg_echo` carries the local echo, `msg_www` means the oevsv.at firehose only, the
 firehose branch now marks BLE-sourced own messages too (it was `'node'`-only), and the ✓ title

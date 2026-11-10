@@ -46,7 +46,7 @@ A piped install (`curl … | sudo bash`) pins script, bootstrap libs,
 templates, and app to one resolved release tag for the whole run — the same
 command on the same tag reproduces the same box later. `--ref` overrides
 just the bootstrap tree (libs + templates), independently of the app
-version — see [`../doc/version-logic.md`](../doc/version-logic.md) for the
+version — see [`../doc/reference/version-logic.md`](../doc/reference/version-logic.md) for the
 full resolution rules and [`../README.md`](../README.md) for the
 install/update one-liners.
 
@@ -120,7 +120,7 @@ The following ports are opened:
 | 5353  | UDP      | mDNS (.local, multicast only)                  |
 | 19532 | TCP      | Journal upload (LAN only, nftables path only)  |
 
-**Another service needs its own rule.** Put it in `/etc/mcapp/nftables.d/`, so updates keep it. A firewall file with your own rules and no McApp marker is never replaced. How to: [Running other software on the box](../doc/operations-reference.md#running-other-software-on-the-box).
+**Another service needs its own rule.** Put it in `/etc/mcapp/nftables.d/`, so updates keep it. A firewall file with your own rules and no McApp marker is never replaced. How to: [Running other software on the box](../doc/archive/operations-reference-pre-split-2026-11-10.md#running-other-software-on-the-box).
 
 **Internal-only ports (NOT exposed to the network):**
 

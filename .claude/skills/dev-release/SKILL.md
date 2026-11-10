@@ -278,8 +278,8 @@ from the webapp Update page without a re-deploy, if that turns out to be the fas
 
 ## Related
 
-- `doc/version-logic.md` — how dev/production versions and tags resolve
+- `doc/reference/version-logic.md` — how dev/production versions and tags resolve
 - `bootstrap/README.md` — installer flags and what the bootstrap actually does
-- `doc/operations-reference.md` — deploy, config, health, troubleshooting
+- `doc/archive/operations-reference-pre-split-2026-11-10.md` — deploy, config, health, troubleshooting
 - `CLAUDE.md` § System Epoch — bump `SYSTEM_EPOCH` + `REQUIRED_SYSTEM_EPOCH` together when
   system-level state changes; a startup test enforces the parity

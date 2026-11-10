@@ -1,7 +1,7 @@
 # node.py
 
 Manage a MeshCom node over its USB serial console for the container test
-campaign (`doc/2026-10-31_1200-container-test-campaign.md`).
+campaign (`doc/plans/2026-10-31_1200-container-test-campaign.md`).
 
     uv run scripts/container-tests/node/node.py [--port P] [--dry-run] <cmd>
 

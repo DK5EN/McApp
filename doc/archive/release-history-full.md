@@ -12,7 +12,7 @@ of other services and your own Caddy sites now survive an update. Before McApp o
 it keeps a backup.
 
 > Update from the Update page as usual. `SYSTEM_EPOCH` goes to 9, schema stays at 40. If you run other
-> software next to McApp, read "Running other software on the box" in `doc/operations-reference.md`.
+> software next to McApp, read "Running other software on the box" in `operations-reference-pre-split-2026-11-10.md`.
 
 ### Highlights
 
@@ -93,7 +93,7 @@ the live event stream and the large API responses. On a fast LAN you will barely
 - Responses under 512 bytes stay plain, and static files keep their pre-built Brotli and gzip files.
 - `/events` compresses only on Caddy 2.11.5 or newer, and stays plain and working on an older one.
 - New `scripts/measure_front_door.py` for wire bytes and timing. Full numbers:
-  `doc/2026-11-06_1400-runtime-compression-measurements.md`.
+  `2026-11-06_1400-runtime-compression-measurements.md`.
 
 ### Frontend (webapp)
 
@@ -1423,7 +1423,7 @@ there is no migration, no bootstrap convergence and no contract version change.
   clients. `--info` and `--nodeset` now answer with two frames and use the multi-part query
   delay. `/api/status` reports `node_fwver` and `node_build`, and a change of the node's via
   setting logs one INFO line.
-- `doc/ble-state-machine.md` rewritten for the current two-process BLE architecture.
+- `../reference/ble-state-machine.md` rewritten for the current two-process BLE architecture.
 - Dependencies refreshed (uvicorn 0.54.0), including the standalone `ble_service` lock.
 
 ### Frontend (webapp)
@@ -1972,10 +1972,10 @@ found to restore a stale database. No schema change (stays at **v30**). Push con
 
 ### Documentation
 
-- `doc/MeshCom-ACK.md`: hop mask 0x0F, status 0x02 peer ACK, 13-byte BLE ACK.
+- `../reference/MeshCom-ACK.md`: hop mask 0x0F, status 0x02 peer ACK, 13-byte BLE ACK.
 - `CLAUDE.md`, `hey_path.py`: the MHeard `SRC`/`GW`/`PP` keys were reverted upstream on
   2026-08-28; the parser stays, inert.
-- `doc/2026-09-11_1200-aprs-key-contract-adoption.md`: which of the 17 firmware keys MCProxy
+- `2026-09-11_1200-aprs-key-contract-adoption.md`: which of the 17 firmware keys MCProxy
   types, and why the rest stay in `extras`.
 
 ### Verification
@@ -2050,7 +2050,7 @@ on` after every reconnect, `--wrong command` for a typo) and catch-up replays fl
   on a `False` return, an exception, or a missing client.
 - **[fix]** Inbound text that is not valid UTF-8 is re-read as CP1252 instead of dropping the
   character; one charset filter (Unicode category blacklist) on both transports.
-- **[docs]** `doc/2026-09-10_1900-ble-protocol-parity-audit.md`: the full audit with every
+- **[docs]** `2026-09-10_1900-ble-protocol-parity-audit.md`: the full audit with every
   finding, its evidence in all three code bases, and the ones that did not survive
   verification. CLAUDE.md corrected: the MHeard `SRC`/`GW`/`PP` fields were reverted upstream
   on 2026-08-28; the parser is retained and inert.
