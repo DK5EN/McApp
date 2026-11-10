@@ -795,7 +795,7 @@ async def _test_v28_uptime_gap_scrub(results: list[tuple[str, bool]]) -> None:
 
 async def _test_v27_gw_lora_mod_scrub(results: list[tuple[str, bool]]) -> None:
     """Seed a pre-v27 fixture holding stale `gw`/`lora_mod` values and assert the
-    v27 step repairs both (doc/hey-path-fixes.md F1/F6).
+    v27 step repairs both (doc/archive/hey-path-fixes.md F1/F6).
 
     `gw`: until this wave, `transform_mh` emitted `GW` on every MH frame, not
     only on a HEY (`PLT == '@'`), so a stored `gw = 0` is not recoverable — it

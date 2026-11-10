@@ -38,7 +38,7 @@ of just returning.
       `_ingest_signal`, exactly once — guarded against double-counting by
       only firing when the enrichment actually filled rssi/snr from NULL.
 
-PN retry XOR (doc/2026-09-27_2200-pn-retry-xor-plan.md): the firmware retries
+PN retry XOR (doc/archive/2026-09-27_2200-pn-retry-xor-plan.md): the firmware retries
 a personal DM up to 3x, XORing msg_id bits 10-11 with the retry index.
 
   12. Two XOR-related msg_ids for a personal dst, from the same sender -> one
@@ -389,7 +389,7 @@ async def _test_duplicate_signal_ingested(results: list[tuple[str, bool]]) -> No
 
 
 async def _test_signal_sentinel_not_stored(results: list[tuple[str, bool]]) -> None:
-    """BUG-1 (doc/2026-09-16_0807-message-detail-popover-bugfix-report.md):
+    """BUG-1 (doc/archive/2026-09-16_0807-message-detail-popover-bugfix-report.md):
     rssi=0/snr=0 is the firmware's "no RF reception" sentinel on every
     non-`lora` src_type and must never land on the `messages` row — nor get
     pre-filled into a column that `_enrich_duplicate_row`'s COALESCE would
@@ -512,7 +512,7 @@ async def _test_text_frame_hardware_fields(results: list[tuple[str, bool]]) -> N
 
 
 async def _test_pn_retry_xor_dedup(results: list[tuple[str, bool]]) -> None:
-    """PN retry XOR (doc/2026-09-27_2200-pn-retry-xor-plan.md): the firmware
+    """PN retry XOR (doc/archive/2026-09-27_2200-pn-retry-xor-plan.md): the firmware
     retries a DM up to 3x, XORing msg_id bits 10-11 with the retry index. An
     old-firmware relay forwards each copy with its own msg_id, so a personal
     DM's two retry copies must dedup to ONE row even though their msg_ids

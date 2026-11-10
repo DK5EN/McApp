@@ -5,7 +5,7 @@ did not hear it. It is therefore chat text and nothing else: no RF signal, no
 hook that reasons about our own link (uptime beacon, RM1 reply), no ack
 matching against our own DMs, no telemetry / position / MHeard. Every guard in
 `IngestMixin.store_message` asks this one predicate; do not compare the string
-inline. Design: doc/2026-10-11_1005-internet-feed-concept.md §4.3-4.4.
+inline. Design: doc/plans/2026-10-11_1005-internet-feed-concept.md §4.3-4.4.
 """
 
 from typing import Any

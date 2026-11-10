@@ -1,6 +1,6 @@
 """NodeAdminMixin: storage for the RM1 (HMAC remote admin) feature (schema v35).
 
-Three tables (plan: `doc/2026-10-05_1000-node-admin-ui-concept-and-plan.md` §4):
+Three tables (plan: `doc/archive/2026-10-05_1000-node-admin-ui-concept-and-plan.md` §4):
 
   * `node_admin_keys`  - one SecretBox token per managed node (`target_call`).
   * `node_admin_state` - the monotonic command counter `ctr`, the verified

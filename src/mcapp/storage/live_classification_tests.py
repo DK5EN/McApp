@@ -1,7 +1,7 @@
 """Regression suite for the live-broadcast classifier annotation
 (`store_message` in `storage/ingest.py`).
 
-Backend half of doc/2026-09-20_1000-live-classifier-and-dedup-plan.md F1 —
+Backend half of doc/archive/2026-09-20_1000-live-classifier-and-dedup-plan.md F1 —
 `MessageRouter.publish` hands ONE `data` dict to every "mesh_message"
 subscriber in subscription order; `main.py:_storage_handler` (subscribed
 first, in `MessageRouter.__init__`) classifies inside `store_message` and

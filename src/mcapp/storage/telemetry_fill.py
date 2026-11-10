@@ -1,6 +1,6 @@
 """Pure merge logic for the telemetry gap fill from meshmap.
 
-Plan: doc/2026-11-07_1000-telemetry-gap-fill-plan.md ("Rules for the fill",
+Plan: doc/archive/2026-11-07_1000-telemetry-gap-fill-plan.md ("Rules for the fill",
 "Field mapping"). No I/O, no clock: callers pass `now_ms` and the local
 timestamps. Meshmap `timestamp` is UNIX SECONDS; everything this module
 returns is in milliseconds, like the rest of the database.

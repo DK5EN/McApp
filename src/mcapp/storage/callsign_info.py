@@ -3,7 +3,7 @@
 Three tables from migration 33: the `callsign_info` cache, the `qrz_lookups`
 ledger the daily hard cap counts, and the single-row `qrz_state`. Policy (what
 is due, when to stop) lives in `qrz_service.py`; this mixin only reads and
-writes. Plan: doc/2026-10-04_0848-qrz-callsign-lookup-plan.md.
+writes. Plan: doc/archive/2026-10-04_0848-qrz-callsign-lookup-plan.md.
 """
 
 from __future__ import annotations

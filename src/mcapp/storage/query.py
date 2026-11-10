@@ -166,7 +166,7 @@ _PEER_ACK_SQL = _ack_sql(_PEER_ACK_GLOBS)
 
 # --- get_conversation_summary shared SQL fragments -------------------------
 # Factored so the aggregate SUM(CASE...) query and the per-row suppression
-# candidate query (doc/2026-09-19_2140-unread-suppression-plan.md §D1) can
+# candidate query (doc/archive/2026-09-19_2140-unread-suppression-plan.md §D1) can
 # never drift: both are built from the SAME dedup subquery text and the SAME
 # two boolean "is this row unread" expressions. If the candidate predicate
 # and the aggregate's counting condition ever disagreed, the suppression
@@ -191,7 +191,7 @@ _CONV_CKEY_SQL = "COALESCE(m.conversation_key, m.dst)"
 # It is deliberately NOT a modulo/division bucket (`m.timestamp / W`): a fixed
 # boundary can fall between the two copies of one real transport pair (measured
 # spacing <= 172 ms) and split them into two "messages" — which is exactly the
-# unclearable +1 badge doc/2026-09-19_2140-unread-suppression-plan.md exists to
+# unclearable +1 badge doc/archive/2026-09-19_2140-unread-suppression-plan.md exists to
 # fix. An anchor derived from the data itself can never do that.
 #
 # A `MIN(m.timestamp) OVER (... RANGE BETWEEN W PRECEDING AND CURRENT ROW)`
@@ -222,7 +222,7 @@ def _conv_dedup_subquery(key_clause: str) -> str:
     """The distinct-message dedup subquery (aliased `d` by both callers)
     shared by get_conversation_summary's two queries.
 
-    doc/2026-09-20_1000-live-classifier-and-dedup-plan.md F2: a bare `msg_id`
+    doc/archive/2026-09-20_1000-live-classifier-and-dedup-plan.md F2: a bare `msg_id`
     (or rowid-fallback) group is not enough to call two rows "the same
     message" — a firmware `msg_id` is a node-local counter that gets reused
     across stations, conversations and days. Measured on the live snapshot,
@@ -438,7 +438,7 @@ class QueryMixin(StorageBase):
         # NOTE: datetime.now(timezone.utc), not datetime.utcnow(). The latter returns a
         # naive datetime whose .timestamp() is interpreted as LOCAL time, shifting every
         # cutoff below by the local UTC offset (2h in CEST). That used to leave only a
-        # ~2h/day sliver of 5-min buckets for the rollup. See doc/charts-wrong.md §13.
+        # ~2h/day sliver of 5-min buckets for the rollup. See doc/plans/charts-wrong.md §13.
         now = datetime.now(UTC)
         cutoff_msg_ms = int((now - timedelta(hours=prune_hours)).timestamp() * 1000)
         cutoff_pos_ms = int((now - timedelta(hours=prune_hours_pos)).timestamp() * 1000)
@@ -837,7 +837,7 @@ class QueryMixin(StorageBase):
     ) -> dict[str, dict[str, int]]:
         """Per-conversation count/last_ts/unread, joined against read_cursors.
 
-        Unread-cursor rework (doc/2026-09-06_1200-unread-cursor-plan.md §3/§4):
+        Unread-cursor rework (doc/archive/2026-09-06_1200-unread-cursor-plan.md §3/§4):
         added BESIDE `get_smart_initial_with_summary` (which stays byte-
         identical) rather than replacing it, so the legacy `summary`/
         `read_counts` wire keeps working for one release (D6) while the new
@@ -869,7 +869,7 @@ class QueryMixin(StorageBase):
         match nothing — callers pass `key=None` for it and read the bucket out
         of the full scan.
 
-        Suppression (doc/2026-09-19_2140-unread-suppression-plan.md §D1):
+        Suppression (doc/archive/2026-09-19_2140-unread-suppression-plan.md §D1):
         `unread` additionally excludes any row the client's own spam filter
         or blocklist would hide, via the shared predicate in
         `storage.suppression`. Without this, a conversation whose NEWEST
@@ -1326,7 +1326,7 @@ class QueryMixin(StorageBase):
             # buckets yet. Rather than show an empty chart for hours, fall back to
             # a floor of 1 so every station heard at least once is shown. Dense
             # installs never take this branch — see
-            # doc/plan-mheard-fresh-install-fix.md §2.
+            # doc/archive/plan-mheard-fresh-install-fix.md §2.
             qualified = {
                 cs: entries
                 for cs, entries in callsign_data.items()
@@ -1754,7 +1754,7 @@ class QueryMixin(StorageBase):
         """WX chart payload as JSON bytes: raw rows up to 192 h, 2 h means beyond.
 
         Built and encoded in one worker thread without per-row dicts (wire contract in
-        doc/2026-11-07_1400-telemetry-downsampling-plan.md).
+        doc/archive/2026-11-07_1400-telemetry-downsampling-plan.md).
         """
         bucket_s = 0 if hours <= TELEMETRY_RAW_MAX_HOURS else TELEMETRY_MEAN_BUCKET_S
         return await asyncio.to_thread(
@@ -1897,7 +1897,8 @@ class QueryMixin(StorageBase):
         ]
 
 
-# --- WX telemetry readers (wire contract: doc/2026-11-07_1400-telemetry-downsampling-plan.md)
+# --- WX telemetry readers (wire contract, see
+# doc/archive/2026-11-07_1400-telemetry-downsampling-plan.md)
 
 TELEMETRY_RAW_MAX_HOURS = 192
 TELEMETRY_MEAN_BUCKET_S = 7200

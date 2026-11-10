@@ -2,7 +2,7 @@
 
 This is the exact area that bit once in production (the mHeard-gap bug:
 `_nightly_prune` job ordering + naive-`utcnow` TZ handling — see
-`doc/charts-wrong.md` §13 and the NOTE block in `QueryMixin.prune_messages`).
+`doc/plans/charts-wrong.md` §13 and the NOTE block in `QueryMixin.prune_messages`).
 It earns real coverage.
 
 Mirrors the ephemeral-tempfile pattern of `sqlite_storage.run_startup_tests`
@@ -944,7 +944,7 @@ async def run_query_tests() -> bool:  # noqa: PLR0915 - test suite lists one cas
                 )
             )
 
-            # --- mheard sparse-floor fallback (doc/plan-mheard-fresh-install-fix.md) --
+            # --- mheard sparse-floor fallback (doc/archive/plan-mheard-fresh-install-fix.md) --
             # A "datapoint" is a distinct 5-min signal_buckets row per callsign, not a
             # packet. `_build_chart_series` used to hard-drop any callsign below
             # MIN_DATAPOINTS_FOR_STATS (10) with no fallback — a fresh install with

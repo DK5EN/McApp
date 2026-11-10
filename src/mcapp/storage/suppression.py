@@ -5,7 +5,7 @@ than the read cursor, but the webapp never renders a message its own spam
 filter or blocklist hides — and the read cursor only advances over rendered
 bubbles. A conversation whose *newest* message is one the client hides can
 therefore never have its badge cleared by any client action (see
-doc/2026-09-19_2140-unread-suppression-plan.md, root cause). The fix is to
+doc/archive/2026-09-19_2140-unread-suppression-plan.md, root cause). The fix is to
 teach the server the same "will the client show this?" predicate so `unread`
 can be computed over only the rows the client would actually display.
 

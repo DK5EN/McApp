@@ -1,7 +1,7 @@
 """Replay of the cross-repo inline-`:ackNNN` matcher corpus (`ack_match_vectors.json`).
 
 MCProxy is the REFERENCE implementation of the rule the webapp's
-`findAckMessage` must mirror (doc/2026-10-04_1842-ack-matcher-fix-plan.md,
+`findAckMessage` must mirror (doc/archive/2026-10-04_1842-ack-matcher-fix-plan.md,
 "Reference rule"): the ack's number equals the original's trailing `{NNN`
 echo id exactly, the original is inside the 1 h window (168 h for a row at
 `delivery_status = 'held'`, one-sided), the original's sender equals the ack's

@@ -5,7 +5,7 @@ watching arrivals of the `{CET}` time beacon the server originates and our
 node relays. Arrival only — never a round trip, and never derived from the
 beacon's own payload clock (upstream-misleading by design; see
 `project_cet_beacon_time` and CLAUDE.md). Full design:
-`doc/2026-08-21_2350-gateway-uptime-plan.md`.
+`doc/archive/2026-08-21_2350-gateway-uptime-plan.md`.
 
 Storage model (plan §3): an append-only ledger of CLOSED state segments
 (`link_uptime_segments`, kind `gap` | `dark`) plus one live state row

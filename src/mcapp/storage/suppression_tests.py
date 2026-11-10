@@ -1,7 +1,7 @@
 """Regression suite for the message-suppression predicate
 (`storage/suppression.py`).
 
-Backend half of doc/2026-09-19_2140-unread-suppression-plan.md §D1 — the
+Backend half of doc/archive/2026-09-19_2140-unread-suppression-plan.md §D1 — the
 predicate itself, built and pinned in isolation from the summary-query wiring
 a later wave adds. Pure functions plus one ephemeral-SQLite-backed loader —
 no TTY, no network, no `/etc/mcapp`. Follows the house pattern used by

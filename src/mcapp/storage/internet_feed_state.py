@@ -2,7 +2,7 @@
 
 Single-row `internet_feed_state` table from migration 36. Policy (when to
 connect, what to filter) lives in the feed service; this mixin only reads and
-writes. Design: doc/2026-10-11_1005-internet-feed-concept.md §4.1.
+writes. Design: doc/plans/2026-10-11_1005-internet-feed-concept.md §4.1.
 """
 
 from __future__ import annotations

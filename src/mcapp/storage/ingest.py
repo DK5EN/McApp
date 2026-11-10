@@ -259,7 +259,7 @@ def _inline_sto_original(
     return None
 
 
-# Store-and-forward DM status (doc/2026-09-14_1153-store-forward-dm-status-plan.md
+# Store-and-forward DM status (doc/archive/2026-09-14_1153-store-forward-dm-status-plan.md
 # §4; firmware spec MeshCom-Firmware-DEV-Main/docs/client-integration-store-
 # forward.md §2). One monotone rank across the states `messages.delivery_status`
 # can hold: `held` = 2, `failed` = 3, `acked` = 4. Rank 1 (sent/node/gateway) is
@@ -342,7 +342,7 @@ class IngestMixin(StorageBase):
         so two stations collide regularly inside one window and must never
         suppress each other.
 
-        PN retry XOR (doc/2026-09-27_2200-pn-retry-xor-plan.md): for a personal
+        PN retry XOR (doc/archive/2026-09-27_2200-pn-retry-xor-plan.md): for a personal
         `dst`, the firmware's up-to-3 retries of one DM XOR msg_id bits 10-11, so
         the in-memory key is the retry-invariant `msg_core()` instead of the raw
         id — an old-firmware relay forwards each retry copy as its own frame and
@@ -375,7 +375,7 @@ class IngestMixin(StorageBase):
         can never drift apart; drifting would let a relay copy an hour later
         touch the wrong message.
 
-        PN retry XOR (doc/2026-09-27_2200-pn-retry-xor-plan.md): for a personal
+        PN retry XOR (doc/archive/2026-09-27_2200-pn-retry-xor-plan.md): for a personal
         `dst` the match widens to every msg_id sharing this one's retry-invariant
         core (`msg_id_retry_variants`), matching `_claim_recent_ingest`'s in-memory
         key — otherwise an old-firmware relay's forwarded retry copies land as
@@ -1265,7 +1265,7 @@ class IngestMixin(StorageBase):
         # ARE this message's own, the `held` record this late ack completes.
         if target is not None and target["timestamp"] > timestamp - ACK_MSG_ID_WINDOW_MS:
             # Keyed on the TARGET row's own stored msg_id, not the ack frame's
-            # (PN retry XOR, doc/2026-09-27_2200-pn-retry-xor-plan.md §3) —
+            # (PN retry XOR, doc/archive/2026-09-27_2200-pn-retry-xor-plan.md §3) —
             # matching the inline `:ackNNN` path below and `_record_message_ack`'s
             # ledger writes at every call site in this method, so a resolved
             # retry-variant match prunes and records under the same key.
@@ -1315,7 +1315,7 @@ class IngestMixin(StorageBase):
             if acked_rows and target is not None:
                 # Ledger key is the TARGET row's own stored msg_id, matching the
                 # inline `:ackNNN` path — see the prune call's comment above and
-                # doc/2026-09-27_2200-pn-retry-xor-plan.md §3. The published
+                # doc/archive/2026-09-27_2200-pn-retry-xor-plan.md §3. The published
                 # `msg_status` event below still names `ack_for_msg_id` (the
                 # frame's own field), unchanged.
                 await self._record_message_ack(
@@ -1543,7 +1543,7 @@ class IngestMixin(StorageBase):
         `delivery_status` — which is also what the caller needs to tell a
         normal match from one made only by the held carve-out.
 
-        PN retry XOR (doc/2026-09-27_2200-pn-retry-xor-plan.md): when the exact
+        PN retry XOR (doc/archive/2026-09-27_2200-pn-retry-xor-plan.md): when the exact
         id has no match, retry against every id sharing its retry-invariant core
         (`msg_id_retry_variants`). Defensive: firmware folds every 0x41 frame
         for our own DM back to the ORIGINAL msg_id (plan §1), including a
@@ -1889,7 +1889,7 @@ class IngestMixin(StorageBase):
             rssi = None
             snr = None
 
-        # BUG-1 (doc/2026-09-16_0807-message-detail-popover-bugfix-report.md):
+        # BUG-1 (doc/archive/2026-09-16_0807-message-detail-popover-bugfix-report.md):
         # rssi=0/snr=0 is the firmware's "no RF reception" sentinel, written
         # unconditionally on every Extern-UDP frame. `_ingest_signal` already
         # excludes it from signal_log/station_positions by `src_type`, not by
@@ -2860,7 +2860,7 @@ class IngestMixin(StorageBase):
             ),
         )
 
-    # ── Telemetry gap fill (Wave 1; plan doc/2026-11-07_1000-telemetry-gap-fill-plan.md) ──
+    # ── Telemetry gap fill (Wave 1; plan doc/archive/2026-11-07_1000-telemetry-gap-fill-plan.md) ──
     # Deliberately NOT routed through store_telemetry: that path upserts
     # station_positions, so an old filled sample would regress the sidebar's latest
     # value. No blocklist logic here either; the caller filters.

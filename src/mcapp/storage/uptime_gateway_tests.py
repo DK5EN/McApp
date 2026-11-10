@@ -1,6 +1,6 @@
 """Regression suite for gateway-mode awareness in the uptime ledger (schema v40).
 
-Contract: `doc/2026-11-06_0020-gateway-availability-fix.md`. A node with
+Contract: `doc/archive/2026-11-06_0020-gateway-availability-fix.md`. A node with
 gateway mode off never receives a hop-0 `{CET}` beacon, so without the `SN`
 register's `GW` flag the ledger records one endless outage. Covers:
 

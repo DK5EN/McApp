@@ -1,7 +1,7 @@
 """Regression suite for the `unread` half of the suppression wiring in
 `get_conversation_summary` (`storage/query.py`).
 
-Backend half of doc/2026-09-19_2140-unread-suppression-plan.md §D1's wave 2 —
+Backend half of doc/archive/2026-09-19_2140-unread-suppression-plan.md §D1's wave 2 —
 the predicate itself (`storage/suppression.py`) is pinned in isolation by
 `storage.suppression_tests.run_suppression_predicate_tests`; this suite pins
 only the wiring: that `unread` subtracts exactly the candidate rows
