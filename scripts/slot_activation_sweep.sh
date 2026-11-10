@@ -7,7 +7,7 @@
 # the starting slot the same way. Run it after deploying a release whose runner
 # knows `--mode activate`; older slots carry older runners, so the sweep
 # returns from such a slot by invoking the NEW slot's runner directly over ssh
-# (the documented manual escape hatch, see doc/operations-reference.md).
+# (the documented manual escape hatch, see doc/archive/operations-reference-pre-split-2026-11-10.md).
 #
 # Usage: scripts/slot_activation_sweep.sh [host]      # exit 0 = every assertion held
 set -euo pipefail

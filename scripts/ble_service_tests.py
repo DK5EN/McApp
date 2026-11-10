@@ -1068,7 +1068,7 @@ async def _test_register_cache_excludes_conffin_and_mh(record: Any) -> None:
 async def _test_register_cache_caches_is1_and_sn1(record: Any) -> None:
     """IS1 (build date, follows I) and SN1 (via state, follows SN) are the
     newest two BLE JSON registers (2026-09-25 firmware, see
-    doc/2026-09-25_2041-is1-sn1-registers-plan.md in the mcapp repo). Before
+    doc/archive/2026-09-25_2041-is1-sn1-registers-plan.md in the mcapp repo). Before
     this fix `_CACHEABLE_REGISTER_TYPS` did not list either, so
     `_cache_register_if_applicable` silently ignored both and `GET
     /api/ble/registers` never carried them -- exactly the CONFFIN/MH
@@ -6116,7 +6116,7 @@ async def _test_mcapp_ensure_connected_forward_route(record: Any) -> None:
 
 # --------------------------------------------------------------------------
 # Node time zone (TZ-01 firmware): ble_service/src/node_tz.py + the branching
-# in BLEAdapter.set_time(). Plan: doc/2026-10-04_1600-node-tz-implementation-plan.md
+# in BLEAdapter.set_time(). Plan: doc/archive/2026-10-04_1600-node-tz-implementation-plan.md
 # (cases T1-T12 there). `--utcoff` CLEARS a TZ rule on TZ-01 firmware, so the
 # wire is what is pinned: which A0 commands go out, in which order, and that
 # 0x20 (UTC) always ends the sequence.

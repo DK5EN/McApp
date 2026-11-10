@@ -1,6 +1,6 @@
 """Startup regression suite for the bootstrap's network-safety rules.
 
-Background: doc/2026-09-18_2320-wifi-outage-postmortem.md. The in-session
+Background: doc/archive/2026-09-18_2320-wifi-outage-postmortem.md. The in-session
 ``apt-get upgrade`` in ``install_apt_deps()`` replaced wpasupplicant, whose
 postinst restarted the link the ssh session rode on; the new build made
 NetworkManager try WPA3-SAE that the Zero 2 W cannot complete, and the box

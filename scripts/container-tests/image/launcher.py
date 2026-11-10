@@ -1,7 +1,7 @@
 """Spike entrypoint: runtime shims standing in for B12 code changes (no src/mcapp edits).
 
 Change numbers refer to "Required code changes" in
-doc/2026-10-31_0830-container-deployment-concept.md.
+doc/plans/2026-10-31_0830-container-deployment-concept.md.
 """
 
 import importlib
