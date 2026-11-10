@@ -312,8 +312,3 @@ async def update_and_check(  # noqa: PLR0911 - complex handler kept intact
         count=count,
         user_action=user_action,
     )
-
-
-# REVIEW-09: MCProxy's storage layer still imports the old private name across the subtree
-# boundary. Keep this alias until that import is switched; then delete it.
-_tokenize_normalized = tokenize_normalized
