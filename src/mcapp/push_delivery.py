@@ -221,7 +221,7 @@ def _push_text(payload: dict[str, Any]) -> str:
 # persist it with the same exact comparison; the push dispatcher subscribes to
 # the raw router topics, not to storage, so without this rule every
 # broadcast:true subscriber got a notification reading "--ackinfo on" after
-# each BLE reconnect (RX-03, doc/2026-09-10_1900-ble-protocol-parity-audit.md).
+# each BLE reconnect (RX-03, doc/archive/2026-09-10_1900-ble-protocol-parity-audit.md).
 # Compared against the RAW src, exact and case-sensitive: "RESPONSE-1" is a
 # valid amateur callsign and stays eligible.
 _COMMAND_REPLY_PSEUDO_CALL = "response"
@@ -305,7 +305,7 @@ def is_eligible(payload: dict[str, Any], own_callsign: str) -> bool:
         notification for it. `ble_protocol.decode_binary_message` emits it
         as the boolean `app_offline`; a UDP datagram has no such byte and
         never sets the key. Boolean True only, never merely truthy (RX-04,
-        doc/2026-09-10_1900-ble-protocol-parity-audit.md).
+        doc/archive/2026-09-10_1900-ble-protocol-parity-audit.md).
     """
     if payload.get("type") != "msg" or not _push_text(payload):
         return False

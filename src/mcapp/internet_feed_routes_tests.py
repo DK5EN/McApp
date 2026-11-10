@@ -1,6 +1,6 @@
 """Regression suite for the internet feed router (`sse_routes/internet_feed.py`).
 
-Design: doc/2026-10-11_1005-internet-feed-concept.md §4.1. Fully offline: a fake
+Design: doc/plans/2026-10-11_1005-internet-feed-concept.md §4.1. Fully offline: a fake
 `InternetFeedApi` records calls; the body-withheld cases run through the REAL
 `StallMiddleware` with a fake recorder.
 

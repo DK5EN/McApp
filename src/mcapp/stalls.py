@@ -3,7 +3,7 @@
 API — server- and client-observed — with the parameters needed to reproduce
 it, keyed by one correlation id.
 
-See doc/2026-09-15_1530-stall-tracking-plan.md for the full design (§1 kinds
+See doc/archive/2026-09-15_1530-stall-tracking-plan.md for the full design (§1 kinds
 and thresholds, §2 the record, §6 the interface contract this module
 implements verbatim — `src/mcapp/stall_middleware.py` and
 `src/mcapp/sse_routes/stalls.py` are written against these exact signatures

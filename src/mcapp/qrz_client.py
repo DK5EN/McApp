@@ -3,7 +3,7 @@
 Kept pure so every branch of the protocol's error rules is testable without a
 network. The rules follow the spec's "The Session Node" and "Error Conditions"
 sections (XML spec 1.36); the mapping to our reactions is in
-doc/2026-10-04_0848-qrz-callsign-lookup-plan.md §3.
+doc/archive/2026-10-04_0848-qrz-callsign-lookup-plan.md §3.
 """
 
 from __future__ import annotations

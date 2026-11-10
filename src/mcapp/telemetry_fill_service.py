@@ -1,4 +1,6 @@
-"""Telemetry gap fill from meshmap (Wave 2; plan doc/2026-11-07_1000-telemetry-gap-fill-plan.md).
+"""Telemetry gap fill from meshmap (Wave 2).
+
+Plan: doc/archive/2026-11-07_1000-telemetry-gap-fill-plan.md.
 
 While the Internet feed is enabled, every visible station's WX gaps are filled from
 `GET /api/v2/telemetry` and persisted with `origin = 'meshmap'`. The merge rules live in

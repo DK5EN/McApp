@@ -1,6 +1,6 @@
 """QRZ.com callsign lookup service: one background loop, hard-capped.
 
-Budget rules (doc/2026-10-04_0848-qrz-callsign-lookup-plan.md §4):
+Budget rules (doc/archive/2026-10-04_0848-qrz-callsign-lookup-plan.md §4):
 
 - on a free account at most `DAILY_CAP` lookups per rolling 24 h, counted
   from a ledger row written BEFORE the request goes out, so a crash or

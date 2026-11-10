@@ -1,6 +1,6 @@
 """Regression suite for the Node Admin router (`sse_routes/node_admin.py`).
 
-Plan: doc/2026-10-05_1000-node-admin-ui-concept-and-plan.md §5 (guard,
+Plan: doc/archive/2026-10-05_1000-node-admin-ui-concept-and-plan.md §5 (guard,
 routes, redaction) and §6.1 B2. Fully offline: a fake `NodeAdminService`
 records calls and raises on demand; the redaction cases run through the REAL
 `StallMiddleware` with a fake recorder.

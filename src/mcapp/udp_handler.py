@@ -114,7 +114,7 @@ _unescape_firmware_msg_body = unescape_firmware_msg_body
 # Every top-level field of the Extern-UDP wire format is a JSON SCALAR. That is not
 # an assumption: `sendExtern()` builds the `pos`, `msg` and `tele` documents key by
 # key out of C strings and numbers (`extudp_functions.cpp:401-481`), and
-# `doc/UDP-2.0-impl.md` §2.1 enumerates the same flat field set. json.loads can only
+# `doc/archive/UDP-2.0-impl.md` §2.1 enumerates the same flat field set. json.loads can only
 # produce a dict or a list on top of those scalars, so anything non-scalar arriving
 # here came from something that is not the firmware.
 _JSON_SCALAR_TYPES = (str, int, float, bool, type(None))

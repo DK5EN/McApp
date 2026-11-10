@@ -4,7 +4,8 @@ No I/O, no DB, no clock. Ground truth is the firmware, branch ``fork-dev``:
 ``src/remote_cmd.cpp`` (``rmParse``, ``allowed``, ``isForbiddenText``,
 ``rmDeriveKey``, ``rmCanonical``, ``rmReply``, ``rmVerifyReply``),
 ``src/regex_functions.cpp`` (``checkRegexCall``, ``normalizeOwnCall``) and
-``docs/adr-remote-hmac.md``. Plan: ``doc/2026-10-05_1000-node-admin-ui-concept-and-plan.md``.
+``docs/adr-remote-hmac.md``.
+Plan: ``doc/archive/2026-10-05_1000-node-admin-ui-concept-and-plan.md``.
 
 Wire format::
 

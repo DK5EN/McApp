@@ -1,6 +1,6 @@
 """Pure parser for the firmware `{ping}`/`{pong}` link-check exchange.
 
-See `doc/2026-08-13_1500-linkcheck-ping-pong-ADR.md` §1.2 (wire format), §1.3
+See `doc/archive/2026-08-13_1500-linkcheck-ping-pong-ADR.md` §1.2 (wire format), §1.3
 (the correlation token) and §1.5 (measured on air) for the protocol this
 module decodes, and `doc/archive/2026-08-13_1500-linkcheck-implementation-plan.md`
 §1 and §2.3 for how it is used. Do not re-derive the protocol here — read

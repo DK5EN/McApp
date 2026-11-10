@@ -1,5 +1,5 @@
 """Built-in suite for the columnar WX telemetry reads, Wave 5 (plan
-doc/2026-11-07_1400-telemetry-downsampling-plan.md, "Wire contract").
+doc/archive/2026-11-07_1400-telemetry-downsampling-plan.md, "Wire contract").
 
 Fully offline: a temp DB built through the real storage initialize, rows inserted
 directly. Every case names the rule whose removal it catches.

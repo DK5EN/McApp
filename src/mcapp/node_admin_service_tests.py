@@ -1,6 +1,6 @@
 """Regression suite for the Node Admin service (`node_admin_service.py`, RM1 remote admin).
 
-Plan: doc/2026-10-05_1000-node-admin-ui-concept-and-plan.md §5, §6.1 B1. Fully
+Plan: doc/archive/2026-10-05_1000-node-admin-ui-concept-and-plan.md §5, §6.1 B1. Fully
 offline and transmits nothing: a real SQLite storage on a temp DB, a real
 `SecretBox` on a temp key file, and recorders for `transmit`, `broadcast`, the
 clock and `sleep` (a virtual-time scheduler: `FakeTime.advance`).

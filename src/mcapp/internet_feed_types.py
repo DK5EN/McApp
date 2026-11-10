@@ -2,7 +2,7 @@
 
 The routes (`sse_routes/internet_feed.py`) only see `InternetFeedApi`; the
 service (`internet_feed.py`) implements it. Design:
-doc/2026-10-11_1005-internet-feed-concept.md §4.1-§4.2.
+doc/plans/2026-10-11_1005-internet-feed-concept.md §4.1-§4.2.
 """
 
 from __future__ import annotations

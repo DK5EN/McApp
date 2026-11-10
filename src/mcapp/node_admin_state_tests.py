@@ -1,6 +1,7 @@
 """Built-in test suite for ``node_admin_state.py`` (Node Admin remote view, wave W1a).
 
-Plan: ``doc/2026-10-06_1100-node-admin-remote-view-concept.md`` sections 4.3 and 9, Appendix A.
+Plan: ``doc/archive/2026-10-06_1100-node-admin-remote-view-concept.md``
+sections 4.3 and 9, Appendix A.
 Pure functions only: no DB, no network, no node. House pattern (``remote_cmd_tests.py``): one
 PASS/FAIL line per case, a summary, a bool return.
 

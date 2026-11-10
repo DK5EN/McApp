@@ -1,6 +1,6 @@
 """Regression suite for the QRZ.com callsign lookup (issue #14).
 
-Plan: doc/2026-10-04_0848-qrz-callsign-lookup-plan.md. Fully offline: QRZ is
+Plan: doc/archive/2026-10-04_0848-qrz-callsign-lookup-plan.md. Fully offline: QRZ is
 an `httpx.MockTransport`, time is a fake clock, every scenario gets a
 throwaway SQLite DB and a throwaway install key.
 

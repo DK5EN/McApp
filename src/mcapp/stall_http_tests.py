@@ -2,7 +2,7 @@
 and the `/api/stalls*` router (`sse_routes/stalls.py`).
 
 Written against the §6 interface contract in
-`doc/2026-09-15_1530-stall-tracking-plan.md`, not against the real
+`doc/archive/2026-09-15_1530-stall-tracking-plan.md`, not against the real
 `StallRecorder` (`stalls.py`, owned by a sibling wave and not part of this
 file's exclusive set): `_FakeRecorder` below implements exactly the subset of
 that contract this suite exercises (`severity_for`, `record`, `config.

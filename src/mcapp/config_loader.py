@@ -203,7 +203,7 @@ class StallsConfig:
 
     Read from the `stalls` key in config.json (nested dict, field names as
     JSON keys); absent key or absent sub-key = the default below. See
-    doc/2026-09-15_1530-stall-tracking-plan.md §1/§6 for what each threshold
+    doc/archive/2026-09-15_1530-stall-tracking-plan.md §1/§6 for what each threshold
     gates and why the defaults are what they are.
     """
 
@@ -232,7 +232,7 @@ class NodeAdminConfig:
     authentication, so `/api/node-admin/*` is LAN-only through a Host/Origin guard.
     `allowed_origins` is a developer escape hatch that extends the Origin check for
     the webapp's cross-origin proxy mode and the Vite dev server; nothing needs it
-    in normal use. Plan: doc/2026-10-05_1000-node-admin-ui-concept-and-plan.md §5.
+    in normal use. Plan: doc/archive/2026-10-05_1000-node-admin-ui-concept-and-plan.md §5.
     """
 
     allowed_origins: list[str] = field(default_factory=list)

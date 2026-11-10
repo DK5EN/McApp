@@ -4,7 +4,7 @@ Registers this box with meshmap (TOFU token, stored encrypted), subscribes to
 `GET /api/v2/box/feed` over SSE and republishes every mapped message on the
 `www_message` topic. Inert while the operator has not enabled it. Contract:
 mcmap `docs/proposals/data-mcapp-box-feed.md`; design:
-`doc/2026-10-11_1005-internet-feed-concept.md` §4.2-§4.4.
+`doc/plans/2026-10-11_1005-internet-feed-concept.md` §4.2-§4.4.
 
 Wave A: positions are not requested (`pos=off`) and `positions` / `removed` in
 a batch are ignored.

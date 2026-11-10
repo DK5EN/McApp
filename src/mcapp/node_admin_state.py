@@ -1,7 +1,7 @@
 """Last known state of a remote node, folded from verified RM1 reply rows.
 
 Pure: no I/O, no clock reads (`now_ms` is a parameter). Plan:
-doc/2026-10-06_1100-node-admin-remote-view-concept.md sections 3.3 and 4.3, contract in
+doc/archive/2026-10-06_1100-node-admin-remote-view-concept.md sections 3.3 and 4.3, contract in
 Appendix A; the service adds the connection / pacing keys around `fold()`.
 
 Evidence rules (all from concept 4.3):

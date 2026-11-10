@@ -1,7 +1,7 @@
 """Observed sessions: a decoded, read-only view of RM1 remote-admin traffic.
 
 Pure functions over stored message rows (plan:
-doc/2026-10-11_1400-rm1-observed-sessions-plan.md). Nothing here transmits, reads
+doc/archive/2026-10-11_1400-rm1-observed-sessions-plan.md). Nothing here transmits, reads
 the DB or touches the clock: ``now_ms`` and the keys are passed in.
 
 A command ``RM1 <ctr> <cmd>[ <args>] <tag>`` and its reply ``RM1 <ctr> ok|err

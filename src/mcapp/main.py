@@ -108,7 +108,7 @@ SHUTDOWN_TIMEOUT_SSE_S = 3.0
 # MessageRouter._query_ble_registers, which asks for all fourteen). Cached here
 # so an SSE reconnect is served instantly instead of re-querying the radio.
 # IS1 (build date, follows I) and SN1 (via state, follows SN) are the newest
-# two -- see doc/2026-09-25_2041-is1-sn1-registers-plan.md.
+# two -- see doc/archive/2026-09-25_2041-is1-sn1-registers-plan.md.
 BLE_REGISTER_TYPES = (
     "I",
     "SN",
@@ -2726,7 +2726,7 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
     handlers. Extracted from main() (CO-04); returns everything main() needs to
     log startup info, start background tasks, and drive the shutdown sequence.
     """
-    # Stall tracking (doc/2026-09-15_1530-stall-tracking-plan.md): the counting
+    # Stall tracking (doc/archive/2026-09-15_1530-stall-tracking-plan.md): the counting
     # executor must be installed before anything calls asyncio.to_thread, and the
     # recorder starts only after the migration chain has run (its own DDL is the
     # defensive fallback, migration 32 is canonical).
@@ -2824,7 +2824,7 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
     storage_handler.reply_hook = node_admin_service.on_reply
     await node_admin_service.start()
 
-    # Internet feed (meshmap box feed, doc/2026-10-11_1005-internet-feed-concept.md):
+    # Internet feed (meshmap box feed, doc/plans/2026-10-11_1005-internet-feed-concept.md):
     # always constructed, inert until enabled in Settings > Internet. Same lazy
     # SSE lookup as Node Admin; the identity is rebuilt from the live BLE state on
     # every check-in.
@@ -3198,7 +3198,7 @@ async def _nightly_prune(
             # Roll up 5-min buckets into 1-hour buckets BEFORE pruning. prune_messages
             # deletes 5-min buckets older than the retention window, so if it runs first
             # the rollup finds them already gone and only ~2h/day survive into 1-hour
-            # buckets (corrupting the 30d/1y charts). See doc/charts-wrong.md §13.
+            # buckets (corrupting the 30d/1y charts). See doc/plans/charts-wrong.md §13.
             await storage_handler.aggregate_hourly_buckets()
             remaining = await storage_handler.prune_messages(
                 cfg.storage.prune_hours,

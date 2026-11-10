@@ -13,7 +13,7 @@ A copy of `messages.db` therefore yields only ciphertext, and a copy of the SD
 card cannot decrypt on a different board. Code running as the service user on
 the running box can do whatever the service does; no software-only scheme on a
 Pi without a TPM changes that. Concept and threat model:
-doc/2026-10-04_0848-qrz-callsign-lookup-plan.md §5.
+doc/archive/2026-10-04_0848-qrz-callsign-lookup-plan.md §5.
 """
 
 from __future__ import annotations
