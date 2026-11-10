@@ -86,7 +86,7 @@ def _normalize(text: str) -> str:
       6. lowercase
 
     CLS-03: this used to be duplicated verbatim in fingerprint() and
-    _tokenize_normalized(), so a single inbound message paid for the same
+    tokenize_normalized(), so a single inbound message paid for the same
     5-step regex pipeline twice. update_and_check() now normalizes once and
     derives both the fingerprint and the token list from that one result.
     """
@@ -98,7 +98,7 @@ def _normalize(text: str) -> str:
     return t.lower()
 
 
-def _tokenize_normalized(text: str) -> list[str]:
+def tokenize_normalized(text: str) -> list[str]:
     """Tokenize text, normalizing it first. For callers that only need
     tokens (not also a fingerprint of the same text) — see _normalize()."""
     return _normalize(text).split()
@@ -140,13 +140,13 @@ def is_exempt(tokens: list[str], tags: Collection[str], dst: str, directed: bool
 def is_short_token_exempt(text: str, min_tokens: int) -> bool:
     """True if ``text`` normalizes to <= ``min_tokens`` tokens.
 
-    Public wrapper around ``_tokenize_normalized()`` for callers that only
+    Public wrapper around ``tokenize_normalized()`` for callers that only
     need the short-token half of ``is_exempt()``'s exemption check (e.g.
     ``Storage.clear_stale_auto_beacons``'s periodic sweep re-evaluating
     stored ``example_msg`` text against the current ``min_tokens``
     threshold), not the full category/directedness decision.
     """
-    return len(_tokenize_normalized(text)) <= min_tokens
+    return len(tokenize_normalized(text)) <= min_tokens
 
 
 def check_only(msg: dict[str, Any], tags: Collection[str] = (), directed: bool = False) -> bool:
@@ -156,7 +156,7 @@ def check_only(msg: dict[str, Any], tags: Collection[str] = (), directed: bool =
     e.g. classify.py's reclassify path, which (unlike update_and_check)
     doesn't already have a normalized-token list lying around.
     """
-    tokens = _tokenize_normalized(msg.get("msg") or "")
+    tokens = tokenize_normalized(msg.get("msg") or "")
     return is_exempt(tokens, tags, msg.get("dst") or "", directed)
 
 
@@ -201,7 +201,7 @@ async def update_and_check(  # noqa: PLR0911 - complex handler kept intact
     """
     # CLS-03: normalize once, derive both the fingerprint and the token list
     # from that single result instead of each of fingerprint()/
-    # _tokenize_normalized() re-running the same 5-step regex pipeline.
+    # tokenize_normalized() re-running the same 5-step regex pipeline.
     normalized = _normalize(msg["msg"])
     hash_ = hashlib.sha1(normalized.encode("utf-8"), usedforsecurity=False).hexdigest()[
         :TEMPLATE_HASH_LEN
@@ -312,3 +312,8 @@ async def update_and_check(  # noqa: PLR0911 - complex handler kept intact
         count=count,
         user_action=user_action,
     )
+
+
+# REVIEW-09: MCProxy's storage layer still imports the old private name across the subtree
+# boundary. Keep this alias until that import is switched; then delete it.
+_tokenize_normalized = tokenize_normalized

@@ -83,7 +83,7 @@ MessageCategory = Literal[
 # auto-flagged or user-promoted, removes it on demote. Counts as automated.
 AUTO_BEACON_TAG: str = "auto_beacon"
 
-# Fixed tag -> category map, first match wins (doc/2026-10-20_classifier-unification.md,
+# Fixed tag -> category map, first match wins (doc/adr/ADR-0004-classifier-unification.md,
 # "Category derivation"). ``category`` is a derived, read-only column for one
 # release; tags are the source of truth.
 _TAG_CATEGORY_ORDER: tuple[tuple[str, str], ...] = (
@@ -116,11 +116,6 @@ def derive_category(tags: Collection[str], directed: bool) -> str:
 # Kept as a tuple so it can be used as a frozen set of legal values.
 CATEGORIES: tuple[str, ...] = get_args(MessageCategory)
 
-# Bumped whenever classifier output semantics change (hash algorithm,
-# score formula, category vocabulary).  Rule edits bump the per-DB
-# version counter instead -- this constant tracks code changes only and
-# lives alongside the DB version in ``classifier_ver`` on each row.
-CLASSIFIER_SCHEMA_VERSION: int = 1
 
 # CLS-05: the 12-hex-char SHA-1 prefix length was a bare `[:12]` literal
 # duplicated in template.py's fingerprint() and classify.py's _fallback_hash().
