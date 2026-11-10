@@ -155,7 +155,7 @@ class ClassifierApiMixin(StorageBase):
     async def clear_stale_auto_beacons(
         self, human_categories: frozenset[str], min_tokens: int
     ) -> int:
-        from ..classifier.template import _tokenize_normalized  # noqa: PLC0415 - circular
+        from ..classifier.template import tokenize_normalized  # noqa: PLC0415 - circular
 
         cleared = 0
         placeholders = ",".join("?" * len(human_categories))
@@ -191,7 +191,7 @@ class ClassifierApiMixin(StorageBase):
         stale_hashes = [
             row["template_hash"]
             for row in rows
-            if len(_tokenize_normalized(row["example_msg"] or "")) <= min_tokens
+            if len(tokenize_normalized(row["example_msg"] or "")) <= min_tokens
         ]
         if stale_hashes:
             await self._execute_many(
