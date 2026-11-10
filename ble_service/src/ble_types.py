@@ -22,7 +22,7 @@ REGISTER_QUERY_DELAY_S = 0.8
 # set_time(): pause between the node-offset command and the 0x20 timestamp so
 # the firmware has applied the offset before it converts UTC to local.
 TIME_SYNC_SETTLE_S = 0.3
-# set_time() node-TZ handling (doc/2026-10-04_1600-node-tz-implementation-plan.md
+# set_time() node-TZ handling (doc/archive/2026-10-04_1600-node-tz-implementation-plan.md
 # D3/D5): how long to wait for the SN1 push after `--nodeset` (classification
 # probe) and after `--settz` / the follow-up `--nodeset` (verification).
 NODE_TZ_PROBE_TIMEOUT_S = 3.0

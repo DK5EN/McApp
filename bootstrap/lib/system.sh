@@ -741,7 +741,7 @@ _mcapp_journal_ramlog_cleanup() {
 # 2026-09-18 the journal was volatile and the WiFi outage of that day left
 # no on-box evidence at all -- the only record was the copy shipped to
 # rpizero, which ended at the second the link dropped
-# (doc/2026-09-18_2320-wifi-outage-postmortem.md). 16M of journal with
+# (doc/archive/2026-09-18_2320-wifi-outage-postmortem.md). 16M of journal with
 # journald's 5-minute sync interval is the SD-wear price of that evidence.
 configure_journald() {
   log_info "Configuring journald (persistent, SystemMaxUse=16M on ${MCAPP_JOURNAL_DIR})..."

@@ -1,7 +1,7 @@
 """Node time zone (TZ-01 firmware): pure helpers for `BLEAdapter.set_time()`.
 
-Contract: `doc/2026-10-04_1500-node-tz-ble-contract.md`, design:
-`doc/2026-10-04_1600-node-tz-implementation-plan.md` section 3.
+Contract: `doc/reference/2026-10-04_1500-node-tz-ble-contract.md`, design:
+`doc/archive/2026-10-04_1600-node-tz-implementation-plan.md` section 3.
 
 Firmware with TZ-01 stores a POSIX TZ rule (`CET-1CEST,M3.5.0,M10.5.0/3`) and
 derives its own UTC offset and DST switch. `--utcoff` CLEARS such a rule, so
