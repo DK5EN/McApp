@@ -1,6 +1,6 @@
 """Regression suite for the group label / callsign override routes (`labels.py`).
 
-Plan: doc/2026-10-25_0900-conversation-nav-group-labels-plan.md §3, D4-D7, D11.
+Plan: doc/plans/2026-10-25_0900-conversation-nav-group-labels-plan.md §3, D4-D7, D11.
 Fully offline: a real `SSEManager` + real SQLite storage in a temp dir, driven
 through httpx's ASGI transport. Broadcasts are read from in-memory `SSEClient`
 queues. Runner: `run_labels_routes_tests()` is ASYNC.

@@ -4,7 +4,7 @@ The session engine lives in `commands/linkcheck.py` (`LinkCheckMixin`, mixed
 into `CommandHandler`); this module is only the HTTP surface. Protocol details
 — why the correlation token has two representations, why the measured time is
 not a round-trip time, why a relayed pong's signal belongs to the last hop —
-are in `doc/2026-08-13_1500-linkcheck-ping-pong-ADR.md` §1.3/§1.4/§1.5.
+are in `doc/archive/2026-08-13_1500-linkcheck-ping-pong-ADR.md` §1.3/§1.4/§1.5.
 
 Two things a reader of this file should know up front:
 

@@ -5,7 +5,7 @@ which does all the real work — building a contiguous, gapless cover of the
 requested window from the segment ledger and computing uptime/coverage/
 longest-outage stats from it. This module only validates the `range` query
 param and maps it to the window width the mixin expects (plan
-`doc/2026-08-21_2350-gateway-uptime-plan.md` §5).
+`doc/archive/2026-08-21_2350-gateway-uptime-plan.md` §5).
 
 The four accepted keys deliberately match the webapp's `RANGE_VALUES` so
 `RangeTabs.vue` can be reused unchanged — a caller-supplied window in

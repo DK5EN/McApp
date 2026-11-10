@@ -1,6 +1,6 @@
 """LinkCheckMixin: McApp-driven `{ping}`/`{pong}` link check sessions.
 
-See `doc/2026-08-13_1500-linkcheck-ping-pong-ADR.md` §1.2-§1.5 for the wire
+See `doc/archive/2026-08-13_1500-linkcheck-ping-pong-ADR.md` §1.2-§1.5 for the wire
 protocol and correlation scheme this module drives, and
 `doc/archive/2026-08-13_1500-linkcheck-implementation-plan.md` §3 for the design.
 This mirrors `commands/ctcping.py`'s session-engine idioms (state dict keyed

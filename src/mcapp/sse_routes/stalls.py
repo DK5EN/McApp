@@ -1,5 +1,5 @@
 """Stall-tracking REST surface: `GET /api/stalls`, `GET /api/stalls/summary`,
-`POST /api/stalls/client` (plan `doc/2026-09-15_1530-stall-tracking-plan.md`
+`POST /api/stalls/client` (plan `doc/archive/2026-09-15_1530-stall-tracking-plan.md`
 §4). Thin HTTP layer over `manager.stall_recorder` (a `StallRecorder`,
 §6 of the same plan) — every route just validates its query/body and
 delegates to `recorder.query()` / `recorder.summary()` / `recorder.ingest_client()`.

@@ -205,7 +205,7 @@ def build_stream_router(manager: SSEManager, version: str) -> APIRouter:  # noqa
         # None when the register (or field) is absent -- older firmware never
         # sends IS1 at all, and every field of a cached register dict is
         # read via .get() elsewhere too. See
-        # doc/2026-09-25_2041-is1-sn1-registers-plan.md.
+        # doc/archive/2026-09-25_2041-is1-sn1-registers-plan.md.
         cached_registers: dict[str, Any] = (
             message_router.cached_ble_registers if message_router is not None else {}
         )
