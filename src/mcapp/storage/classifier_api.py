@@ -352,10 +352,12 @@ class ClassifierApiMixin(StorageBase):
             " OR (count >= 5 AND last_seen >= ?)"
             " OR (count >= 3 AND last_seen >= ?))"
         )
+        exempt = _history_exempt_sql(len(human_categories))
+        params = (c24, c72, *human_categories)
         rows = await self._query(
             f"SELECT template_hash, example_msg FROM beacon_templates WHERE {where} "  # noqa: S608 - fixed text; values bound
-            f"AND NOT {_history_exempt_sql(len(human_categories))}",
-            (c24, c72, *human_categories),
+            f"AND NOT {exempt}",
+            params,
         )
         hashes = [
             r["template_hash"]
@@ -364,11 +366,15 @@ class ClassifierApiMixin(StorageBase):
         ]
         if not hashes:
             return 0
-        await self._execute_many(
-            "UPDATE beacon_templates SET auto_beacon = 1 WHERE template_hash = ?",
-            [(h,) for h in hashes],
+        # The UPDATE re-checks the full predicate: a demote or a directed
+        # message that lands between the SELECT above and this write must win,
+        # not be overwritten by a stale read.
+        return await self._mutate(
+            "UPDATE beacon_templates SET auto_beacon = 1 "  # noqa: S608 - fixed text; values bound
+            f"WHERE template_hash IN (SELECT value FROM json_each(?)) AND {where} "
+            f"AND NOT {exempt}",
+            (json.dumps(hashes), *params),
         )
-        return len(hashes)
 
     async def count_blocked_text_hits_24h(self) -> dict[str, int]:
         """Per blocked-text substring-match count over the last 24h.

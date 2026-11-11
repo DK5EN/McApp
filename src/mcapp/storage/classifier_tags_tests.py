@@ -469,12 +469,71 @@ async def _test_migration(results: list[tuple[str, bool]]) -> None:
             await storage.close()
 
 
+async def _test_backfill_race(results: list[tuple[str, bool]]) -> None:
+    """A demote or directed message landing between backfill's read and write wins.
+
+    The candidate SELECT and the promotion UPDATE are separate awaits, so an API
+    demote or a freshly stored directed message can land in between. The hook
+    writes both through a second connection while backfill filters its
+    candidates, i.e. after the SELECT and before the UPDATE.
+    """
+    import sqlite3
+
+    from . import classifier_api
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db = Path(tmp) / "t.db"
+        storage = await create_sqlite_storage(db)
+        # Patched by name: the module re-imports it without re-exporting it.
+        name = "is_short_token_exempt"
+        orig = getattr(classifier_api, name)
+        fired: list[bool] = []
+
+        def hook(text: str, min_tokens: int) -> bool:
+            if not fired:
+                fired.append(True)
+                conn = sqlite3.connect(db)
+                try:
+                    conn.execute(
+                        "UPDATE beacon_templates SET user_action = 'demote'"
+                        " WHERE template_hash = 'demoted_mid'"
+                    )
+                    conn.execute(
+                        "INSERT INTO messages (msg_id, src, dst, msg, type, timestamp,"
+                        " template_hash, category, tags) VALUES ('Z1', 'DK5EN-1', 'DK5EN-2',"
+                        " 'x', 'msg', ?, 'directed_mid', 'directed', '[]')",
+                        (now_ms(),),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+            return bool(orig(text, min_tokens))
+
+        try:
+            for h in ("plain", "demoted_mid", "directed_mid"):
+                await _add_template(storage, h, ["A"], 9, 1)
+            setattr(classifier_api, name, hook)
+            try:
+                n = await storage.backfill_auto_beacon_templates()
+            finally:
+                setattr(classifier_api, name, orig)
+            results.append(
+                (
+                    "backfill race: a demote or directed message after the read is honoured",
+                    bool(fired) and n == 1 and await _flagged(storage) == {"plain"},
+                )
+            )
+        finally:
+            await storage.close()
+
+
 async def run_classifier_tags_tests() -> bool:
     """Run the classifier-tags storage suite. Returns True iff all pass."""
     results: list[tuple[str, bool]] = []
     await _test_count_by_tag(results)
     await _test_backfill(results)
     await _test_backfill_exemptions(results)
+    await _test_backfill_race(results)
     await _test_live_human_history(results)
     await _test_clear_stale(results)
     await _test_prefs_write(results)
