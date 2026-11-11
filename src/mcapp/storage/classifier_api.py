@@ -9,10 +9,33 @@ import asyncio
 import json
 from typing import Any
 
+from ..classifier.template import _AUTO_BEACON_MIN_TOKENS, _HUMAN_CATEGORIES, is_short_token_exempt
 from ..classifier.types import ms_to_zulu
 from ..util import now_ms
 from ._base import StorageBase
 from .constants import _MSG_SELECT, db_write, escape_like
+
+
+def _history_exempt_sql(n_categories: int) -> str:
+    """SQL predicate: some message of the template is human (category/alert tag).
+
+    Single definition shared by ``clear_stale_auto_beacons`` (clears matches),
+    ``backfill_auto_beacon_templates`` (never promotes matches) and
+    ``template_has_human_history`` (live path), so the three cannot disagree.
+    Refers to ``beacon_templates.template_hash``; binds ``n_categories`` params.
+    """
+    placeholders = ",".join("?" * n_categories)
+    return (
+        "EXISTS ("  # noqa: S608 - placeholders only; values parameterized
+        "  SELECT 1 FROM messages m "
+        "  WHERE m.template_hash = beacon_templates.template_hash "
+        f"  AND (m.category IN ({placeholders}) OR EXISTS ("
+        "    SELECT 1 FROM json_each("
+        "      CASE WHEN json_valid(m.tags) THEN m.tags ELSE '[]' END"
+        "    ) j WHERE j.value = 'alert'"
+        "  )) LIMIT 1"
+        ")"
+    )
 
 
 class ClassifierApiMixin(StorageBase):
@@ -152,28 +175,34 @@ class ClassifierApiMixin(StorageBase):
         )
         return int(rows[0]["n"]) if rows else 0
 
+    async def template_has_human_history(
+        self, template_hash: str, human_categories: frozenset[str]
+    ) -> bool:
+        """True iff a stored message of the template is human (category/alert tag).
+
+        Same predicate as the cleanup and the startup backfill; uses
+        ``idx_messages_template_hash``.
+        """
+        rows = await self._query(
+            f"SELECT {_history_exempt_sql(len(human_categories))} AS h "  # noqa: S608 - placeholders only; values parameterized
+            "FROM beacon_templates WHERE template_hash = ?",
+            (*human_categories, template_hash),
+        )
+        return bool(rows[0]["h"]) if rows else False
+
     async def clear_stale_auto_beacons(
         self, human_categories: frozenset[str], min_tokens: int
     ) -> int:
         from ..classifier.template import tokenize_normalized  # noqa: PLC0415 - circular
 
         cleared = 0
-        placeholders = ",".join("?" * len(human_categories))
 
         def _clear_by_category() -> int:
             with db_write(self.db_path) as conn:
                 cur = conn.execute(
-                    f"UPDATE beacon_templates SET auto_beacon = 0 "  # noqa: S608 - identifiers from fixed set; values parameterized
-                    f"WHERE user_action IS NULL AND auto_beacon = 1 "
-                    f"AND EXISTS ("
-                    f"  SELECT 1 FROM messages m "
-                    f"  WHERE m.template_hash = beacon_templates.template_hash "
-                    f"  AND (m.category IN ({placeholders}) OR EXISTS ("
-                    f"    SELECT 1 FROM json_each("
-                    f"      CASE WHEN json_valid(m.tags) THEN m.tags ELSE '[]' END"
-                    f"    ) j WHERE j.value = 'alert'"
-                    f"  )) LIMIT 1"
-                    f")",
+                    "UPDATE beacon_templates SET auto_beacon = 0 "  # noqa: S608 - placeholders only
+                    "WHERE user_action IS NULL AND auto_beacon = 1 "
+                    f"AND {_history_exempt_sql(len(human_categories))}",
                     tuple(human_categories),
                 )
                 conn.commit()
@@ -296,7 +325,11 @@ class ClassifierApiMixin(StorageBase):
         )
         return {r["tag"]: r["n"] for r in rows}
 
-    async def backfill_auto_beacon_templates(self) -> int:
+    async def backfill_auto_beacon_templates(
+        self,
+        human_categories: frozenset[str] = _HUMAN_CATEGORIES,
+        min_tokens: int = _AUTO_BEACON_MIN_TOKENS,
+    ) -> int:
         """Flag templates that now cross the AUTO_BEACON_RULES thresholds.
 
         Mirrors (8, any window) / (5, 24h) / (3, 72h). The live path counts the
@@ -304,7 +337,10 @@ class ClassifierApiMixin(StorageBase):
         templates; the template row has no per-sender counts, so every arm
         requires a single sender here -- three people greeting each other must
         not become a beacon on the next startup. Rows with a user override
-        (promote/demote) are left alone. Returns the number newly flagged.
+        (promote/demote) are left alone. Never promotes a template that
+        ``clear_stale_auto_beacons`` would clear (human history, or a
+        short-token example), so restarts do not undo a reclassify.
+        Returns the number newly flagged.
         """
         now = now_ms()
         c24, c72 = ms_to_zulu(now - 24 * 3600 * 1000), ms_to_zulu(now - 72 * 3600 * 1000)
@@ -316,10 +352,23 @@ class ClassifierApiMixin(StorageBase):
             " OR (count >= 5 AND last_seen >= ?)"
             " OR (count >= 3 AND last_seen >= ?))"
         )
-        return await self._mutate(
-            f"UPDATE beacon_templates SET auto_beacon = 1 WHERE {where}",  # noqa: S608 - fixed text; values bound
-            (c24, c72),
+        rows = await self._query(
+            f"SELECT template_hash, example_msg FROM beacon_templates WHERE {where} "  # noqa: S608 - fixed text; values bound
+            f"AND NOT {_history_exempt_sql(len(human_categories))}",
+            (c24, c72, *human_categories),
         )
+        hashes = [
+            r["template_hash"]
+            for r in rows
+            if not is_short_token_exempt(r["example_msg"] or "", min_tokens)
+        ]
+        if not hashes:
+            return 0
+        await self._execute_many(
+            "UPDATE beacon_templates SET auto_beacon = 1 WHERE template_hash = ?",
+            [(h,) for h in hashes],
+        )
+        return len(hashes)
 
     async def count_blocked_text_hits_24h(self) -> dict[str, int]:
         """Per blocked-text substring-match count over the last 24h.

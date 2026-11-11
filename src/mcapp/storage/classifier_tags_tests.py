@@ -33,6 +33,8 @@ from .constants import (
 )
 
 _HOUR_MS = 3_600_000
+# 4 tokens: above the short-token exemption (<= 2), so fixtures are promotable.
+_LONG_MSG = "alpha beta gamma delta"
 
 
 def _zulu(ms: int) -> str:
@@ -47,9 +49,10 @@ async def _add_template(
     """Insert a beacon_templates row directly (count/last_seen fully controlled)."""
     await storage._mutate(
         "INSERT INTO beacon_templates (template_hash, example_msg, example_src, srcs, count,"
-        " first_seen, last_seen, auto_beacon, user_action) VALUES (?, 'm', ?, ?, ?, ?, ?, 0, ?)",
+        " first_seen, last_seen, auto_beacon, user_action) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)",
         (
             hash_,
+            extra.get("example_msg", _LONG_MSG),
             srcs[0],
             json.dumps(srcs),
             count,
@@ -130,6 +133,105 @@ async def _test_backfill(results: list[tuple[str, bool]]) -> None:
                 (
                     "backfill: idempotent (second run flags nothing)",
                     await storage.backfill_auto_beacon_templates() == 0,
+                )
+            )
+        finally:
+            await storage.close()
+
+
+async def _test_backfill_exemptions(results: list[tuple[str, bool]]) -> None:
+    """Backfill never promotes what clear_stale_auto_beacons would clear (mc-chat 50f6426)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        storage = await create_sqlite_storage(Path(tmp) / "t.db")
+        try:
+            for h in ("plain", "human", "alerted", "short"):
+                await _add_template(storage, h, ["A"], 9, 1)
+            await storage._mutate(
+                "UPDATE beacon_templates SET example_msg = 'ok thanks'"
+                " WHERE template_hash = 'short'"
+            )
+            await _add_message(storage, "human", "directed", json.dumps([]))
+            await _add_message(storage, "alerted", "other", json.dumps(["alert"]))
+            await _add_message(storage, "plain", "other", json.dumps(["time"]))
+            n = await storage.backfill_auto_beacon_templates()
+            results.append(
+                (
+                    "backfill exemptions: human-history and short-token templates not promoted",
+                    n == 1 and await _flagged(storage) == {"plain"},
+                )
+            )
+            # No ping-pong: the cleanup leaves the promoted template alone.
+            cleared = await storage.clear_stale_auto_beacons(frozenset({"directed", "alert"}), 2)
+            results.append(
+                (
+                    "backfill exemptions: cleanup does not clear what backfill promoted",
+                    cleared == 0 and await _flagged(storage) == {"plain"},
+                )
+            )
+        finally:
+            await storage.close()
+
+
+async def _test_live_human_history(results: list[tuple[str, bool]]) -> None:
+    """update_and_check consults template_has_human_history when a rule triggers."""
+    from ..classifier.template import _HUMAN_CATEGORIES, update_and_check
+    from .classifier_api import _history_exempt_sql
+
+    with tempfile.TemporaryDirectory() as tmp:
+        storage = await create_sqlite_storage(Path(tmp) / "t.db")
+        try:
+            texts = {"human": "alpha beta gamma delta", "plain": "one two three four"}
+            hashes: dict[str, str] = {}
+            outcome: dict[str, bool | str] = {}
+            for name, text in texts.items():
+                msg = {"msg_id": "AAAA0001", "src": "OE1XYZ-1", "dst": "20", "msg": text}
+                res = await update_and_check(storage, msg, now_ms(), (), False)
+                hashes[name] = res.template_hash
+                await _add_message(
+                    storage, res.template_hash, "directed" if name == "human" else "other", "[]"
+                )
+                try:
+                    for _ in range(7):  # lifetime rule: count >= 8, single sender
+                        res = await update_and_check(storage, msg, now_ms(), (), False)
+                    outcome[name] = res.is_beacon
+                except AttributeError as exc:
+                    outcome[name] = f"AttributeError: {exc}"
+            results.append(
+                (
+                    "live: threshold crossing does not raise (template_has_human_history exists)",
+                    all(isinstance(v, bool) for v in outcome.values()),
+                )
+            )
+            results.append(
+                (
+                    "live: template with a directed message in its history is NOT promoted",
+                    outcome.get("human") is False,
+                )
+            )
+            results.append(
+                ("live: template without human history IS promoted", outcome.get("plain") is True)
+            )
+            results.append(
+                (
+                    "live: template_has_human_history true/false per template",
+                    await storage.template_has_human_history(hashes["human"], _HUMAN_CATEGORIES)
+                    and not await storage.template_has_human_history(
+                        hashes["plain"], _HUMAN_CATEGORIES
+                    )
+                    and not await storage.template_has_human_history("nosuch", _HUMAN_CATEGORIES),
+                )
+            )
+            plan = await storage._query(
+                "EXPLAIN QUERY PLAN SELECT "  # noqa: S608 - placeholders only
+                + _history_exempt_sql(2)
+                + " FROM beacon_templates"
+                " WHERE template_hash = ?",
+                ("directed", "alert", "x"),
+            )
+            results.append(
+                (
+                    "live: history lookup is served by idx_messages_template_hash",
+                    any("idx_messages_template_hash" in r["detail"] for r in plan),
                 )
             )
         finally:
@@ -372,6 +474,8 @@ async def run_classifier_tags_tests() -> bool:
     results: list[tuple[str, bool]] = []
     await _test_count_by_tag(results)
     await _test_backfill(results)
+    await _test_backfill_exemptions(results)
+    await _test_live_human_history(results)
     await _test_clear_stale(results)
     await _test_prefs_write(results)
     await _test_migration(results)

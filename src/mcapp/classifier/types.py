@@ -182,6 +182,9 @@ class StorageProtocol(Protocol):
     async def count_recent_messages_by_template_src(
         self, hash_: str, src: str, since_ms: int
     ) -> int: ...
+    async def template_has_human_history(
+        self, template_hash: str, human_categories: frozenset[str]
+    ) -> bool: ...
     async def clear_stale_auto_beacons(
         self, human_categories: frozenset[str], min_tokens: int
     ) -> int: ...

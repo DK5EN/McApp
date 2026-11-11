@@ -295,6 +295,12 @@ async def update_and_check(  # noqa: PLR0911 - complex handler kept intact
             triggered = True
             break
 
+    # Same history exemption as the periodic cleanup, consulted only when
+    # promotion would happen, so the hot path stays cheap and the two cannot
+    # ping-pong (promote here, clear on the next reclassify).
+    if triggered and await storage.template_has_human_history(hash_, _HUMAN_CATEGORIES):
+        triggered = False
+
     if triggered:
         await storage.set_template_auto_beacon(hash_, True)
         return BeaconResult(
