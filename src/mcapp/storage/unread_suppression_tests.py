@@ -138,7 +138,7 @@ async def _test_group20_regression(results: list[tuple[str, bool]]) -> None:
 
             # The newest message: a bare URL classified as node_advert,
             # exactly the live row (HB9VQQ-1 -> 20, category=node_advert,
-            # info_score=0.3, tags=["node"]).
+            # info_score=0.3, tags=["auto_beacon"]).
             advert_ts = t0 + 10
             await _store_msg(
                 storage,
@@ -151,7 +151,7 @@ async def _test_group20_regression(results: list[tuple[str, bool]]) -> None:
                 storage,
                 "HB9VQQ-1",
                 advert_ts,
-                {"category": "node_advert", "tags": ["node"], "info_score": 0.3},
+                {"category": "node_advert", "tags": ["auto_beacon"], "info_score": 0.3},
             )
 
             await storage.set_read_cursor(group_key, t0)  # cursor on the visible message
@@ -314,7 +314,7 @@ async def _test_own_message_exclusion_unaffected(results: list[tuple[str, bool]]
             reply_ts = t0 + 20
             await _store_msg(storage, dm_dst, "DK5EN-98", "reply from partner", reply_ts)
             await _classify(
-                storage, dm_dst, reply_ts, {"category": "node_advert", "tags": ["node"]}
+                storage, dm_dst, reply_ts, {"category": "node_advert", "tags": ["auto_beacon"]}
             )
 
             # Active, non-noop policy: hides node_advert, which is the
@@ -381,7 +381,7 @@ async def _test_transport_duplicates_suppressed(results: list[tuple[str, bool]])
             # depend on which physical row the earliest-copy aggregation
             # happens to read from.
             await storage._mutate(
-                "UPDATE messages SET category = 'node_advert', tags = '[\"node\"]'"
+                "UPDATE messages SET category = 'node_advert', tags = '[\"auto_beacon\"]'"
                 " WHERE msg_id = 'E686400E'"
             )
 
@@ -438,7 +438,7 @@ async def _test_spam_group_rebucket_subtraction(results: list[tuple[str, bool]])
             spam_ts = t0 + 10
             await _store_msg(storage, spam_src, group_key, "buy now", spam_ts)
             await _classify(
-                storage, spam_src, spam_ts, {"category": "node_advert", "tags": ["node"]}
+                storage, spam_src, spam_ts, {"category": "node_advert", "tags": ["auto_beacon"]}
             )
 
             await storage.set_filter_prefs({"enabled": True, "hiddenTags": ["node"]})
@@ -497,7 +497,7 @@ async def _test_key_narrowing_matches_full_scan(results: list[tuple[str, bool]])
             advert_ts = t0 + 10
             await _store_msg(storage, "OE1ABC-1", group_key, "advert", advert_ts)
             await _classify(
-                storage, "OE1ABC-1", advert_ts, {"category": "node_advert", "tags": ["node"]}
+                storage, "OE1ABC-1", advert_ts, {"category": "node_advert", "tags": ["auto_beacon"]}
             )
 
             # Unrelated second conversation, so the full scan has more than
@@ -557,7 +557,9 @@ async def _test_own_suppressed_message_does_not_cancel_foreign_unread(
             # The operator's own weather-bot command: hidden, and a
             # candidate row (newer than the unset -> 0 cursor).
             await _store_msg(storage, MY_CALLSIGN, dm_dst, "!wx", t0)
-            await _classify(storage, MY_CALLSIGN, t0, {"category": "bot_command", "tags": ["bot"]})
+            await _classify(
+                storage, MY_CALLSIGN, t0, {"category": "bot_command", "tags": ["auto_beacon"]}
+            )
 
             # The partner's reply: foreign, visible, newer still.
             reply_ts = t0 + 10
@@ -613,7 +615,7 @@ async def _test_spam_group_subtract_uses_rebucketed_cursor(
 
             await _store_msg(storage, spam_src, group_key, "buy now (old)", older_ts)
             await _classify(
-                storage, spam_src, older_ts, {"category": "node_advert", "tags": ["node"]}
+                storage, spam_src, older_ts, {"category": "node_advert", "tags": ["auto_beacon"]}
             )
             # The newer row is left unclassified (visible) on purpose — see
             # the docstring above: only the OLDER row's mis-handling can

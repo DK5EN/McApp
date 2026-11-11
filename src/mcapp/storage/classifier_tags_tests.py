@@ -177,7 +177,7 @@ async def _test_prefs_write(results: list[tuple[str, bool]]) -> None:
                 (
                     "set_filter_prefs: legacy hiddenCategories -> hiddenTags, key removed",
                     "hiddenCategories" not in prefs
-                    and prefs.get("hiddenTags") == ["time", "bot", "qso"]
+                    and prefs.get("hiddenTags") == ["auto_beacon", "qso"]
                     and prefs.get("enabled") is True,
                 )
             )

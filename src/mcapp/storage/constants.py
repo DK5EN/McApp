@@ -25,11 +25,11 @@ LATEST_SCHEMA_VERSION = 42
 # Legacy filter category -> engine tag (classifier unification, issue #17 / Q2).
 # `directed` and `other` have no tag and are dropped on migration.
 CATEGORY_TO_TAG: dict[str, str] = {
-    "timestamp_beacon": "time",
+    "timestamp_beacon": "auto_beacon",
     "wx_beacon": "weather",
-    "node_advert": "node",
-    "sw_advert": "software",
-    "bot_command": "bot",
+    "node_advert": "auto_beacon",
+    "sw_advert": "auto_beacon",
+    "bot_command": "auto_beacon",
     "alert": "alert",
     "test_msg": "test",
     "greeting": "greeting",

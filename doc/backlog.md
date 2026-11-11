@@ -226,17 +226,3 @@ Finding F14 (health log §59: the update runner reported success without deployi
 ## B23 — P6: confirm auto mode respects the `release.sh 2` allow rule
 
 `fc58264` allows `./scripts/release.sh 2` in the project settings. Whether auto mode honours it is untested: it shows only on the next real production release. Check it then; if it still prompts, the rule's pattern is wrong.
-
-## B24 — re-sync the classifier contract and suppression vectors from mc-chat (taxonomy v7)
-
-mc-chat (2026-11-11) moved the classifier to taxonomy v7: `bot`, `node`, `software` and `time` are now
-`auto_beacon`, `url` is added, and the contract's rules carry a `legacy_tag`. The canonical files
-are `mc-chat/contract/classifier_contract.json` and `mc-chat/contract/suppression_vectors.json`. The
-copies here, `src/mcapp/contract/suppression_vectors.json` and the contract the engine reads, still
-have the old vocabulary and the old default hiding (`time` and `bot` hidden by default, now none).
-
-Work: copy both canonical files in (the contract also needs the engine to read `legacy_tag`, if the
-MCProxy engine is a port of mc-chat's), bump the pinned sha256 in the tests, and check the hidden-tag
-defaults in MCProxy's `SuppressionPolicy`. The webapp's drift check (`has not drifted from MCProxy`)
-stays red until this is done, which is the intended signal.
-Source: owner decisions of 2026-11-11 (mcmap classifier taxonomy v7, mc-chat migration).
