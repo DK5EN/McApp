@@ -5,7 +5,9 @@
   "policies": {
     "disabled_hides_category": {
       "enabled": false,
-      "hiddenTags": ["node"],
+      "hiddenTags": [
+        "node"
+      ],
       "minInfoScore": null,
       "hideAutoBeacons": false,
       "promotedHashes": [],
@@ -19,14 +21,18 @@
       "hideAutoBeacons": false,
       "promotedHashes": [],
       "demotedHashes": [],
-      "blockedTexts": ["spamword"]
+      "blockedTexts": [
+        "spamword"
+      ]
     },
     "promoted_only": {
       "enabled": true,
       "hiddenTags": [],
       "minInfoScore": null,
       "hideAutoBeacons": false,
-      "promotedHashes": ["promo123abc1"],
+      "promotedHashes": [
+        "promo123abc1"
+      ],
       "demotedHashes": [],
       "blockedTexts": []
     },
@@ -35,22 +41,33 @@
       "hiddenTags": [],
       "minInfoScore": null,
       "hideAutoBeacons": false,
-      "promotedHashes": ["promo123abc1"],
+      "promotedHashes": [
+        "promo123abc1"
+      ],
       "demotedHashes": [],
       "blockedTexts": []
     },
     "demoted_beats_category": {
       "enabled": true,
-      "hiddenTags": ["bot"],
+      "hiddenTags": [
+        "bot"
+      ],
       "minInfoScore": null,
       "hideAutoBeacons": false,
       "promotedHashes": [],
-      "demotedHashes": ["demo456def12"],
+      "demotedHashes": [
+        "demo456def12"
+      ],
       "blockedTexts": []
     },
     "group20_regression": {
       "enabled": true,
-      "hiddenTags": ["time", "bot", "node", "software"],
+      "hiddenTags": [
+        "time",
+        "bot",
+        "node",
+        "software"
+      ],
       "minInfoScore": null,
       "hideAutoBeacons": false,
       "promotedHashes": [],
@@ -109,7 +126,9 @@
       "hideAutoBeacons": false,
       "promotedHashes": [],
       "demotedHashes": [],
-      "blockedTexts": ["BadWord"]
+      "blockedTexts": [
+        "BadWord"
+      ]
     },
     "blocked_text_empty_list": {
       "enabled": true,
@@ -125,8 +144,12 @@
       "hiddenTags": [],
       "minInfoScore": null,
       "hideAutoBeacons": false,
-      "promotedHashes": ["real123abc12"],
-      "demotedHashes": ["other456def1"],
+      "promotedHashes": [
+        "real123abc12"
+      ],
+      "demotedHashes": [
+        "other456def1"
+      ],
       "blockedTexts": []
     },
     "empty_hash_in_promoted": {
@@ -134,22 +157,31 @@
       "hiddenTags": [],
       "minInfoScore": null,
       "hideAutoBeacons": false,
-      "promotedHashes": [""],
+      "promotedHashes": [
+        ""
+      ],
       "demotedHashes": [],
       "blockedTexts": []
     },
     "empty_hash_in_demoted_with_hidden_category": {
       "enabled": true,
-      "hiddenTags": ["alert"],
+      "hiddenTags": [
+        "alert"
+      ],
       "minInfoScore": null,
       "hideAutoBeacons": false,
       "promotedHashes": [],
-      "demotedHashes": [""],
+      "demotedHashes": [
+        ""
+      ],
       "blockedTexts": []
     },
     "populated_hidden_categories": {
       "enabled": true,
-      "hiddenTags": ["greeting", "alert"],
+      "hiddenTags": [
+        "greeting",
+        "alert"
+      ],
       "minInfoScore": null,
       "hideAutoBeacons": false,
       "promotedHashes": [],
@@ -158,7 +190,9 @@
     },
     "hide_greeting": {
       "enabled": true,
-      "hiddenTags": ["greeting"],
+      "hiddenTags": [
+        "greeting"
+      ],
       "minInfoScore": null,
       "hideAutoBeacons": false,
       "promotedHashes": [],
@@ -167,7 +201,9 @@
     },
     "hide_qso": {
       "enabled": true,
-      "hiddenTags": ["qso"],
+      "hiddenTags": [
+        "qso"
+      ],
       "minInfoScore": null,
       "hideAutoBeacons": false,
       "promotedHashes": [],
@@ -176,7 +212,9 @@
     },
     "hide_question": {
       "enabled": true,
-      "hiddenTags": ["question"],
+      "hiddenTags": [
+        "question"
+      ],
       "minInfoScore": null,
       "hideAutoBeacons": false,
       "promotedHashes": [],
@@ -185,7 +223,9 @@
     },
     "hide_time": {
       "enabled": true,
-      "hiddenTags": ["time"],
+      "hiddenTags": [
+        "time"
+      ],
       "minInfoScore": null,
       "hideAutoBeacons": false,
       "promotedHashes": [],
@@ -194,7 +234,9 @@
     },
     "hide_auto_beacon_tag": {
       "enabled": true,
-      "hiddenTags": ["auto_beacon"],
+      "hiddenTags": [
+        "auto_beacon"
+      ],
       "minInfoScore": null,
       "hideAutoBeacons": false,
       "promotedHashes": [],
@@ -216,7 +258,9 @@
       "policy": "disabled_hides_category",
       "message": {
         "msg": "plain text",
-        "tags": ["node"],
+        "tags": [
+          "auto_beacon"
+        ],
         "info_score": 1.0,
         "template_hash": "abc123abc123"
       },
@@ -260,7 +304,9 @@
       "policy": "demoted_beats_category",
       "message": {
         "msg": "hello world",
-        "tags": ["bot"],
+        "tags": [
+          "auto_beacon"
+        ],
         "info_score": 1.0,
         "template_hash": "demo456def12"
       },
@@ -271,7 +317,9 @@
       "policy": "group20_regression",
       "message": {
         "msg": "https://www.varac-hamradio.com/group/varac-hf-discussion-forum/discussion",
-        "tags": ["node"],
+        "tags": [
+          "auto_beacon"
+        ],
         "info_score": 0.3,
         "template_hash": ""
       },
@@ -282,7 +330,9 @@
       "policy": "group20_category_not_hidden",
       "message": {
         "msg": "https://www.varac-hamradio.com/group/varac-hf-discussion-forum/discussion",
-        "tags": ["node"],
+        "tags": [
+          "auto_beacon"
+        ],
         "info_score": 0.3,
         "template_hash": ""
       },
@@ -293,7 +343,9 @@
       "policy": "auto_beacon_hidden",
       "message": {
         "msg": "beacon text",
-        "tags": ["auto_beacon"],
+        "tags": [
+          "auto_beacon"
+        ],
         "info_score": 1.0,
         "template_hash": ""
       },
@@ -304,7 +356,9 @@
       "policy": "auto_beacon_shown",
       "message": {
         "msg": "beacon text",
-        "tags": ["auto_beacon"],
+        "tags": [
+          "auto_beacon"
+        ],
         "info_score": 1.0,
         "template_hash": ""
       },
@@ -425,7 +479,9 @@
       "policy": "empty_hash_in_demoted_with_hidden_category",
       "message": {
         "msg": "hello",
-        "tags": ["alert"],
+        "tags": [
+          "alert"
+        ],
         "info_score": 1.0,
         "template_hash": ""
       },
@@ -447,7 +503,10 @@
       "policy": "hide_greeting",
       "message": {
         "msg": "Guten Morgen zusammen",
-        "tags": ["greeting", "auto_beacon"],
+        "tags": [
+          "greeting",
+          "auto_beacon"
+        ],
         "info_score": 1.0,
         "template_hash": ""
       },
@@ -458,7 +517,10 @@
       "policy": "hide_greeting",
       "message": {
         "msg": "Hallo, wie geht's?",
-        "tags": ["greeting", "qso"],
+        "tags": [
+          "greeting",
+          "qso"
+        ],
         "info_score": 1.0,
         "template_hash": ""
       },
@@ -469,7 +531,10 @@
       "policy": "hide_qso",
       "message": {
         "msg": "Hallo, wie geht's?",
-        "tags": ["greeting", "qso"],
+        "tags": [
+          "greeting",
+          "qso"
+        ],
         "info_score": 1.0,
         "template_hash": ""
       },
@@ -480,7 +545,9 @@
       "policy": "hide_qso",
       "message": {
         "msg": "hello",
-        "tags": ["greeting"],
+        "tags": [
+          "greeting"
+        ],
         "info_score": 1.0,
         "template_hash": ""
       },
@@ -491,7 +558,10 @@
       "policy": "hide_time",
       "message": {
         "msg": "hello",
-        "tags": ["weather", "time"],
+        "tags": [
+          "weather",
+          "auto_beacon"
+        ],
         "info_score": 1.0,
         "template_hash": ""
       },
@@ -502,7 +572,10 @@
       "policy": "hide_time",
       "message": {
         "msg": "hello",
-        "tags": ["time", "qso"],
+        "tags": [
+          "auto_beacon",
+          "qso"
+        ],
         "info_score": 1.0,
         "template_hash": ""
       },
@@ -513,7 +586,10 @@
       "policy": "hide_auto_beacon_tag",
       "message": {
         "msg": "hello",
-        "tags": ["greeting", "auto_beacon"],
+        "tags": [
+          "greeting",
+          "auto_beacon"
+        ],
         "info_score": 1.0,
         "template_hash": ""
       },
@@ -524,40 +600,49 @@
       "policy": "hide_greeting",
       "message": {
         "msg": "hello",
-        "tags": ["auto_beacon"],
+        "tags": [
+          "auto_beacon"
+        ],
         "info_score": 1.0,
         "template_hash": ""
       },
       "suppressed": false
     },
     {
-      "name": "hiddenTags absent: default hides bot",
+      "name": "hiddenTags absent: no default hiding (owner 2026-11-11), bot is labelled",
       "policy": "hidden_tags_absent_defaults",
       "message": {
         "msg": "hello",
-        "tags": ["bot"],
+        "tags": [
+          "auto_beacon"
+        ],
         "info_score": 1.0,
         "template_hash": ""
       },
-      "suppressed": true
+      "suppressed": false
     },
     {
-      "name": "hiddenTags absent: default hides time",
+      "name": "hiddenTags absent: no default hiding (owner 2026-11-11), time beacon is labelled",
       "policy": "hidden_tags_absent_defaults",
       "message": {
         "msg": "hello",
-        "tags": ["time", "weather"],
+        "tags": [
+          "auto_beacon",
+          "weather"
+        ],
         "info_score": 1.0,
         "template_hash": ""
       },
-      "suppressed": true
+      "suppressed": false
     },
     {
       "name": "hiddenTags absent: default leaves weather visible",
       "policy": "hidden_tags_absent_defaults",
       "message": {
         "msg": "hello",
-        "tags": ["weather"],
+        "tags": [
+          "weather"
+        ],
         "info_score": 1.0,
         "template_hash": ""
       },
@@ -568,7 +653,10 @@
       "policy": "hidden_tags_absent_defaults",
       "message": {
         "msg": "hello",
-        "tags": ["qso", "greeting"],
+        "tags": [
+          "qso",
+          "greeting"
+        ],
         "info_score": 1.0,
         "template_hash": ""
       },
@@ -579,7 +667,9 @@
       "policy": "group20_category_not_hidden",
       "message": {
         "msg": "hello",
-        "tags": ["bot"],
+        "tags": [
+          "auto_beacon"
+        ],
         "info_score": 1.0,
         "template_hash": ""
       },
@@ -601,7 +691,10 @@
       "policy": "hide_question",
       "message": {
         "msg": "Wer kennt sich mit DMR aus?",
-        "tags": ["question", "qso"],
+        "tags": [
+          "question",
+          "qso"
+        ],
         "info_score": 1.0,
         "template_hash": ""
       },
@@ -612,7 +705,9 @@
       "policy": "hide_greeting",
       "message": {
         "msg": "hello",
-        "tags": ["qso"],
+        "tags": [
+          "qso"
+        ],
         "info_score": 1.0,
         "template_hash": ""
       },

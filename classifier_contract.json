@@ -1,9 +1,9 @@
 {
   "schema": 1,
-  "taxonomy_version": 6,
+  "taxonomy_version": 7,
   "source": {
     "repo": "mcmap",
-    "commit": "968a01f681956b43361c3f4680584939265d64d1"
+    "commit": "ae029112427aaef80eee1d3fe6e5b8ce01bbb208"
   },
   "tags": [
     {
@@ -34,7 +34,7 @@
     {
       "id": "qso",
       "label": "QSO",
-      "definition": "Human conversation: replies, statements, reports, chit-chat, thanks. Derived, not matched: a message with none of the automated tags (bot, weather, node, software, bulletin, pota-sota, alert, time) is qso, alongside any greeting, question, test or qsl. Weather blocks qso unless there is conversation evidence (leading @CALL addressee, 1:1 DM, or a question); a weather report with only a greeting is not qso."
+      "definition": "Human conversation: replies, statements, reports, chit-chat, thanks. Derived, not matched: a message with none of the automated tags (auto_beacon, weather, bulletin, pota-sota, alert) is qso, alongside any greeting, question, test or qsl. Weather blocks qso unless there is conversation evidence (leading @CALL addressee, 1:1 DM, or a question); a weather report with only a greeting is not qso."
     },
     {
       "id": "bulletin",
@@ -52,35 +52,22 @@
       "definition": "Emergency, warning or urgent safety-relevant information: Notfall, SOS, earthquake, storm/flood warning, outage alert. A routine reminder with a warning emoji is a bulletin, not an alert."
     },
     {
-      "id": "bot",
-      "label": "Bot",
-      "definition": "Command to a node or bot, a bot's reply, or a machine protocol frame: '--setowngw ...', '>ping', 'pong', 'MH(3): ...', 'Route: ...', 'unbekannter Befehl:', command help output, file-transfer/MCF payloads ('MCF1|...', 'FTS|...')."
+      "id": "url",
+      "label": "URL",
+      "definition": "The message contains a web link (http, https or www): a camera page, a homepage, a forum, a download. Added next to the other tags. A link says nothing about whether a person wrote the text."
     },
     {
-      "id": "software",
-      "label": "Software",
-      "definition": "Announces a program, firmware version, web tool or software URL: 'MeshcomWebDesk V1.12.2 - https://...', version banners, firmware download links."
-    },
-    {
-      "id": "node",
-      "label": "Node",
-      "definition": "Automated station or node presence or status announcement: 'X is online', location/locator/QTH banner, BBS/gateway/digipeater availability, battery/supply notice, telemetry counter line, HTML or emoji URL advert. NOT a human message that merely mentions a callsign or locator."
-    },
-    {
-      "id": "time",
-      "label": "Time",
-      "definition": "Automated clock/time announcement, e.g. '{CET}2026-10-16 22:00:00'."
+      "id": "auto_beacon",
+      "label": "Auto beacon",
+      "definition": "Automated: it carries the same message over and over again. Machine output such as node status banners, bot and command replies, software or firmware announcements, clock lines and file-transfer frames."
     }
   ],
   "automated_tags": [
-    "bot",
+    "auto_beacon",
     "weather",
-    "node",
-    "software",
     "bulletin",
     "pota-sota",
-    "alert",
-    "time"
+    "alert"
   ],
   "qso": {
     "tag": "qso",
@@ -100,7 +87,8 @@
       "scope": "msg",
       "pattern": "^[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(—|–|--)[a-z][a-zA-Z0-9_-]{0,30}([\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000][^\\n]*)?(?=\\n?(?![\\s\\S]))",
       "flags": "",
-      "tag": "bot"
+      "tag": "auto_beacon",
+      "legacy_tag": "bot"
     },
     {
       "priority": 6,
@@ -108,7 +96,8 @@
       "scope": "msg",
       "pattern": "^(befehle|commands)[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*:[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*--[a-z]",
       "flags": "i",
-      "tag": "bot"
+      "tag": "auto_beacon",
+      "legacy_tag": "bot"
     },
     {
       "priority": 7,
@@ -116,7 +105,8 @@
       "scope": "msg",
       "pattern": "^unbekannter befehl:",
       "flags": "i",
-      "tag": "bot"
+      "tag": "auto_beacon",
+      "legacy_tag": "bot"
     },
     {
       "priority": 8,
@@ -124,7 +114,8 @@
       "scope": "msg",
       "pattern": "^[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*ping[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?=\\n?(?![\\s\\S]))",
       "flags": "i",
-      "tag": "bot"
+      "tag": "auto_beacon",
+      "legacy_tag": "bot"
     },
     {
       "priority": 8.5,
@@ -132,7 +123,8 @@
       "scope": "msg",
       "pattern": "^[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[>!][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?:ping|pong|mh|mheard|route|stats|wx|version|ver|info|help|h|userinfo|dice|echo|time|topic|pos)(?:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]{1,30}){0,2}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?![\\s\\S])",
       "flags": "i",
-      "tag": "bot"
+      "tag": "auto_beacon",
+      "legacy_tag": "bot"
     },
     {
       "priority": 10,
@@ -140,7 +132,8 @@
       "scope": "msg",
       "pattern": "^\\{CET\\}<?[\\p{Nd}]{2,4}[-.][\\p{Nd}]{2}[-.][\\p{Nd}]{2,4} [\\p{Nd}]{2}:[\\p{Nd}]{2}:[\\p{Nd}]{2}",
       "flags": "",
-      "tag": "time"
+      "tag": "auto_beacon",
+      "legacy_tag": "time"
     },
     {
       "priority": 10.5,
@@ -148,7 +141,8 @@
       "scope": "msg",
       "pattern": "^(?:(?:Time|Zeit):[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[0-9]{1,2}[./][0-9]{2}[./][0-9]{4}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[0-9]{2}:[0-9]{2}|🕐[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[0-9]{2}:[0-9]{2}(?::[0-9]{2})?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+Uhr,)",
       "flags": "",
-      "tag": "time"
+      "tag": "auto_beacon",
+      "legacy_tag": "time"
     },
     {
       "priority": 18.5,
@@ -156,7 +150,8 @@
       "scope": "msg",
       "pattern": "^[^\\p{L}\\p{N}_\\n]{0,6}ALERT(?:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*\\[[^\\n\\]]{1,40}\\]:|:(?=[^\\n]*\\[[^\\n\\]]{1,40}\\]))|^(?:INFO:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*|[^\\p{L}\\p{N}_\\n]{0,6}\\[[^\\n\\]]{1,40}\\][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*)Koniec[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:burzy|zjawiska)",
       "flags": "",
-      "tag": "weather"
+      "tag": "weather",
+      "legacy_tag": "weather"
     },
     {
       "priority": 19,
@@ -164,7 +159,8 @@
       "scope": "msg",
       "pattern": "^(?:(?:Toscana[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?ALLERTA[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:METEO|GIALLA|ARANCIONE|ROSSA|REGIONALE)(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|(?:ALARM|WARNUNG|ENTWARNUNG|BEENDET|ALERTE|FIN D'ALERTE)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[A-Z]{2}:|[^\\n]*\\|[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*alert\\.swiss[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?![\\s\\S]))",
       "flags": "",
-      "tag": "alert"
+      "tag": "alert",
+      "legacy_tag": "alert"
     },
     {
       "priority": 19.5,
@@ -172,7 +168,17 @@
       "scope": "msg",
       "pattern": "^ALLERTA[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+Reg\\.|^SISMA[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+M[0-9]|(?<![\\p{L}\\p{N}_])terremoto[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+di[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+magnitudo|(?<![\\p{L}\\p{N}_])scossa[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+di[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+terremoto|^\\[[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?:INIZIO|FINE|AGGIORNAMENTO)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+ALLERTA[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*\\]|^(?:⚠️?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*)?Terremoto[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:ML|Md|Mw|M)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?[0-9]|(?<![\\p{L}\\p{N}_])scossa[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+sismica",
       "flags": "i",
-      "tag": "alert"
+      "tag": "alert",
+      "legacy_tag": "alert"
+    },
+    {
+      "priority": 19.6,
+      "name": "Quake report word (IT)",
+      "scope": "msg",
+      "pattern": "^[^\\p{L}\\p{N}_\\n]{0,6}(?:terremoto|sisma)(?![\\p{L}\\p{N}_])(?=[^\\p{L}\\p{N}\\n]*[\\p{L}\\p{N}])|(?<![\\p{L}\\p{N}_])(?:notifica|rettifica|allerta|avviso)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:automatica[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?(?:terremoto|sisma)(?![\\p{L}\\p{N}_])(?=[^\\p{L}\\p{N}\\n]*[\\p{L}\\p{N}])",
+      "flags": "i",
+      "tag": "alert",
+      "legacy_tag": "alert"
     },
     {
       "priority": 20,
@@ -180,7 +186,8 @@
       "scope": "msg",
       "pattern": "🌡[^\\n]*(📊|💧)",
       "flags": "",
-      "tag": "weather"
+      "tag": "weather",
+      "legacy_tag": "weather"
     },
     {
       "priority": 21,
@@ -188,7 +195,8 @@
       "scope": "msg",
       "pattern": "(WX[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]|Temp[:= ])[\\s\\S]*(QNH|hPa|mbar)",
       "flags": "is",
-      "tag": "weather"
+      "tag": "weather",
+      "legacy_tag": "weather"
     },
     {
       "priority": 22,
@@ -196,7 +204,8 @@
       "scope": "msg",
       "pattern": "🌡️[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[\\p{Nd}]+",
       "flags": "",
-      "tag": "weather"
+      "tag": "weather",
+      "legacy_tag": "weather"
     },
     {
       "priority": 23,
@@ -204,7 +213,8 @@
       "scope": "msg",
       "pattern": "(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))T:[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*-?[\\p{Nd}]+[^\\n]*\\|[^\\n]*(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))P:[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[\\p{Nd}]+(\\.[\\p{Nd}]+)?[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(mb|hpa)(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))",
       "flags": "i",
-      "tag": "weather"
+      "tag": "weather",
+      "legacy_tag": "weather"
     },
     {
       "priority": 24,
@@ -212,7 +222,8 @@
       "scope": "msg",
       "pattern": "(?=[\\s\\S]*\\p{Nd})(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))(meteo|temp(?:eratura)?)(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))[\\s\\S]*(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))(umid(?:it[àa])?|pioggia|pressione|vento)(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))",
       "flags": "is",
-      "tag": "weather"
+      "tag": "weather",
+      "legacy_tag": "weather"
     },
     {
       "priority": 24.5,
@@ -220,7 +231,8 @@
       "scope": "msg",
       "pattern": "^(?![\\s\\S]*(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))(?:antenne|antenna|richtung|azimut|drehen?|dreh|neigung|winkel|elevation|tilt)(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_])))[\\s\\S]*?(?<![0-9.,/:-])[+-]?[0-9]{1,2}(?:[.,][0-9])?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?(?:°[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?C(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|°(?![\\p{L}\\p{N}])|Grad(?![\\p{L}])|degrees(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|C°)",
       "flags": "i",
-      "tag": "weather"
+      "tag": "weather",
+      "legacy_tag": "weather"
     },
     {
       "priority": 24.55,
@@ -228,7 +240,8 @@
       "scope": "msg",
       "pattern": "^(?![\\s\\S]*(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))(?:antenne|antenna|richtung|azimut|drehen?|neigung|winkel|elevation|tilt)(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_])))(?=[\\s\\S]*(?<![\\p{L}\\p{N}_])(?:bew[öo]lkt|bedeckt|sonnig|wolkig|wolkenlos|trocken|regen[A-Za-z0-9_]*|nebel|schnee[A-Za-z0-9_]*|gewitter|wind[A-Za-z0-9_]*|sonne|heiter|nuvolo[A-Za-z0-9_]*|sereno|pioggia|soleil|nuageux|cloudy)(?![\\p{L}\\p{N}_]))[\\s\\S]*?(?<![0-9.,/:\\p{L}-])[+-]?[0-9]{1,2}(?:[.,][0-9])?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?\\*?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?C(?![\\p{L}\\p{N}_])",
       "flags": "i",
-      "tag": "weather"
+      "tag": "weather",
+      "legacy_tag": "weather"
     },
     {
       "priority": 24.6,
@@ -236,7 +249,26 @@
       "scope": "msg",
       "pattern": "^Meteo[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*-[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*T:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*-?[0-9]|^Telemetry[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+V[0-9]+(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))[^\\n]*(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))T:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*-?[0-9]+(?:[.,][0-9]+)?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*C(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))[^\\n]*(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))H:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[0-9]+[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*%|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))(?:Tagesregenmenge|Taupunkt|B[öo]engeschwindigkeit)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*=[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*-?[0-9]|^WX[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[A-R]{2}[0-9]{2}[a-x]{2}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*:|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))Vento:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[0-9]+(?:\\.[0-9]+)?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*km/h|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))temperature[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+in[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[^\\n]{1,40}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+is[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+-?[0-9]+(?:\\.[0-9]+)?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+degrees(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))",
       "flags": "i",
-      "tag": "weather"
+      "tag": "weather",
+      "legacy_tag": "weather"
+    },
+    {
+      "priority": 24.7,
+      "name": "WX humidity percent",
+      "scope": "msg",
+      "pattern": "(?<![\\p{L}\\p{N}_])(?:luftfeuchte|feuchte|humidity|humid|hum|rf|rh|umid(?:it[àa])?)(?![\\p{L}\\p{N}_])[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff:=]*[0-9]{1,3}(?:[.,][0-9])?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?%",
+      "flags": "i",
+      "tag": "weather",
+      "legacy_tag": "weather"
+    },
+    {
+      "priority": 24.8,
+      "name": "WX locator with temperature",
+      "scope": "msg",
+      "pattern": "(?<![\\p{L}\\p{N}_])[A-R]{2}[0-9]{2}[A-X]{2}(?![\\p{L}\\p{N}_])[\\s\\S]*(?<![0-9.,])-?[0-9]{1,2}(?:[.,][0-9])?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?°?C(?![\\p{L}\\p{N}_])|(?<![0-9.,])-?[0-9]{1,2}(?:[.,][0-9])?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?°?C(?![\\p{L}\\p{N}_])[\\s\\S]*(?<![\\p{L}\\p{N}_])[A-R]{2}[0-9]{2}[A-X]{2}(?![\\p{L}\\p{N}_])",
+      "flags": "i",
+      "tag": "weather",
+      "legacy_tag": "weather"
     },
     {
       "priority": 25,
@@ -244,7 +276,8 @@
       "scope": "msg",
       "pattern": "(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))T[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*=[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*-?[\\p{Nd}]+(\\.[\\p{Nd}]+)?[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*C?(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))[^\\n]*(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))H[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*=[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[\\p{Nd}]+%?(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))[^\\n]*(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))P[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*=[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[\\p{Nd}]+(\\.[\\p{Nd}]+)?[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(hpa|mb)(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))",
       "flags": "i",
-      "tag": "weather"
+      "tag": "weather",
+      "legacy_tag": "weather"
     },
     {
       "priority": 26,
@@ -252,7 +285,8 @@
       "scope": "msg",
       "pattern": "(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))(APRS|CWOP)[ -/]?wetter(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))|(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))CWOP(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))[^\\n]*(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))(temperatur|luftdruck|feuchtigkeit)(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))",
       "flags": "i",
-      "tag": "weather"
+      "tag": "weather",
+      "legacy_tag": "weather"
     },
     {
       "priority": 27,
@@ -260,7 +294,8 @@
       "scope": "msg",
       "pattern": "(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))pollen(wetter|vorhersage)(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))",
       "flags": "i",
-      "tag": "weather"
+      "tag": "weather",
+      "legacy_tag": "weather"
     },
     {
       "priority": 27,
@@ -268,7 +303,8 @@
       "scope": "msg",
       "pattern": "(?:^|[^\\p{L}\\p{N}_])(Roggen|Gr(ä|ae)ser|Beifu(ß|ss)|Ambrosia|Birke|Erle|Esche|Hasel|Ulme|Pappel|Weide|Eiche|Linde)[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*:[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(keine|gering|mittel|hoch)",
       "flags": "i",
-      "tag": "weather"
+      "tag": "weather",
+      "legacy_tag": "weather"
     },
     {
       "priority": 28,
@@ -276,7 +312,8 @@
       "scope": "msg",
       "pattern": "(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))WX(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))[^\\n]*(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))Temp\\.?:[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*-?[\\p{Nd}]+[^\\n]*(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))(Feuchte|Regen|Wind|Solar)(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))",
       "flags": "i",
-      "tag": "weather"
+      "tag": "weather",
+      "legacy_tag": "weather"
     },
     {
       "priority": 29,
@@ -284,7 +321,8 @@
       "scope": "msg",
       "pattern": "(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))[\\p{Nd}]+[,.]?[\\p{Nd}]*[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*Grad[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[CF](?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))[^\\n]*(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))hPa(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))",
       "flags": "i",
-      "tag": "weather"
+      "tag": "weather",
+      "legacy_tag": "weather"
     },
     {
       "priority": 29,
@@ -292,7 +330,8 @@
       "scope": "msg",
       "pattern": "(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))BFT(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))",
       "flags": "i",
-      "tag": "weather"
+      "tag": "weather",
+      "legacy_tag": "weather"
     },
     {
       "priority": 29,
@@ -300,7 +339,8 @@
       "scope": "msg",
       "pattern": "(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))WX[_-]?Daten(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))",
       "flags": "i",
-      "tag": "weather"
+      "tag": "weather",
+      "legacy_tag": "weather"
     },
     {
       "priority": 29.5,
@@ -308,7 +348,8 @@
       "scope": "msg",
       "pattern": "^(?=[\\s\\S]*(?:-?[0-9]+(?:[.,][0-9]+)?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*°?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*C(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|-?[0-9]+(?:[.,][0-9]+)?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*°[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*C?|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))[Tt]emp(?:eratur|\\.|erature)?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[:=]?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*-?[0-9]))(?=[\\s\\S]*(?:(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))(?:hPa|hpa)(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))QNH(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))QFE(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|Luftfeucht|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))Hum\\.?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[:=]|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))rF(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))H[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*=[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[0-9]|Luftdruck|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))[Kk]m/h|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))m/s(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))UR[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[0-9]))",
       "flags": "",
-      "tag": "weather"
+      "tag": "weather",
+      "legacy_tag": "weather"
     },
     {
       "priority": 29.8,
@@ -316,7 +357,8 @@
       "scope": "msg",
       "pattern": "^(?=[^\\n]*(?<![\\p{L}\\p{N}_.])[Vv]?1\\.[0-9]{1,2}\\.[0-9]{1,2}(?![\\p{L}\\p{N}_.]))(?=[^\\n]*(?:(?<![\\p{L}\\p{N}_.])[Vv]?4\\.[0-9]{2}[a-z](?![\\p{L}\\p{N}_])|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))[A-R]{2}[0-9]{2}[A-Xa-x]{2}(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))))[^\\n?]{0,160}(?![\\s\\S])",
       "flags": "",
-      "tag": "software"
+      "tag": "auto_beacon",
+      "legacy_tag": "software"
     },
     {
       "priority": 30,
@@ -324,7 +366,8 @@
       "scope": "msg",
       "pattern": "(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))meshcom[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*webdesk[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+v?[\\p{Nd}]+\\.[\\p{Nd}]",
       "flags": "i",
-      "tag": "software"
+      "tag": "auto_beacon",
+      "legacy_tag": "software"
     },
     {
       "priority": 31,
@@ -332,7 +375,8 @@
       "scope": "msg",
       "pattern": "(\\*{2,}|-{2,}=|={2,}|-=\\()[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*meshcom[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*webdesk",
       "flags": "i",
-      "tag": "software"
+      "tag": "auto_beacon",
+      "legacy_tag": "software"
     },
     {
       "priority": 32,
@@ -340,7 +384,8 @@
       "scope": "msg",
       "pattern": "(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))(meshcom[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*webdesk|webdesk)(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))[^\\n]*\\|[^\\n]*\\|",
       "flags": "i",
-      "tag": "software"
+      "tag": "auto_beacon",
+      "legacy_tag": "software"
     },
     {
       "priority": 33,
@@ -348,7 +393,8 @@
       "scope": "msg",
       "pattern": "^[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[\\p{Nd}]+\\.[\\p{Nd}]+(\\.[\\p{Nd}]+)?[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+73[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+de[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+[a-z0-9]+",
       "flags": "i",
-      "tag": "software"
+      "tag": "auto_beacon",
+      "legacy_tag": "software"
     },
     {
       "priority": 34,
@@ -356,7 +402,8 @@
       "scope": "msg",
       "pattern": "^[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*\\[CNT:[\\p{Nd}]+/[\\p{Nd}]+\\][\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*\\[INT:[\\p{Nd}]+\\]",
       "flags": "",
-      "tag": "node"
+      "tag": "auto_beacon",
+      "legacy_tag": "node"
     },
     {
       "priority": 34,
@@ -364,7 +411,8 @@
       "scope": "msg",
       "pattern": "^[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*meshdash[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+v[0-9]+\\.[0-9]+\\.[0-9]+[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+startup",
       "flags": "i",
-      "tag": "software"
+      "tag": "auto_beacon",
+      "legacy_tag": "software"
     },
     {
       "priority": 34.1,
@@ -372,7 +420,8 @@
       "scope": "msg",
       "pattern": "^POS[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+GPS[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+-?[0-9]{1,3}\\.[0-9]+,[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*-?[0-9]{1,3}\\.[0-9]+",
       "flags": "",
-      "tag": "node"
+      "tag": "auto_beacon",
+      "legacy_tag": "node"
     },
     {
       "priority": 34.5,
@@ -380,7 +429,8 @@
       "scope": "msg",
       "pattern": "(?:^Contest:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff][^\\n]*\\([0-9]{4}Z-[0-9]{4}Z,|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))AFU[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+Termine(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))(?:Uhr|MESZ|MEZ)(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))[^\\n]*\\[[0-9]+/[0-9]+\\][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?![\\s\\S])|[0-9]{1,2}[:.][0-9]{2}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?:Uhr|MESZ|MEZ)(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))[^\\n]*\\[[0-9]+/[0-9]+\\][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?![\\s\\S])|^\\[Temp\\]:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*\\([0-9]+(?:\\.[0-9]+)?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[<>][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[0-9]+(?:\\.[0-9]+)?\\))",
       "flags": "",
-      "tag": "bulletin"
+      "tag": "bulletin",
+      "legacy_tag": "bulletin"
     },
     {
       "priority": 35,
@@ -388,7 +438,8 @@
       "scope": "msg",
       "pattern": "(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))contest[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*termine(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))",
       "flags": "i",
-      "tag": "bulletin"
+      "tag": "bulletin",
+      "legacy_tag": "bulletin"
     },
     {
       "priority": 35.5,
@@ -396,7 +447,8 @@
       "scope": "msg",
       "pattern": "^[^\\n]{0,16}?(?:(?<![\\p{L}\\p{N}_])(?:OV[- ]?(?:abend|runde)|clubabend)(?![\\p{L}\\p{N}_])[^\\n]{0,80}?(?<![0-9.:])[0-9]{1,2}[:.]?[0-9]{0,2}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?Uhr|(?<![0-9.:])[0-9]{1,2}(?:[:.][0-9]{2})?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?Uhr[^\\n]{0,60}?(?<![\\p{L}\\p{N}_])(?:OV[- ]?(?:abend|runde)|clubabend)(?![\\p{L}\\p{N}_]))",
       "flags": "i",
-      "tag": "bulletin"
+      "tag": "bulletin",
+      "legacy_tag": "bulletin"
     },
     {
       "priority": 35.5,
@@ -404,7 +456,8 @@
       "scope": "msg",
       "pattern": "^[^\\n]{0,16}?(?<![\\p{L}\\p{N}_])(?:OV[- ]?(?:abend|runde)|clubabend)(?![\\p{L}\\p{N}_])[^\\n]{0,80}?(?<![0-9.:])[0-9]{1,2}[:.][0-9]{2}(?![0-9])",
       "flags": "i",
-      "tag": "bulletin"
+      "tag": "bulletin",
+      "legacy_tag": "bulletin"
     },
     {
       "priority": 35.6,
@@ -412,7 +465,35 @@
       "scope": "msg",
       "pattern": "^[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*\\[(?:POTA|SOTA|DYPLOM)\\]",
       "flags": "i",
-      "tag": "pota-sota"
+      "tag": "pota-sota",
+      "legacy_tag": "pota-sota"
+    },
+    {
+      "priority": 35.7,
+      "name": "Bulletin net reminder",
+      "scope": "msg",
+      "pattern": "(?<![\\p{L}\\p{N}_./-])(?:rundspruch|netz|net|runde|sked)(?![\\p{L}\\p{N}_])(?=[^\\n]*(?<![0-9.:])[0-9]{1,2}(?::[0-9]{2}|[.][0-9]{2}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?:uhr|h|mesz|mez)(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))))",
+      "flags": "i",
+      "tag": "bulletin",
+      "legacy_tag": "bulletin"
+    },
+    {
+      "priority": 35.8,
+      "name": "Bulletin event link",
+      "scope": "msg",
+      "pattern": "(?<![\\p{L}\\p{N}_])(?:termin|veranstaltung|event|treffen|workshop|vortrag|infoabend)(?![\\p{L}\\p{N}_])[^\\n]{0,80}https?://",
+      "flags": "i",
+      "tag": "bulletin",
+      "legacy_tag": "bulletin"
+    },
+    {
+      "priority": 35.9,
+      "name": "Bulletin contest calendar",
+      "scope": "msg",
+      "pattern": "(?<![\\p{L}\\p{N}_])contest(?![\\p{L}\\p{N}_])[^\\n]{0,60}?(?<![\\p{L}\\p{N}_])(?:mo|di|mi|do|fr|sa|so|mon|tue|wed|thu|fri|sat|sun)(?![\\p{L}\\p{N}_])[^\\n]{0,30}?(?<![0-9.:])[0-9]{1,2}(?::[0-9]{2}|[.][0-9]{2}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?:uhr|h|mesz|mez|utc|z)(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_])))",
+      "flags": "i",
+      "tag": "bulletin",
+      "legacy_tag": "bulletin"
     },
     {
       "priority": 36,
@@ -420,7 +501,8 @@
       "scope": "msg",
       "pattern": "<(div|a|span|p|br)(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))[^>]*>",
       "flags": "",
-      "tag": "node"
+      "tag": "auto_beacon",
+      "legacy_tag": "node"
     },
     {
       "priority": 37,
@@ -428,7 +510,8 @@
       "scope": "msg",
       "pattern": "^(?![\\s\\S]*ALLERTA)[\\s\\S]*?[🌀-🫿☀-➿⌀-⏿][\\s\\S]*(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))(https?://|www\\.)[^\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+",
       "flags": "s",
-      "tag": "node"
+      "tag": "auto_beacon",
+      "legacy_tag": "node"
     },
     {
       "priority": 38,
@@ -436,7 +519,8 @@
       "scope": "msg",
       "pattern": "(^pong[!.\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]|↩️[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*pong(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))|^\\{(?:ping|pong)\\})",
       "flags": "i",
-      "tag": "bot"
+      "tag": "auto_beacon",
+      "legacy_tag": "bot"
     },
     {
       "priority": 39,
@@ -444,7 +528,8 @@
       "scope": "msg",
       "pattern": "^[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*MH\\([\\p{Nd}]+\\):[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[A-Z0-9]+-[\\p{Nd}]+",
       "flags": "",
-      "tag": "bot"
+      "tag": "auto_beacon",
+      "legacy_tag": "bot"
     },
     {
       "priority": 39.5,
@@ -452,7 +537,8 @@
       "scope": "msg",
       "pattern": "^⏳[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*Command throttled|^Cmds:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*>|^\\([0-9]+/[0-9]+\\)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?:📋|📻[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*MH:|📍|![A-Za-z0-9_]|[A-Z0-9]{3,}-[0-9]{1,3}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*@[0-9]{2}:[0-9]{2})|^Node[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[^|\\n]{0,30}\\|[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*QTH:[^|\\n]*\\|[^\\n]*Bot active[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*\\(--help\\)|^\\[[0-9]+/[0-9]+\\][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[A-Z0-9]{3,}-[0-9]{1,2}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[0-9]{4}-[0-9]{2}-[0-9]{2}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[0-9]{2}:[0-9]{2}:[0-9]{2}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+R:-?[0-9]+dBm|^📊[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*Stats[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*\\(last|^(?:\\[CTC\\][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*)?(?:🏓[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*)?Ping test(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|^[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[−‒–—―-]{1,2}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?(?:set[a-z]+|info|ping|help|mheard|mh|sendpos|reboot|pos|track|symcd|nbrrelay)(?![\\p{L}\\p{N}_])",
       "flags": "i",
-      "tag": "bot"
+      "tag": "auto_beacon",
+      "legacy_tag": "bot"
     },
     {
       "priority": 39.55,
@@ -460,7 +546,8 @@
       "scope": "msg",
       "pattern": "^(?:Automatische[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+Antwort|Auto[- ]?reply|Risposta[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+automatica|R[ée]ponse[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+automatique)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:von|from|da|de)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+",
       "flags": "i",
-      "tag": "bot"
+      "tag": "auto_beacon",
+      "legacy_tag": "bot"
     },
     {
       "priority": 39.56,
@@ -468,7 +555,8 @@
       "scope": "msg",
       "pattern": "(?<![\\p{L}\\p{N}_])(?:Hilfe|Help|Aiuto|Pomoc)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*:?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*--help(?![\\p{L}\\p{N}_])",
       "flags": "i",
-      "tag": "bot"
+      "tag": "auto_beacon",
+      "legacy_tag": "bot"
     },
     {
       "priority": 39.6,
@@ -476,7 +564,8 @@
       "scope": "msg",
       "pattern": "^(?:MCF1|FTS|FTA)\\|",
       "flags": "",
-      "tag": "bot"
+      "tag": "auto_beacon",
+      "legacy_tag": "bot"
     },
     {
       "priority": 39.65,
@@ -484,7 +573,8 @@
       "scope": "msg",
       "pattern": "^\\[[A-Za-z]{3,24}Tracker\\][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*\\|?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*ID[0-9]+:",
       "flags": "",
-      "tag": "bot"
+      "tag": "auto_beacon",
+      "legacy_tag": "bot"
     },
     {
       "priority": 40,
@@ -492,7 +582,8 @@
       "scope": "msg",
       "pattern": "^[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*QTH:[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[^\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]|,[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[A-R]{2}[0-9]{2}[A-X]{2}(?:[a-x]{2})?,[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*DOK[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[A-Z][0-9]{2}|^[A-Z0-9]{2,3}[0-9][A-Z0-9]{1,4}(?:-[0-9]{1,2})?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:operativo|qrv)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?![\\s\\S])",
       "flags": "i",
-      "tag": "node"
+      "tag": "auto_beacon",
+      "legacy_tag": "node"
     },
     {
       "priority": 40,
@@ -500,7 +591,8 @@
       "scope": "msg",
       "pattern": "^[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*Route:[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*[A-Z0-9]+-[\\p{Nd}]+",
       "flags": "i",
-      "tag": "bot"
+      "tag": "auto_beacon",
+      "legacy_tag": "bot"
     },
     {
       "priority": 40.1,
@@ -508,7 +600,8 @@
       "scope": "msg",
       "pattern": "^(?![^\\n]*\\?)(?=[^\\n]*(?<![\\p{L}\\p{N}_])[A-R]{2}[0-9]{2}[A-X]{2}(?![\\p{L}\\p{N}_]))[^\\n]{0,160}?,[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[0-9]{1,2}\\.[0-9]{1,2}\\.[0-9]{2,4},[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff*]*(?![\\s\\S])",
       "flags": "i",
-      "tag": "node"
+      "tag": "auto_beacon",
+      "legacy_tag": "node"
     },
     {
       "priority": 40.5,
@@ -516,7 +609,8 @@
       "scope": "msg",
       "pattern": "^Battery protection armed|^[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*📍[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*QTH(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|^\\[[0-9]+/[0-9]+\\][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*Info[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[0-9]{4}-[0-9]{2}-[0-9]{2}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[0-9]{2}:[0-9]{2}:[0-9]{2}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+BAT:|^Telemetry[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+V[0-9]+(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))[^\\n]*(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))[VIW][0-9]:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*-?[0-9]|^Supply moved[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[0-9]|(?<![\\p{L}\\p{N}_])(?:BBS|digipeater|mailbox)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+online(?![\\p{L}\\p{N}_])|^[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[A-Z0-9]{2,3}[0-9][A-Z0-9]{1,4}(?:-[0-9]{1,2})?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+up:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*power on",
       "flags": "i",
-      "tag": "node"
+      "tag": "auto_beacon",
+      "legacy_tag": "node"
     },
     {
       "priority": 41,
@@ -524,7 +618,8 @@
       "scope": "msg",
       "pattern": "^[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*-{2,}=+[^\\n]*=+-{2,}[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?=\\n?(?![\\s\\S]))",
       "flags": "",
-      "tag": "node"
+      "tag": "auto_beacon",
+      "legacy_tag": "node"
     },
     {
       "priority": 41.5,
@@ -532,7 +627,8 @@
       "scope": "msg",
       "pattern": "^[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*https?://(?:[A-Za-z0-9_.-]+\\.)?(?:angonikro\\.github\\.io/MeshCom-Guru|dg9sr\\.github\\.io/Adifanalyzer|github\\.com/(?:icssw-org|DH1FR)/|mc-dash\\.dig-italia\\.it|meshcom\\.dig-italia\\.it|dig-italia\\.it/out_|icssw\\.org/(?:en/|it/)?(?:meshcom-versionen|opensource-meshcom-clients|meshcom-ota-update))[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?![\\s\\S])|^[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*https?://(?:github\\.com/[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+|[A-Za-z0-9_-]+\\.github\\.io[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*|meshmap\\.oevsv\\.at(?:[/?#][^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*)?|dig-italia\\.it/docs_meshcom/[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*|icssw\\.org/[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?:update|firmware|software|download|client|versionen)[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?![\\s\\S])",
       "flags": "i",
-      "tag": "software"
+      "tag": "auto_beacon",
+      "legacy_tag": "software"
     },
     {
       "priority": 42,
@@ -540,7 +636,17 @@
       "scope": "msg",
       "pattern": "^[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(https?://|www\\.)[^\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?=\\n?(?![\\s\\S]))",
       "flags": "",
-      "tag": null
+      "tag": null,
+      "legacy_tag": null
+    },
+    {
+      "priority": 42.1,
+      "name": "URL in text",
+      "scope": "msg",
+      "pattern": "(https?://|www\\.)[^\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+",
+      "flags": "i",
+      "tag": "url",
+      "legacy_tag": "url"
     },
     {
       "priority": 47,
@@ -548,7 +654,8 @@
       "scope": "msg",
       "pattern": "^(?:[^\\p{L}\\p{N}_]*qsl[?!.\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?![\\s\\S])|[^\\p{L}\\p{N}_]*qsl(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|@[A-Za-z0-9/-]+:?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+qsl(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|[A-Za-z0-9/]{3,}(?:-[0-9]{1,2})?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*:QSL[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[0-9]|Danke fuer die Teilnahme am Meshday\\. Deine QSL:)|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))qsl[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+bitte(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))pse[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+qsl(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|(?<![\\p{L}\\p{N}_])qsl(?![\\p{L}\\p{N}_])|(?:dank[A-Za-z0-9_]*|thank[A-Za-z0-9_]*)[^\\n]{0,40}(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))am[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:www\\.)?meshday(?:\\.de)?(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))[^\\n]{0,20}(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))beteiligt",
       "flags": "i",
-      "tag": "qsl"
+      "tag": "qsl",
+      "legacy_tag": "qsl"
     },
     {
       "priority": 47.5,
@@ -556,7 +663,8 @@
       "scope": "msg",
       "pattern": "^(?![\\s\\S]{41})[\\s\\S]*(?:(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))tests?(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))|(?:verbindungs|strecken|reichweiten|funktions|selbst|probe)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?test|(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))testnachricht|(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))testmessage|messaggio[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:di[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?test|radio[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+check|(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))probebetrieb)",
       "flags": "i",
-      "tag": "test"
+      "tag": "test",
+      "legacy_tag": "test"
     },
     {
       "priority": 47.6,
@@ -564,7 +672,8 @@
       "scope": "msg",
       "pattern": "^(?![\\s\\S]*(?:contest|mini-test|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))CWT(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))|>test|(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))Cmds:))(?!FTS\\|)(?=[\\s\\S]{41,160}(?![\\s\\S]))[^\\n]{0,28}?(?<![\\p{L}\\p{N}_-])(?:test|testnachricht|testmail|testmessage|testbetrieb|reichweitentest|funktionstest|verbindungstest)(?![\\p{L}\\p{N}_])(?![\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?:erfolgreich|ok|durchgeführt))",
       "flags": "i",
-      "tag": "test"
+      "tag": "test",
+      "legacy_tag": "test"
     },
     {
       "priority": 47.7,
@@ -572,7 +681,8 @@
       "scope": "msg",
       "pattern": "^[^A-Za-z0-9_]*(?:1234?5?6?7?8?9?|qwert[zy]|asdf[A-Za-z0-9_]{0,4}|testbake|messaggio[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+di[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+prova|sendeprobe)[^A-Za-z0-9_]*(?![\\s\\S])",
       "flags": "i",
-      "tag": "test"
+      "tag": "test",
+      "legacy_tag": "test"
     },
     {
       "priority": 47.8,
@@ -580,7 +690,8 @@
       "scope": "msg",
       "pattern": "(?<![\\p{L}\\p{N}_])testbake(?![\\p{L}\\p{N}_])",
       "flags": "i",
-      "tag": "test"
+      "tag": "test",
+      "legacy_tag": "test"
     },
     {
       "priority": 48,
@@ -588,7 +699,8 @@
       "scope": "msg",
       "pattern": "^[^\\p{L}\\p{N}_]*(test|prova|probe|proberuf|versuch|essai|prueba)([^\\p{L}\\p{N}_]|(?=\\n?(?![\\s\\S])))",
       "flags": "i",
-      "tag": "test"
+      "tag": "test",
+      "legacy_tag": "test"
     },
     {
       "priority": 49,
@@ -596,7 +708,8 @@
       "scope": "msg",
       "pattern": "^(?![\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*https?://)(?![\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[>!][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[A-Za-z0-9_])(?=[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[^\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)[^\\n]*\\?{1,3}[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff\\p{Extended_Pictographic}️)]*(?![\\s\\S])",
       "flags": "",
-      "tag": "question"
+      "tag": "question",
+      "legacy_tag": "question"
     },
     {
       "priority": 50,
@@ -604,7 +717,8 @@
       "scope": "msg",
       "pattern": "^(?:[^\\p{L}\\p{N}_]*(73|hallo|servus|moin|nabend|ahoi|guten[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morgen|abend|tag)|gute[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(nacht|reise)|good[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morning|evening|night|afternoon|day)|buon ?giorno|buona? ?s?era|buona ?notte|buonanotte|buon ?pomeriggio|ciao|hello|hi(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))|(?:salut|bonjour|bonsoir|bonne[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:nuit|soir[ée]e|journ[ée]e)|witam|hej|hey|huhu|mahlzeit|cze[sś][cć]|dzie[nń][\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+dobry|dobry[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:wiecz[oó]r|dzie[nń])|dobranoc|ol[aá]|slt|gm|gn|(?:einen[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+|ein[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+)?(?:sch[oö]nen?|sch[oö]nes|guten?|gute)[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:morgen|abend|tag|nacht|wochenstart|wochenende|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag|start)|buona?[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:sera|serata|giornata|notte|mattina|domenica)|buon[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:giorno|pomeriggio|inizio|weekend|fine)|saluti|salve|gr[uü](?:ß|ss|[ßs]e))(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_])))|[^\\p{L}\\p{N}_]*(?:(?:ein[A-Za-z0-9_]*[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?(?:sch[oö]n[A-Za-z0-9_]*|sonnig[A-Za-z0-9_]*|guten?|frohe?|gesegnete?|angenehme?|erholsame?|ruhige?)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:(?:guten?|sch[oö]n[A-Za-z0-9_]*)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?(?:morgen|tag|abend|nachmittag|vormittag|mittag|nacht|woche|wochenende|wochenstart|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag|start|feierabend|feiertag)|gude|tach|pfiat(?:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+di)?|gr[uü](?:ß|ss)e?|buenos[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+d[ií]as|buenas[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:tardes|noches)|hola|alo|dzie[nń][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+dobry|witaj|mi[lł]ego|dobrej[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+nocy|godmorgen|god[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+morgen|buon[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+pranzo|happy[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+meshday)(?![\\p{L}\\p{N}_])|@[A-Za-z0-9/-]{3,12}(?::|[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[^\\p{L}\\p{N}_]*(73|hallo|servus|moin|nabend|ahoi|guten[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morgen|abend|tag)|gute[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(nacht|reise)|good[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morning|evening|night|afternoon|day)|buon ?giorno|buona? ?s?era|buona ?notte|buonanotte|buon ?pomeriggio|ciao|hello|hi(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))|(?:salut|bonjour|bonsoir|bonne[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:nuit|soir[ée]e|journ[ée]e)|witam|hej|hey|huhu|mahlzeit|cze[sś][cć]|dzie[nń][\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+dobry|dobry[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:wiecz[oó]r|dzie[nń])|dobranoc|ol[aá]|slt|gm|gn|(?:einen[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+|ein[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+)?(?:sch[oö]nen?|sch[oö]nes|guten?|gute)[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:morgen|abend|tag|nacht|wochenstart|wochenende|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag|start)|buona?[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:sera|serata|giornata|notte|mattina|domenica)|buon[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:giorno|pomeriggio|inizio|weekend|fine)|saluti|salve|gr[uü](?:ß|ss|[ßs]e))(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))))",
       "flags": "i",
-      "tag": "greeting"
+      "tag": "greeting",
+      "legacy_tag": "greeting"
     },
     {
       "priority": 50,
@@ -612,7 +726,8 @@
       "scope": "msg",
       "pattern": "^(?:@[A-Za-z0-9/-]{3,12}(?::|[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*)?[^\\p{L}\\p{N}_]*(?:n['’]abend|hejka|hejo|siema|witajcie)(?![\\p{L}\\p{N}_])",
       "flags": "i",
-      "tag": "greeting"
+      "tag": "greeting",
+      "legacy_tag": "greeting"
     },
     {
       "priority": 50,
@@ -620,7 +735,8 @@
       "scope": "msg",
       "pattern": "(?!^(?:[^\\p{L}\\p{N}_]*(73|hallo|servus|moin|nabend|ahoi|guten[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morgen|abend|tag)|gute[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(nacht|reise)|good[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morning|evening|night|afternoon|day)|buon ?giorno|buona? ?s?era|buona ?notte|buonanotte|buon ?pomeriggio|ciao|hello|hi(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))|(?:salut|bonjour|bonsoir|bonne[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:nuit|soir[ée]e|journ[ée]e)|witam|hej|hey|huhu|mahlzeit|cze[sś][cć]|dzie[nń][\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+dobry|dobry[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:wiecz[oó]r|dzie[nń])|dobranoc|ol[aá]|slt|gm|gn|(?:einen[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+|ein[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+)?(?:sch[oö]nen?|sch[oö]nes|guten?|gute)[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:morgen|abend|tag|nacht|wochenstart|wochenende|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag|start)|buona?[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:sera|serata|giornata|notte|mattina|domenica)|buon[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:giorno|pomeriggio|inizio|weekend|fine)|saluti|salve|gr[uü](?:ß|ss|[ßs]e))(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_])))|[^\\p{L}\\p{N}_]*(?:(?:ein[A-Za-z0-9_]*[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?(?:sch[oö]n[A-Za-z0-9_]*|sonnig[A-Za-z0-9_]*|guten?|frohe?|gesegnete?|angenehme?|erholsame?|ruhige?)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:(?:guten?|sch[oö]n[A-Za-z0-9_]*)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?(?:morgen|tag|abend|nachmittag|vormittag|mittag|nacht|woche|wochenende|wochenstart|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag|start|feierabend|feiertag)|gude|tach|pfiat(?:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+di)?|gr[uü](?:ß|ss)e?|buenos[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+d[ií]as|buenas[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:tardes|noches)|hola|alo|dzie[nń][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+dobry|witaj|mi[lł]ego|dobrej[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+nocy|godmorgen|god[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+morgen|buon[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+pranzo|happy[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+meshday)(?![\\p{L}\\p{N}_])|@[A-Za-z0-9/-]{3,12}(?::|[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[^\\p{L}\\p{N}_]*(73|hallo|servus|moin|nabend|ahoi|guten[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morgen|abend|tag)|gute[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(nacht|reise)|good[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morning|evening|night|afternoon|day)|buon ?giorno|buona? ?s?era|buona ?notte|buonanotte|buon ?pomeriggio|ciao|hello|hi(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))|(?:salut|bonjour|bonsoir|bonne[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:nuit|soir[ée]e|journ[ée]e)|witam|hej|hey|huhu|mahlzeit|cze[sś][cć]|dzie[nń][\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+dobry|dobry[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:wiecz[oó]r|dzie[nń])|dobranoc|ol[aá]|slt|gm|gn|(?:einen[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+|ein[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+)?(?:sch[oö]nen?|sch[oö]nes|guten?|gute)[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:morgen|abend|tag|nacht|wochenstart|wochenende|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag|start)|buona?[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:sera|serata|giornata|notte|mattina|domenica)|buon[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:giorno|pomeriggio|inizio|weekend|fine)|saluti|salve|gr[uü](?:ß|ss|[ßs]e))(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_])))))^(?:(?:qsl|ok|okay|ack|roger)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff.,:;!-]+)?(?:[A-Z0-9]{3,8}(?:-[0-9]{1,2})?:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*|@[A-Za-z0-9/-]{3,12}[:\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*)?[^\\p{L}\\p{N}_]*(?:(?:gr[uü](?:ß|ss)e?|guten?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:morgen|abend|tag)|moin|hallo|servus|buon[A-Za-z0-9_]+|ciao|gm|gn|gri[ae](?:ß|ss?)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:eich|di|euch)|aloha|halli(?:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff-]+hallo)?|hel{2,}o|helo|ga[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+a[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+tutti|gumo|tsch[uü]e?ss?|bis[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+sp[aä]ter|salli|liebe[ns]?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+gr[uü](?:ß|ss)e?|bye[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*bye|bonne[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:sieste|soir[ée]e|journ[ée]e|fin|nuit)|(?:ich[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?w[uü]nsche?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:euch[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+|allen[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+|ein[A-Za-z0-9_]*[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)+(?:sch[oö]n[A-Za-z0-9_]*|gut[A-Za-z0-9_]*|angenehm[A-Za-z0-9_]*))(?![\\p{L}\\p{N}_])|(?:ein[A-Za-z0-9_]*[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?sch[oö]n[A-Za-z0-9_]*[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:sonnig[A-Za-z0-9_]*|sch[oö]n[A-Za-z0-9_]*|erholsam[A-Za-z0-9_]*|ruhig[A-Za-z0-9_]*)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:morgen|tag|abend|nacht|woche|wochenende|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag)(?![\\p{L}\\p{N}_]))",
       "flags": "i",
-      "tag": "greeting"
+      "tag": "greeting",
+      "legacy_tag": "greeting"
     },
     {
       "priority": 55,
@@ -628,7 +744,8 @@
       "scope": "msg",
       "pattern": "⚠️?[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*erinnerung|erinnerung[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*⚠",
       "flags": "i",
-      "tag": "bulletin"
+      "tag": "bulletin",
+      "legacy_tag": "bulletin"
     },
     {
       "priority": 60,
@@ -636,7 +753,8 @@
       "scope": "msg",
       "pattern": "(erdbeben|earthquake|magnitude[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+[\\p{Nd}]+)",
       "flags": "i",
-      "tag": "alert"
+      "tag": "alert",
+      "legacy_tag": "alert"
     },
     {
       "priority": 90,
@@ -644,7 +762,8 @@
       "scope": "dst",
       "pattern": "(?:^|,)[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?!(?:ALL|TEST|TIME)[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?=\\n?(?![\\s\\S])))(?=[^,]*[A-Z])[A-Z0-9./-]+[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?=\\n?(?![\\s\\S]))",
       "flags": "i",
-      "tag": "directed"
+      "tag": "directed",
+      "legacy_tag": "directed"
     }
   ],
   "vectors": [
@@ -892,8 +1011,8 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "greeting",
-        "software"
+        "auto_beacon",
+        "greeting"
       ],
       "rules": [
         "Version banner",
@@ -933,6 +1052,7 @@
       ],
       "rules": [
         "WX bare C temperature with sky word",
+        "WX humidity percent",
         "WX measurements"
       ],
       "directed": false
@@ -959,6 +1079,7 @@
       ],
       "rules": [
         "WX temperature value",
+        "WX humidity percent",
         "WX measurements",
         "Greeting DE/EN"
       ],
@@ -1003,7 +1124,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "software"
+        "auto_beacon"
       ],
       "rules": [
         "Version banner"
@@ -1015,7 +1136,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "software"
+        "auto_beacon"
       ],
       "rules": [
         "Version banner",
@@ -1030,7 +1151,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "software"
+        "auto_beacon"
       ],
       "rules": [
         "Version banner"
@@ -1042,10 +1163,12 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "software"
+        "auto_beacon",
+        "url"
       ],
       "rules": [
-        "MeshCom WebDesk version"
+        "MeshCom WebDesk version",
+        "URL in text"
       ],
       "directed": false
     },
@@ -1249,7 +1372,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Bot command prefix"
@@ -1261,7 +1384,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Bot command prefix"
@@ -1273,7 +1396,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Bot command prefix"
@@ -1285,7 +1408,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Bot command prefix"
@@ -1317,11 +1440,13 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "software"
+        "auto_beacon",
+        "url"
       ],
       "rules": [
         "Software URL",
-        "URL advert"
+        "URL advert",
+        "URL in text"
       ],
       "directed": false
     },
@@ -1330,11 +1455,13 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "software"
+        "auto_beacon",
+        "url"
       ],
       "rules": [
         "Software URL",
-        "URL advert"
+        "URL advert",
+        "URL in text"
       ],
       "directed": false
     },
@@ -1343,10 +1470,12 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "qso"
+        "qso",
+        "url"
       ],
       "rules": [
-        "URL advert"
+        "URL advert",
+        "URL in text"
       ],
       "directed": false
     },
@@ -1355,10 +1484,12 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "qso"
+        "qso",
+        "url"
       ],
       "rules": [
-        "URL advert"
+        "URL advert",
+        "URL in text"
       ],
       "directed": false
     },
@@ -1447,7 +1578,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "MH heard list"
@@ -1459,7 +1590,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Route beacon"
@@ -1471,7 +1602,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "node"
+        "auto_beacon"
       ],
       "rules": [
         "QTH beacon"
@@ -1547,7 +1678,8 @@
       ],
       "rules": [
         "WX Italian",
-        "WX bot templates"
+        "WX bot templates",
+        "WX humidity percent"
       ],
       "directed": false
     },
@@ -1992,11 +2124,13 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "software"
+        "auto_beacon",
+        "url"
       ],
       "rules": [
         "Software URL",
-        "URL advert"
+        "URL advert",
+        "URL in text"
       ],
       "directed": false
     },
@@ -2005,11 +2139,13 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "software"
+        "auto_beacon",
+        "url"
       ],
       "rules": [
         "Software URL",
-        "URL advert"
+        "URL advert",
+        "URL in text"
       ],
       "directed": false
     },
@@ -2018,11 +2154,13 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "software"
+        "auto_beacon",
+        "url"
       ],
       "rules": [
         "Software URL",
-        "URL advert"
+        "URL advert",
+        "URL in text"
       ],
       "directed": false
     },
@@ -2031,11 +2169,13 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "software"
+        "auto_beacon",
+        "url"
       ],
       "rules": [
         "Software URL",
-        "URL advert"
+        "URL advert",
+        "URL in text"
       ],
       "directed": false
     },
@@ -2044,11 +2184,13 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "software"
+        "auto_beacon",
+        "url"
       ],
       "rules": [
         "Software URL",
-        "URL advert"
+        "URL advert",
+        "URL in text"
       ],
       "directed": false
     },
@@ -2057,11 +2199,13 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "software"
+        "auto_beacon",
+        "url"
       ],
       "rules": [
         "Software URL",
-        "URL advert"
+        "URL advert",
+        "URL in text"
       ],
       "directed": false
     },
@@ -2070,10 +2214,12 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "qso"
+        "qso",
+        "url"
       ],
       "rules": [
-        "URL advert"
+        "URL advert",
+        "URL in text"
       ],
       "directed": false
     },
@@ -2082,10 +2228,12 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "qso"
+        "qso",
+        "url"
       ],
       "rules": [
-        "URL advert"
+        "URL advert",
+        "URL in text"
       ],
       "directed": false
     },
@@ -2094,9 +2242,12 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "qso"
+        "qso",
+        "url"
       ],
-      "rules": [],
+      "rules": [
+        "URL in text"
+      ],
       "directed": false
     },
     {
@@ -2214,7 +2365,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "node",
+        "auto_beacon",
         "test"
       ],
       "rules": [
@@ -2347,7 +2498,8 @@
         "alert"
       ],
       "rules": [
-        "Alert bot Italian"
+        "Alert bot Italian",
+        "Quake report word (IT)"
       ],
       "directed": false
     },
@@ -2371,7 +2523,8 @@
         "alert"
       ],
       "rules": [
-        "Alert bot Italian"
+        "Alert bot Italian",
+        "Quake report word (IT)"
       ],
       "directed": false
     },
@@ -2390,7 +2543,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Bot reply templates"
@@ -2402,7 +2555,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Bot reply templates"
@@ -2414,7 +2567,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Bot reply templates"
@@ -2426,7 +2579,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Bot reply templates"
@@ -2438,7 +2591,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Bot reply templates"
@@ -2450,7 +2603,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot",
+        "auto_beacon",
         "test"
       ],
       "rules": [
@@ -2464,7 +2617,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Bot reply templates"
@@ -2476,7 +2629,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "File-transfer frames"
@@ -2488,7 +2641,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "File-transfer frames"
@@ -2500,7 +2653,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "File-transfer frames"
@@ -2512,7 +2665,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "File-transfer frames"
@@ -2534,7 +2687,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Bot command dash",
@@ -2557,7 +2710,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Bot command dash",
@@ -2570,7 +2723,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "node"
+        "auto_beacon"
       ],
       "rules": [
         "Node status lines"
@@ -2582,7 +2735,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "node"
+        "auto_beacon"
       ],
       "rules": [
         "Node status lines"
@@ -2594,7 +2747,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "node"
+        "auto_beacon"
       ],
       "rules": [
         "Node status lines"
@@ -2606,7 +2759,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "node"
+        "auto_beacon"
       ],
       "rules": [
         "Node status lines"
@@ -2618,7 +2771,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "node"
+        "auto_beacon"
       ],
       "rules": [
         "Node status lines"
@@ -2689,10 +2842,12 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "qso"
+        "qso",
+        "url"
       ],
       "rules": [
-        "URL advert"
+        "URL advert",
+        "URL in text"
       ],
       "directed": false
     },
@@ -2701,7 +2856,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Bot command prefix"
@@ -2713,7 +2868,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "software"
+        "auto_beacon"
       ],
       "rules": [
         "Version banner"
@@ -2725,7 +2880,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "software"
+        "auto_beacon"
       ],
       "rules": [
         "Version banner"
@@ -2752,7 +2907,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "time"
+        "auto_beacon"
       ],
       "rules": [
         "Time bot reply"
@@ -2764,7 +2919,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "time"
+        "auto_beacon"
       ],
       "rules": [
         "Time bot reply"
@@ -2776,7 +2931,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "time"
+        "auto_beacon"
       ],
       "rules": [
         "Time bot reply"
@@ -2798,7 +2953,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "software"
+        "auto_beacon"
       ],
       "rules": [
         "MeshDash startup"
@@ -2843,10 +2998,12 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "alert"
+        "alert",
+        "url"
       ],
       "rules": [
-        "Alert bot"
+        "Alert bot",
+        "URL in text"
       ],
       "directed": false
     },
@@ -2855,10 +3012,12 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "node"
+        "auto_beacon",
+        "url"
       ],
       "rules": [
-        "Emoji URL advert"
+        "Emoji URL advert",
+        "URL in text"
       ],
       "directed": false
     },
@@ -2887,7 +3046,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Bot command dash",
@@ -2900,7 +3059,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Bot command help response"
@@ -2912,7 +3071,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Bot error response"
@@ -2924,7 +3083,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Ping command"
@@ -2936,7 +3095,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "time"
+        "auto_beacon"
       ],
       "rules": [
         "CET timestamp"
@@ -3108,7 +3267,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "software"
+        "auto_beacon"
       ],
       "rules": [
         "MeshCom WebDesk version"
@@ -3120,7 +3279,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "software"
+        "auto_beacon"
       ],
       "rules": [
         "MeshCom WebDesk banner"
@@ -3132,7 +3291,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "software"
+        "auto_beacon"
       ],
       "rules": [
         "MeshCom/WebDesk mention"
@@ -3144,7 +3303,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "software"
+        "auto_beacon"
       ],
       "rules": [
         "FW version 73"
@@ -3156,7 +3315,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "node"
+        "auto_beacon"
       ],
       "rules": [
         "Telemetry CNT/INT"
@@ -3180,7 +3339,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Pong reply"
@@ -3192,7 +3351,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "MH heard list"
@@ -3204,7 +3363,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "node"
+        "auto_beacon"
       ],
       "rules": [
         "HTML advert"
@@ -3216,10 +3375,12 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "node"
+        "auto_beacon",
+        "url"
       ],
       "rules": [
-        "Emoji URL advert"
+        "Emoji URL advert",
+        "URL in text"
       ],
       "directed": false
     },
@@ -3228,7 +3389,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "node"
+        "auto_beacon"
       ],
       "rules": [
         "QTH beacon"
@@ -3240,7 +3401,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Route beacon"
@@ -3252,7 +3413,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "node"
+        "auto_beacon"
       ],
       "rules": [
         "Banner advert"
@@ -3264,10 +3425,12 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "qso"
+        "qso",
+        "url"
       ],
       "rules": [
-        "URL advert"
+        "URL advert",
+        "URL in text"
       ],
       "directed": false
     },
@@ -3377,7 +3540,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "node"
+        "auto_beacon"
       ],
       "rules": [
         "Node timestamp banner"
@@ -3389,7 +3552,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "node"
+        "auto_beacon"
       ],
       "rules": [
         "POS GPS line"
@@ -3401,7 +3564,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Auto reply notice"
@@ -3413,7 +3576,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Tracker data frame"
@@ -3425,8 +3588,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot",
-        "node"
+        "auto_beacon"
       ],
       "rules": [
         "Help-flag banner",
@@ -3443,6 +3605,95 @@
       ],
       "rules": [
         "WX bare C temperature with sky word"
+      ],
+      "directed": false
+    },
+    {
+      "text": "TERREMOTO zona Nord: prime verifiche in corso",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "alert"
+      ],
+      "rules": [
+        "Quake report word (IT)"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Rundspruch heute 19:30 Uhr auf 145.500",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bulletin"
+      ],
+      "rules": [
+        "Bulletin net reminder"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Termin: Infoabend am Samstag, https://example.org/event",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bulletin",
+        "url"
+      ],
+      "rules": [
+        "Bulletin event link",
+        "URL in text"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Contest Mo 19:00 UKW, Mi 18:00 FT8",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bulletin"
+      ],
+      "rules": [
+        "Bulletin contest calendar"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Schau mal rein: https://example.org/cam",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "url"
+      ],
+      "rules": [
+        "URL in text"
+      ],
+      "directed": false
+    },
+    {
+      "text": "Luftfeuchte: 82 %",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX humidity percent"
+      ],
+      "directed": false
+    },
+    {
+      "text": "DF2AP JO50JX 18,1°C Wind 4 km/h",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX temperature value",
+        "WX locator with temperature",
+        "WX measurements"
       ],
       "directed": false
     },
@@ -3574,7 +3825,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot",
+        "auto_beacon",
         "question"
       ],
       "rules": [
@@ -3906,7 +4157,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Ping command"
@@ -3918,7 +4169,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Ping command"
@@ -3930,7 +4181,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Ping command"
@@ -3942,7 +4193,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Ping command"
@@ -3954,7 +4205,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Bot command dash",
@@ -3967,7 +4218,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Bot command dash",
@@ -3980,7 +4231,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Bot command dash",
@@ -3993,10 +4244,12 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "qso"
+        "qso",
+        "url"
       ],
       "rules": [
-        "URL advert"
+        "URL advert",
+        "URL in text"
       ],
       "directed": false
     },
@@ -4005,10 +4258,12 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "qso"
+        "qso",
+        "url"
       ],
       "rules": [
-        "URL advert"
+        "URL advert",
+        "URL in text"
       ],
       "directed": false
     },
@@ -4040,7 +4295,7 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "bot"
+        "auto_beacon"
       ],
       "rules": [
         "Ping command"
