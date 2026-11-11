@@ -58,7 +58,7 @@ _VECTORS_PATH = Path(__file__).parent.parent / "contract" / "suppression_vectors
 # constant deliberately (and re-check the hand-written cases below still
 # agree with the new corpus) or the change was unintentional and this
 # tripwire just did its job. Mirrors commands/hashtag_dst_tests.py.
-_EXPECTED_SHA256 = "e0c44a84d296a4fd1fa8e4db34c5cce49bd8b956a25dd2b81583a4925ad80880"
+_EXPECTED_SHA256 = "e9bfee33c7db5f1f5f74919f29a560b81b5f3975a092df8d89c827302fa02154"
 
 # DDL copied verbatim from storage/migrations.py (migrations v11, v16, v17).
 # Kept as a local copy rather than importing anything from migrations.py: a
