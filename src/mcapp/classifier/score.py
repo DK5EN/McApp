@@ -54,6 +54,14 @@ _MINIMAL_CONTENT_CAP: float = 0.30
 # ``--help`` echoes that slipped past the regex).
 _MINIMAL_TOKEN_CAP: int = 2
 
+# Owner 2026-11-11: a short message is not noise when a person wrote it. "Hi" and
+# "Hello 👏" are human, so the minimal-content clamp does not apply to a short
+# greeting or a directed message. It still applies to digits and symbols
+# ("123") and to short words that carry no human marker ("info").
+_HUMAN_SHORT_TAGS: frozenset[str] = frozenset({"greeting"})
+
+_LETTER_RE = re.compile(r"[^\W\d_]")
+
 
 def compute(
     msg: dict,  # type: ignore[type-arg]
@@ -92,8 +100,11 @@ def compute(
     freshness: float = 1.0 / (1 + template_count)
 
     # Negative contributors
+    # Owner 2026-11-11: emoji is an expression, not noise, when words are present
+    # ("Hello 👏"). The penalty applies only to text without letters.
     emoji_count: int = len(EMOJI_RE.findall(text))
-    emoji_density: float = emoji_count / max(len(text), 1)
+    has_letters = _LETTER_RE.search(text) is not None
+    emoji_density: float = 0.0 if has_letters else emoji_count / max(len(text), 1)
     url_density: float = 1.0 if URL_RE.search(text) else 0.0
     automated = {AUTO_BEACON_TAG, *automated_tags}
     known_beacon: float = 1.0 if automated & tag_set else 0.0
@@ -110,14 +121,20 @@ def compute(
 
     final: float = max(0.0, min(1.0, score + 0.5))
 
-    # Bot clamp: bot commands are noise regardless of length/directness.
-    if "bot" in tag_set:
+    # Automated clamp: machine output (auto_beacon: bot replies, node banners, software
+    # announcements, clock lines) is noise regardless of length/directness.
+    if AUTO_BEACON_TAG in tag_set:
         return min(final, _BOT_COMMAND_CAP)
 
     # Minimal-content clamp: catches raw tokens that slipped past the regex
-    # (stray whitespace, numeric-only pings, etc.).
+    # (stray whitespace, numeric-only pings, etc.). A short human message is exempt.
     stripped = text.strip()
-    if stripped and len(stripped.split()) <= _MINIMAL_TOKEN_CAP:
+    human_short = bool(_HUMAN_SHORT_TAGS & tag_set) or directed
+    if (
+        stripped
+        and len(stripped.split()) <= _MINIMAL_TOKEN_CAP
+        and not (human_short and has_letters)
+    ):
         return min(final, _MINIMAL_CONTENT_CAP)
 
     return final

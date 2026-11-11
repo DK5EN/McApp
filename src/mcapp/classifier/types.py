@@ -97,10 +97,20 @@ _TAG_CATEGORY_ORDER: tuple[tuple[str, str], ...] = (
 )
 
 
-def derive_category(tags: Collection[str], directed: bool) -> str:
-    """Derive the legacy single-valued category from tags and the directed flag."""
+def derive_category(
+    tags: Collection[str],
+    directed: bool,
+    legacy_tags: Collection[str] | None = None,
+) -> str:
+    """Derive the legacy single-valued category from tags and the directed flag.
+
+    ``legacy_tags`` (from the engine, v7) are the tags the matched rules carried before the
+    v7 taxonomy; they decide the automated categories, so timestamp beacons, weather, node,
+    software, bot and alert keep their categories. Without it the tags themselves decide.
+    """
+    category_tags = tags if legacy_tags is None else legacy_tags
     for tag, category in _TAG_CATEGORY_ORDER:
-        if tag in tags:
+        if tag in category_tags:
             return category
     if directed:
         return "directed"

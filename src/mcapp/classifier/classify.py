@@ -189,7 +189,12 @@ class Classifier:
                 # template is automated, so it is no conversation.
                 tag_set.add(AUTO_BEACON_TAG)
                 tag_set.discard(_QSO_TAG)
-            category = derive_category(tag_set, directed)
+                # Owner 2026-11-11: a repeated greeting-plus-weather template is a weather
+                # report, the greeting is non-human. A greeting alone stays (greeting bots
+                # are flaggable, issue #17), and a single greeting+weather message keeps both.
+                if "weather" in tag_set:
+                    tag_set.discard("greeting")
+            category = derive_category(tag_set, directed, l1.legacy_tags)
 
             # Layer 3: info score
             info_score = score_compute(

@@ -446,8 +446,10 @@ async def _suite_score(results: list[tuple[str, bool]]) -> None:
     score = score_compute(_msg(text="a normal conversational reply here"), {"qso"}, 0)
     results.append(("score: compute() returns a value in [0, 1]", 0.0 <= score <= 1.0))
 
-    bot_score = score_compute(_msg(text="!wx"), {"bot"}, 0, automated_tags={"bot"})
-    results.append(("score: bot tag is clamped low", bot_score <= 0.25))
+    bot_score = score_compute(
+        _msg(text="!wx"), {AUTO_BEACON_TAG}, 0, automated_tags={AUTO_BEACON_TAG}
+    )
+    results.append(("score: auto_beacon tag is clamped low", bot_score <= 0.25))
 
     # Ordering property: an informative multi-token sentence must outscore a
     # low-information emoji-only or URL-only body.
