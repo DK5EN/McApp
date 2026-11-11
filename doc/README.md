@@ -66,7 +66,8 @@ uses. A runbook never contains decision logic.
 [RB-008 standalone BLE service](runbook/RB-008-ble-service-standalone.md) ·
 [RB-009 bootstrap install and CLI](runbook/RB-009-bootstrap-install-and-cli.md) ·
 [RB-010 remote SD card flashing](runbook/RB-010-remote-sd-card-flashing.md) ·
-[RB-011 TLS remote access setup](runbook/RB-011-tls-remote-access-setup.md) (architecture stale, see banner)
+[RB-011 TLS remote access setup](runbook/RB-011-tls-remote-access-setup.md) (architecture stale, see banner) ·
+[RB-012 classifier soak check](runbook/RB-012-classifier-soak-check.md)
 
 ### Reference
 
