@@ -39,7 +39,7 @@
 	handle /events* {
 		# gzip level 1 only, flushed per event. Measured on a Pi Zero 2 W: the connect burst
 		# drops from 781 KB to 129 KB, zstd would hold 7 MB more per 3 clients, and events
-		# still arrive within 1 ms. Plan: doc/2026-11-06_1400-runtime-compression-measurements.md
+		# still arrive within 1 ms. Plan: doc/archive/2026-11-06_1400-runtime-compression-measurements.md
 		encode {
 			gzip 1
 		}

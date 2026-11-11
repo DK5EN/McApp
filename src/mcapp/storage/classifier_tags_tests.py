@@ -1,6 +1,6 @@
 """Storage-level regression suite for the classifier unification (tags).
 
-Pins the MCProxy side of mc-chat 4300263 (doc/2026-10-20_classifier-unification.md):
+Pins the MCProxy side of mc-chat 4300263 (doc/adr/ADR-0004-classifier-unification.md):
 
   1. `count_messages_by_tag` (incl. malformed `tags` JSON never raising).
   2. `backfill_auto_beacon_templates`: single-sender templates only, on every arm.
