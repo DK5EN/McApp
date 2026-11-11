@@ -32,6 +32,10 @@ class L1Result:
     tags: frozenset[str]
     rules: tuple[str, ...]
     directed: bool
+    # The tags the matched rules carried before the v7 taxonomy (bot, node, software, time).
+    # The category layer reads these, so categories and the timestamp-beacon drop keep their
+    # meaning while the stored tags use the new vocabulary (auto_beacon).
+    legacy_tags: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -40,6 +44,7 @@ class _Rule:
     scope: str
     tag: str | None
     pattern: regex.Pattern[str]
+    legacy_tag: str | None = None
 
 
 def _compile(pattern: str, flags: str, label: str) -> regex.Pattern[str]:
@@ -76,12 +81,15 @@ class Engine:
             if scope not in _SCOPES:
                 raise ValueError(f"rule {name!r}: unknown scope {scope!r}")
             tag = raw["tag"]
+            # contracts before v7 have no legacy_tag: the tag is its own legacy tag
+            legacy = raw.get("legacy_tag", tag)
             rules.append(
                 _Rule(
                     name,
                     scope,
                     None if tag is None else str(tag),
                     _compile(str(raw["pattern"]), str(raw["flags"]), f"rule {name!r}"),
+                    None if legacy is None else str(legacy),
                 )
             )
         self._rules = tuple(rules)  # contract order is evaluation order
@@ -110,6 +118,7 @@ class Engine:
         directed = False
         names: list[str] = []
         tags: set[str] = set()
+        legacy: set[str] = set()
         for rule in self._rules:
             if rule.scope == "msg":
                 target = text
@@ -129,6 +138,8 @@ class Engine:
             names.append(rule.name)
             if rule.tag is not None:
                 tags.add(rule.tag)
+            if rule.legacy_tag is not None:
+                legacy.add(rule.legacy_tag)
         evidence = (
             ("directed" in self._exempt and directed)
             or ("question" in self._exempt and "question" in tags)
@@ -139,7 +150,7 @@ class Engine:
         )
         if text.strip(_JS_WHITESPACE) != "" and not automated:
             tags.add(self._qso_tag)
-        return L1Result(frozenset(tags), tuple(names), directed)
+        return L1Result(frozenset(tags), tuple(names), directed, frozenset(legacy))
 
 
 def load_contract(data: Mapping[str, Any]) -> Engine:
