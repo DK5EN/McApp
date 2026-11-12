@@ -505,16 +505,17 @@ ssh mcapp.local '
   systemctl is-active mcapp mcapp-ble caddy lighttpd
   systemctl show mcapp -p NRestarts --value          # still 0
   grep -h "^LATEST_SCHEMA_VERSION" ~/mcapp-slots/current/src/mcapp/storage/constants.py
-  find ~/mcapp-slots/current/src/mcapp -name "*_tests.py" -o -name "*.json" | wc -l'   # 0 — see below
+  find ~/mcapp-slots/current/src/mcapp -name "*_tests.py" -o -name "*.json" | wc -l'   # 3 on production (classifier_contract, axes_contract, group_labels_icssw), see below
 ```
 
 **A production tarball carries no test harness, by design.** `build_tarball`'s second argument
 selects the shape: production ships runtime code only — no `*_tests.py`, no `tests.py`, none of
-any of the `.json` corpora under `src/mcapp/` (nothing but those test modules reads them; 13 at
-v2.1.6-dev.1, and the count grows), and not
+the `.json` corpora under `src/mcapp/` (nothing but those test modules reads them; 13 at
+v2.1.6-dev.1, and the count grows) except the three runtime data files `contract/classifier_contract.json`,
+`contract/axes_contract.json` and `group_labels_icssw.json`, and not
 `run_startup_tests.py`. A dev pre-release ships all four, which is why the gate can be run on the
-box against a dev tag but not against a production one. So the count above is **0 on production
-and non-zero on dev** — if a production slot has either, the predicate regressed.
+box against a dev tag but not against a production one. So the count above is **3 on production
+(exactly those runtime files) and far larger on dev** — if a production slot has more, the predicate regressed.
 
 This is also why `main.py` must never import a test module at import time: it loads `router_tests`
 lazily and the one caller treats `ImportError` as "skipped, no harness in this build". A

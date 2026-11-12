@@ -1006,6 +1006,28 @@ class MigrationsMixin(StorageBase):
                     )
                     _set_schema_version(conn, 42)
 
+                if current_version < 43:  # noqa: PLR2004 - schema migration step
+                    # Message axes (shared spec, mc-chat axes-backend-spec): timing is
+                    # the live cadence class, echo/echo_of the "repeat of another
+                    # sender's text" flag. NULL = not classified; the startup backfill
+                    # fills existing rows. No new index: the axes queries ride
+                    # idx_messages_type_src_timestamp / idx_messages_type_timestamp, and
+                    # the backfill's INDEXED BY needs idx_messages_timestamp (constants.py).
+                    for col, typedef in [
+                        ("timing", "TEXT"),
+                        ("echo", "INTEGER"),
+                        ("echo_of", "TEXT"),
+                    ]:
+                        try:
+                            conn.execute(f"ALTER TABLE messages ADD COLUMN {col} {typedef}")
+                        except sqlite3.OperationalError:
+                            logger.debug("Column %s already exists in messages, skipping", col)
+                    logger.info(
+                        "Migration v%d → v43: messages.timing, echo, echo_of",
+                        current_version,
+                    )
+                    _set_schema_version(conn, 43)
+
         await asyncio.to_thread(_init_db)
 
         # Initialize bucket accumulators from existing signal_log

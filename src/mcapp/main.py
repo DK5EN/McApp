@@ -65,6 +65,7 @@ except ImportError:
     SSE_AVAILABLE = False
 
 from . import __version__
+from .axes_contract import load_axes
 from .classifier import Classifier
 from .classifier.types import SSEEvent
 from .classifier_contract import contract_id, load_engine
@@ -567,8 +568,13 @@ class MessageRouter:
             # tables is what keeps a blocked station invisible in history and
             # mHeard. The same shared decision gates the SSE and command paths,
             # so every ingestion path agrees (previously only storage blocked).
-            if self.blocklist_decision(message_data) != "pass":
+            decision = self.blocklist_decision(message_data)
+            if decision != "pass":
                 self._logger.debug("Blocked (not persisted) from %s", message_data.get("src"))
+                if decision == "redirect":
+                    # Quarantined group traffic is still broadcast live (to SPAM_GROUP)
+                    # without ever reaching store_message: give it the four axis keys.
+                    self.storage_handler.annotate_axes_defaults(message_data)
                 return
 
             raw_json = json.dumps(message_data)
@@ -2764,6 +2770,12 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
     classifier = Classifier(storage_handler, engine, contract_id(engine))
     await classifier.load()
     storage_handler.set_classifier(classifier)
+    # Message axes (timing/echo stored at ingest, format at read): a missing or broken
+    # contract leaves the feature off (NULL columns, wire format null), never fatal.
+    try:
+        storage_handler.set_axes(load_axes())
+    except Exception:
+        logger.exception("Axes contract failed to load; message axes disabled")
 
     message_router = MessageRouter(storage_handler)
     message_router.stall_recorder = stall_recorder
@@ -3221,10 +3233,23 @@ async def run_classifier_startup(
     would flag must be flagged before the sweep, or the rows keep ``qso`` until
     the next version bump. (Mirrors mc-chat's ``run_classifier_startup``.)
     """
-    promoted = await storage_handler.backfill_auto_beacon_templates()
-    if promoted:
-        logger.info("Auto-beacon backfill promoted %d templates", promoted)
-    await _maybe_backfill_classifier(classifier, storage_handler, sse_manager)
+    # Each step is isolated: a failure is logged and must not skip the next one (the axes
+    # backfill in particular is independent of both tag steps).
+    try:
+        promoted = await storage_handler.backfill_auto_beacon_templates()
+        if promoted:
+            logger.info("Auto-beacon backfill promoted %d templates", promoted)
+    except Exception:
+        logger.exception("Auto-beacon backfill failed; continuing with the next startup step")
+    try:
+        await _maybe_backfill_classifier(classifier, storage_handler, sse_manager)
+    except Exception:
+        logger.exception("Classifier backfill failed; continuing with the next startup step")
+    # Axes backfill runs after the tag backfill (its own contract-keyed marker).
+    try:
+        await storage_handler.backfill_message_axes()
+    except Exception:
+        logger.exception("Message axes backfill failed; will retry on next start")
 
 
 async def _maybe_backfill_classifier(

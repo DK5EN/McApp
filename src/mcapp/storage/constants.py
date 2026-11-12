@@ -20,7 +20,7 @@ from ..commands.parsing import is_group, is_hashtag, resolve_dst_target
 # passing suite for a reason unrelated to the change being made. This is not
 # circular with migrations.py: the step numbers there are independent literals,
 # so forgetting either half fails loudly.
-LATEST_SCHEMA_VERSION = 42
+LATEST_SCHEMA_VERSION = 43
 
 # Legacy filter category -> engine tag (classifier unification, issue #17 / Q2).
 # `directed` and `other` have no tag and are dropped on migration.
@@ -265,7 +265,7 @@ _MSG_SELECT = (
     " via, hw_id, lora_mod, max_hop, mesh_info, firmware, fw_sub,"
     " last_hw_id, last_sending, transformer, echo_id, acked, send_success,"
     " category, tags, info_score, template_hash, classifier_ver,"
-    " delivery_status, holder"
+    " delivery_status, holder, timing, echo, echo_of"
 )
 
 

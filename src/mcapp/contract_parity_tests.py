@@ -19,6 +19,8 @@ import hashlib
 import json
 import pathlib
 
+from .axes_contract import DEFAULT_AXES_CONTRACT_PATH
+from .classifier.axes import axes_conformance_failures, load_axes_contract_file
 from .classifier.engine import conformance_failures
 from .classifier_contract import DEFAULT_CONTRACT_PATH, load_engine
 from .commands.constants import has_console
@@ -49,6 +51,8 @@ _EXPECTED_SHA256 = "b666b2da034cf7609ede8bcc45aeeaa4802595621b63674237af0d084900
 # mcmap's exported classifier rule set (mc-chat contract/ subtree). Same drift
 # tripwire as above: re-capture only in the commit that pulls a new export.
 _CLASSIFIER_EXPECTED_SHA256 = "0f6ab47f8ea7fb29902aadf57e5c0cb5f564e0ea641e5f4ea69dcea99d0fa063"
+# Message-axes contract (mcmap export, subtree-shared from mc-chat). Bump with the contract.
+_AXES_EXPECTED_SHA256 = "c83ce98089e128add629c269a56a5da1643b551c3e14de3be4120653cb4ef636"
 
 
 def run_contract_parity_tests() -> bool:
@@ -80,6 +84,20 @@ def run_contract_parity_tests() -> bool:
     _record(
         f"classifier engine passes the contract's conformance vectors ({len(failures)} failures)",
         failures == [],
+    )
+
+    # Axes contract: pinned bytes + the engine's own conformance vectors.
+    axes_raw = DEFAULT_AXES_CONTRACT_PATH.read_bytes()
+    _record(
+        "axes_contract.json sha256 matches captured hash (drift tripwire)",
+        hashlib.sha256(axes_raw).hexdigest() == _AXES_EXPECTED_SHA256,
+    )
+    axes_failures = axes_conformance_failures(
+        load_axes_contract_file(DEFAULT_AXES_CONTRACT_PATH), json.loads(axes_raw)
+    )
+    _record(
+        f"axes engine passes the contract's conformance vectors ({len(axes_failures)} failures)",
+        axes_failures == [],
     )
 
     # Target extraction

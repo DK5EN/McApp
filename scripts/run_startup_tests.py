@@ -111,6 +111,7 @@ from mcapp.storage.internet_feed_state_tests import run_internet_feed_state_test
 from mcapp.storage.label_overrides_tests import run_label_overrides_tests
 from mcapp.storage.linkcheck_ingest_tests import run_linkcheck_ingest_tests
 from mcapp.storage.live_classification_tests import run_live_classification_tests
+from mcapp.storage.message_axes_tests import run_message_axes_tests
 from mcapp.storage.mheard_attribution_tests import run_mheard_attribution_tests
 from mcapp.storage.migration_chain_tests import run_migration_chain_tests
 from mcapp.storage.node_admin_hook_tests import run_node_admin_hook_tests
@@ -368,6 +369,8 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     live_classification_ok = await run_live_classification_tests()
     print(f"live_classification: {'PASS' if live_classification_ok else 'FAIL'}")
+    message_axes_ok = await run_message_axes_tests()
+    print(f"message_axes: {'PASS' if message_axes_ok else 'FAIL'}")
 
     ingest_dedup_ok = await run_ingest_dedup_tests()
     print(f"ingest_dedup: {'PASS' if ingest_dedup_ok else 'FAIL'}")
@@ -569,6 +572,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and template_override_ok
         and conv_dedup_ok
         and live_classification_ok
+        and message_axes_ok
         and ingest_dedup_ok
         and meteo_ok
         and msg_core_ok

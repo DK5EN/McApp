@@ -45,8 +45,9 @@ that is `../runbook/RB-004-update-runner-and-slots.md`.
    - *Production:* merges to `main`, tags `vX.Y.Z`, builds, publishes, and prepares the next version on `development`.
 3. **Production only: group labels.** The production release runs `scripts/refresh_group_labels.py` (step 2b of the
    prod-release procedure, `CLAUDE.md` "Group Labels"). Its snapshot ships in the tarball.
-4. **Production only: classifier contract.** `release.sh` ships `classifier_contract.json` explicitly (`CLAUDE.md`
-   "Classifier"). Check it is in the tarball list.
+4. **Production only: classifier and axes contracts.** `release.sh` ships `classifier_contract.json` and
+   `axes_contract.json` explicitly (`CLAUDE.md` "Classifier"). Check both are in the tarball list; without the
+   axes contract the message axes (timing, echo, format) silently stay off.
 5. **Release notes.** `release.sh` asks you to add a `## vX.Y.Z (date)` section at the **top** of
    `doc/release-history.md` and waits for Enter. Older sections move to `doc/archive/release-history-full.md`
    (the prod-release skill describes it). `scripts/release_notes_tests.py` pins the commit side of this.
