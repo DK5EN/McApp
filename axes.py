@@ -138,7 +138,11 @@ class AxesEngine:
     # Class attribute so a test (or a tighter host) can shrink it.
     MEMO_CAP = _MEMO_CAP
 
-    def __init__(self, data: Mapping[str, Any]) -> None:
+    def __init__(self, data: Mapping[str, Any], *, memo_cap: int | None = None) -> None:
+        """`memo_cap` bounds the format memo per instance; a small-RAM host passes a few
+        thousand instead of the 100_000 default."""
+        if memo_cap is not None:
+            self.MEMO_CAP = memo_cap
         schema = data.get("schema")
         if schema != SUPPORTED_SCHEMA:
             raise ValueError(f"unsupported axes contract schema {schema!r}")
@@ -220,6 +224,16 @@ class AxesEngine:
     @property
     def timing_values(self) -> tuple[str, ...]:
         return self._timing_values
+
+    @property
+    def prior_limit(self) -> int:
+        """How many of a sender's newest distinct earlier times live_timing can use."""
+        return max(self._cadence_window, self._live_gaps)
+
+    @property
+    def echo_window_sec(self) -> float:
+        """How far back (seconds) live_echo looks for an original."""
+        return self._echo_window
 
     @property
     def format_values(self) -> frozenset[str]:
@@ -397,12 +411,12 @@ class AxesEngine:
         return cls[-1] if cls else "jittered"
 
 
-def load_axes_contract(data: Mapping[str, Any]) -> AxesEngine:
-    return AxesEngine(data)
+def load_axes_contract(data: Mapping[str, Any], *, memo_cap: int | None = None) -> AxesEngine:
+    return AxesEngine(data, memo_cap=memo_cap)
 
 
-def load_axes_contract_file(path: Path) -> AxesEngine:
-    return AxesEngine(json.loads(path.read_text(encoding="utf-8")))
+def load_axes_contract_file(path: Path, *, memo_cap: int | None = None) -> AxesEngine:
+    return AxesEngine(json.loads(path.read_text(encoding="utf-8")), memo_cap=memo_cap)
 
 
 def _chk_tokenize(e: AxesEngine, x: Mapping[str, Any]) -> str | None:
