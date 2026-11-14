@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import time
 import uuid
@@ -325,24 +326,7 @@ class Classifier:
                     )
                     break
 
-                for row in batch:
-                    try:
-                        cls = await self.classify(row, update_stats=False)
-                        await self.storage.update_message_classification(
-                            row["id"],
-                            category=cls.category,
-                            tags=list(cls.tags),
-                            info_score=cls.info_score,
-                            template_hash=cls.template_hash,
-                            classifier_ver=cls.classifier_version,
-                        )
-                    except Exception:
-                        logger.exception(
-                            "Reclassify failed for row id=%r — skipping",
-                            row.get("id"),
-                        )
-                        skipped_ids.add(int(row["id"]))
-                    job.processed += 1
+                await self._reclassify_batch(batch, job, skipped_ids, target_version)
 
                 if progress_cb is not None:
                     try:
@@ -366,6 +350,63 @@ class Classifier:
                     await progress_cb(job)
                 except Exception:
                     logger.exception("progress_cb (done) raised — ignoring")
+
+    async def _reclassify_batch(
+        self,
+        batch: list[dict[str, Any]],
+        job: ReclassifyJob,
+        skipped_ids: set[int],
+        target_version: int,
+    ) -> None:
+        """Classify one batch; full-write changed rows, only stamp the rest."""
+        changed: list[tuple[str, str, float, str, int, int]] = []
+        unchanged_ids: list[int] = []
+        results: list[tuple[dict[str, Any], Classification]] = []
+        for row in batch:
+            try:
+                cls = await self.classify(row, update_stats=False)
+            except Exception:
+                logger.exception("Reclassify failed for row id=%r — skipping", row.get("id"))
+                skipped_ids.add(int(row["id"]))
+                job.processed += 1
+                continue
+            results.append((row, cls))
+            new = (cls.category, json.dumps(list(cls.tags)), cls.info_score, cls.template_hash)
+            old = (
+                row.get("category"),
+                row.get("tags"),
+                row.get("info_score"),
+                row.get("template_hash"),
+            )
+            if new != old:
+                changed.append((*new, cls.classifier_version, int(row["id"])))
+            else:
+                unchanged_ids.append(int(row["id"]))
+        try:
+            await self.storage.update_classification_batch(
+                changed=changed,
+                unchanged_ids=unchanged_ids,
+                classifier_ver=target_version,
+            )
+        except Exception:
+            logger.exception("Reclassify batch write failed — falling back to per-row writes")
+        else:
+            job.processed += len(results)
+            return
+        for row, cls in results:
+            try:
+                await self.storage.update_message_classification(
+                    row["id"],
+                    category=cls.category,
+                    tags=list(cls.tags),
+                    info_score=cls.info_score,
+                    template_hash=cls.template_hash,
+                    classifier_ver=cls.classifier_version,
+                )
+            except Exception:
+                logger.exception("Reclassify failed for row id=%r — skipping", row.get("id"))
+                skipped_ids.add(int(row["id"]))
+            job.processed += 1
 
     async def collect_stats(self) -> dict[str, Any]:
         """Return the proxy:classifier_stats payload.

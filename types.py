@@ -213,6 +213,20 @@ class StorageProtocol(Protocol):
         template_hash: str,
         classifier_ver: int,
     ) -> None: ...
+    async def update_classification_batch(
+        self,
+        *,
+        changed: list[tuple[str, str, float, str, int, int]],
+        unchanged_ids: list[int],
+        classifier_ver: int,
+    ) -> None:
+        """Write one reclassify batch in one write unit and one commit.
+
+        ``changed`` tuples are ``(category, tags_json, info_score,
+        template_hash, classifier_ver, row_id)`` (full UPDATE);
+        ``unchanged_ids`` are only stamped with ``classifier_ver``.
+        """
+        ...
 
     # Meta / versioning
     async def get_meta(self, key: str) -> str | None: ...
