@@ -290,6 +290,50 @@ class ClassifierApiMixin(StorageBase):
             (category, json.dumps(tags), info_score, template_hash, classifier_ver, row_id),
         )
 
+    async def update_classification_batch(
+        self,
+        *,
+        changed: list[tuple[str, str, float, str, int, int]],
+        unchanged_ids: list[int],
+        classifier_ver: int,
+    ) -> None:
+        """Write one reclassify batch in a single write unit and a single commit.
+
+        ``changed`` tuples are ``(category, tags_json, info_score, template_hash,
+        classifier_ver, row_id)`` with ``tags_json`` already serialised;
+        ``unchanged_ids`` are only stamped with ``classifier_ver``. Both statements
+        share one transaction under the writer lock: any failure rolls back the whole
+        batch. Mirrors mc-chat's method of the same name.
+        """
+        if not changed and not unchanged_ids:
+            return
+        # `_writer_lock`/`_get_writer_conn`/`_writer_failed` live on SQLiteStorage
+        # (sqlite_storage.py), not on StorageBase; no existing helper runs two
+        # statements under one commit, hence the explicit single write unit here.
+        host: Any = self
+        stamps = [(classifier_ver, rid) for rid in unchanged_ids]
+
+        def _run() -> None:
+            with host._writer_lock:  # noqa: SLF001 - writer plumbing lives on SQLiteStorage
+                conn = host._get_writer_conn()  # noqa: SLF001 - writer plumbing lives on SQLiteStorage
+                try:
+                    if changed:
+                        conn.executemany(
+                            "UPDATE messages SET category = ?, tags = ?, info_score = ?, "
+                            "template_hash = ?, classifier_ver = ? WHERE id = ?",
+                            changed,
+                        )
+                    if stamps:
+                        conn.executemany(
+                            "UPDATE messages SET classifier_ver = ? WHERE id = ?", stamps
+                        )
+                    conn.commit()
+                except Exception as exc:
+                    host._writer_failed(conn, exc)  # noqa: SLF001 - writer plumbing lives on SQLiteStorage
+                    raise
+
+        await asyncio.to_thread(_run)
+
     async def get_meta(self, key: str) -> str | None:
         rows = await self._query("SELECT value FROM classifier_meta WHERE key = ?", (key,))
         return rows[0]["value"] if rows else None

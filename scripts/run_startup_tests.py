@@ -102,6 +102,7 @@ from mcapp.stall_http_tests import run_stall_http_tests
 from mcapp.stall_tests import run_stall_tests
 from mcapp.storage.ack_match_vectors_tests import run_ack_match_vector_tests
 from mcapp.storage.ack_status_tests import run_ack_status_tests
+from mcapp.storage.classifier_batch_tests import run_classifier_batch_tests
 from mcapp.storage.classifier_tags_tests import run_classifier_tags_tests
 from mcapp.storage.connection_lifecycle_tests import run_connection_lifecycle_tests
 from mcapp.storage.conv_dedup_tests import run_conv_dedup_tests
@@ -209,6 +210,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     classifier_routes_ok = await run_classifier_routes_tests()
     print(f"classifier_routes: {'PASS' if classifier_routes_ok else 'FAIL'}")
+
+    classifier_batch_ok = await run_classifier_batch_tests()
+    print(f"classifier_batch: {'PASS' if classifier_batch_ok else 'FAIL'}")
 
     classifier_tags_ok = await run_classifier_tags_tests()
     print(f"classifier_tags: {'PASS' if classifier_tags_ok else 'FAIL'}")
@@ -518,6 +522,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and sse_ok
         and classifier_ok
         and classifier_routes_ok
+        and classifier_batch_ok
         and classifier_tags_ok
         and parsing_ok
         and hashtag_dst_ok
