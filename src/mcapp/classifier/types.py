@@ -9,7 +9,7 @@ git subtree in other packages without importing meshcom_mock directly.
 from __future__ import annotations
 
 import re
-from collections.abc import Collection
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol, get_args, runtime_checkable
@@ -95,6 +95,21 @@ _TAG_CATEGORY_ORDER: tuple[tuple[str, str], ...] = (
     ("alert", "alert"),
     ("test", "test_msg"),
 )
+
+
+def legacy_tag_view(topics: Iterable[str], origin: str | None) -> list[str]:
+    """v7 tag list of a v8 row: sorted topics plus the retired origin-derived ids.
+
+    ALIAS(one release, classifier rework 2026-11): ``auto_beacon`` for origin ``machine`` and
+    ``qso`` for origin ``human``, so the webapp's client-side hiding keeps working until it
+    reads ``origin``. Origin None (not computed) adds nothing. Stored legacy tags that already
+    carry either id pass through once (no duplicates).
+    """
+    view = sorted(set(topics))
+    extra = {"machine": AUTO_BEACON_TAG, "human": "qso"}.get(origin or "")
+    if extra is not None and extra not in view:
+        view.append(extra)
+    return view
 
 
 def derive_category(
@@ -212,6 +227,8 @@ class StorageProtocol(Protocol):
         info_score: float,
         template_hash: str,
         classifier_ver: int,
+        origin: str | None = None,
+        origin_rule: str | None = None,
     ) -> None: ...
     async def update_classification_batch(
         self,
@@ -219,12 +236,14 @@ class StorageProtocol(Protocol):
         changed: list[tuple[str, str, float, str, int, int]],
         unchanged_ids: list[int],
         classifier_ver: int,
+        origins: dict[int, tuple[str, str]] | None = None,
     ) -> None:
         """Write one reclassify batch in one write unit and one commit.
 
         ``changed`` tuples are ``(category, tags_json, info_score,
         template_hash, classifier_ver, row_id)`` (full UPDATE);
-        ``unchanged_ids`` are only stamped with ``classifier_ver``.
+        ``unchanged_ids`` are only stamped with ``classifier_ver``. ``origins`` maps a
+        row id to ``(origin, origin_rule)``; None keeps the stored values.
         """
         ...
 
@@ -236,6 +255,7 @@ class StorageProtocol(Protocol):
     # Stats (used by collect_stats)
     async def count_messages_by_category(self, since_ms: int) -> dict[str, int]: ...
     async def count_messages_by_tag(self, since_ms: int) -> dict[str, int]: ...
+    async def count_messages_by_origin(self, since_ms: int) -> dict[str, int]: ...
     async def get_top_beacon_templates(
         self, since_ms: int, limit: int = 10
     ) -> list[dict[str, Any]]: ...
