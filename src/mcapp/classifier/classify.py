@@ -292,7 +292,12 @@ class Classifier:
         )
 
     def _origin_of_row(self, row: dict[str, Any], is_beacon: bool) -> OriginResult | None:
-        """Origin of a stored row from its STORED timing (degraded without axes, see origin_for)."""
+        """Origin of a stored row from its STORED timing (degraded without axes, see origin_for).
+
+        Chat rows only, like ingest: other row types keep origin NULL.
+        """
+        if (row.get("type") or "msg") != "msg":
+            return None
         return origin_for(
             self.engine,
             self.axes,
