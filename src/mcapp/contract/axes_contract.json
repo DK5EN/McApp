@@ -1,11 +1,17 @@
 {
-  "schema": 1,
+  "schema": 2,
   "source": {
     "repo": "mcmap",
-    "commit": "9721dac4f679e834f1003ade28ab8329c618d5d6"
+    "commit": "ec964281888baa2e252138765d60cbfb5f72b433"
   },
   "constants": {
     "CADENCE_WINDOW": 8,
+    "CADENCE_RAW_WINDOW": 64,
+    "PART_SEC": 120,
+    "MAX_FRACTION": 6,
+    "MIN_FRACTION_SEC": 300,
+    "LIVE_PRIOR_LIMIT": 128,
+    "TIMING_MODEL_VERSION": 2,
     "MIN_INTERVALS": 3,
     "TOLERANCE": 0.05,
     "MIN_SHARE": 0.75,
@@ -2400,28 +2406,171 @@
         ]
       },
       {
-        "text": "Befehle: --help --info",
-        "classes": [
-          "WORD",
-          "PUNCT",
-          "CMD",
-          "CMD"
-        ]
-      },
-      {
-        "text": "WX station Temp: 12 C QNH 1013",
+        "text": "Ich schaue morgen vorbei, vy73",
         "classes": [
           "WORD",
           "WORD",
           "WORD",
+          "WORD",
           "PUNCT",
-          "UNIT",
           "WORD",
           "NUM"
         ]
       },
       {
-        "text": "APRS-Wetter station",
+        "text": "Wir melden uns, einen schönen Abend allen",
+        "classes": [
+          "WORD",
+          "WORD",
+          "WORD",
+          "PUNCT",
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD"
+        ]
+      },
+      {
+        "text": "Regentonne ist voll",
+        "classes": [
+          "WORD",
+          "WORD",
+          "WORD"
+        ]
+      },
+      {
+        "text": "Wer hört mich? Rapport bitte",
+        "classes": [
+          "WORD",
+          "WORD",
+          "WORD",
+          "PUNCT",
+          "WORD",
+          "WORD"
+        ]
+      },
+      {
+        "text": "WX-Musterstadt-🌬️5-9km/h-[🌡️12]",
+        "classes": [
+          "WORD",
+          "PUNCT",
+          "WORD",
+          "PUNCT",
+          "EMOJI",
+          "NUM",
+          "UNIT",
+          "PUNCT",
+          "PUNCT",
+          "EMOJI",
+          "NUM",
+          "PUNCT"
+        ]
+      },
+      {
+        "text": "seit 73 Minuten",
+        "classes": [
+          "WORD",
+          "NUM",
+          "WORD"
+        ]
+      },
+      {
+        "text": "Wie immer alles gut",
+        "classes": [
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD"
+        ]
+      },
+      {
+        "text": "Jak zwykle dobrze",
+        "classes": [
+          "WORD",
+          "WORD",
+          "WORD"
+        ]
+      },
+      {
+        "text": "checking out now",
+        "classes": [
+          "WORD",
+          "WORD",
+          "WORD"
+        ]
+      },
+      {
+        "text": "Test in aria",
+        "classes": [
+          "WORD",
+          "WORD",
+          "WORD"
+        ]
+      },
+      {
+        "text": "Kabel aus Cu",
+        "classes": [
+          "WORD",
+          "WORD",
+          "WORD"
+        ]
+      },
+      {
+        "text": "Neue Version von Foo erscheint bald",
+        "classes": [
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD"
+        ]
+      },
+      {
+        "text": "[Tout]: (9.4 < 13) Beispielgruppe 12345:Info unter www.example.org",
+        "classes": [
+          "PUNCT",
+          "WORD",
+          "PUNCT",
+          "PUNCT",
+          "PUNCT",
+          "NUM",
+          "PUNCT",
+          "NUM",
+          "PUNCT",
+          "WORD",
+          "NUM",
+          "PUNCT",
+          "WORD",
+          "WORD",
+          "URL"
+        ]
+      },
+      {
+        "text": "Unbekannter Befehl: foo",
+        "classes": [
+          "WORD",
+          "WORD",
+          "PUNCT",
+          "WORD"
+        ]
+      },
+      {
+        "text": "🌡️ 12",
+        "classes": [
+          "EMOJI",
+          "NUM"
+        ]
+      },
+      {
+        "text": "Pollenwetter heute",
+        "classes": [
+          "WORD",
+          "WORD"
+        ]
+      },
+      {
+        "text": "WX-Daten aktuell",
         "classes": [
           "WORD",
           "PUNCT",
@@ -2430,164 +2579,28 @@
         ]
       },
       {
-        "text": "Wind 4 BFT",
+        "text": "MeshDash V1.11.04 startup",
         "classes": [
           "WORD",
-          "NUM",
-          "WORD"
-        ]
-      },
-      {
-        "text": "4.35 73 de XX1ABC",
-        "classes": [
-          "NUM",
-          "NUM",
-          "WORD",
-          "CALL"
-        ]
-      },
-      {
-        "text": "MH(3): XX1ABC-1 XX2DEF-2",
-        "classes": [
-          "WORD",
-          "PUNCT",
-          "NUM",
-          "PUNCT",
-          "PUNCT",
           "CALL",
-          "CALL"
-        ]
-      },
-      {
-        "text": "--=== Welcome ===--",
-        "classes": [
           "PUNCT",
-          "PUNCT",
-          "PUNCT",
-          "PUNCT",
-          "PUNCT",
-          "WORD",
-          "PUNCT",
-          "PUNCT",
-          "PUNCT",
-          "PUNCT",
-          "PUNCT"
-        ]
-      },
-      {
-        "text": "OV-Abend jeden Donnerstag ab 19 Uhr",
-        "classes": [
-          "WORD",
-          "PUNCT",
-          "WORD",
-          "WORD",
-          "WORD",
-          "WORD",
           "NUM",
           "WORD"
         ]
       },
       {
-        "text": "WARNUNG ZH: Hochwasser (Musterort) | alert.swiss",
+        "text": "visit <a href=\"x\">here</a>",
         "classes": [
           "WORD",
-          "WORD",
           "PUNCT",
           "WORD",
-          "PUNCT",
-          "WORD",
-          "PUNCT",
-          "PIPE",
-          "WORD",
-          "PUNCT",
-          "WORD"
+          "KV"
         ]
       },
       {
-        "text": "QSL?",
+        "text": " https://example.org/a ",
         "classes": [
-          "WORD",
-          "PUNCT"
-        ]
-      },
-      {
-        "text": "qwerty",
-        "classes": [
-          "WORD"
-        ]
-      },
-      {
-        "text": "Grias eich, wer kann mir helfen",
-        "classes": [
-          "WORD",
-          "WORD",
-          "PUNCT",
-          "WORD",
-          "WORD",
-          "WORD",
-          "WORD"
-        ]
-      },
-      {
-        "text": "4.35p Node Testburg JN48aa *  Hilfe:  --help , 12.07.2026, 14:54 ***",
-        "classes": [
-          "NUM",
-          "WORD",
-          "WORD",
-          "WORD",
-          "LOC",
-          "PUNCT",
-          "WORD",
-          "PUNCT",
-          "CMD",
-          "PUNCT",
-          "DATE",
-          "PUNCT",
-          "TIME",
-          "PUNCT",
-          "PUNCT",
-          "PUNCT"
-        ]
-      },
-      {
-        "text": "Contest Mo 19:00 UKW, Mi 18:00 FT8",
-        "classes": [
-          "WORD",
-          "WORD",
-          "TIME",
-          "WORD",
-          "PUNCT",
-          "WORD",
-          "TIME",
-          "CALL"
-        ]
-      },
-      {
-        "text": "Guten Morgen aus Musterstadt bei 11°",
-        "classes": [
-          "WORD",
-          "WORD",
-          "WORD",
-          "WORD",
-          "WORD",
-          "UNIT"
-        ]
-      },
-      {
-        "text": "Wie ist das Wetter bei euch, hier 12 °C und 1013 hPa?",
-        "classes": [
-          "WORD",
-          "WORD",
-          "WORD",
-          "WORD",
-          "WORD",
-          "WORD",
-          "PUNCT",
-          "WORD",
-          "UNIT",
-          "WORD",
-          "UNIT",
-          "PUNCT"
+          "URL"
         ]
       },
       {
@@ -2599,7 +2612,174 @@
         ]
       },
       {
-        "text": "[DYPLOM] XX1ABC @ Example Award Programme | 3.701 MHz SSB ?",
+        "text": "Station A: 21.4C QNH 1013 hPa",
+        "classes": [
+          "WORD",
+          "WORD",
+          "PUNCT",
+          "UNIT",
+          "WORD",
+          "UNIT"
+        ]
+      },
+      {
+        "text": "QSL?",
+        "classes": [
+          "WORD",
+          "PUNCT"
+        ]
+      },
+      {
+        "text": "Wir testen heute die Strecke nach Norden",
+        "classes": [
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD"
+        ]
+      },
+      {
+        "text": "Cmds: >help, >ping, >mh",
+        "classes": [
+          "WORD",
+          "PUNCT",
+          "CMD",
+          "CMD",
+          "CMD"
+        ]
+      },
+      {
+        "text": "[POTA] SP9NLI @ Park | 18.089 MHz CW - CW",
+        "classes": [
+          "PUNCT",
+          "WORD",
+          "PUNCT",
+          "CALL",
+          "PUNCT",
+          "WORD",
+          "PIPE",
+          "NUM",
+          "WORD",
+          "WORD",
+          "PUNCT",
+          "WORD"
+        ]
+      },
+      {
+        "text": "Automatische Antwort von XX1ABC-13: Test erhalten.",
+        "classes": [
+          "WORD",
+          "WORD",
+          "WORD",
+          "CALL",
+          "PUNCT",
+          "WORD",
+          "WORD",
+          "PUNCT"
+        ]
+      },
+      {
+        "text": "Rundspruch heute 19:30 Uhr auf 145.500",
+        "classes": [
+          "WORD",
+          "WORD",
+          "TIME",
+          "WORD",
+          "WORD",
+          "NUM"
+        ]
+      },
+      {
+        "text": "Luftfeuchte: 82 %",
+        "classes": [
+          "WORD",
+          "PUNCT",
+          "UNIT"
+        ]
+      },
+      {
+        "text": "Temp=12.5°C Luftdruck=1013mbar Regen=0.0mm Wind=3km/h",
+        "classes": [
+          "KV",
+          "KV",
+          "KV",
+          "KV"
+        ]
+      },
+      {
+        "text": "es regnet hier seit Stunden",
+        "classes": [
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD"
+        ]
+      },
+      {
+        "text": "Das Gateway läuft seit gestern wieder stabil",
+        "classes": [
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD"
+        ]
+      },
+      {
+        "text": "Habt ihr auch 11°?",
+        "classes": [
+          "WORD",
+          "WORD",
+          "WORD",
+          "UNIT",
+          "PUNCT"
+        ]
+      },
+      {
+        "text": "Das ist ein Test der Antenne auf dem Dach heute",
+        "classes": [
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD"
+        ]
+      },
+      {
+        "text": "{CET}2026-01-02 03:04:05",
+        "classes": [
+          "PUNCT",
+          "WORD",
+          "PUNCT",
+          "DATE",
+          "TIME"
+        ]
+      },
+      {
+        "text": "Cmds: >help, kennt das jemand?",
+        "classes": [
+          "WORD",
+          "PUNCT",
+          "CMD",
+          "WORD",
+          "WORD",
+          "WORD",
+          "PUNCT"
+        ]
+      },
+      {
+        "text": "[DYPLOM] XX1ABC @ Example Award Programme | 7.074 MHz FT8",
         "classes": [
           "PUNCT",
           "WORD",
@@ -2612,38 +2792,28 @@
           "PIPE",
           "NUM",
           "WORD",
-          "WORD",
-          "PUNCT"
+          "CALL"
         ]
       },
       {
-        "text": "Hejka, jestes tam?",
+        "text": "n'Abend zusammen",
         "classes": [
           "WORD",
           "PUNCT",
           "WORD",
-          "WORD",
-          "PUNCT"
+          "WORD"
         ]
       },
       {
-        "text": "Morgen 18Uhr ist Clubabend im Vereinsheim. Kommt vorbei?",
+        "text": "Ich sage hejka",
         "classes": [
           "WORD",
-          "NUM",
           "WORD",
-          "WORD",
-          "WORD",
-          "WORD",
-          "WORD",
-          "PUNCT",
-          "WORD",
-          "WORD",
-          "PUNCT"
+          "WORD"
         ]
       },
       {
-        "text": "Danke fuer den schoenen OV-Abend gestern, bin um 23 Uhr heim",
+        "text": "Ich war gestern beim Clubabend, war nett",
         "classes": [
           "WORD",
           "WORD",
@@ -2651,12 +2821,6 @@
           "WORD",
           "WORD",
           "PUNCT",
-          "WORD",
-          "WORD",
-          "PUNCT",
-          "WORD",
-          "WORD",
-          "NUM",
           "WORD",
           "WORD"
         ]
@@ -2670,21 +2834,23 @@
         ]
       },
       {
-        "text": " ping ",
+        "text": "ping\r",
         "classes": [
           "WORD"
         ]
       },
       {
-        "text": "https://example.org/x ",
+        "text": "https://example.org/\n",
         "classes": [
           "URL"
         ]
       },
       {
-        "text": "Hallo Welt",
+        "text": "Temp: 12 hPa\r\nmore",
         "classes": [
           "WORD",
+          "PUNCT",
+          "UNIT",
           "WORD"
         ]
       }
@@ -4189,162 +4355,181 @@
         ]
       },
       {
-        "text": "Befehle: --help --info",
+        "text": "Ich schaue morgen vorbei, vy73",
         "tokens": [
-          "befehle",
-          "help",
-          "info"
+          "ich",
+          "morgen",
+          "schaue",
+          "vorbei",
+          "vy73"
         ]
       },
       {
-        "text": "WX station Temp: 12 C QNH 1013",
+        "text": "Wir melden uns, einen schönen Abend allen",
         "tokens": [
-          "1013",
-          "12",
-          "qnh",
-          "station",
-          "temp",
-          "wx"
-        ]
-      },
-      {
-        "text": "APRS-Wetter station",
-        "tokens": [
-          "aprs",
-          "station",
-          "wetter"
-        ]
-      },
-      {
-        "text": "Wind 4 BFT",
-        "tokens": [
-          "bft",
-          "wind"
-        ]
-      },
-      {
-        "text": "4.35 73 de XX1ABC",
-        "tokens": [
-          "35",
-          "73",
-          "de",
-          "xx1abc"
-        ]
-      },
-      {
-        "text": "MH(3): XX1ABC-1 XX2DEF-2",
-        "tokens": [
-          "mh",
-          "xx1abc",
-          "xx2def"
-        ]
-      },
-      {
-        "text": "--=== Welcome ===--",
-        "tokens": [
-          "welcome"
-        ]
-      },
-      {
-        "text": "OV-Abend jeden Donnerstag ab 19 Uhr",
-        "tokens": [
-          "19",
-          "ab",
           "abend",
-          "donnerstag",
-          "jeden",
-          "ov",
-          "uhr"
+          "allen",
+          "einen",
+          "melden",
+          "schönen",
+          "uns",
+          "wir"
         ]
       },
       {
-        "text": "WARNUNG ZH: Hochwasser (Musterort) | alert.swiss",
+        "text": "Regentonne ist voll",
         "tokens": [
-          "alert",
-          "hochwasser",
-          "musterort",
-          "swiss",
-          "warnung",
-          "zh"
+          "ist",
+          "regentonne",
+          "voll"
         ]
       },
       {
-        "text": "QSL?",
+        "text": "Wer hört mich? Rapport bitte",
         "tokens": [
-          "qsl"
-        ]
-      },
-      {
-        "text": "qwerty",
-        "tokens": [
-          "qwerty"
-        ]
-      },
-      {
-        "text": "Grias eich, wer kann mir helfen",
-        "tokens": [
-          "eich",
-          "grias",
-          "helfen",
-          "kann",
-          "mir",
+          "bitte",
+          "hört",
+          "mich",
+          "rapport",
           "wer"
         ]
       },
       {
-        "text": "4.35p Node Testburg JN48aa *  Hilfe:  --help , 12.07.2026, 14:54 ***",
+        "text": "WX-Musterstadt-🌬️5-9km/h-[🌡️12]",
         "tokens": [
-          "07",
           "12",
-          "14",
-          "2026",
-          "35p",
-          "54",
-          "help",
-          "hilfe",
-          "jn48aa",
-          "node",
-          "testburg"
+          "9km",
+          "musterstadt",
+          "wx"
         ]
       },
       {
-        "text": "Contest Mo 19:00 UKW, Mi 18:00 FT8",
+        "text": "seit 73 Minuten",
         "tokens": [
-          "00",
-          "18",
-          "19",
-          "contest",
-          "ft8",
-          "mi",
-          "mo",
-          "ukw"
+          "73",
+          "minuten",
+          "seit"
         ]
       },
       {
-        "text": "Guten Morgen aus Musterstadt bei 11°",
+        "text": "Wie immer alles gut",
         "tokens": [
-          "11",
-          "aus",
-          "bei",
-          "guten",
-          "morgen",
-          "musterstadt"
-        ]
-      },
-      {
-        "text": "Wie ist das Wetter bei euch, hier 12 °C und 1013 hPa?",
-        "tokens": [
-          "1013",
-          "12",
-          "bei",
-          "das",
-          "euch",
-          "hier",
-          "hpa",
-          "ist",
-          "und",
-          "wetter",
+          "alles",
+          "gut",
+          "immer",
           "wie"
+        ]
+      },
+      {
+        "text": "Jak zwykle dobrze",
+        "tokens": [
+          "dobrze",
+          "jak",
+          "zwykle"
+        ]
+      },
+      {
+        "text": "checking out now",
+        "tokens": [
+          "checking",
+          "now",
+          "out"
+        ]
+      },
+      {
+        "text": "Test in aria",
+        "tokens": [
+          "aria",
+          "in",
+          "test"
+        ]
+      },
+      {
+        "text": "Kabel aus Cu",
+        "tokens": [
+          "aus",
+          "cu",
+          "kabel"
+        ]
+      },
+      {
+        "text": "Neue Version von Foo erscheint bald",
+        "tokens": [
+          "bald",
+          "erscheint",
+          "foo",
+          "neue",
+          "version",
+          "von"
+        ]
+      },
+      {
+        "text": "[Tout]: (9.4 < 13) Beispielgruppe 12345:Info unter www.example.org",
+        "tokens": [
+          "12345",
+          "13",
+          "beispielgruppe",
+          "example",
+          "info",
+          "org",
+          "tout",
+          "unter",
+          "www"
+        ]
+      },
+      {
+        "text": "Unbekannter Befehl: foo",
+        "tokens": [
+          "befehl",
+          "foo",
+          "unbekannter"
+        ]
+      },
+      {
+        "text": "🌡️ 12",
+        "tokens": [
+          "12"
+        ]
+      },
+      {
+        "text": "Pollenwetter heute",
+        "tokens": [
+          "heute",
+          "pollenwetter"
+        ]
+      },
+      {
+        "text": "WX-Daten aktuell",
+        "tokens": [
+          "aktuell",
+          "daten",
+          "wx"
+        ]
+      },
+      {
+        "text": "MeshDash V1.11.04 startup",
+        "tokens": [
+          "04",
+          "11",
+          "meshdash",
+          "startup",
+          "v1"
+        ]
+      },
+      {
+        "text": "visit <a href=\"x\">here</a>",
+        "tokens": [
+          "here",
+          "href",
+          "visit"
+        ]
+      },
+      {
+        "text": " https://example.org/a ",
+        "tokens": [
+          "example",
+          "https",
+          "org"
         ]
       },
       {
@@ -4356,54 +4541,205 @@
         ]
       },
       {
-        "text": "[DYPLOM] XX1ABC @ Example Award Programme | 3.701 MHz SSB ?",
+        "text": "Station A: 21.4C QNH 1013 hPa",
         "tokens": [
-          "701",
-          "award",
-          "dyplom",
-          "example",
+          "1013",
+          "21",
+          "4c",
+          "hpa",
+          "qnh",
+          "station"
+        ]
+      },
+      {
+        "text": "QSL?",
+        "tokens": [
+          "qsl"
+        ]
+      },
+      {
+        "text": "Wir testen heute die Strecke nach Norden",
+        "tokens": [
+          "die",
+          "heute",
+          "nach",
+          "norden",
+          "strecke",
+          "testen",
+          "wir"
+        ]
+      },
+      {
+        "text": "Cmds: >help, >ping, >mh",
+        "tokens": [
+          "cmds",
+          "help",
+          "mh",
+          "ping"
+        ]
+      },
+      {
+        "text": "[POTA] SP9NLI @ Park | 18.089 MHz CW - CW",
+        "tokens": [
+          "089",
+          "18",
+          "cw",
           "mhz",
-          "programme",
-          "ssb",
+          "park",
+          "pota",
+          "sp9nli"
+        ]
+      },
+      {
+        "text": "Automatische Antwort von XX1ABC-13: Test erhalten.",
+        "tokens": [
+          "13",
+          "antwort",
+          "automatische",
+          "erhalten",
+          "test",
+          "von",
           "xx1abc"
         ]
       },
       {
-        "text": "Hejka, jestes tam?",
+        "text": "Rundspruch heute 19:30 Uhr auf 145.500",
+        "tokens": [
+          "145",
+          "19",
+          "30",
+          "500",
+          "auf",
+          "heute",
+          "rundspruch",
+          "uhr"
+        ]
+      },
+      {
+        "text": "Luftfeuchte: 82 %",
+        "tokens": [
+          "82",
+          "luftfeuchte"
+        ]
+      },
+      {
+        "text": "Temp=12.5°C Luftdruck=1013mbar Regen=0.0mm Wind=3km/h",
+        "tokens": [
+          "0mm",
+          "1013mbar",
+          "12",
+          "3km",
+          "luftdruck",
+          "regen",
+          "temp",
+          "wind"
+        ]
+      },
+      {
+        "text": "es regnet hier seit Stunden",
+        "tokens": [
+          "es",
+          "hier",
+          "regnet",
+          "seit",
+          "stunden"
+        ]
+      },
+      {
+        "text": "Das Gateway läuft seit gestern wieder stabil",
+        "tokens": [
+          "das",
+          "gateway",
+          "gestern",
+          "läuft",
+          "seit",
+          "stabil",
+          "wieder"
+        ]
+      },
+      {
+        "text": "Habt ihr auch 11°?",
+        "tokens": [
+          "11",
+          "auch",
+          "habt",
+          "ihr"
+        ]
+      },
+      {
+        "text": "Das ist ein Test der Antenne auf dem Dach heute",
+        "tokens": [
+          "antenne",
+          "auf",
+          "dach",
+          "das",
+          "dem",
+          "der",
+          "ein",
+          "heute",
+          "ist",
+          "test"
+        ]
+      },
+      {
+        "text": "{CET}2026-01-02 03:04:05",
+        "tokens": [
+          "01",
+          "02",
+          "03",
+          "04",
+          "05",
+          "2026",
+          "cet"
+        ]
+      },
+      {
+        "text": "Cmds: >help, kennt das jemand?",
+        "tokens": [
+          "cmds",
+          "das",
+          "help",
+          "jemand",
+          "kennt"
+        ]
+      },
+      {
+        "text": "[DYPLOM] XX1ABC @ Example Award Programme | 7.074 MHz FT8",
+        "tokens": [
+          "074",
+          "award",
+          "dyplom",
+          "example",
+          "ft8",
+          "mhz",
+          "programme",
+          "xx1abc"
+        ]
+      },
+      {
+        "text": "n'Abend zusammen",
+        "tokens": [
+          "abend",
+          "zusammen"
+        ]
+      },
+      {
+        "text": "Ich sage hejka",
         "tokens": [
           "hejka",
-          "jestes",
-          "tam"
+          "ich",
+          "sage"
         ]
       },
       {
-        "text": "Morgen 18Uhr ist Clubabend im Vereinsheim. Kommt vorbei?",
+        "text": "Ich war gestern beim Clubabend, war nett",
         "tokens": [
-          "18uhr",
+          "beim",
           "clubabend",
-          "im",
-          "ist",
-          "kommt",
-          "morgen",
-          "vereinsheim",
-          "vorbei"
-        ]
-      },
-      {
-        "text": "Danke fuer den schoenen OV-Abend gestern, bin um 23 Uhr heim",
-        "tokens": [
-          "23",
-          "abend",
-          "bin",
-          "danke",
-          "den",
-          "fuer",
           "gestern",
-          "heim",
-          "ov",
-          "schoenen",
-          "uhr",
-          "um"
+          "ich",
+          "nett",
+          "war"
         ]
       },
       {
@@ -4415,13 +4751,13 @@
         ]
       },
       {
-        "text": " ping ",
+        "text": "ping\r",
         "tokens": [
           "ping"
         ]
       },
       {
-        "text": "https://example.org/x ",
+        "text": "https://example.org/\n",
         "tokens": [
           "example",
           "https",
@@ -4429,10 +4765,12 @@
         ]
       },
       {
-        "text": "Hallo Welt",
+        "text": "Temp: 12 hPa\r\nmore",
         "tokens": [
-          "hallo",
-          "welt"
+          "12",
+          "hpa",
+          "more",
+          "temp"
         ]
       }
     ],
@@ -7150,7 +7488,104 @@
         "skeleton": "WORD*3 EMOJI WORD*3 URL"
       },
       {
-        "text": "Befehle: --help --info",
+        "text": "Ich schaue morgen vorbei, vy73",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "NUMERIC_REPORT"
+        ],
+        "skeleton": "WORD*4 PUNCT WORD NUM"
+      },
+      {
+        "text": "Wir melden uns, einen schönen Abend allen",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD*3 PUNCT WORD*4"
+      },
+      {
+        "text": "Regentonne ist voll",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD*3"
+      },
+      {
+        "text": "Wer hört mich? Rapport bitte",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD*3 PUNCT WORD*2"
+      },
+      {
+        "text": "WX-Musterstadt-🌬️5-9km/h-[🌡️12]",
+        "dominant": "SEPARATOR",
+        "signals": [],
+        "states": [
+          "MEASUREMENT",
+          "SEPARATOR",
+          "MEASUREMENT",
+          "SEPARATOR",
+          "SEPARATOR",
+          "MEASUREMENT",
+          "MEASUREMENT",
+          "SEPARATOR",
+          "SEPARATOR",
+          "SEPARATOR",
+          "MEASUREMENT",
+          "SEPARATOR"
+        ],
+        "skeleton": "WORD PUNCT WORD PUNCT EMOJI NUM UNIT PUNCT*2 EMOJI NUM PUNCT"
+      },
+      {
+        "text": "seit 73 Minuten",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD NUM WORD"
+      },
+      {
+        "text": "Wie immer alles gut",
         "dominant": "PROSE",
         "signals": [
           "mostly-prose"
@@ -7161,27 +7596,144 @@
           "PROSE",
           "PROSE"
         ],
-        "skeleton": "WORD PUNCT CMD*2"
+        "skeleton": "WORD*4"
       },
       {
-        "text": "WX station Temp: 12 C QNH 1013",
-        "dominant": "NUMERIC_REPORT",
+        "text": "Jak zwykle dobrze",
+        "dominant": "PROSE",
         "signals": [
-          "mostly-data"
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD*3"
+      },
+      {
+        "text": "checking out now",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD*3"
+      },
+      {
+        "text": "Test in aria",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD*3"
+      },
+      {
+        "text": "Kabel aus Cu",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD*3"
+      },
+      {
+        "text": "Neue Version von Foo erscheint bald",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
         ],
         "states": [
           "PROSE",
           "PROSE",
           "PROSE",
-          "NUMERIC_REPORT",
-          "NUMERIC_REPORT",
-          "NUMERIC_REPORT",
-          "NUMERIC_REPORT"
+          "PROSE",
+          "PROSE",
+          "PROSE"
         ],
-        "skeleton": "WORD*3 PUNCT UNIT WORD NUM"
+        "skeleton": "WORD*6"
       },
       {
-        "text": "APRS-Wetter station",
+        "text": "[Tout]: (9.4 < 13) Beispielgruppe 12345:Info unter www.example.org",
+        "dominant": "SIGNATURE",
+        "signals": [
+          "url"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "SIGNATURE",
+          "SIGNATURE",
+          "SIGNATURE",
+          "NUMERIC_REPORT",
+          "SIGNATURE",
+          "NUMERIC_REPORT",
+          "SIGNATURE",
+          "NUMERIC_REPORT",
+          "NUMERIC_REPORT",
+          "NUMERIC_REPORT",
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "PUNCT WORD PUNCT*3 NUM PUNCT NUM PUNCT WORD NUM PUNCT WORD*2 URL"
+      },
+      {
+        "text": "Unbekannter Befehl: foo",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD*2 PUNCT WORD"
+      },
+      {
+        "text": "🌡️ 12",
+        "dominant": "NUMERIC_REPORT",
+        "signals": [
+          "emoji-led",
+          "no-words",
+          "mostly-prose",
+          "mostly-data"
+        ],
+        "states": [
+          "PROSE",
+          "NUMERIC_REPORT"
+        ],
+        "skeleton": "EMOJI NUM"
+      },
+      {
+        "text": "Pollenwetter heute",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD*2"
+      },
+      {
+        "text": "WX-Daten aktuell",
         "dominant": "PROSE",
         "signals": [
           "mostly-prose"
@@ -7195,228 +7747,44 @@
         "skeleton": "WORD PUNCT WORD*2"
       },
       {
-        "text": "Wind 4 BFT",
-        "dominant": "PROSE",
-        "signals": [
-          "mostly-prose"
-        ],
-        "states": [
-          "PROSE",
-          "PROSE",
-          "PROSE"
-        ],
-        "skeleton": "WORD NUM WORD"
-      },
-      {
-        "text": "4.35 73 de XX1ABC",
-        "dominant": "PROSE",
-        "signals": [
-          "mostly-prose"
-        ],
-        "states": [
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE"
-        ],
-        "skeleton": "NUM*2 WORD CALL"
-      },
-      {
-        "text": "MH(3): XX1ABC-1 XX2DEF-2",
+        "text": "MeshDash V1.11.04 startup",
         "dominant": "SIGNATURE",
         "signals": [],
         "states": [
           "PROSE",
+          "SIGNATURE",
+          "SIGNATURE",
           "NUMERIC_REPORT",
-          "NUMERIC_REPORT",
-          "SIGNATURE",
-          "SIGNATURE",
-          "SIGNATURE",
-          "SIGNATURE"
-        ],
-        "skeleton": "WORD PUNCT NUM PUNCT*2 CALL*2"
-      },
-      {
-        "text": "--=== Welcome ===--",
-        "dominant": "SIGNATURE",
-        "signals": [],
-        "states": [
-          "SIGNATURE",
-          "SIGNATURE",
-          "SIGNATURE",
-          "SIGNATURE",
-          "SIGNATURE",
-          "SIGNATURE",
-          "SIGNATURE",
-          "SIGNATURE",
-          "SIGNATURE",
-          "SIGNATURE",
-          "SIGNATURE"
-        ],
-        "skeleton": "PUNCT*5 WORD PUNCT*5"
-      },
-      {
-        "text": "OV-Abend jeden Donnerstag ab 19 Uhr",
-        "dominant": "PROSE",
-        "signals": [
-          "mostly-prose"
-        ],
-        "states": [
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
           "PROSE"
         ],
-        "skeleton": "WORD PUNCT WORD*4 NUM WORD"
+        "skeleton": "WORD CALL PUNCT NUM WORD"
       },
       {
-        "text": "WARNUNG ZH: Hochwasser (Musterort) | alert.swiss",
-        "dominant": "MEASUREMENT",
+        "text": "visit <a href=\"x\">here</a>",
+        "dominant": "LABELLED_LIST",
         "signals": [
           "mostly-data"
         ],
         "states": [
           "MEASUREMENT",
-          "MEASUREMENT",
           "SEPARATOR",
-          "MEASUREMENT",
-          "SEPARATOR",
-          "MEASUREMENT",
-          "SEPARATOR",
-          "SEPARATOR",
-          "MEASUREMENT",
-          "SEPARATOR",
-          "MEASUREMENT"
+          "LABELLED_LIST",
+          "LABELLED_LIST"
         ],
-        "skeleton": "WORD*2 PUNCT WORD PUNCT WORD PUNCT PIPE WORD PUNCT WORD"
+        "skeleton": "WORD PUNCT WORD KV"
       },
       {
-        "text": "QSL?",
+        "text": " https://example.org/a ",
         "dominant": "PROSE",
         "signals": [
-          "mostly-prose"
-        ],
-        "states": [
-          "PROSE",
-          "PROSE"
-        ],
-        "skeleton": "WORD PUNCT"
-      },
-      {
-        "text": "qwerty",
-        "dominant": "PROSE",
-        "signals": [
+          "url",
+          "no-words",
           "mostly-prose"
         ],
         "states": [
           "PROSE"
         ],
-        "skeleton": "WORD"
-      },
-      {
-        "text": "Grias eich, wer kann mir helfen",
-        "dominant": "PROSE",
-        "signals": [
-          "mostly-prose"
-        ],
-        "states": [
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE"
-        ],
-        "skeleton": "WORD*2 PUNCT WORD*4"
-      },
-      {
-        "text": "4.35p Node Testburg JN48aa *  Hilfe:  --help , 12.07.2026, 14:54 ***",
-        "dominant": "SIGNATURE",
-        "signals": [
-          "locator",
-          "clock"
-        ],
-        "states": [
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "SIGNATURE",
-          "SIGNATURE",
-          "SIGNATURE",
-          "SIGNATURE",
-          "SIGNATURE",
-          "SIGNATURE",
-          "SIGNATURE",
-          "SIGNATURE",
-          "SIGNATURE",
-          "SIGNATURE",
-          "SIGNATURE",
-          "SIGNATURE"
-        ],
-        "skeleton": "NUM WORD*3 LOC PUNCT WORD PUNCT CMD PUNCT DATE PUNCT TIME PUNCT*3"
-      },
-      {
-        "text": "Contest Mo 19:00 UKW, Mi 18:00 FT8",
-        "dominant": "SIGNATURE",
-        "signals": [
-          "clock"
-        ],
-        "states": [
-          "PROSE",
-          "PROSE",
-          "NUMERIC_REPORT",
-          "NUMERIC_REPORT",
-          "SIGNATURE",
-          "SIGNATURE",
-          "SIGNATURE",
-          "SIGNATURE"
-        ],
-        "skeleton": "WORD*2 TIME WORD PUNCT WORD TIME CALL"
-      },
-      {
-        "text": "Guten Morgen aus Musterstadt bei 11°",
-        "dominant": "PROSE",
-        "signals": [
-          "mostly-prose"
-        ],
-        "states": [
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "MEASUREMENT"
-        ],
-        "skeleton": "WORD*5 UNIT"
-      },
-      {
-        "text": "Wie ist das Wetter bei euch, hier 12 °C und 1013 hPa?",
-        "dominant": "PROSE",
-        "signals": [
-          "unit-values",
-          "mostly-prose"
-        ],
-        "states": [
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "MEASUREMENT",
-          "MEASUREMENT",
-          "MEASUREMENT",
-          "SEPARATOR"
-        ],
-        "skeleton": "WORD*6 PUNCT WORD UNIT WORD UNIT PUNCT"
+        "skeleton": "URL"
       },
       {
         "text": "Erdbeben bei Wien",
@@ -7432,9 +7800,255 @@
         "skeleton": "WORD*3"
       },
       {
-        "text": "[DYPLOM] XX1ABC @ Example Award Programme | 3.701 MHz SSB ?",
+        "text": "Station A: 21.4C QNH 1013 hPa",
         "dominant": "MEASUREMENT",
+        "signals": [
+          "unit-values",
+          "mostly-data"
+        ],
+        "states": [
+          "MEASUREMENT",
+          "MEASUREMENT",
+          "SEPARATOR",
+          "MEASUREMENT",
+          "MEASUREMENT",
+          "MEASUREMENT"
+        ],
+        "skeleton": "WORD*2 PUNCT UNIT WORD UNIT"
+      },
+      {
+        "text": "QSL?",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD PUNCT"
+      },
+      {
+        "text": "Wir testen heute die Strecke nach Norden",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD*7"
+      },
+      {
+        "text": "Cmds: >help, >ping, >mh",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD PUNCT CMD*3"
+      },
+      {
+        "text": "[POTA] SP9NLI @ Park | 18.089 MHz CW - CW",
+        "dominant": "PROSE",
         "signals": [],
+        "states": [
+          "SEPARATOR",
+          "MEASUREMENT",
+          "SEPARATOR",
+          "MEASUREMENT",
+          "SEPARATOR",
+          "MEASUREMENT",
+          "SEPARATOR",
+          "NUMERIC_REPORT",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "PUNCT WORD PUNCT CALL PUNCT WORD PIPE NUM WORD*2 PUNCT WORD"
+      },
+      {
+        "text": "Automatische Antwort von XX1ABC-13: Test erhalten.",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD*3 CALL PUNCT WORD*2 PUNCT"
+      },
+      {
+        "text": "Rundspruch heute 19:30 Uhr auf 145.500",
+        "dominant": "PROSE",
+        "signals": [
+          "clock",
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "NUMERIC_REPORT",
+          "PROSE",
+          "PROSE",
+          "NUMERIC_REPORT"
+        ],
+        "skeleton": "WORD*2 TIME WORD*2 NUM"
+      },
+      {
+        "text": "Luftfeuchte: 82 %",
+        "dominant": "MEASUREMENT",
+        "signals": [
+          "mostly-data"
+        ],
+        "states": [
+          "MEASUREMENT",
+          "SEPARATOR",
+          "MEASUREMENT"
+        ],
+        "skeleton": "WORD PUNCT UNIT"
+      },
+      {
+        "text": "Temp=12.5°C Luftdruck=1013mbar Regen=0.0mm Wind=3km/h",
+        "dominant": "LABELLED_LIST",
+        "signals": [
+          "key-value-list",
+          "no-words",
+          "mostly-data"
+        ],
+        "states": [
+          "LABELLED_LIST",
+          "LABELLED_LIST",
+          "LABELLED_LIST",
+          "LABELLED_LIST"
+        ],
+        "skeleton": "KV*4"
+      },
+      {
+        "text": "es regnet hier seit Stunden",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD*5"
+      },
+      {
+        "text": "Das Gateway läuft seit gestern wieder stabil",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD*7"
+      },
+      {
+        "text": "Habt ihr auch 11°?",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "MEASUREMENT",
+          "SEPARATOR"
+        ],
+        "skeleton": "WORD*3 UNIT PUNCT"
+      },
+      {
+        "text": "Das ist ein Test der Antenne auf dem Dach heute",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD*10"
+      },
+      {
+        "text": "{CET}2026-01-02 03:04:05",
+        "dominant": "SIGNATURE",
+        "signals": [
+          "clock"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "SIGNATURE",
+          "SIGNATURE",
+          "SIGNATURE"
+        ],
+        "skeleton": "PUNCT WORD PUNCT DATE TIME"
+      },
+      {
+        "text": "Cmds: >help, kennt das jemand?",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD PUNCT CMD WORD*3 PUNCT"
+      },
+      {
+        "text": "[DYPLOM] XX1ABC @ Example Award Programme | 7.074 MHz FT8",
+        "dominant": "MEASUREMENT",
+        "signals": [
+          "mostly-data"
+        ],
         "states": [
           "SEPARATOR",
           "MEASUREMENT",
@@ -7446,14 +8060,13 @@
           "MEASUREMENT",
           "SEPARATOR",
           "NUMERIC_REPORT",
-          "PROSE",
-          "PROSE",
-          "PROSE"
+          "NUMERIC_REPORT",
+          "SIGNATURE"
         ],
-        "skeleton": "PUNCT WORD PUNCT CALL PUNCT WORD*3 PIPE NUM WORD*2 PUNCT"
+        "skeleton": "PUNCT WORD PUNCT CALL PUNCT WORD*3 PIPE NUM WORD CALL"
       },
       {
-        "text": "Hejka, jestes tam?",
+        "text": "n'Abend zusammen",
         "dominant": "PROSE",
         "signals": [
           "mostly-prose"
@@ -7462,13 +8075,12 @@
           "PROSE",
           "PROSE",
           "PROSE",
-          "PROSE",
           "PROSE"
         ],
-        "skeleton": "WORD PUNCT WORD*2 PUNCT"
+        "skeleton": "WORD PUNCT WORD*2"
       },
       {
-        "text": "Morgen 18Uhr ist Clubabend im Vereinsheim. Kommt vorbei?",
+        "text": "Ich sage hejka",
         "dominant": "PROSE",
         "signals": [
           "mostly-prose"
@@ -7476,20 +8088,12 @@
         "states": [
           "PROSE",
           "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
           "PROSE"
         ],
-        "skeleton": "WORD NUM WORD*5 PUNCT WORD*2 PUNCT"
+        "skeleton": "WORD*3"
       },
       {
-        "text": "Danke fuer den schoenen OV-Abend gestern, bin um 23 Uhr heim",
+        "text": "Ich war gestern beim Clubabend, war nett",
         "dominant": "PROSE",
         "signals": [
           "mostly-prose"
@@ -7502,15 +8106,9 @@
           "PROSE",
           "PROSE",
           "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
           "PROSE"
         ],
-        "skeleton": "WORD*5 PUNCT WORD*2 PUNCT WORD*2 NUM WORD*2"
+        "skeleton": "WORD*5 PUNCT WORD*2"
       },
       {
         "text": "plain chat text",
@@ -7526,7 +8124,7 @@
         "skeleton": "WORD*3"
       },
       {
-        "text": " ping ",
+        "text": "ping\r",
         "dominant": "PROSE",
         "signals": [
           "mostly-prose"
@@ -7537,7 +8135,7 @@
         "skeleton": "WORD"
       },
       {
-        "text": "https://example.org/x ",
+        "text": "https://example.org/\n",
         "dominant": "PROSE",
         "signals": [
           "url",
@@ -7550,16 +8148,18 @@
         "skeleton": "URL"
       },
       {
-        "text": "Hallo Welt",
-        "dominant": "PROSE",
+        "text": "Temp: 12 hPa\r\nmore",
+        "dominant": "MEASUREMENT",
         "signals": [
-          "mostly-prose"
+          "mostly-data"
         ],
         "states": [
-          "PROSE",
-          "PROSE"
+          "MEASUREMENT",
+          "SEPARATOR",
+          "MEASUREMENT",
+          "MEASUREMENT"
         ],
-        "skeleton": "WORD*2"
+        "skeleton": "WORD PUNCT UNIT WORD"
       }
     ],
     "cadence": [
@@ -7682,7 +8282,7 @@
           1700000120,
           1700000150
         ],
-        "cadence": "periodic"
+        "cadence": "jittered"
       },
       {
         "times": [
@@ -7693,7 +8293,7 @@
           1700000124,
           1700000155
         ],
-        "cadence": "periodic"
+        "cadence": "jittered"
       },
       {
         "times": [
@@ -7728,7 +8328,7 @@
           1700000180,
           1700000240
         ],
-        "cadence": "periodic"
+        "cadence": "jittered"
       },
       {
         "times": [
@@ -7790,7 +8390,7 @@
           1700001800,
           1700002400
         ],
-        "cadence": "jittered"
+        "cadence": "periodic"
       },
       {
         "times": [
@@ -7858,7 +8458,7 @@
           1700001800,
           1700001800
         ],
-        "cadence": "jittered"
+        "cadence": "periodic"
       },
       {
         "times": [
@@ -7869,7 +8469,7 @@
           1700001200,
           1700001800
         ],
-        "cadence": "jittered"
+        "cadence": "periodic"
       },
       {
         "times": [
@@ -7892,7 +8492,7 @@
           1700001200,
           1700002400
         ],
-        "cadence": "jittered"
+        "cadence": "periodic"
       },
       {
         "times": [
@@ -7972,6 +8572,153 @@
           1700000000
         ],
         "cadence": "jittered"
+      },
+      {
+        "times": [
+          1700000000,
+          1700014400,
+          1700021600,
+          1700043200,
+          1700057600,
+          1700064800,
+          1700079200,
+          1700093630
+        ],
+        "cadence": "periodic"
+      },
+      {
+        "times": [
+          1700000000,
+          1700014400,
+          1700025200,
+          1700039600,
+          1700043200,
+          1700072000,
+          1700086400,
+          1700097200
+        ],
+        "cadence": "periodic"
+      },
+      {
+        "times": [
+          1700000000,
+          1700036000,
+          1700086400,
+          1700122400,
+          1700172820,
+          1700208820,
+          1700259220,
+          1700295220
+        ],
+        "cadence": "periodic"
+      },
+      {
+        "times": [
+          1700000000,
+          1700000002,
+          1700000004,
+          1700010800,
+          1700010802,
+          1700010804,
+          1700021600,
+          1700021602,
+          1700021604,
+          1700032400,
+          1700032402,
+          1700032404,
+          1700043200,
+          1700043202,
+          1700043204,
+          1700054000,
+          1700054002,
+          1700054004
+        ],
+        "cadence": "periodic"
+      },
+      {
+        "times": [
+          1700000000,
+          1700000600,
+          1700001200,
+          1700008100,
+          1700008700,
+          1700015600,
+          1700016200,
+          1700023100
+        ],
+        "cadence": "jittered"
+      },
+      {
+        "times": [
+          1700000000,
+          1700000000,
+          1700000030,
+          1700000100,
+          1700000195,
+          1700000595,
+          1700001025
+        ],
+        "cadence": "jittered"
+      },
+      {
+        "times": [
+          1700000000,
+          1700000120,
+          1700000240,
+          1700000360,
+          1700000480
+        ],
+        "cadence": "periodic"
+      },
+      {
+        "times": [
+          1700000000,
+          1700000100,
+          1700000200,
+          1700003600,
+          1700003700,
+          1700003800,
+          1700007200,
+          1700007300,
+          1700007400,
+          1700010800,
+          1700010900,
+          1700011000
+        ],
+        "cadence": "jittered"
+      },
+      {
+        "times": [
+          1700000000,
+          1700000400,
+          1700001000,
+          1700001800,
+          1700002800
+        ],
+        "cadence": "jittered"
+      },
+      {
+        "times": [
+          1700000000,
+          1700001013,
+          1700002711,
+          1700003917,
+          1700006143,
+          1700007019,
+          1700009431,
+          1700010267,
+          1700012347,
+          1700013001,
+          1700016001,
+          1700019001,
+          1700022001,
+          1700025001,
+          1700028001,
+          1700031001,
+          1700034001,
+          1700037001
+        ],
+        "cadence": "periodic"
       }
     ],
     "timing_gaps": [
@@ -8556,6 +9303,7 @@
       {
         "prior_times": [],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "one-shot"
       },
       {
@@ -8563,6 +9311,7 @@
           1700000000
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "one-shot"
       },
       {
@@ -8570,6 +9319,7 @@
           1700000005
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "one-shot"
       },
       {
@@ -8578,6 +9328,7 @@
           1700000010
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "one-shot"
       },
       {
@@ -8585,6 +9336,7 @@
           1700000100
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "one-shot"
       },
       {
@@ -8594,6 +9346,7 @@
           1699999400
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "jittered"
       },
       {
@@ -8604,6 +9357,7 @@
           1700001200
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "jittered"
       },
       {
@@ -8613,6 +9367,7 @@
           1699999400
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "scheduled"
       },
       {
@@ -8626,6 +9381,7 @@
           1699999400
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "scheduled"
       },
       {
@@ -8639,6 +9395,7 @@
           1699996400
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "scheduled"
       },
       {
@@ -8665,6 +9422,7 @@
           1699999400
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "scheduled"
       },
       {
@@ -8721,6 +9479,7 @@
           1699998200
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "scheduled"
       },
       {
@@ -8734,6 +9493,7 @@
           1699995800
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "scheduled"
       },
       {
@@ -8754,6 +9514,7 @@
           1699999400
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "scheduled"
       },
       {
@@ -8769,6 +9530,7 @@
           1700001200
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "scheduled"
       },
       {
@@ -8782,6 +9544,7 @@
           1699999300
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "scheduled"
       },
       {
@@ -8795,6 +9558,7 @@
           1699999400
         ],
         "t": 1700000077,
+        "layout_times": null,
         "timing": "scheduled"
       },
       {
@@ -8807,6 +9571,7 @@
           1699999995
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "burst"
       },
       {
@@ -8823,6 +9588,7 @@
           1699999999
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "burst"
       },
       {
@@ -8834,6 +9600,7 @@
           1699999980
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "burst"
       },
       {
@@ -8843,6 +9610,7 @@
           1699999999
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "burst"
       },
       {
@@ -8850,6 +9618,7 @@
           1699999999.5
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "burst"
       },
       {
@@ -8857,6 +9626,7 @@
           1699999999
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "burst"
       },
       {
@@ -8869,6 +9639,7 @@
           1699999440
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "jittered"
       },
       {
@@ -8883,6 +9654,7 @@
           1700004129
         ],
         "t": 1700006000,
+        "layout_times": null,
         "timing": "jittered"
       },
       {
@@ -8902,6 +9674,7 @@
           1699997816
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "jittered"
       },
       {
@@ -8949,6 +9722,7 @@
           1699993943
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "jittered"
       },
       {
@@ -9036,6 +9810,7 @@
           1699994916
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "jittered"
       },
       {
@@ -9064,6 +9839,7 @@
           1699999400
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "scheduled"
       },
       {
@@ -9115,6 +9891,7 @@
           1699998200
         ],
         "t": 1700000100,
+        "layout_times": null,
         "timing": "burst"
       },
       {
@@ -9159,6 +9936,107 @@
           1700000200
         ],
         "t": 1700000600,
+        "layout_times": null,
+        "timing": "scheduled"
+      },
+      {
+        "prior_times": [
+          1699994000,
+          1699995200,
+          1699996400,
+          1699997600,
+          1699998800,
+          1699994400,
+          1699995777,
+          1699997111,
+          1699998555
+        ],
+        "t": 1700000000,
+        "layout_times": null,
+        "timing": "jittered"
+      },
+      {
+        "prior_times": [
+          1699994000,
+          1699995200,
+          1699996400,
+          1699997600,
+          1699998800,
+          1699994400,
+          1699995777,
+          1699997111,
+          1699998555
+        ],
+        "t": 1700000000,
+        "layout_times": [
+          1699994000,
+          1699995200,
+          1699996400,
+          1699997600,
+          1699998800
+        ],
+        "timing": "scheduled"
+      },
+      {
+        "prior_times": [
+          1699994000,
+          1699995200,
+          1699996400,
+          1699997600,
+          1699998800,
+          1699994400,
+          1699995777,
+          1699997111,
+          1699998555
+        ],
+        "t": 1700000000,
+        "layout_times": [
+          1699994000,
+          1699995200,
+          1699996400,
+          1699997600,
+          1699998800,
+          1700000000,
+          1700001200
+        ],
+        "timing": "scheduled"
+      },
+      {
+        "prior_times": [
+          1699994000,
+          1699995200,
+          1699996400,
+          1699997600,
+          1699998800,
+          1699994400,
+          1699995777,
+          1699997111,
+          1699998555
+        ],
+        "t": 1700000000,
+        "layout_times": [],
+        "timing": "jittered"
+      },
+      {
+        "prior_times": [
+          1699994000,
+          1699995200,
+          1699996400,
+          1699997600,
+          1699998800,
+          1699994400,
+          1699995777,
+          1699997111,
+          1699998555
+        ],
+        "t": 1700000077,
+        "layout_times": [
+          1699994000,
+          1699995200,
+          1699996400,
+          1699997600,
+          1699998800
+        ],
         "timing": "scheduled"
       },
       {
@@ -9167,6 +10045,7 @@
           1699999999.5
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "burst"
       },
       {
@@ -9174,6 +10053,7 @@
           1697408000
         ],
         "t": 1700000000,
+        "layout_times": null,
         "timing": "jittered"
       },
       {
@@ -9183,6 +10063,43 @@
           1699395200
         ],
         "t": 1700000000,
+        "layout_times": null,
+        "timing": "jittered"
+      },
+      {
+        "prior_times": [
+          1700000000,
+          1700003600,
+          1700004000,
+          1700007200,
+          1700007900,
+          1700010800,
+          1700014400,
+          1700015100
+        ],
+        "t": 1700018000,
+        "layout_times": [
+          1700000000,
+          1700003600,
+          1700007200,
+          1700010800,
+          1700014400
+        ],
+        "timing": "scheduled"
+      },
+      {
+        "prior_times": [
+          1700000000,
+          1700003600,
+          1700004000,
+          1700007200,
+          1700007900,
+          1700010800,
+          1700014400,
+          1700015100
+        ],
+        "t": 1700018000,
+        "layout_times": null,
         "timing": "jittered"
       }
     ],
