@@ -70,6 +70,8 @@ class _Job:
     total = 5
     processed = 0
     done = False
+    error: str | None = None
+    _task: Any = None
 
 
 class _RecordingClassifier:

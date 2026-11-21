@@ -3242,9 +3242,11 @@ async def run_classifier_startup(
     # backfill runs FIRST: the reclassify sweep derives ``origin`` from the STORED timing, so
     # it must see the timing of the current axes contract. It is awaited here, inside the
     # background task, so boot itself is never blocked.
+    axes_ok = True
     try:
         await storage_handler.backfill_message_axes()
     except Exception:
+        axes_ok = False
         logger.exception("Message axes backfill failed; will retry on next start")
     try:
         promoted = await storage_handler.backfill_auto_beacon_templates()
@@ -3252,6 +3254,14 @@ async def run_classifier_startup(
             logger.info("Auto-beacon backfill promoted %d templates", promoted)
     except Exception:
         logger.exception("Auto-beacon backfill failed; continuing with the next startup step")
+    if not axes_ok:
+        # The sweep would stamp origin from NULL/partial timing and set the per-version marker,
+        # so the next boot (axes backfill now working) would never recompute it. Skip both.
+        logger.warning(
+            "Skipping classifier reclassify sweep: axes backfill did not complete; "
+            "both will run again on next start"
+        )
+        return
     try:
         await _maybe_backfill_classifier(classifier, storage_handler, sse_manager)
     except Exception:
@@ -3295,10 +3305,19 @@ async def _maybe_backfill_classifier(
 
         job = await classifier.reclassify(progress_cb=_backfill_progress)
         logger.info(
-            "Classifier backfill scheduled: job=%s rows=%d",
+            "Classifier backfill started: job=%s rows=%d",
             job.job_id,
             job.total,
         )
+        # The marker means "sweep FINISHED", so wait for the job (we are already in the
+        # background startup task). A sweep killed mid-run (shutdown cancels this await) or
+        # one that failed fatally leaves no marker and is redone next boot.
+        task = job._task  # noqa: SLF001 - ReclassifyJob keeps its task here
+        if task is not None:
+            await task
+        if job.error is not None:
+            logger.warning("Classifier backfill failed (%s); marker not set", job.error)
+            return
     await storage_handler.set_meta(marker_key, datetime.now(UTC).isoformat())
 
 
