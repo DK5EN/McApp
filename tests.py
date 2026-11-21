@@ -485,8 +485,8 @@ async def _suite_orchestrator(storage: StorageProtocol, results: list[tuple[str,
     results.append(("classify: live path tags a greeting", cls_live.category == "greeting"))
     results.append(
         (
-            "classify: a human greeting is not auto_beacon and keeps qso",
-            AUTO_BEACON_TAG not in cls_live.tags and "qso" in cls_live.tags,
+            "classify: stored tags are v8 topics (greeting, never auto_beacon/qso)",
+            "greeting" in cls_live.tags and not {AUTO_BEACON_TAG, "qso"} & set(cls_live.tags),
         )
     )
     results.append(

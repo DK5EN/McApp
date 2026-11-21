@@ -18,19 +18,37 @@ Public surface: ``Classification``, ``CATEGORIES``.
 from __future__ import annotations
 
 from .classify import Classifier
+from .origin import (
+    ORIGIN_HUMAN,
+    ORIGIN_MACHINE,
+    OriginResult,
+    OriginSpec,
+    carries_values,
+    message_origin,
+    origin_of,
+)
 from .types import (
     AUTO_BEACON_TAG,
     CATEGORIES,
     Classification,
     MessageCategory,
     derive_category,
+    legacy_tag_view,
 )
 
 __all__ = [
     "AUTO_BEACON_TAG",
     "CATEGORIES",
+    "ORIGIN_HUMAN",
+    "ORIGIN_MACHINE",
     "Classification",
     "Classifier",
     "MessageCategory",
+    "OriginResult",
+    "OriginSpec",
+    "carries_values",
     "derive_category",
+    "legacy_tag_view",
+    "message_origin",
+    "origin_of",
 ]

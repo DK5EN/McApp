@@ -30,9 +30,10 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .engine import Engine
+from .origin import ORIGIN_HUMAN, ORIGIN_MACHINE, OriginResult, message_origin
 from .score import compute as score_compute
 from .template import (
     _AUTO_BEACON_MIN_TOKENS,
@@ -52,8 +53,14 @@ from .types import (
     derive_category,
 )
 
+if TYPE_CHECKING:
+    from .axes import AxesEngine
+
 CONTRACT_ID_META_KEY = "classifier_contract_id"
 _QSO_TAG = "qso"
+# mc-chat extension of the contract origin axis: a human verdict on a message whose L2
+# template is an auto-beacon is overridden to machine with this rule name.
+ORIGIN_RULE_BEACON_TEMPLATE = "beacon-template"
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +70,49 @@ ProgressCallback = Callable[["ReclassifyJob"], Awaitable[None]]
 def _fallback_hash(text: str) -> str:
     """Plain SHA-1 of raw text, no normalization.  Used in the exception path."""
     return hashlib.sha1(text.encode("utf-8"), usedforsecurity=False).hexdigest()[:TEMPLATE_HASH_LEN]
+
+
+def is_beacon_of(cls: Classification) -> bool:
+    """L2 beacon verdict of a classification (False for one that did not come from L2)."""
+    return isinstance(cls, BeaconClassification) and cls.is_beacon
+
+
+def origin_for(  # noqa: PLR0913, PLR0917 - positional API mirrors message_origin
+    engine: Engine,
+    axes: AxesEngine | None,
+    text: str,
+    src: str,
+    dst: str,
+    timing: str | None,
+    *,
+    is_beacon: bool,
+) -> OriginResult | None:
+    """Contract origin (``message_origin``) plus the mc-chat beacon-template extension.
+
+    Without an axes engine (contract failed to load) only the two verdicts that need neither
+    timing nor format are given -- a machine-flagged rule, then the beacon template -- and
+    everything else stays None, so ``auto_beacon`` hiding survives a degraded start.
+    """
+    if axes is None:
+        machine_rules = engine.classify(text, src, dst).machine_rules
+        if machine_rules:
+            return OriginResult(ORIGIN_MACHINE, engine.origin_spec.rules[0])
+        return OriginResult(ORIGIN_MACHINE, ORIGIN_RULE_BEACON_TEMPLATE) if is_beacon else None
+    res = message_origin(engine, axes, text, src, dst, timing)
+    if res.origin == ORIGIN_HUMAN and is_beacon:
+        return OriginResult(ORIGIN_MACHINE, ORIGIN_RULE_BEACON_TEMPLATE)
+    return res
+
+
+@dataclass(frozen=True)
+class BeaconClassification(Classification):
+    """``Classifier.classify`` result: a ``Classification`` that also carries the L2 verdict.
+
+    ``tags`` are the v8 topics (never ``auto_beacon``/``qso``; those are origin-derived aliases,
+    see ``types.legacy_tag_view``). ``is_beacon`` is the template's auto-beacon decision.
+    """
+
+    is_beacon: bool = False
 
 
 @dataclass
@@ -87,9 +137,17 @@ class Classifier:
     ``store_message`` enriches rows automatically.
     """
 
-    def __init__(self, storage: StorageProtocol, engine: Engine, contract_id: str) -> None:
+    def __init__(
+        self,
+        storage: StorageProtocol,
+        engine: Engine,
+        contract_id: str,
+        axes: AxesEngine | None = None,
+    ) -> None:
         self.storage = storage
         self.engine = engine
+        # Axes engine for the origin axis on the reclassify path; None = origin not computed.
+        self.axes = axes
         self.contract_id = contract_id
         self.version: int = 0
         self._jobs: dict[str, ReclassifyJob] = {}
@@ -124,6 +182,7 @@ class Classifier:
     ) -> Classification:
         """Classify a single message.
 
+
         When ``update_stats`` is True (default, live-ingest path):
           - Layer 2 calls ``update_and_check`` which increments
             ``beacon_templates.count``.
@@ -141,7 +200,9 @@ class Classifier:
             text: str = msg.get("msg") or ""
             dst: str = msg.get("dst") or ""
             l1 = self.engine.classify(text, msg.get("src") or "", dst)
+            # tag_set is the INTERNAL v7 set (score + category); topic_set is what is stored.
             tag_set: set[str] = set(l1.tags)
+            topic_set: set[str] = set(l1.topics)
             directed = l1.directed or DIRECTED_DST_RE.search(dst) is not None
             auto_beacon = False
 
@@ -195,6 +256,7 @@ class Classifier:
                 # are flaggable, issue #17), and a single greeting+weather message keeps both.
                 if "weather" in tag_set:
                     tag_set.discard("greeting")
+                    topic_set.discard("greeting")
             category = derive_category(tag_set, directed, l1.legacy_tags)
 
             # Layer 3: info score
@@ -212,7 +274,7 @@ class Classifier:
                 msg.get("msg_id"),
             )
             raw_text: str = msg.get("msg") or ""
-            return Classification(
+            return BeaconClassification(
                 category="other",
                 tags=(),
                 info_score=0.5,
@@ -220,12 +282,25 @@ class Classifier:
                 classifier_version=self.version,
             )
 
-        return Classification(
+        return BeaconClassification(
             category=category,
-            tags=tuple(sorted(tag_set)),
+            tags=tuple(sorted(topic_set)),
             info_score=info_score,
             template_hash=template_hash,
             classifier_version=self.version,
+            is_beacon=auto_beacon,
+        )
+
+    def _origin_of_row(self, row: dict[str, Any], is_beacon: bool) -> OriginResult | None:
+        """Origin of a stored row from its STORED timing (degraded without axes, see origin_for)."""
+        return origin_for(
+            self.engine,
+            self.axes,
+            row.get("msg") or "",
+            row.get("src") or "",
+            row.get("dst") or "",
+            row.get("timing"),
+            is_beacon=is_beacon,
         )
 
     async def _cleanup_stale_auto_beacons(self) -> int:
@@ -360,17 +435,19 @@ class Classifier:
     ) -> None:
         """Classify one batch; full-write changed rows, only stamp the rest."""
         changed: list[tuple[str, str, float, str, int, int]] = []
+        origins: dict[int, tuple[str, str]] = {}
         unchanged_ids: list[int] = []
-        results: list[tuple[dict[str, Any], Classification]] = []
+        results: list[tuple[dict[str, Any], Classification, OriginResult | None]] = []
         for row in batch:
             try:
                 cls = await self.classify(row, update_stats=False)
+                origin = self._origin_of_row(row, is_beacon_of(cls))
             except Exception:
                 logger.exception("Reclassify failed for row id=%r — skipping", row.get("id"))
                 skipped_ids.add(int(row["id"]))
                 job.processed += 1
                 continue
-            results.append((row, cls))
+            results.append((row, cls, origin))
             new = (cls.category, json.dumps(list(cls.tags)), cls.info_score, cls.template_hash)
             old = (
                 row.get("category"),
@@ -378,13 +455,20 @@ class Classifier:
                 row.get("info_score"),
                 row.get("template_hash"),
             )
-            if new != old:
+            origin_changed = origin is not None and (origin.origin, origin.rule) != (
+                row.get("origin"),
+                row.get("origin_rule"),
+            )
+            if origin is not None and origin_changed:
+                origins[int(row["id"])] = (origin.origin, origin.rule)
+            if new != old or origin_changed:
                 changed.append((*new, cls.classifier_version, int(row["id"])))
             else:
                 unchanged_ids.append(int(row["id"]))
         try:
             await self.storage.update_classification_batch(
                 changed=changed,
+                origins=origins,
                 unchanged_ids=unchanged_ids,
                 classifier_ver=target_version,
             )
@@ -393,7 +477,7 @@ class Classifier:
         else:
             job.processed += len(results)
             return
-        for row, cls in results:
+        for row, cls, origin in results:
             try:
                 await self.storage.update_message_classification(
                     row["id"],
@@ -402,6 +486,8 @@ class Classifier:
                     info_score=cls.info_score,
                     template_hash=cls.template_hash,
                     classifier_ver=cls.classifier_version,
+                    origin=origin.origin if origin is not None else None,
+                    origin_rule=origin.rule if origin is not None else None,
                 )
             except Exception:
                 logger.exception("Reclassify failed for row id=%r — skipping", row.get("id"))
@@ -416,7 +502,8 @@ class Classifier:
             {
                 "counts": {category: int, ...},       # last 30 days
                 "recent_24h": {category: int, ...},
-                "by_tag": {tag: int, ...},            # last 30 days
+                "by_tag": {tag: int, ...},            # stored v8 topics, last 30 days
+                "by_origin": {"human": int, "machine": int, "null": int},  # last 30 days
                 "top_templates": [
                     {"template_hash", "example_msg", "count", "auto_beacon"},
                     ...                                # top 10 by count, last 7 days
@@ -427,6 +514,7 @@ class Classifier:
         now_ms = int(time.time() * 1000)
         counts = await self.storage.count_messages_by_category(now_ms - 30 * 24 * 3600 * 1000)
         by_tag = await self.storage.count_messages_by_tag(now_ms - 30 * 24 * 3600 * 1000)
+        by_origin = await self.storage.count_messages_by_origin(now_ms - 30 * 24 * 3600 * 1000)
         recent_24h = await self.storage.count_messages_by_category(now_ms - 24 * 3600 * 1000)
 
         # timestamp_beacon is not persisted (drop-on-classify); surface the
@@ -442,6 +530,7 @@ class Classifier:
             "counts": counts,
             "recent_24h": recent_24h,
             "by_tag": by_tag,
+            "by_origin": by_origin,
             "top_templates": top_templates,
             "auto_beacon_total": auto_beacon_total,
         }

@@ -21,7 +21,7 @@ from typing import Any
 
 import regex
 
-SUPPORTED_SCHEMA = 1
+SUPPORTED_SCHEMA = 2
 _MEMO_CAP = 100_000
 
 # Signal names structure emits; the contract's ``structure.signals`` must list exactly these.
@@ -164,6 +164,12 @@ class AxesEngine:
         self._max_multiple = int(c["MAX_MULTIPLE"])
         self._min_median = float(c["MIN_MEDIAN_SEC"])
         self._live_gaps = int(c["LIVE_TIMING_GAPS"])
+        self._raw_window = int(c["CADENCE_RAW_WINDOW"])
+        self._part_sec = float(c["PART_SEC"])
+        self._max_fraction = int(c["MAX_FRACTION"])
+        self._min_fraction_sec = float(c["MIN_FRACTION_SEC"])
+        self._live_prior_limit = int(c["LIVE_PRIOR_LIMIT"])
+        self._timing_model_version = int(c["TIMING_MODEL_VERSION"])
         self._echo_window = float(c["ECHO_WINDOW_SEC"])
         self._echo_min_tokens = int(c["ECHO_MIN_TOKENS"])
         self._echo_containment = float(c["ECHO_CONTAINMENT"])
@@ -228,7 +234,11 @@ class AxesEngine:
     @property
     def prior_limit(self) -> int:
         """How many of a sender's newest distinct earlier times live_timing can use."""
-        return max(self._cadence_window, self._live_gaps)
+        return max(self._cadence_window, self._live_gaps, self._live_prior_limit)
+
+    @property
+    def timing_model_version(self) -> int:
+        return self._timing_model_version
 
     @property
     def echo_window_sec(self) -> float:
@@ -364,22 +374,41 @@ class AxesEngine:
     # -- timing ---------------------------------------------------------------------------
 
     def _is_on_clock(self, gap: float, period: float) -> bool:
-        for k in range(1, self._max_multiple + 1):
-            target = k * period
-            if abs(gap - target) <= self._tolerance * target:
-                return True
-        return False
+        if not period > 0:
+            return False
+        k = math.floor(gap / period + 0.5)  # JS Math.round: halves go up
+        return 1 <= k <= self._max_multiple and abs(gap - k * period) <= self._tolerance * period
+
+    def _sends_of(self, times: Sequence[float]) -> list[float]:
+        out: list[float] = []
+        for t in times:
+            if not out or t - out[-1] >= self._part_sec:
+                out.append(t)
+        return out
+
+    def _best_period(self, gaps: Sequence[float]) -> tuple[float, float]:
+        best_p, best_share = 0.0, 0.0
+        for g in gaps:
+            for k in range(1, self._max_fraction + 1):
+                p = g / k
+                if p < self._min_median or (k > 1 and p < self._min_fraction_sec):
+                    continue
+                share = sum(1 for x in gaps if self._is_on_clock(x, p)) / len(gaps)
+                if share > best_share or (share == best_share and p > best_p):
+                    best_p, best_share = p, share
+        return best_p, best_share
 
     def cadence(self, times: Sequence[float]) -> str:
-        t = sorted(x for x in times if math.isfinite(x))[-self._cadence_window :]
-        gaps = [t[i] - t[i - 1] for i in range(1, len(t))]
-        if len(gaps) < self._min_intervals:
+        raw = sorted(x for x in times if math.isfinite(x))[-self._raw_window :]
+        recent = raw[-self._cadence_window :]
+        if len(recent) - 1 < self._min_intervals:
             return CADENCE_SINGLE
-        s = sorted(gaps)
-        mid = len(s) // 2
-        med = s[mid] if len(s) % 2 == 1 else (s[mid - 1] + s[mid]) / 2
-        on_clock = sum(1 for g in gaps if self._is_on_clock(g, med)) / len(gaps) if med > 0 else 0
-        periodic = med >= self._min_median and on_clock >= self._min_share
+        sends = self._sends_of(raw)[-self._cadence_window :]
+        gaps = [sends[i] - sends[i - 1] for i in range(1, len(sends))]
+        period, share = (0.0, 0.0)
+        if len(gaps) >= self._min_intervals:
+            period, share = self._best_period(gaps)
+        periodic = period >= self._min_median and share >= self._min_share
         return CADENCE_PERIODIC if periodic else CADENCE_JITTERED
 
     def hmm_classes_of_gaps(self, gaps: Sequence[float]) -> list[str]:
@@ -398,12 +427,38 @@ class AxesEngine:
         path = _viterbi(self._t_log_pi, self._t_log_a, emit)
         return [self._t_class_of[s] for s in path]
 
-    def live_timing(self, prior_times: Iterable[float], t: float) -> str:
+    def skeleton(self, text: str) -> str:
+        """Collapsed token-class sequence ('LOC CALL UNIT*2'); the same-layout grouping key."""
+        parts: list[str] = []
+        for cls, _ in self.tokenize(text):
+            prev = parts[-1] if parts else None
+            if prev is not None and prev.startswith(cls + "*"):
+                parts[-1] = f"{cls}*{int(prev[len(cls) + 1 :]) + 1}"
+            elif prev == cls:
+                parts[-1] = f"{cls}*2"
+            else:
+                parts.append(cls)
+        return " ".join(parts)
+
+    def live_timing(
+        self,
+        prior_times: Iterable[float],
+        t: float,
+        layout_times: Iterable[float] | None = None,
+    ) -> str:
+        """Timing of the message at `t`. `layout_times`, when given, are the sender's earlier
+        times of messages with the same skeleton: the clock test runs on those, burst and
+        jittered stay on all `prior_times`."""
         earlier = sorted({p for p in prior_times if math.isfinite(p) and p < t})
         if not earlier:
             return "one-shot"
         earlier.append(t)
-        if self.cadence(earlier[-self._cadence_window :]) == CADENCE_PERIODIC:
+        if layout_times is None:
+            clock_base = earlier
+        else:
+            clock_base = sorted({p for p in layout_times if math.isfinite(p) and p < t})
+            clock_base.append(t)
+        if self.cadence(clock_base[-self._raw_window :]) == CADENCE_PERIODIC:
             return "scheduled"
         recent = earlier[-(self._live_gaps + 1) :]
         gaps = [recent[i] - recent[i - 1] for i in range(1, len(recent))]
@@ -434,11 +489,17 @@ def _chk_echo_tokens(e: AxesEngine, x: Mapping[str, Any]) -> str | None:
 def _chk_format(e: AxesEngine, x: Mapping[str, Any]) -> str | None:
     f = e.message_format(x["text"])
     states = e.states_of(x["text"])
-    if f.dominant == x["dominant"] and list(f.signals) == x["signals"] and states == x["states"]:
+    skel = e.skeleton(x["text"])
+    if (
+        f.dominant == x["dominant"]
+        and list(f.signals) == x["signals"]
+        and states == x["states"]
+        and skel == x["skeleton"]
+    ):
         return None
     return (
         f"{x['text']!r}: got {f.dominant} {list(f.signals)} {states}; "
-        f"want {x['dominant']} {x['signals']} {x['states']}"
+        f"{skel!r}; want {x['dominant']} {x['signals']} {x['states']} {x['skeleton']!r}"
     )
 
 
@@ -453,7 +514,7 @@ def _chk_timing_gaps(e: AxesEngine, x: Mapping[str, Any]) -> str | None:
 
 
 def _chk_live_timing(e: AxesEngine, x: Mapping[str, Any]) -> str | None:
-    got = e.live_timing(x["prior_times"], x["t"])
+    got = e.live_timing(x["prior_times"], x["t"], x["layout_times"])
     if got == x["timing"]:
         return None
     return f"{x['prior_times']} t={x['t']}: got {got}; want {x['timing']}"
