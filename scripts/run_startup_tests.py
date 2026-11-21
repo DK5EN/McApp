@@ -117,6 +117,7 @@ from mcapp.storage.mheard_attribution_tests import run_mheard_attribution_tests
 from mcapp.storage.migration_chain_tests import run_migration_chain_tests
 from mcapp.storage.node_admin_hook_tests import run_node_admin_hook_tests
 from mcapp.storage.node_admin_storage_tests import run_node_admin_storage_tests
+from mcapp.storage.origin_tests import run_origin_tests
 from mcapp.storage.query_tests import run_query_tests
 from mcapp.storage.read_cursor_tests import run_read_cursor_tests
 from mcapp.storage.signal_via_tests import run_signal_via_tests
@@ -376,6 +377,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
     message_axes_ok = await run_message_axes_tests()
     print(f"message_axes: {'PASS' if message_axes_ok else 'FAIL'}")
 
+    origin_ok = await run_origin_tests()
+    print(f"origin: {'PASS' if origin_ok else 'FAIL'}")
+
     ingest_dedup_ok = await run_ingest_dedup_tests()
     print(f"ingest_dedup: {'PASS' if ingest_dedup_ok else 'FAIL'}")
 
@@ -578,6 +582,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and conv_dedup_ok
         and live_classification_ok
         and message_axes_ok
+        and origin_ok
         and ingest_dedup_ok
         and meteo_ok
         and msg_core_ok

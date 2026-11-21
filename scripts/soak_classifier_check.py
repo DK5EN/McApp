@@ -36,14 +36,14 @@ WHERE m.timestamp >= ? AND j.value IN ('bot', 'node', 'software', 'time')
 """
 SQL_AUTO_SAMPLE = """
 SELECT m.src, m.dst, m.msg, m.template_hash FROM messages m
-WHERE m.timestamp >= ? AND EXISTS (
+WHERE m.timestamp >= ? AND (m.origin = 'machine' OR EXISTS (
   SELECT 1 FROM json_each(CASE WHEN json_valid(m.tags) THEN m.tags ELSE '[]' END) j
-  WHERE j.value = 'auto_beacon')
+  WHERE j.value = 'auto_beacon'))
 ORDER BY m.timestamp DESC LIMIT ?
 """
 SQL_HUMAN_SAMPLE = """
 SELECT m.src, m.dst, m.msg, m.tags FROM messages m
-WHERE m.timestamp >= ? AND m.type = 'msg' AND NOT EXISTS (
+WHERE m.timestamp >= ? AND m.type = 'msg' AND m.origin IS NOT 'machine' AND NOT EXISTS (
   SELECT 1 FROM json_each(CASE WHEN json_valid(m.tags) THEN m.tags ELSE '[]' END) j
   WHERE j.value = 'auto_beacon')
 ORDER BY m.timestamp DESC LIMIT ?

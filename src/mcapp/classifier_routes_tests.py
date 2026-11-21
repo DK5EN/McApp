@@ -2,8 +2,9 @@
 
 Pins: rule CRUD and the dry-run tester are gone (404/405, never a handler),
 `/api/classifier/status` reports `rule_count` (from the loaded contract) and
-`contract_id`, and the startup order is template promotion backfill BEFORE the
-reclassify sweep (reclassify reads the stored `auto_beacon` flag).
+`contract_id`, and the startup order is axes backfill (origin reads the stored timing), then
+template promotion backfill, BEFORE the reclassify sweep (reclassify reads the stored
+`auto_beacon` flag).
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from .main import run_classifier_startup
 from .sse_routes.classifier import build_classifier_router
 
 _BASE = "http://localhost"
-_EXPECTED_RULES = 76
+_EXPECTED_RULES = 93
 
 
 class _Storage:
@@ -33,6 +34,10 @@ class _Storage:
 
     async def count_messages_to_classify(self, classifier_ver_below: int | None = None) -> int:
         return 5 if classifier_ver_below is not None else 9
+
+    async def backfill_message_axes(self) -> int | None:
+        self.calls.append("axes")
+        return None
 
     async def backfill_auto_beacon_templates(self) -> int:
         self.calls.append("promote")
@@ -127,8 +132,8 @@ async def run_classifier_routes_tests() -> bool:
     rec = _RecordingClassifier(calls)
     await run_classifier_startup(cast(Any, rec), cast(Any, storage), None)
     _record(
-        "startup: promotion backfill runs before reclassify",
-        calls[:2] == ["promote", "reclassify"],
+        "startup: axes backfill, then promotion backfill, then reclassify",
+        calls[:3] == ["axes", "promote", "reclassify"],
     )
 
     passed = sum(1 for _, ok in results if ok)

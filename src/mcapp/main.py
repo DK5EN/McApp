@@ -2767,15 +2767,20 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
     # contract changes the version, which makes the startup backfill reclassify.
     logger.info("Initializing classifier...")
     engine = load_engine()
-    classifier = Classifier(storage_handler, engine, contract_id(engine))
-    await classifier.load()
-    storage_handler.set_classifier(classifier)
-    # Message axes (timing/echo stored at ingest, format at read): a missing or broken
-    # contract leaves the feature off (NULL columns, wire format null), never fatal.
+    # Axes first: the contract id covers the axes commit too (origin reads timing/format), and
+    # classifier.load() compares it against the stored id. A missing or broken axes contract
+    # leaves the feature off (NULL columns, wire format null, degraded origin), never fatal.
+    axes_runtime = None
     try:
-        storage_handler.set_axes(load_axes())
+        axes_runtime = load_axes()
     except Exception:
         logger.exception("Axes contract failed to load; message axes disabled")
+    axes_engine = None if axes_runtime is None else axes_runtime.engine
+    classifier = Classifier(storage_handler, engine, contract_id(engine, axes_engine), axes_engine)
+    await classifier.load()
+    storage_handler.set_classifier(classifier)
+    if axes_runtime is not None:
+        storage_handler.set_axes(axes_runtime)
 
     message_router = MessageRouter(storage_handler)
     message_router.stall_recorder = stall_recorder
@@ -3226,15 +3231,21 @@ async def _nightly_prune(
 async def run_classifier_startup(
     classifier: Classifier, storage_handler: SQLiteStorage, sse_manager: Any
 ) -> None:
-    """Startup classifier catch-up: auto-beacon promotion first, then reclassify.
+    """Startup catch-up: axes backfill, then auto-beacon promotion, then reclassify.
 
-    The order is load-bearing: ``reclassify`` reads the *stored* ``auto_beacon``
-    flag of each template to strip ``qso``, so templates the promotion backfill
-    would flag must be flagged before the sweep, or the rows keep ``qso`` until
-    the next version bump. (Mirrors mc-chat's ``run_classifier_startup``.)
+    The axes-first order is load-bearing for ``origin``, and so is the rest of it:
+    ``reclassify`` reads the *stored* ``auto_beacon`` flag of each template to strip ``qso``,
+    so templates the promotion backfill would flag must be flagged before the sweep, or the
+    rows keep ``qso`` until the next version bump. (Mirrors mc-chat's ``run_classifier_startup``.)
     """
-    # Each step is isolated: a failure is logged and must not skip the next one (the axes
-    # backfill in particular is independent of both tag steps).
+    # Each step is isolated: a failure is logged and must not skip the next one. The axes
+    # backfill runs FIRST: the reclassify sweep derives ``origin`` from the STORED timing, so
+    # it must see the timing of the current axes contract. It is awaited here, inside the
+    # background task, so boot itself is never blocked.
+    try:
+        await storage_handler.backfill_message_axes()
+    except Exception:
+        logger.exception("Message axes backfill failed; will retry on next start")
     try:
         promoted = await storage_handler.backfill_auto_beacon_templates()
         if promoted:
@@ -3245,11 +3256,6 @@ async def run_classifier_startup(
         await _maybe_backfill_classifier(classifier, storage_handler, sse_manager)
     except Exception:
         logger.exception("Classifier backfill failed; continuing with the next startup step")
-    # Axes backfill runs after the tag backfill (its own contract-keyed marker).
-    try:
-        await storage_handler.backfill_message_axes()
-    except Exception:
-        logger.exception("Message axes backfill failed; will retry on next start")
 
 
 async def _maybe_backfill_classifier(

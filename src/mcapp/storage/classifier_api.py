@@ -283,11 +283,25 @@ class ClassifierApiMixin(StorageBase):
         info_score: float,
         template_hash: str,
         classifier_ver: int,
+        origin: str | None = None,
+        origin_rule: str | None = None,
     ) -> None:
+        """``origin``/``origin_rule`` None keep the stored values (no axes engine)."""
         await self._mutate(
             "UPDATE messages SET category = ?, tags = ?, info_score = ?, "
-            "template_hash = ?, classifier_ver = ? WHERE id = ?",
-            (category, json.dumps(tags), info_score, template_hash, classifier_ver, row_id),
+            "template_hash = ?, classifier_ver = ?, "
+            "origin = COALESCE(?, origin), origin_rule = COALESCE(?, origin_rule) "
+            "WHERE id = ?",
+            (
+                category,
+                json.dumps(tags),
+                info_score,
+                template_hash,
+                classifier_ver,
+                origin,
+                origin_rule,
+                row_id,
+            ),
         )
 
     async def update_classification_batch(
@@ -296,6 +310,7 @@ class ClassifierApiMixin(StorageBase):
         changed: list[tuple[str, str, float, str, int, int]],
         unchanged_ids: list[int],
         classifier_ver: int,
+        origins: dict[int, tuple[str, str]] | None = None,
     ) -> None:
         """Write one reclassify batch in a single write unit and a single commit.
 
@@ -303,9 +318,10 @@ class ClassifierApiMixin(StorageBase):
         classifier_ver, row_id)`` with ``tags_json`` already serialised;
         ``unchanged_ids`` are only stamped with ``classifier_ver``. Both statements
         share one transaction under the writer lock: any failure rolls back the whole
-        batch. Mirrors mc-chat's method of the same name.
+        batch. ``origins`` maps row id -> (origin, origin_rule). Mirrors mc-chat's method
+        of the same name.
         """
-        if not changed and not unchanged_ids:
+        if not changed and not unchanged_ids and not origins:
             return
         # `_writer_lock`/`_get_writer_conn`/`_writer_failed` live on SQLiteStorage
         # (sqlite_storage.py), not on StorageBase; no existing helper runs two
@@ -323,6 +339,11 @@ class ClassifierApiMixin(StorageBase):
                             "template_hash = ?, classifier_ver = ? WHERE id = ?",
                             changed,
                         )
+                    if origins:
+                        conn.executemany(
+                            "UPDATE messages SET origin = ?, origin_rule = ? WHERE id = ?",
+                            [(o, r, rid) for rid, (o, r) in origins.items()],
+                        )
                     if stamps:
                         conn.executemany(
                             "UPDATE messages SET classifier_ver = ? WHERE id = ?", stamps
@@ -333,6 +354,18 @@ class ClassifierApiMixin(StorageBase):
                     raise
 
         await asyncio.to_thread(_run)
+
+    async def count_messages_by_origin(self, since_ms: int) -> dict[str, int]:
+        """``{human, machine, null}`` counts since ``since_ms`` (same window as by_tag)."""
+        rows = await self._query(
+            "SELECT origin, COUNT(*) AS n FROM messages WHERE timestamp >= ? GROUP BY origin",
+            (since_ms,),
+        )
+        out = {"human": 0, "machine": 0, "null": 0}
+        for r in rows:
+            origin = r["origin"]
+            out[origin if origin in ("human", "machine") else "null"] += int(r["n"])
+        return out
 
     async def get_meta(self, key: str) -> str | None:
         rows = await self._query("SELECT value FROM classifier_meta WHERE key = ?", (key,))

@@ -424,10 +424,10 @@ async def _test_backfill_failure_isolation(results: Results, tmp: str) -> None:
             def __getattr__(self, name: str) -> Any:
                 return getattr(real.engine, name)
 
-            def live_timing(self, prior: Any, t: float) -> str:
+            def live_timing(self, prior: Any, t: float, layout_times: Any = None) -> str:
                 if t == bad_sec:
                     raise RuntimeError("row failure")
-                return real.engine.live_timing(prior, t)
+                return real.engine.live_timing(prior, t, layout_times)
 
         storage.set_axes(replace(real, engine=_Flaky()))  # type: ignore[arg-type]
         done = await _reset_and_backfill(storage)
@@ -783,6 +783,49 @@ async def _test_backfill_mutation_guards(results: Results, tmp: str) -> None:
         await storage.close()
 
 
+async def _test_layout_clock(results: Results, tmp: str) -> None:
+    """Timing model 2: the clock test runs on same-skeleton priors; backfill == ingest,
+    including a same-second burst of mixed layouts and history deeper than prior_limit."""
+    storage = await _new_storage(tmp, "layout", axes=load_axes())
+    try:
+        sender = "DL1LAY-1"
+        sched = "periodic beacon number {} hello"  # WORD*3 NUM WORD
+        other = "WX 12.5C 55% 1013hPa"  # WORD UNIT*3
+        # Layout X every 600 s; layout Y at irregular offsets in between.
+        for i in range(8):
+            base = _T0 + i * 600 * _SEC
+            await _ingest(storage, _chat(sender, f"L{i:07d}", base, sched.format(i)))
+            await _ingest(storage, _chat(sender, f"Y{i:07d}", base + (37 + 91 * i) * _SEC, other))
+        last_x = await _row(storage, "L0000007")
+        results.append(
+            (
+                "layout clock: periodic layout stays scheduled amid another layout",
+                last_x["timing"] == "scheduled",
+            )
+        )
+        # Same-second burst of mixed layouts, then history deeper than prior_limit.
+        burst = _T0 + 10_000 * _SEC
+        for k in range(5):
+            await _ingest(
+                storage, _chat(sender, f"B{k:07d}", burst + k * 100, sched.format(100 + k))
+            )
+            await _ingest(storage, _chat(sender, f"C{k:07d}", burst + k * 100 + 50, other))
+        deep = load_axes().prior_limit + 12
+        for i in range(deep):
+            text = sched.format(200 + i) if i % 3 else other
+            await _ingest(storage, _chat(sender, f"D{i:07d}", burst + (1 + i) * 600 * _SEC, text))
+        await _ingest(storage, _chat(sender, "E0000000", burst + (deep + 1) * 600 * _SEC, sched))
+        live = await _snapshot(storage)
+        await _reset_and_backfill(storage, batch_size=37)
+        results.append(("layout clock: backfill == ingest", await _snapshot(storage) == live))
+        await _reset_and_backfill(storage, batch_size=5)
+        results.append(
+            ("layout clock: backfill == ingest with tiny pages", await _snapshot(storage) == live)
+        )
+    finally:
+        await storage.close()
+
+
 async def run_message_axes_tests() -> bool:
     """Run the message-axes regression suite. Returns True iff every case passes."""
     results: Results = []
@@ -792,6 +835,7 @@ async def run_message_axes_tests() -> bool:
         await _test_no_engine_and_failing_engine(results, tmp)
         await _test_backfill_equivalence(results, tmp)
         await _test_out_of_order(results, tmp)
+        await _test_layout_clock(results, tmp)
         await _test_backfill_failure_isolation(results, tmp)
         await _test_live_keys_on_every_path(results, tmp)
         await _test_concurrent_ingest(results, tmp)

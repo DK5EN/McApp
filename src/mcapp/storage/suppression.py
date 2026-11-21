@@ -50,6 +50,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from ..classifier.types import legacy_tag_view
+
 
 @dataclass(frozen=True, slots=True)
 class SuppressionPolicy:
@@ -80,6 +82,8 @@ class MessageView:
     tags: frozenset[str]
     info_score: float | None
     template_hash: str
+    # v8 origin axis (human|machine) or None; `tags` already carries its alias ids.
+    origin: str | None = None
 
 
 # A policy that suppresses nothing, for any input. Returned by
@@ -317,10 +321,15 @@ def view_from_row(row: Mapping[str, Any]) -> MessageView:
     """
     msg = row.get("msg")
     template_hash = row.get("template_hash")
+    origin = row.get("origin")
+    origin = origin if origin in ("human", "machine") else None
 
     return MessageView(
         msg=msg if isinstance(msg, str) else "",
-        tags=_parse_tags(row.get("tags")),
+        # ALIAS(one release, classifier rework 2026-11): stored topics + origin-derived
+        # auto_beacon/qso; legacy rows (origin NULL) keep their stored v7 ids.
+        tags=frozenset(legacy_tag_view(_parse_tags(row.get("tags")), origin)),
+        origin=origin,
         info_score=_as_optional_float(row.get("info_score")),
         template_hash=template_hash if isinstance(template_hash, str) else "",
     )

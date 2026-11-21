@@ -450,6 +450,55 @@ def _test_hidden_tags_semantics(results: list[tuple[str, bool]]) -> None:
     )
 
 
+def _test_origin_alias(results: list[tuple[str, bool]]) -> None:
+    """v8 rows store topics; auto_beacon/qso are origin aliases.
+    ALIAS(one release, classifier rework 2026-11). MCProxy has no SQL twin of the predicate
+    (unread counting runs `is_suppressed` per candidate row), so the matrix is Python-only."""
+    hide_ab = policy_from_parts({"enabled": True, "hideAutoBeacons": True}, [], {})
+    v8_machine = view_from_row({"msg": "x", "tags": ["weather"], "origin": "machine"})
+    results.append(
+        (
+            "v8 row (topics + origin machine) is hidden by hide_auto_beacons",
+            is_suppressed(v8_machine, hide_ab),
+        )
+    )
+    results.append(
+        (
+            "v8 row with origin human / NULL is not hidden by hide_auto_beacons",
+            not is_suppressed(view_from_row({"msg": "x", "tags": [], "origin": "human"}), hide_ab)
+            and not is_suppressed(view_from_row({"msg": "x", "tags": ["weather"]}), hide_ab),
+        )
+    )
+    # origin x stored-tag shape x hiddenTags -> expected hidden
+    stored_shapes: dict[str, list[str]] = {
+        "v8": ["weather"],
+        "legacy_ab": ["auto_beacon"],
+        "legacy_qso": ["qso"],
+    }
+    for origin in ("machine", "human", None):
+        for shape, stored in stored_shapes.items():
+            for hid in ("auto_beacon", "qso", "bot", "weather"):
+                view = view_from_row({"msg": "x", "tags": stored, "origin": origin})
+                policy = policy_from_parts({"enabled": True, "hiddenTags": [hid]}, [], {})
+                effective = hid  # `bot` folds to auto_beacon (v7 legacy map)
+                if hid == "bot":
+                    effective = "auto_beacon"
+                want = (
+                    (
+                        effective == "auto_beacon"
+                        and (origin == "machine" or "auto_beacon" in stored)
+                    )
+                    or (effective == "qso" and (origin == "human" or "qso" in stored))
+                    or effective in stored
+                )
+                results.append(
+                    (
+                        f"alias matrix origin={origin} stored={shape} hidden={hid}",
+                        is_suppressed(view, policy) == want,
+                    )
+                )
+
+
 async def run_suppression_predicate_tests() -> bool:
     """Run the suppression-predicate regression suite. Returns True iff
     every case passes."""
@@ -460,6 +509,7 @@ async def run_suppression_predicate_tests() -> bool:
     _test_view_from_row(results)
     _test_policy_is_noop(results)
     _test_hidden_tags_semantics(results)
+    _test_origin_alias(results)
 
     for label, ok in results:
         print(f"    {'✅ PASS' if ok else '❌ FAIL'} | {label}")

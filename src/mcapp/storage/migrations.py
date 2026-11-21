@@ -1028,6 +1028,19 @@ class MigrationsMixin(StorageBase):
                     )
                     _set_schema_version(conn, 43)
 
+                if current_version < 44:  # noqa: PLR2004 - schema migration step
+                    # Origin axis (contract schema 2, classifier/origin.py): "human" |
+                    # "machine" plus the deciding rule. NULL = not computed, never "human".
+                    for col, typedef in [("origin", "TEXT"), ("origin_rule", "TEXT")]:
+                        try:
+                            conn.execute(f"ALTER TABLE messages ADD COLUMN {col} {typedef}")
+                        except sqlite3.OperationalError:
+                            logger.debug("Column %s already exists in messages, skipping", col)
+                    logger.info(
+                        "Migration v%d → v44: messages.origin, origin_rule", current_version
+                    )
+                    _set_schema_version(conn, 44)
+
         await asyncio.to_thread(_init_db)
 
         # Initialize bucket accumulators from existing signal_log

@@ -94,33 +94,48 @@ class AxesBackfillState:
         self._rt = runtime
         # +1: a same-second earlier row may sit at the tail and is filtered by `< t`.
         self._maxlen = runtime.prior_limit + 1
-        # src -> deque of (time, smallest id seen at that time), distinct times ascending.
-        self._times: dict[str, deque[tuple[int, int]]] = {}
+        # src -> deque of (time, smallest id seen at that time, skeleton -> smallest id of
+        # that skeleton at that time), distinct times ascending. The skeleton map feeds the
+        # timing-model-2 layout clock.
+        self._times: dict[str, deque[tuple[int, int, dict[str, int]]]] = {}
         # src -> True once a time was evicted from its deque (history deeper than we hold).
         self._truncated: set[str] = set()
         # (time, id, src, msg_id, text, tokens) of rows within the echo window; the token
         # set is computed once per row instead of once per (row, later row) pair.
         self._window: deque[tuple[int, int, str, str | None, str, frozenset[str]]] = deque()
 
-    def prior_for(self, src: str, t: int, row_id: int) -> list[int] | None:
-        """Distinct earlier times of `src` with time < t from rows with id < row_id.
+    def prior_for(
+        self, src: str, t: int, row_id: int, text: str
+    ) -> tuple[list[int], list[int]] | None:
+        """``(prior_times, layout_times)`` of `src` for a row of `text`: the newest
+        `prior_limit` distinct earlier times (time < t, from rows with id < row_id) and those
+        of them that hold a lower-id row with the same skeleton as `text`.
 
         None = the held history cannot answer exactly (out-of-order row on a sender with
         more history than we keep); the caller asks the database instead.
         """
         need = self._rt.prior_limit
         dq = self._times.get(src)
-        eligible = [x for x, mid in dq if x < t and mid < row_id] if dq else []
+        eligible = [(x, sk) for x, mid, sk in dq if x < t and mid < row_id] if dq else []
         if len(eligible) >= need or src not in self._truncated:
-            return eligible[-need:]
+            kept = eligible[-need:]
+            layout = self._rt.engine.skeleton(text)
+            return [x for x, _ in kept], [x for x, sk in kept if sk.get(layout, row_id) < row_id]
         return None
 
     def compute(
-        self, row_id: int, src: str, text: str, t: int, prior: list[int]
+        self,
+        row_id: int,
+        src: str,
+        text: str,
+        t: int,
+        prior: tuple[list[int], list[int]],
     ) -> tuple[str, int, str | None]:
-        """Return ``(timing, echo, echo_of)`` for the row; does not absorb it."""
+        """Return ``(timing, echo, echo_of)`` for the row; does not absorb it.
+
+        ``prior`` is ``(prior_times, layout_times)`` as returned by `prior_for`."""
         rt = self._rt
-        timing = rt.engine.live_timing(prior, t)
+        timing = rt.engine.live_timing(prior[0], t, prior[1])
 
         lo = t - rt.echo_window_sec
         while self._window and self._window[0][0] < lo:
@@ -144,10 +159,14 @@ class AxesBackfillState:
         dq = self._times.get(src)
         if dq is None:
             dq = self._times[src] = deque(maxlen=self._maxlen)
+        layout = self._rt.engine.skeleton(text)
         if not dq or dq[-1][0] != t:
             if len(dq) == dq.maxlen:
                 self._truncated.add(src)
-            dq.append((t, row_id))
-        elif dq[-1][0] == t and row_id < dq[-1][1]:
-            dq[-1] = (t, row_id)
+            dq.append((t, row_id, {layout: row_id}))
+        else:
+            _, mid, skel = dq[-1]
+            skel[layout] = min(row_id, skel.get(layout, row_id))
+            if row_id < mid:
+                dq[-1] = (t, row_id, skel)
         self._window.append((t, row_id, src, msg_id, text, self._rt.engine.echo_tokens(text)))

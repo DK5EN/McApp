@@ -23,6 +23,8 @@ from .. import linkcheck
 from ..axes_contract import AxesBackfillState, AxesRuntime, echo_key, format_payload
 from ..ble_protocol import normalise_ack_callsign
 from ..classifier.axes import EchoCandidate, EchoMessage
+from ..classifier.classify import is_beacon_of, origin_for
+from ..classifier.types import legacy_tag_view
 from ..commands.parsing import dst_kind, resolve_dst_target
 from ..logging_setup import get_logger
 from ..util import (
@@ -88,7 +90,7 @@ if TYPE_CHECKING:
 #   echo window  -> idx_messages_type_timestamp     (type, timestamp DESC)
 #   backfill     -> idx_messages_timestamp          (timestamp, rowid), no sorter
 _AXES_PRIOR_SQL = (
-    "SELECT DISTINCT timestamp FROM messages"
+    "SELECT DISTINCT timestamp, msg FROM messages"
     " WHERE type = 'msg' AND src = ? AND timestamp < ?"
     " ORDER BY timestamp DESC LIMIT ?"
 )
@@ -103,7 +105,7 @@ _AXES_BACKFILL_SQL = (
 )
 # Fallback for an out-of-order row on a sender with more history than the streaming state holds.
 _AXES_PRIOR_BEFORE_SQL = (
-    "SELECT DISTINCT timestamp FROM messages"
+    "SELECT DISTINCT timestamp, msg FROM messages"
     " WHERE type = 'msg' AND src = ? AND timestamp < ? AND id < ?"
     " ORDER BY timestamp DESC LIMIT ?"
 )
@@ -316,6 +318,25 @@ _DELIVERY_STATUS_RANK_CASE_SQL = (
 )
 
 
+# v7 ids retired as stored tags in v8; they survive only as origin-derived aliases.
+_RETIRED_TAG_IDS = frozenset({"auto_beacon", "qso"})
+
+
+def _wire_tag_fields(stored: list[Any] | None, origin: Any) -> dict[str, Any]:
+    """``tags`` (legacy alias view) + ``topics`` for a message dict.
+
+    v8 stores topics in `tags`; ``topics`` is that minus the retired ids (pre-v8 rows still
+    carry them) and ``tags`` is `legacy_tag_view` so the webapp's client-side hiding by
+    auto_beacon/qso keeps working. ALIAS(one release, classifier rework 2026-11).
+    """
+    clean = [t for t in (stored or []) if isinstance(t, str)]
+    org = origin if origin in ("human", "machine") else None
+    return {
+        "topics": [t for t in clean if t not in _RETIRED_TAG_IDS],
+        "tags": legacy_tag_view(clean, org),
+    }
+
+
 def _classifier_fields(
     category: Any,
     tags: list[Any] | None,
@@ -350,7 +371,9 @@ def _classifier_fields(
     if category is not None:
         fields["category"] = category
     if tags is not None:
-        fields["tags"] = tags
+        # Stored topics; `topics` + the alias `tags` view are derived by the caller once the
+        # origin is known (`_wire_tag_fields`). ALIAS(one release, classifier rework 2026-11).
+        fields.update(_wire_tag_fields(tags, None))
     if info_score is not None:
         fields["info_score"] = info_score
     if template_hash:
@@ -423,21 +446,62 @@ class IngestMixin(StorageBase):
         message["timing"] = None
         message["echo"] = None
         message["echo_of"] = None
+        message["origin"] = None
+        message["origin_rule"] = None
         text = message.get("msg")
         message["format"] = self._message_format(text) if isinstance(text, str) else None
 
-    async def _axes_prior_times(
-        self, axes: AxesRuntime, src: str, t_sec: int, before_id: int | None = None
-    ) -> list[int]:
-        """Newest `prior_limit` DISTINCT earlier seconds of `src` (index-backed).
+    @staticmethod
+    def _refresh_wire_tags(message: dict[str, Any]) -> None:
+        """Re-derive the live dict's alias `tags` once its origin is known (the classifier
+        annotation runs before origin is computed). No-op for an unclassified message."""
+        topics = message.get("topics")
+        if isinstance(topics, list):
+            message.update(_wire_tag_fields(topics, message.get("origin")))
+
+    def _origin_cols(
+        self, src: str, text: str, dst: str, timing: str | None, is_beacon: bool
+    ) -> tuple[str | None, str | None]:
+        """``(origin, origin_rule)`` of a new chat row from its FINAL timing and the
+        classifier's beacon verdict. Degrades without an axes engine (see `origin_for`);
+        ``(None, None)`` without a classifier or on any failure (never breaks ingest)."""
+        classifier = self._classifier
+        if classifier is None:
+            return None, None
+        try:
+            res = origin_for(
+                classifier.engine,
+                None if self._axes is None else self._axes.engine,
+                text,
+                src,
+                dst or "",
+                timing,
+                is_beacon=is_beacon,
+            )
+        except Exception as exc:
+            self._axes_log_failure(exc, "origin")
+            return None, None
+        return (None, None) if res is None else (res.origin, res.rule)
+
+    async def _axes_prior(
+        self, axes: AxesRuntime, src: str, t_sec: int, text: str, before_id: int | None = None
+    ) -> tuple[list[int], list[int]]:
+        """``(prior_times, layout_times)`` of `src` for a row of `text` at `t_sec`.
+
+        prior_times: newest `prior_limit` DISTINCT earlier seconds (index-backed).
+        layout_times: those of them at which the sender also sent a text whose
+        `skeleton` equals the current text's (timing model 2 clock test).
 
         `before_id` restricts to rows with a lower id (backfill fallback); ingest passes None
         because every existing row is earlier than the row being inserted."""
         need = axes.prior_limit
         limit = need * 2
         bound = t_sec * 1000
+        skeleton = axes.engine.skeleton
+        layout = skeleton(text)
         seen: set[int] = set()
         out: list[int] = []
+        layout_secs: set[int] = set()
         while True:
             if before_id is None:
                 rows = await self._query(_AXES_PRIOR_SQL, (src, bound, limit))
@@ -448,8 +512,17 @@ class IngestMixin(StorageBase):
                 if sec not in seen:
                     seen.add(sec)
                     out.append(sec)
+                if isinstance(r["msg"], str) and skeleton(r["msg"]) == layout:
+                    layout_secs.add(sec)
+            # Known exactness limit: we return as soon as len(out) >= need, so when the
+            # need-th distinct second sits at a LIMIT page tail its remaining rows (and a
+            # same-millisecond tie on a continuation page, `timestamp < bound`) can be cut,
+            # which can drop the oldest prior's layout match. That needs >= 2 distinct texts
+            # per second from one sender over its last 128 active seconds, which LoRa airtime
+            # rules out.
             if len(out) >= need or len(rows) < limit:
-                return out[:need]
+                kept = out[:need]
+                return kept, [x for x in kept if x in layout_secs]
             bound = int(rows[-1]["timestamp"])
 
     async def _compute_axes(
@@ -462,8 +535,8 @@ class IngestMixin(StorageBase):
         if t_sec is None:
             raise ValueError("unusable timestamp")
         engine = axes.engine
-        prior = await self._axes_prior_times(axes, src, t_sec)
-        timing = engine.live_timing(prior, t_sec)
+        prior, layout_times = await self._axes_prior(axes, src, t_sec, msg)
+        timing = engine.live_timing(prior, t_sec, layout_times)
         echo, echo_of = 0, None
         if len(engine.echo_tokens(msg)) >= axes.echo_min_tokens:
             rows = await self._query(
@@ -491,10 +564,10 @@ class IngestMixin(StorageBase):
         self, axes: AxesRuntime, state: AxesBackfillState, row: tuple[int, str, str, int]
     ) -> tuple[Any, ...]:
         rid, src, text, t = row
-        prior = state.prior_for(src, t, rid)
-        if prior is None:
-            prior = await self._axes_prior_times(axes, src, t, before_id=rid)
-        timing, echo, echo_of = state.compute(rid, src, text, t, prior)
+        held = state.prior_for(src, t, rid, text)
+        if held is None:
+            held = await self._axes_prior(axes, src, t, text, before_id=rid)
+        timing, echo, echo_of = state.compute(rid, src, text, t, held)
         return (timing, echo, None if echo_of is None else str(echo_of), rid)
 
     async def backfill_message_axes(self, *, batch_size: int = _AXES_BACKFILL_BATCH) -> int | None:
@@ -2035,9 +2108,9 @@ class IngestMixin(StorageBase):
                 "  via, hw_id, lora_mod, max_hop, mesh_info, firmware, fw_sub,"
                 "  last_hw_id, last_sending, transformer, echo_id, conversation_key, fcs_ok,"
                 "  category, tags, info_score, template_hash, classifier_ver,"
-                "  timing, echo, echo_of)"
+                "  timing, echo, echo_of, origin, origin_rule)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
-                "         ?, ?, ?, ?, ?, ?, ?, ?)",
+                "         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params,
             )
         # sqlite3.Error, not OperationalError: IntegrityError (a NOT NULL/UNIQUE
@@ -2572,6 +2645,7 @@ class IngestMixin(StorageBase):
         # Classifier.classify() has its own fallback, but we do not rely on that —
         # a misbehaving classifier must not drop the message.
         cls_cols: tuple[Any, ...] = (None, None, None, None, None)
+        beacon_verdict = False
         if self._classifier is not None:
             try:
                 cls = await self._classifier.classify(
@@ -2590,6 +2664,7 @@ class IngestMixin(StorageBase):
                     cls.template_hash,
                     cls.classifier_version,
                 )
+                beacon_verdict = is_beacon_of(cls)
                 # Annotate the INBOUND `message` dict, not just the INSERT
                 # params: `MessageRouter.publish` hands this exact object to
                 # every "mesh_message" subscriber in subscription order, and
@@ -2625,7 +2700,9 @@ class IngestMixin(StorageBase):
         if linkcheck.is_link_check_payload(msg):
             return
 
-        def _row_params(axes_cols: tuple[Any, ...]) -> tuple[Any, ...]:
+        def _row_params(
+            axes_cols: tuple[Any, ...], origin_cols: tuple[Any, ...] = (None, None)
+        ) -> tuple[Any, ...]:
             return (
                 msg_id,
                 src,
@@ -2652,6 +2729,7 @@ class IngestMixin(StorageBase):
                 fcs_ok,
                 *cls_cols,
                 *axes_cols,
+                *origin_cols,
             )
 
         # Message axes (timing, echo). Same contract as the classifier above: any failure
@@ -2666,7 +2744,19 @@ class IngestMixin(StorageBase):
             or msg_type != "msg"
             or not self._is_axes_chat_frame(message)
         ):
-            await self._insert_message_row(_row_params((None, None, None)), msg_id, dst)
+            # No axes engine (degraded) or not a chat frame: origin_for still gives the
+            # machine-rule / beacon-template verdicts for chat rows (no timing needed).
+            origin_cols = (
+                self._origin_cols(src, msg, dst, None, beacon_verdict)
+                if msg_type == "msg" and self._is_axes_chat_frame(message)
+                else (None, None)
+            )
+            await self._insert_message_row(
+                _row_params((None, None, None), origin_cols), msg_id, dst
+            )
+            if origin_cols != (None, None):
+                message["origin"], message["origin_rule"] = origin_cols
+                self._refresh_wire_tags(message)
             return
         async with lock:
             axes_cols: tuple[Any, ...] = (None, None, None)
@@ -2675,7 +2765,10 @@ class IngestMixin(StorageBase):
                 axes_cols = (timing, echo, echo_of)
             except Exception as exc:
                 self._axes_log_failure(exc, "ingest")
-            await self._insert_message_row(_row_params(axes_cols), msg_id, dst)
+            origin_cols = self._origin_cols(src, msg, dst, axes_cols[0], beacon_verdict)
+            await self._insert_message_row(_row_params(axes_cols, origin_cols), msg_id, dst)
+        message["origin"], message["origin_rule"] = origin_cols
+        self._refresh_wire_tags(message)
         # Keys were pre-set to None by `annotate_axes_defaults`; fill what was computed.
         message["timing"] = axes_cols[0]
         message["echo"] = None if axes_cols[1] is None else bool(axes_cols[1])
@@ -2739,6 +2832,8 @@ class IngestMixin(StorageBase):
                 row.get("classifier_ver"),
             )
         )
+        if tags_decoded is not None:
+            data.update(_wire_tag_fields(tags_decoded, row.get("origin")))
         # Message axes: timing/echo/echo_of are stored columns (NULL = not classified),
         # `format` is derived here from the text (null only when no engine is attached).
         if data["type"] == "msg":
@@ -2746,6 +2841,8 @@ class IngestMixin(StorageBase):
             data["timing"] = row.get("timing")
             data["echo"] = None if echo is None else bool(echo)
             data["echo_of"] = row.get("echo_of")
+            data["origin"] = row.get("origin")
+            data["origin_rule"] = row.get("origin_rule")
             data["format"] = self._message_format(data["msg"])
         return data
 
