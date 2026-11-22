@@ -173,7 +173,7 @@ _PEER_ACK_SQL = _ack_sql(_PEER_ACK_GLOBS)
 # subtraction in get_conversation_summary would silently corrupt `unread`.
 _CONV_DEDUP_COLS = (
     "MIN(m.timestamp) AS ts, m.src, m.dst, m.conversation_key,"
-    " m.msg, m.category, m.tags, m.origin, m.info_score, m.template_hash"
+    " m.msg, m.tags, m.origin, m.info_score, m.template_hash"
 )
 
 # The three identity legs of a distinct message. `_CONV_GID_SQL` is the
@@ -253,7 +253,7 @@ def _conv_dedup_subquery(key_clause: str) -> str:
     `conv_dedup_tests.py` case 7 pins the observed behaviour rather than a
     promise. `m.src`/`m.dst` already relied on this before the
     suppression wave (see get_conversation_summary's docstring on transport
-    duplicates); `m.msg`/`m.category`/`m.tags`/`m.info_score`/
+    duplicates); `m.msg`/`m.tags`/`m.info_score`/
     `m.template_hash` ride the IDENTICAL guarantee — they come from the same
     earliest stored copy of a transport-duplicated message as `ts`, `src`
     and `dst`, not from an arbitrary sibling row of the same group. The
@@ -956,7 +956,7 @@ class QueryMixin(StorageBase):
                 # those definitions for why that sharing is load-bearing.
                 candidate_rows = conn.execute(
                     "SELECT COALESCE(d.conversation_key, d.dst) AS key, d.src, d.dst,"  # noqa: S608 - dedup_sql/key_clause are fixed literals; values parameterized
-                    " d.msg, d.category, d.tags, d.origin, d.info_score, d.template_hash,"
+                    " d.msg, d.tags, d.origin, d.info_score, d.template_hash,"
                     f" ({_CONV_NEWER_EXPR}) AS newer,"
                     f" ({_CONV_NEWER_SPAM_EXPR}) AS newer_spam"
                     f" FROM ({dedup_sql}) d"

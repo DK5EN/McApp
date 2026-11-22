@@ -6,8 +6,9 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import NamedTuple
 
+from ..classifier.types import DIRECTED_DST_RE
 from ..commands.parsing import is_group, is_hashtag, resolve_dst_target
 
 # The schema version a fresh install lands on, and the version every migration
@@ -20,47 +21,7 @@ from ..commands.parsing import is_group, is_hashtag, resolve_dst_target
 # passing suite for a reason unrelated to the change being made. This is not
 # circular with migrations.py: the step numbers there are independent literals,
 # so forgetting either half fails loudly.
-LATEST_SCHEMA_VERSION = 45
-
-# Legacy filter category -> engine tag (classifier unification, issue #17 / Q2).
-# `directed` and `other` have no tag and are dropped on migration.
-CATEGORY_TO_TAG: dict[str, str] = {
-    "timestamp_beacon": "auto_beacon",
-    "wx_beacon": "weather",
-    "node_advert": "auto_beacon",
-    "sw_advert": "auto_beacon",
-    "bot_command": "auto_beacon",
-    "alert": "alert",
-    "test_msg": "test",
-    "greeting": "greeting",
-    "qso": "qso",
-}
-
-
-def legacy_categories_to_tags(prefs: dict[str, Any]) -> list[str]:
-    """Fold a pre-tags ``hiddenCategories`` list into ``hiddenTags``, in place.
-
-    Junk-tolerant (non-list value, non-string or unknown entries are dropped),
-    merges after any existing ``hiddenTags`` and removes the legacy key, so a
-    second call is a no-op. Returns the repr of the dropped entries for logging.
-    Used by the v38 migration and by ``set_filter_prefs`` (an old webapp keeps
-    POSTing the legacy key).
-    """
-    cats = prefs.pop("hiddenCategories", None)
-    tags: list[str] = []
-    dropped: list[str] = []
-    for cat in cats if isinstance(cats, list) else []:
-        tag = CATEGORY_TO_TAG.get(cat) if isinstance(cat, str) else None
-        if tag is None:
-            dropped.append(repr(cat))
-        elif tag not in tags:
-            tags.append(tag)
-    existing = prefs.get("hiddenTags")
-    if isinstance(existing, list):
-        tags = [*existing, *(t for t in tags if t not in existing)]
-    prefs["hiddenTags"] = tags
-    return dropped
-
+LATEST_SCHEMA_VERSION = 46
 
 # Constants matching message_storage.py
 BUCKET_SECONDS = 5 * 60
@@ -264,7 +225,7 @@ _MSG_SELECT = (
     "msg_id, src, dst, msg, type, timestamp, rssi, snr, src_type,"
     " via, hw_id, lora_mod, max_hop, mesh_info, firmware, fw_sub,"
     " last_hw_id, last_sending, transformer, echo_id, acked, send_success,"
-    " category, tags, info_score, template_hash, classifier_ver,"
+    " tags, info_score, template_hash, classifier_ver,"
     " delivery_status, holder, timing, echo, echo_of, origin, origin_rule"
 )
 
@@ -393,6 +354,25 @@ def compute_conversation_key(src: str, dst: str) -> str | None:
     return f"{pair[0]}<>{pair[1]}"
 
 
+SQL_DIRECTED_FUNCTION = "mc_directed"
+
+
+def _sql_directed(dst: object) -> int:
+    """`DIRECTED_DST_RE` for SQLite; NULL and non-text are not directed."""
+    return int(isinstance(dst, str) and DIRECTED_DST_RE.search(dst) is not None)
+
+
+def register_directed_function(conn: sqlite3.Connection) -> None:
+    """Register ``mc_directed(dst)`` on ``conn``.
+
+    Every connection that evaluates the template human-history predicate
+    (`classifier_api._history_exempt_sql`) needs it, so `db_read`, `db_write` and the
+    persistent writer connection all call this: the SQL fragment and the Python
+    `DIRECTED_DST_RE` stay one definition.
+    """
+    conn.create_function(SQL_DIRECTED_FUNCTION, 1, _sql_directed, deterministic=True)
+
+
 @contextmanager
 def db_read(db_path: Path | str) -> Iterator[sqlite3.Connection]:
     """Open a SQLite connection for a read, guaranteed to close.
@@ -406,6 +386,7 @@ def db_read(db_path: Path | str) -> Iterator[sqlite3.Connection]:
     and doc/archive/connection-leak-fable-verdict.md for the incident writeup.
     """
     with closing(sqlite3.connect(db_path, timeout=SQLITE_BUSY_TIMEOUT_S)) as conn:
+        register_directed_function(conn)
         yield conn
 
 
@@ -449,6 +430,7 @@ def db_write(db_path: Path | str) -> Iterator[sqlite3.Connection]:
     """
     with closing(sqlite3.connect(db_path, timeout=SQLITE_BUSY_TIMEOUT_S)) as conn, conn:
         conn.execute("PRAGMA synchronous=NORMAL")
+        register_directed_function(conn)
         yield conn
 
 

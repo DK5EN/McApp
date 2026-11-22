@@ -27,7 +27,7 @@ Cases:
      still the JSON string `store_message` has always written there.
   3. A classifier that raises: the message gains none of the five keys, and
      the row is still stored -- ingestion is never blocked (ADR invariant).
-  4. A classifier returning `category=None` and empty `tags`/`template_hash`/
+  4. A classifier returning empty `tags`/`template_hash`/
      `info_score`/`classifier_version=None`: no key is injected for any of
      them (presence rules, not truthiness-free defaults).
   5. Transport-duplicate second copy: the second `store_message` call for
@@ -44,7 +44,7 @@ Cases:
      on either topic, the SSE payload silently loses the classifier fields
      again, on whichever transport that box actually uses.
   7. The stored `raw_json` column for a classified message contains no
-     `category` key, proving `raw_json` (serialized by the real caller,
+     `topics` key, proving `raw_json` (serialized by the real caller,
      `main.py:_storage_handler`, BEFORE `store_message` runs) is unaffected
      by the in-place annotation.
 
@@ -70,14 +70,13 @@ _GAP_MS = 107  # arbitrary sub-window gap, mirrors ingest_dedup_tests' _GAP_MS
 class _FakeClassification:
     """Duck-typed stand-in for `classifier.types.Classification`.
 
-    `store_message` only reads `.category`/`.tags`/`.info_score`/
+    `store_message` only reads `.tags`/`.info_score`/
     `.template_hash`/`.classifier_version` off whatever its `_classifier`
     (typed `Any`) returns, so this suite never has to import from
     `src/mcapp/classifier/` -- a vendored subtree that must never be edited
     in place and need not be touched to test this call site.
     """
 
-    category: str | None
     tags: tuple[str, ...]
     info_score: float | None
     template_hash: str
@@ -131,7 +130,6 @@ async def _test_classified_message_matches_history(results: list[tuple[str, bool
         storage.set_classifier(
             _FakeClassifier(
                 _FakeClassification(
-                    category="chatter",
                     tags=("greeting", "short"),
                     info_score=0.42,
                     template_hash="abcdef012345",
@@ -148,12 +146,11 @@ async def _test_classified_message_matches_history(results: list[tuple[str, bool
 
         results.append(
             (
-                "live dict carries category/tags/info_score/template_hash/classifier_ver",
+                "live dict carries topics/info_score/template_hash/classifier_ver",
                 all(
                     key in message
                     for key in (
-                        "category",
-                        "tags",
+                        "topics",
                         "info_score",
                         "template_hash",
                         "classifier_ver",
@@ -161,17 +158,11 @@ async def _test_classified_message_matches_history(results: list[tuple[str, bool
                 ),
             )
         )
-        results.append(
-            (
-                "live == history: category",
-                message.get("category") == built.get("category") == "chatter",
-            )
-        )
         expected_tags = ["greeting", "short"]
         results.append(
             (
-                "live == history: tags",
-                message.get("tags") == built.get("tags") == expected_tags,
+                "live == history: topics",
+                message.get("topics") == built.get("topics") == expected_tags,
             )
         )
         results.append(
@@ -203,7 +194,6 @@ async def _test_tags_shape_live_vs_column(results: list[tuple[str, bool]]) -> No
         storage.set_classifier(
             _FakeClassifier(
                 _FakeClassification(
-                    category="info",
                     tags=("weather", "auto_beacon"),
                     info_score=0.9,
                     template_hash="0123456789ab",
@@ -216,7 +206,7 @@ async def _test_tags_shape_live_vs_column(results: list[tuple[str, bool]]) -> No
 
         row = await _stored_row(storage, "A0000002")
         results.append(
-            ("live message['tags'] is a Python list", isinstance(message.get("tags"), list))
+            ("live message['topics'] is a Python list", isinstance(message.get("topics"), list))
         )
         results.append(
             ("stored tags COLUMN is still the JSON string", isinstance(row.get("tags"), str))
@@ -245,8 +235,7 @@ async def _test_classifier_raises_never_blocks_ingestion(results: list[tuple[str
                 not any(
                     key in message
                     for key in (
-                        "category",
-                        "tags",
+                        "topics",
                         "info_score",
                         "template_hash",
                         "classifier_ver",
@@ -269,7 +258,6 @@ async def _test_empty_classification_injects_no_keys(results: list[tuple[str, bo
         storage.set_classifier(
             _FakeClassifier(
                 _FakeClassification(
-                    category=None,
                     tags=(),
                     info_score=None,
                     template_hash="",
@@ -283,12 +271,11 @@ async def _test_empty_classification_injects_no_keys(results: list[tuple[str, bo
         results.append(
             (
                 (
-                    "empty classification: no category/info_score/template_hash/"
+                    "empty classification: no info_score/template_hash/"
                     "classifier_ver key on the live dict (presence rules, not truthiness defaults)"
                 ),
                 not any(
-                    key in message
-                    for key in ("category", "info_score", "template_hash", "classifier_ver")
+                    key in message for key in ("info_score", "template_hash", "classifier_ver")
                 ),
             )
         )
@@ -300,8 +287,8 @@ async def _test_empty_classification_injects_no_keys(results: list[tuple[str, bo
         # payload of 93% of classified messages and diverged the two backends.
         results.append(
             (
-                "empty classification: live dict carries tags == [] (NOT absent)",
-                message.get("tags") == [],
+                "empty classification: live dict carries topics == [] (NOT absent)",
+                message.get("topics") == [],
             )
         )
         row = await _stored_row(storage, "A0000004")
@@ -309,13 +296,13 @@ async def _test_empty_classification_injects_no_keys(results: list[tuple[str, bo
         results.append(
             (
                 "empty classification: stored tags COLUMN is '[]' and rebuilds to tags == []",
-                row.get("tags") == "[]" and built.get("tags") == [],
+                row.get("tags") == "[]" and built.get("topics") == [],
             )
         )
         results.append(
             (
                 "empty classification: live == history for the empty-tags row",
-                message.get("tags") == built.get("tags"),
+                message.get("topics") == built.get("topics"),
             )
         )
     finally:
@@ -329,7 +316,6 @@ async def _test_dedup_duplicate_left_unannotated(results: list[tuple[str, bool]]
         storage.set_classifier(
             _FakeClassifier(
                 _FakeClassification(
-                    category="chatter",
                     tags=("dup",),
                     info_score=0.5,
                     template_hash="ffffffffffff",
@@ -347,7 +333,7 @@ async def _test_dedup_duplicate_left_unannotated(results: list[tuple[str, bool]]
             "SELECT COUNT(*) AS n FROM messages WHERE msg_id = ?", ("A0000005",)
         )
         results.append(("dedup: exactly one row stored for the pair", int(rows[0]["n"]) == 1))
-        results.append(("dedup: FIRST copy's dict is annotated", "category" in first))
+        results.append(("dedup: FIRST copy's dict is annotated", "topics" in first))
         results.append(
             (
                 (
@@ -357,8 +343,7 @@ async def _test_dedup_duplicate_left_unannotated(results: list[tuple[str, bool]]
                 not any(
                     key in second
                     for key in (
-                        "category",
-                        "tags",
+                        "topics",
                         "info_score",
                         "template_hash",
                         "classifier_ver",
@@ -425,7 +410,6 @@ async def _test_raw_column_predates_classification(results: list[tuple[str, bool
         storage.set_classifier(
             _FakeClassifier(
                 _FakeClassification(
-                    category="chatter",
                     tags=("x",),
                     info_score=0.1,
                     template_hash="aaaaaaaaaaaa",
@@ -445,13 +429,13 @@ async def _test_raw_column_predates_classification(results: list[tuple[str, bool
         results.append(
             (
                 (
-                    "stored raw_json column has no 'category' key (serialized before "
+                    "stored raw_json column has no 'topics' key (serialized before "
                     "classification ran)"
                 ),
-                "category" not in stored_raw,
+                "topics" not in stored_raw,
             )
         )
-        results.append(("live dict WAS annotated after store_message", "category" in message))
+        results.append(("live dict WAS annotated after store_message", "topics" in message))
     finally:
         await storage.close()
         tmp.cleanup()

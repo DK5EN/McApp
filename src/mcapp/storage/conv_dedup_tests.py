@@ -49,11 +49,11 @@ Coverage (per the wave brief):
      above in one combined fixture — the wave's own acceptance criterion (10
      keys disagreed on the live snapshot before this change, 0 after).
   7. Same-row-picked-under-a-tie: a same-millisecond TIE between two
-     physical rows that differ in `msg`, `category` AND `info_score`. Probes
+     physical rows that differ in `msg`, `tags` AND `info_score`. Probes
      `_conv_dedup_subquery` directly to see which physical row it exposes,
      then asserts `get_conversation_summary`'s `unread` (which runs the
      aggregate query AND, once anything might be suppressed, the candidate
-     query) agrees with that SAME row's category — proving the two internal
+     query) agrees with that SAME row's tags — proving the two internal
      queries cannot have picked different rows for the tie. NOTE: SQLite's
      bare-column rule explicitly does NOT promise a deterministic pick on a
      tie ("the choice is arbitrary", https://www.sqlite.org/lang_select.html
@@ -176,13 +176,12 @@ async def _duplicate_row(  # noqa: PLR0913 - one arg per overridable column, mir
     dst: str | None = None,
     conversation_key: str | None = None,
     msg: str | None = None,
-    category: str | None = None,
     tags: str | None = None,
     info_score: float | None = None,
 ) -> None:
     """White-box: insert a SECOND physical row for `msg_id`, copying
     src/dst/conversation_key from the existing row and overriding
-    `dst`/`conversation_key`/`msg`/`category`/`info_score` when given. See
+    `dst`/`conversation_key`/`msg`/`tags`/`info_score` when given. See
     the module docstring's fixture note for why this, not a second
     `store_message` call, is how a fixture gets two physical rows for one
     transport-duplicate pair. `dst`/`conversation_key` exist for case 13's
@@ -201,8 +200,8 @@ async def _duplicate_row(  # noqa: PLR0913 - one arg per overridable column, mir
     base = rows[0]
     await storage._mutate(
         "INSERT INTO messages (msg_id, src, dst, msg, type, timestamp, src_type,"
-        " conversation_key, category, tags, info_score)"
-        " VALUES (?, ?, ?, ?, 'msg', ?, ?, ?, ?, ?, ?)",
+        " conversation_key, tags, info_score)"
+        " VALUES (?, ?, ?, ?, 'msg', ?, ?, ?, ?, ?)",
         (
             msg_id,
             base["src"],
@@ -211,7 +210,6 @@ async def _duplicate_row(  # noqa: PLR0913 - one arg per overridable column, mir
             ts,
             src_type,
             conversation_key if conversation_key is not None else base["conversation_key"],
-            category,
             tags,
             info_score,
         ),
@@ -522,13 +520,13 @@ async def _test_narrowed_matches_full_scan(results: list[tuple[str, bool]]) -> N
 
 async def _test_bare_column_tie(results: list[tuple[str, bool]]) -> None:
     """Case 7: pins CURRENT observed behaviour under a same-millisecond tie
-    between two physical rows of one group, differing in `msg`, `category`
+    between two physical rows of one group, differing in `msg`, `tags`
     AND `info_score` -- NOT a guarantee SQLite documents. Probes
     `_conv_dedup_subquery` directly to see which row it exposes for the
     group, then asserts `get_conversation_summary`'s own `unread` (which
     runs the aggregate query and, since a filter can suppress this
-    category, also the per-row candidate query) agrees with that SAME row's
-    category. If the aggregate and candidate queries ever picked different
+    row, also the per-row candidate query) agrees with that SAME row's
+    tags. If the aggregate and candidate queries ever picked different
     physical rows for the tie, `unread` would disagree with the probe here.
     SQLite's own bare-column rule explicitly does NOT promise which row wins
     a tie ("the choice is arbitrary",
@@ -558,7 +556,6 @@ async def _test_bare_column_tie(results: list[tuple[str, bool]]) -> None:
                 "DEAD0001",
                 t0,
                 msg="hidden text",
-                category="node_advert",
                 tags='["node"]',
                 info_score=0.3,
             )
@@ -570,13 +567,13 @@ async def _test_bare_column_tie(results: list[tuple[str, bool]]) -> None:
             with db_read(db_path) as conn:
                 conn.row_factory = sqlite3.Row
                 probed = conn.execute(
-                    f"SELECT category FROM ({dedup_sql}) w WHERE w.dst = ?",  # noqa: S608 - dedup_sql is a fixed literal built by _conv_dedup_subquery; values parameterized
+                    f"SELECT tags FROM ({dedup_sql}) w WHERE w.dst = ?",  # noqa: S608 - dedup_sql is a fixed literal built by _conv_dedup_subquery; values parameterized
                     (_window_cutoff_ms(), group_key),
                 ).fetchall()
             if len(probed) != 1:
                 raise AssertionError(f"expected exactly one deduped row, got {len(probed)}")
-            probed_category = probed[0]["category"]
-            expected_unread = 0 if probed_category == "node_advert" else 1
+            probed_tags = probed[0]["tags"]
+            expected_unread = 0 if probed_tags == '["node"]' else 1
 
             summary = await storage.get_conversation_summary(MY_CALLSIGN)
             entry = summary.get(group_key, {})
@@ -587,7 +584,7 @@ async def _test_bare_column_tie(results: list[tuple[str, bool]]) -> None:
                         f" (not an SQLite guarantee) -- get_conversation_summary's unread"
                         f" ({entry.get('unread')}) agrees with the SAME row"
                         " _conv_dedup_subquery itself exposes"
-                        f" (category={probed_category!r} -> expected unread={expected_unread})"
+                        f" (tags={probed_tags!r} -> expected unread={expected_unread})"
                     ),
                     entry.get("count") == 1 and entry.get("unread") == expected_unread,
                 )

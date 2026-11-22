@@ -44,6 +44,7 @@ from .storage.constants import (
     TELEMETRY_DEDUP_WINDOW_MS,
     db_read,
     db_write,
+    register_directed_function,
 )
 from .storage.ingest import IngestMixin
 from .storage.internet_feed_state import InternetFeedStateMixin
@@ -196,6 +197,7 @@ class SQLiteStorage(
             )
             try:
                 conn.execute("PRAGMA synchronous=NORMAL")
+                register_directed_function(conn)
             except Exception:
                 conn.close()  # sqlite3.connect is lazy; do not leak a half-opened handle
                 raise
@@ -1607,16 +1609,22 @@ async def run_startup_tests() -> bool:  # noqa: PLR0915 - test suite lists one c
             }
             await storage.store_message(msg_d4a, json.dumps(msg_d4a))
             d4a_rows = await storage._query(  # noqa: SLF001 - white-box startup test
-                "SELECT category, tags, info_score, template_hash, classifier_ver"
+                "SELECT tags, info_score, template_hash, classifier_ver"
                 " FROM messages WHERE msg_id = ?",
                 ("D4A00001",),
             )
             d4a = d4a_rows[0] if d4a_rows else {}
             d4a_tags = json.loads(d4a["tags"]) if d4a.get("tags") else []
+            d4a_cols = {
+                r["name"]
+                for r in await storage._query(  # noqa: SLF001 - white-box startup test
+                    "SELECT name FROM pragma_table_info('messages')"
+                )
+            }
             results.append(
                 (
-                    "store_message + real classifier: category derived from the engine tags",
-                    d4a.get("category") == "wx_beacon",
+                    "store_message + real classifier: the retired category column is gone",
+                    "category" not in d4a_cols,
                 )
             )
             results.append(
@@ -1641,7 +1649,7 @@ async def run_startup_tests() -> bool:  # noqa: PLR0915 - test suite lists one c
             # D4(b): a classifier whose classify() RAISES must NOT block ingestion — the
             # row is still stored. Design invariant: "the pipeline never blocks on
             # classifier bugs" (doc/archive/spam-filter-BE.md §5 — store_message() is meant to
-            # fall back to category='other' rather than propagate the exception).
+            # fall back to unclassified (NULL) columns rather than propagate the exception).
             class _RaisingClassifier:
                 async def classify(self, _message: dict[str, Any]) -> Any:
                     raise RuntimeError("classifier boom")

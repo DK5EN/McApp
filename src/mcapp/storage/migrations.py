@@ -22,7 +22,6 @@ from .constants import (
     VALID_SNR_RANGE,
     compute_conversation_key,
     db_write,
-    legacy_categories_to_tags,
 )
 
 logger = get_logger(__name__)
@@ -909,13 +908,12 @@ class MigrationsMixin(StorageBase):
 
                 if current_version < 38:  # noqa: PLR2004 - schema migration step
                     # Classifier unification: custom rules are retired (the rule
-                    # set ships with the engine) and filter prefs move from
-                    # categories to tags. Nothing is lost silently: custom rules
-                    # are saved next to the DB first.
+                    # set ships with the engine). Nothing is lost silently: custom
+                    # rules are saved next to the DB first. Stored filter prefs are
+                    # NOT rewritten (no compatibility layer, 2026-11).
                     self._retire_classifier_rules(conn)
-                    self._migrate_filter_prefs_to_tags(conn)
                     logger.info(
-                        "Migration v%d → v38: classifier_rules retired, hiddenTags prefs",
+                        "Migration v%d → v38: classifier_rules retired",
                         current_version,
                     )
                     _set_schema_version(conn, 38)
@@ -1073,6 +1071,17 @@ class MigrationsMixin(StorageBase):
                     )
                     _set_schema_version(conn, 45)
 
+                if current_version < 46:  # noqa: PLR2004 - schema migration step
+                    # The derived `messages.category` is retired (classifier compat
+                    # removal, 2026-11): origin + topics replace it. SQLite refuses to
+                    # drop an indexed column, so the index goes first. Idempotent.
+                    cols = {r[1] for r in conn.execute("PRAGMA table_info(messages)").fetchall()}
+                    conn.execute("DROP INDEX IF EXISTS idx_messages_category")
+                    if "category" in cols:
+                        conn.execute("ALTER TABLE messages DROP COLUMN category")
+                    logger.info("Migration v%d → v46: dropped messages.category", current_version)
+                    _set_schema_version(conn, 46)
+
         await asyncio.to_thread(_init_db)
 
         # Initialize bucket accumulators from existing signal_log
@@ -1107,37 +1116,6 @@ class MigrationsMixin(StorageBase):
             target.write_text(json.dumps(custom, indent=2, ensure_ascii=False))
             logger.warning("retired %d custom classifier rules -> %s", len(custom), target)
         conn.execute("DROP TABLE classifier_rules")
-        conn.commit()
-
-    @staticmethod
-    def _migrate_filter_prefs_to_tags(conn: sqlite3.Connection) -> None:
-        """V37 → V38: rewrite stored `hiddenCategories` as `hiddenTags` (once).
-
-        Tolerates a missing table, malformed JSON and non-dict blobs.
-        """
-        if (
-            conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'filter_prefs'"
-            ).fetchone()
-            is None
-        ):
-            return
-        row = conn.execute("SELECT prefs FROM filter_prefs WHERE id = 1").fetchone()
-        if not row:
-            return
-        try:
-            prefs = json.loads(row[0])
-        except (ValueError, TypeError):
-            return
-        if not isinstance(prefs, dict) or "hiddenCategories" not in prefs:
-            return
-        dropped = legacy_categories_to_tags(prefs)
-        if dropped:
-            logger.info("filter_prefs: categories without a tag dropped: %s", ", ".join(dropped))
-        conn.execute(
-            "UPDATE filter_prefs SET prefs = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
-            (json.dumps(prefs),),
-        )
         conn.commit()
 
     @staticmethod

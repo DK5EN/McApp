@@ -50,8 +50,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from ..classifier.types import legacy_tag_view
-
 
 @dataclass(frozen=True, slots=True)
 class SuppressionPolicy:
@@ -82,7 +80,7 @@ class MessageView:
     tags: frozenset[str]
     info_score: float | None
     template_hash: str
-    # v8 origin axis (human|machine) or None; `tags` already carries its alias ids.
+    # v8 origin axis (human|machine) or None; `tags` holds the stored topics only.
     origin: str | None = None
 
 
@@ -150,20 +148,12 @@ def _as_optional_float(value: object) -> float | None:
     return None
 
 
-# v7 (owner 2026-11-11): the four machine tags are auto_beacon. A stored preference that still
-# names one of the old tags means the same class, so it maps to auto_beacon instead of silently
-# hiding nothing.
-_LEGACY_HIDDEN_TAG: dict[str, str] = {
-    "bot": "auto_beacon",
-    "node": "auto_beacon",
-    "software": "auto_beacon",
-    "time": "auto_beacon",
-}
-
 # Owner 2026-11-11: nothing is hidden by default. Automated messages are labelled
-# (auto_beacon), not removed from view.
+# (origin machine), not removed from view. Stored ids retired by the classifier rework
+# (qso, auto_beacon, bot, node, software, time) are deliberately NOT rewritten: they match no
+# topic and simply stop hiding anything (owner 2026-11-22).
 DEFAULT_HIDDEN_TAGS: frozenset[str] = frozenset()
-# Tag ids are lowercase words with `-`/`_` (`pota-sota`, `auto_beacon`). Stored
+# Topic ids are lowercase words with `-`/`_` (`pota-sota`). Stored
 # prefs are client-controlled, so user-supplied ids are held to this shape.
 _TAG_ID_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 
@@ -204,7 +194,7 @@ def policy_from_parts(
     if enabled:
         hidden_tags = (
             frozenset(
-                _LEGACY_HIDDEN_TAG.get(t, t)
+                t
                 for t in _as_str_frozenset(filter_prefs.get("hiddenTags"))
                 if _TAG_ID_RE.fullmatch(t)
             )
@@ -326,9 +316,7 @@ def view_from_row(row: Mapping[str, Any]) -> MessageView:
 
     return MessageView(
         msg=msg if isinstance(msg, str) else "",
-        # ALIAS(one release, classifier rework 2026-11): stored topics + origin-derived
-        # auto_beacon/qso; legacy rows (origin NULL) keep their stored v7 ids.
-        tags=frozenset(legacy_tag_view(_parse_tags(row.get("tags")), origin)),
+        tags=_parse_tags(row.get("tags")),
         origin=origin,
         info_score=_as_optional_float(row.get("info_score")),
         template_hash=template_hash if isinstance(template_hash, str) else "",
@@ -347,8 +335,7 @@ def is_text_blocked(msg: str, policy: SuppressionPolicy) -> bool:
 
 def _tag_hidden(tags: frozenset[str], hidden: frozenset[str]) -> bool:
     """ANY rule (mcmap's): a message is hidden when any of its tags is hidden.
-    `qso` and `auto_beacon` are ordinary hideable tags; an untagged message is
-    never hidden by tags."""
+    an untagged message is never hidden by topics."""
     return not tags.isdisjoint(hidden)
 
 
@@ -360,7 +347,7 @@ def is_spam_by_classifier(view: MessageView, policy: SuppressionPolicy) -> bool:
       2. template_hash in promoted       -> True  (stop)
       3. template_hash in demoted        -> False (stop)
       4. hidden tag (see `_tag_hidden`)  -> True  (stop)
-      5. hide_auto_beacons + auto_beacon -> True  (stop)
+      5. hide_auto_beacons + origin machine -> True  (stop)
       6. info_score below min_info_score -> True
       7. otherwise                       -> False
     """
@@ -375,7 +362,7 @@ def is_spam_by_classifier(view: MessageView, policy: SuppressionPolicy) -> bool:
 
     if _tag_hidden(view.tags, policy.hidden_tags):
         return True
-    if policy.hide_auto_beacons and "auto_beacon" in view.tags:
+    if policy.hide_auto_beacons and view.origin == "machine":
         return True
 
     return (

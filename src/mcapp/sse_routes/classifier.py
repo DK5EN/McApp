@@ -81,7 +81,6 @@ def build_classifier_router(manager: SSEManager) -> APIRouter:
 
         job = await classifier.reclassify(
             since_ms=req.since,
-            category_filter=req.category or None,
             force=req.force,
             progress_cb=_progress,
         )
