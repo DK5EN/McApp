@@ -345,3 +345,7 @@ HMAC-tagged `RM1` DMs that administer other nodes. Always on, no config switch (
 - **Slot activation never restores the database, and must never again.** The Update page's Activate button (`POST /api/update/activate {slot}`, runner mode `activate`) switches code + webapp bundle + services and keeps `messages.db`. Its predecessor, Rollback, overwrote the DB with `meta/slot-N.db`, a snapshot taken when slot N was last LEFT through the runner (which `mcapp.sh` deploys never refreshed), so it would have replaced the live DB with a 4-day to 3-week-old copy. Migrations are forward-only additive and the schema marker is never written downward, so older code on a newer DB is fine; "restore the DB on rollback" is a data-loss bug. The served webapp is a COPIED directory (`/var/www/html/webapp`), not a symlink: a slot switch that only moves `current` leaves the old bundle on screen.
 
 See `bootstrap/README.md` for installation, `doc/reference/tls-architecture.md` for TLS, `doc/sop/SOP-003-tls-maintenance.md` for maintenance.
+
+## Git
+
+`development` also moves without you: Dependabot PRs merge automatically once CI passes (weekly on Mondays, security fixes on any day), and the daily `dev-release.yml` cuts `vX.Y.Z-dev.N` (tags McApp and webapp, may commit release notes). Fetch tags too (`git fetch --tags`). Run `git pull --rebase` before you start work and before every push.
