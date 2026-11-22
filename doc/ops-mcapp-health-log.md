@@ -3373,7 +3373,7 @@ point, not a finding. Watch whether cold telemetry requests keep producing `loop
 
 **Not measured:** W27 (`mcapp` RSS at matched load) needs a quiet day, and this run was 22 min after a restart.
 
-## 60. 2026-11-22 13:20 CET — pre-release sweep of v2.1.27-dev.11 before the v2.1.27 promotion (short soak)
+## 60. 2026-11-22 13:05 CET — pre-release sweep of v2.1.27-dev.11 before the v2.1.27 promotion (short soak)
 
 **Verdict: green, zero findings, with a short soak at the operator's decision.** The backend part of the
 release (schema 44, classifier v8) has run since `v2.1.27-dev.9` at 11:34. `dev.10` and `dev.11` are
@@ -3401,3 +3401,22 @@ aborted attempt that never tagged anything. Merged back into `development` with 
 
 **Not measured:** a multi-hour soak of the dev.10/dev.11 webapp, and the epoch 9 to 10 converge on a box
 other than this one.
+
+## 61. 2026-11-22 13:16 CET — post-release sweep of production v2.1.27 (3 min after the deploy)
+
+**Verdict: green, zero findings.** Deployed from the webapp Update page.
+
+- **Runner:** `Finished: {"status": "success", "version": "v2.1.27", "slot": 2, "converge": "ok",
+"duration_s": 117}`. Version and slot match the release and `current`.
+- **Running:** `webapp/version.html` v2.1.27, active slot-2. `mcapp`, `mcapp-ble`, `caddy`, `lighttpd` active,
+  `mcapp` restarted 13:13:32, `NRestarts` 0.
+- **Versions:** `LATEST_SCHEMA_VERSION` 44 in the active slot, equal to the DB. System epoch 10.
+- **Packaging:** the production slot holds exactly the three runtime data files (`classifier_contract.json`,
+  `axes_contract.json`, `group_labels_icssw.json`) and no test modules.
+- **Journal:** `mcapp -p warning` over the 10 min after the restart: no entries.
+- **Host:** 198 MB RAM available.
+
+**Absent:** restarts, journal warnings, a version or slot mismatch in the runner's result.
+
+**Not measured:** the one-time reclassify on a box coming from v2.1.26 (this box had already run it on
+dev.9; about 4 min for 11329 rows there), and the epoch 9 to 10 converge on another box.
