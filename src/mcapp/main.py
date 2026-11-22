@@ -65,6 +65,7 @@ except ImportError:
     SSE_AVAILABLE = False
 
 from . import __version__
+from .axes_contract import load_axes
 from .classifier import Classifier
 from .classifier.types import SSEEvent
 from .classifier_contract import contract_id, load_engine
@@ -108,7 +109,7 @@ SHUTDOWN_TIMEOUT_SSE_S = 3.0
 # MessageRouter._query_ble_registers, which asks for all fourteen). Cached here
 # so an SSE reconnect is served instantly instead of re-querying the radio.
 # IS1 (build date, follows I) and SN1 (via state, follows SN) are the newest
-# two -- see doc/2026-09-25_2041-is1-sn1-registers-plan.md.
+# two -- see doc/archive/2026-09-25_2041-is1-sn1-registers-plan.md.
 BLE_REGISTER_TYPES = (
     "I",
     "SN",
@@ -567,8 +568,13 @@ class MessageRouter:
             # tables is what keeps a blocked station invisible in history and
             # mHeard. The same shared decision gates the SSE and command paths,
             # so every ingestion path agrees (previously only storage blocked).
-            if self.blocklist_decision(message_data) != "pass":
+            decision = self.blocklist_decision(message_data)
+            if decision != "pass":
                 self._logger.debug("Blocked (not persisted) from %s", message_data.get("src"))
+                if decision == "redirect":
+                    # Quarantined group traffic is still broadcast live (to SPAM_GROUP)
+                    # without ever reaching store_message: give it the four axis keys.
+                    self.storage_handler.annotate_axes_defaults(message_data)
                 return
 
             raw_json = json.dumps(message_data)
@@ -2726,7 +2732,7 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
     handlers. Extracted from main() (CO-04); returns everything main() needs to
     log startup info, start background tasks, and drive the shutdown sequence.
     """
-    # Stall tracking (doc/2026-09-15_1530-stall-tracking-plan.md): the counting
+    # Stall tracking (doc/archive/2026-09-15_1530-stall-tracking-plan.md): the counting
     # executor must be installed before anything calls asyncio.to_thread, and the
     # recorder starts only after the migration chain has run (its own DDL is the
     # defensive fallback, migration 32 is canonical).
@@ -2761,9 +2767,20 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
     # contract changes the version, which makes the startup backfill reclassify.
     logger.info("Initializing classifier...")
     engine = load_engine()
-    classifier = Classifier(storage_handler, engine, contract_id(engine))
+    # Axes first: the contract id covers the axes commit too (origin reads timing/format), and
+    # classifier.load() compares it against the stored id. A missing or broken axes contract
+    # leaves the feature off (NULL columns, wire format null, degraded origin), never fatal.
+    axes_runtime = None
+    try:
+        axes_runtime = load_axes()
+    except Exception:
+        logger.exception("Axes contract failed to load; message axes disabled")
+    axes_engine = None if axes_runtime is None else axes_runtime.engine
+    classifier = Classifier(storage_handler, engine, contract_id(engine, axes_engine), axes_engine)
     await classifier.load()
     storage_handler.set_classifier(classifier)
+    if axes_runtime is not None:
+        storage_handler.set_axes(axes_runtime)
 
     message_router = MessageRouter(storage_handler)
     message_router.stall_recorder = stall_recorder
@@ -2824,7 +2841,7 @@ async def build_app(cfg: Config) -> AppContext:  # noqa: PLR0912, PLR0915 - sequ
     storage_handler.reply_hook = node_admin_service.on_reply
     await node_admin_service.start()
 
-    # Internet feed (meshmap box feed, doc/2026-10-11_1005-internet-feed-concept.md):
+    # Internet feed (meshmap box feed, doc/plans/2026-10-11_1005-internet-feed-concept.md):
     # always constructed, inert until enabled in Settings > Internet. Same lazy
     # SSE lookup as Node Admin; the identity is rebuilt from the live BLE state on
     # every check-in.
@@ -3198,7 +3215,7 @@ async def _nightly_prune(
             # Roll up 5-min buckets into 1-hour buckets BEFORE pruning. prune_messages
             # deletes 5-min buckets older than the retention window, so if it runs first
             # the rollup finds them already gone and only ~2h/day survive into 1-hour
-            # buckets (corrupting the 30d/1y charts). See doc/charts-wrong.md §13.
+            # buckets (corrupting the 30d/1y charts). See doc/plans/charts-wrong.md §13.
             await storage_handler.aggregate_hourly_buckets()
             remaining = await storage_handler.prune_messages(
                 cfg.storage.prune_hours,
@@ -3214,17 +3231,41 @@ async def _nightly_prune(
 async def run_classifier_startup(
     classifier: Classifier, storage_handler: SQLiteStorage, sse_manager: Any
 ) -> None:
-    """Startup classifier catch-up: auto-beacon promotion first, then reclassify.
+    """Startup catch-up: axes backfill, then auto-beacon promotion, then reclassify.
 
-    The order is load-bearing: ``reclassify`` reads the *stored* ``auto_beacon``
-    flag of each template to strip ``qso``, so templates the promotion backfill
-    would flag must be flagged before the sweep, or the rows keep ``qso`` until
-    the next version bump. (Mirrors mc-chat's ``run_classifier_startup``.)
+    The axes-first order is load-bearing for ``origin``, and so is the rest of it:
+    ``reclassify`` reads the *stored* ``auto_beacon`` flag of each template to strip ``qso``,
+    so templates the promotion backfill would flag must be flagged before the sweep, or the
+    rows keep ``qso`` until the next version bump. (Mirrors mc-chat's ``run_classifier_startup``.)
     """
-    promoted = await storage_handler.backfill_auto_beacon_templates()
-    if promoted:
-        logger.info("Auto-beacon backfill promoted %d templates", promoted)
-    await _maybe_backfill_classifier(classifier, storage_handler, sse_manager)
+    # Each step is isolated: a failure is logged and must not skip the next one. The axes
+    # backfill runs FIRST: the reclassify sweep derives ``origin`` from the STORED timing, so
+    # it must see the timing of the current axes contract. It is awaited here, inside the
+    # background task, so boot itself is never blocked.
+    axes_ok = True
+    try:
+        await storage_handler.backfill_message_axes()
+    except Exception:
+        axes_ok = False
+        logger.exception("Message axes backfill failed; will retry on next start")
+    try:
+        promoted = await storage_handler.backfill_auto_beacon_templates()
+        if promoted:
+            logger.info("Auto-beacon backfill promoted %d templates", promoted)
+    except Exception:
+        logger.exception("Auto-beacon backfill failed; continuing with the next startup step")
+    if not axes_ok:
+        # The sweep would stamp origin from NULL/partial timing and set the per-version marker,
+        # so the next boot (axes backfill now working) would never recompute it. Skip both.
+        logger.warning(
+            "Skipping classifier reclassify sweep: axes backfill did not complete; "
+            "both will run again on next start"
+        )
+        return
+    try:
+        await _maybe_backfill_classifier(classifier, storage_handler, sse_manager)
+    except Exception:
+        logger.exception("Classifier backfill failed; continuing with the next startup step")
 
 
 async def _maybe_backfill_classifier(
@@ -3264,10 +3305,19 @@ async def _maybe_backfill_classifier(
 
         job = await classifier.reclassify(progress_cb=_backfill_progress)
         logger.info(
-            "Classifier backfill scheduled: job=%s rows=%d",
+            "Classifier backfill started: job=%s rows=%d",
             job.job_id,
             job.total,
         )
+        # The marker means "sweep FINISHED", so wait for the job (we are already in the
+        # background startup task). A sweep killed mid-run (shutdown cancels this await) or
+        # one that failed fatally leaves no marker and is redone next boot.
+        task = job._task  # noqa: SLF001 - ReclassifyJob keeps its task here
+        if task is not None:
+            await task
+        if job.error is not None:
+            logger.warning("Classifier backfill failed (%s); marker not set", job.error)
+            return
     await storage_handler.set_meta(marker_key, datetime.now(UTC).isoformat())
 
 

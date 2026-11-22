@@ -9,10 +9,33 @@ import asyncio
 import json
 from typing import Any
 
+from ..classifier.template import _AUTO_BEACON_MIN_TOKENS, _HUMAN_CATEGORIES, is_short_token_exempt
 from ..classifier.types import ms_to_zulu
 from ..util import now_ms
 from ._base import StorageBase
 from .constants import _MSG_SELECT, db_write, escape_like
+
+
+def _history_exempt_sql(n_categories: int) -> str:
+    """SQL predicate: some message of the template is human (category/alert tag).
+
+    Single definition shared by ``clear_stale_auto_beacons`` (clears matches),
+    ``backfill_auto_beacon_templates`` (never promotes matches) and
+    ``template_has_human_history`` (live path), so the three cannot disagree.
+    Refers to ``beacon_templates.template_hash``; binds ``n_categories`` params.
+    """
+    placeholders = ",".join("?" * n_categories)
+    return (
+        "EXISTS ("  # noqa: S608 - placeholders only; values parameterized
+        "  SELECT 1 FROM messages m "
+        "  WHERE m.template_hash = beacon_templates.template_hash "
+        f"  AND (m.category IN ({placeholders}) OR EXISTS ("
+        "    SELECT 1 FROM json_each("
+        "      CASE WHEN json_valid(m.tags) THEN m.tags ELSE '[]' END"
+        "    ) j WHERE j.value = 'alert'"
+        "  )) LIMIT 1"
+        ")"
+    )
 
 
 class ClassifierApiMixin(StorageBase):
@@ -152,28 +175,34 @@ class ClassifierApiMixin(StorageBase):
         )
         return int(rows[0]["n"]) if rows else 0
 
+    async def template_has_human_history(
+        self, template_hash: str, human_categories: frozenset[str]
+    ) -> bool:
+        """True iff a stored message of the template is human (category/alert tag).
+
+        Same predicate as the cleanup and the startup backfill; uses
+        ``idx_messages_template_hash``.
+        """
+        rows = await self._query(
+            f"SELECT {_history_exempt_sql(len(human_categories))} AS h "  # noqa: S608 - placeholders only; values parameterized
+            "FROM beacon_templates WHERE template_hash = ?",
+            (*human_categories, template_hash),
+        )
+        return bool(rows[0]["h"]) if rows else False
+
     async def clear_stale_auto_beacons(
         self, human_categories: frozenset[str], min_tokens: int
     ) -> int:
-        from ..classifier.template import _tokenize_normalized  # noqa: PLC0415 - circular
+        from ..classifier.template import tokenize_normalized  # noqa: PLC0415 - circular
 
         cleared = 0
-        placeholders = ",".join("?" * len(human_categories))
 
         def _clear_by_category() -> int:
             with db_write(self.db_path) as conn:
                 cur = conn.execute(
-                    f"UPDATE beacon_templates SET auto_beacon = 0 "  # noqa: S608 - identifiers from fixed set; values parameterized
-                    f"WHERE user_action IS NULL AND auto_beacon = 1 "
-                    f"AND EXISTS ("
-                    f"  SELECT 1 FROM messages m "
-                    f"  WHERE m.template_hash = beacon_templates.template_hash "
-                    f"  AND (m.category IN ({placeholders}) OR EXISTS ("
-                    f"    SELECT 1 FROM json_each("
-                    f"      CASE WHEN json_valid(m.tags) THEN m.tags ELSE '[]' END"
-                    f"    ) j WHERE j.value = 'alert'"
-                    f"  )) LIMIT 1"
-                    f")",
+                    "UPDATE beacon_templates SET auto_beacon = 0 "  # noqa: S608 - placeholders only
+                    "WHERE user_action IS NULL AND auto_beacon = 1 "
+                    f"AND {_history_exempt_sql(len(human_categories))}",
                     tuple(human_categories),
                 )
                 conn.commit()
@@ -191,7 +220,7 @@ class ClassifierApiMixin(StorageBase):
         stale_hashes = [
             row["template_hash"]
             for row in rows
-            if len(_tokenize_normalized(row["example_msg"] or "")) <= min_tokens
+            if len(tokenize_normalized(row["example_msg"] or "")) <= min_tokens
         ]
         if stale_hashes:
             await self._execute_many(
@@ -254,12 +283,89 @@ class ClassifierApiMixin(StorageBase):
         info_score: float,
         template_hash: str,
         classifier_ver: int,
+        origin: str | None = None,
+        origin_rule: str | None = None,
     ) -> None:
+        """``origin``/``origin_rule`` None keep the stored values (no axes engine)."""
         await self._mutate(
             "UPDATE messages SET category = ?, tags = ?, info_score = ?, "
-            "template_hash = ?, classifier_ver = ? WHERE id = ?",
-            (category, json.dumps(tags), info_score, template_hash, classifier_ver, row_id),
+            "template_hash = ?, classifier_ver = ?, "
+            "origin = COALESCE(?, origin), origin_rule = COALESCE(?, origin_rule) "
+            "WHERE id = ?",
+            (
+                category,
+                json.dumps(tags),
+                info_score,
+                template_hash,
+                classifier_ver,
+                origin,
+                origin_rule,
+                row_id,
+            ),
         )
+
+    async def update_classification_batch(
+        self,
+        *,
+        changed: list[tuple[str, str, float, str, int, int]],
+        unchanged_ids: list[int],
+        classifier_ver: int,
+        origins: dict[int, tuple[str, str]] | None = None,
+    ) -> None:
+        """Write one reclassify batch in a single write unit and a single commit.
+
+        ``changed`` tuples are ``(category, tags_json, info_score, template_hash,
+        classifier_ver, row_id)`` with ``tags_json`` already serialised;
+        ``unchanged_ids`` are only stamped with ``classifier_ver``. Both statements
+        share one transaction under the writer lock: any failure rolls back the whole
+        batch. ``origins`` maps row id -> (origin, origin_rule). Mirrors mc-chat's method
+        of the same name.
+        """
+        if not changed and not unchanged_ids and not origins:
+            return
+        # `_writer_lock`/`_get_writer_conn`/`_writer_failed` live on SQLiteStorage
+        # (sqlite_storage.py), not on StorageBase; no existing helper runs two
+        # statements under one commit, hence the explicit single write unit here.
+        host: Any = self
+        stamps = [(classifier_ver, rid) for rid in unchanged_ids]
+
+        def _run() -> None:
+            with host._writer_lock:  # noqa: SLF001 - writer plumbing lives on SQLiteStorage
+                conn = host._get_writer_conn()  # noqa: SLF001 - writer plumbing lives on SQLiteStorage
+                try:
+                    if changed:
+                        conn.executemany(
+                            "UPDATE messages SET category = ?, tags = ?, info_score = ?, "
+                            "template_hash = ?, classifier_ver = ? WHERE id = ?",
+                            changed,
+                        )
+                    if origins:
+                        conn.executemany(
+                            "UPDATE messages SET origin = ?, origin_rule = ? WHERE id = ?",
+                            [(o, r, rid) for rid, (o, r) in origins.items()],
+                        )
+                    if stamps:
+                        conn.executemany(
+                            "UPDATE messages SET classifier_ver = ? WHERE id = ?", stamps
+                        )
+                    conn.commit()
+                except Exception as exc:
+                    host._writer_failed(conn, exc)  # noqa: SLF001 - writer plumbing lives on SQLiteStorage
+                    raise
+
+        await asyncio.to_thread(_run)
+
+    async def count_messages_by_origin(self, since_ms: int) -> dict[str, int]:
+        """``{human, machine, null}`` counts since ``since_ms`` (same window as by_tag)."""
+        rows = await self._query(
+            "SELECT origin, COUNT(*) AS n FROM messages WHERE timestamp >= ? GROUP BY origin",
+            (since_ms,),
+        )
+        out = {"human": 0, "machine": 0, "null": 0}
+        for r in rows:
+            origin = r["origin"]
+            out[origin if origin in ("human", "machine") else "null"] += int(r["n"])
+        return out
 
     async def get_meta(self, key: str) -> str | None:
         rows = await self._query("SELECT value FROM classifier_meta WHERE key = ?", (key,))
@@ -296,7 +402,11 @@ class ClassifierApiMixin(StorageBase):
         )
         return {r["tag"]: r["n"] for r in rows}
 
-    async def backfill_auto_beacon_templates(self) -> int:
+    async def backfill_auto_beacon_templates(
+        self,
+        human_categories: frozenset[str] = _HUMAN_CATEGORIES,
+        min_tokens: int = _AUTO_BEACON_MIN_TOKENS,
+    ) -> int:
         """Flag templates that now cross the AUTO_BEACON_RULES thresholds.
 
         Mirrors (8, any window) / (5, 24h) / (3, 72h). The live path counts the
@@ -304,7 +414,10 @@ class ClassifierApiMixin(StorageBase):
         templates; the template row has no per-sender counts, so every arm
         requires a single sender here -- three people greeting each other must
         not become a beacon on the next startup. Rows with a user override
-        (promote/demote) are left alone. Returns the number newly flagged.
+        (promote/demote) are left alone. Never promotes a template that
+        ``clear_stale_auto_beacons`` would clear (human history, or a
+        short-token example), so restarts do not undo a reclassify.
+        Returns the number newly flagged.
         """
         now = now_ms()
         c24, c72 = ms_to_zulu(now - 24 * 3600 * 1000), ms_to_zulu(now - 72 * 3600 * 1000)
@@ -316,9 +429,28 @@ class ClassifierApiMixin(StorageBase):
             " OR (count >= 5 AND last_seen >= ?)"
             " OR (count >= 3 AND last_seen >= ?))"
         )
+        exempt = _history_exempt_sql(len(human_categories))
+        params = (c24, c72, *human_categories)
+        rows = await self._query(
+            f"SELECT template_hash, example_msg FROM beacon_templates WHERE {where} "  # noqa: S608 - fixed text; values bound
+            f"AND NOT {exempt}",
+            params,
+        )
+        hashes = [
+            r["template_hash"]
+            for r in rows
+            if not is_short_token_exempt(r["example_msg"] or "", min_tokens)
+        ]
+        if not hashes:
+            return 0
+        # The UPDATE re-checks the full predicate: a demote or a directed
+        # message that lands between the SELECT above and this write must win,
+        # not be overwritten by a stale read.
         return await self._mutate(
-            f"UPDATE beacon_templates SET auto_beacon = 1 WHERE {where}",  # noqa: S608 - fixed text; values bound
-            (c24, c72),
+            "UPDATE beacon_templates SET auto_beacon = 1 "  # noqa: S608 - fixed text; values bound
+            f"WHERE template_hash IN (SELECT value FROM json_each(?)) AND {where} "
+            f"AND NOT {exempt}",
+            (json.dumps(hashes), *params),
         )
 
     async def count_blocked_text_hits_24h(self) -> dict[str, int]:

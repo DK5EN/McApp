@@ -1,6 +1,6 @@
 """Regression suite for the internet feed glue in main.py / sse_handler.py / push.py.
 
-Design: doc/2026-10-11_1005-internet-feed-concept.md §2, §4.3. The service, the
+Design: doc/plans/2026-10-11_1005-internet-feed-concept.md §2, §4.3. The service, the
 routes and the www ingest guards have their own suites; this one covers the
 `www_message` topic wiring none of them can see.
 

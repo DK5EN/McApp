@@ -356,6 +356,9 @@ def _write_minimal_release_fixture(tmp: Path) -> tuple[Path, Path]:
     (project / "src" / "mcapp" / "contract" / "classifier_contract.json").write_text(
         '{"taxonomy_version": 6}', encoding="utf-8"
     )
+    (project / "src" / "mcapp" / "contract" / "axes_contract.json").write_text(
+        '{"schema": 1}', encoding="utf-8"
+    )
     (project / "src" / "mcapp" / "group_labels_icssw.json").write_text(
         '{"entries": []}', encoding="utf-8"
     )
@@ -588,6 +591,7 @@ def _case_build_tarball_production_is_runtime_only(record: Recorder) -> None:
                 n.endswith(".json")
                 and "/src/" in n
                 and not n.endswith("src/mcapp/contract/classifier_contract.json")
+                and not n.endswith("src/mcapp/contract/axes_contract.json")
                 and not n.endswith("src/mcapp/group_labels_icssw.json")
                 for n in names
             ),
@@ -601,6 +605,11 @@ def _case_build_tarball_production_is_runtime_only(record: Recorder) -> None:
         record(
             "production tarball ships contract/classifier_contract.json (runtime reads it at boot)",
             any(n.endswith("src/mcapp/contract/classifier_contract.json") for n in names),
+            f"(names: {names})",
+        )
+        record(
+            "production tarball ships contract/axes_contract.json (message axes load it at boot)",
+            any(n.endswith("src/mcapp/contract/axes_contract.json") for n in names),
             f"(names: {names})",
         )
         record(

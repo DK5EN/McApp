@@ -34,9 +34,11 @@ from bootstrap_network_safety_tests import run_bootstrap_network_safety_tests
 from bootstrap_pinning_tests import run_bootstrap_pinning_tests
 from bootstrap_port_warning_tests import run_bootstrap_port_warning_tests
 from bootstrap_ramlog_tests import run_bootstrap_ramlog_tests
+from bootstrap_ssh_hardening_tests import run_bootstrap_ssh_hardening_tests
 from bootstrap_tmpdir_tests import run_bootstrap_tmpdir_tests
 from bootstrap_tunnel_backup_tests import run_bootstrap_tunnel_backup_tests
 from bootstrap_venv_tests import run_bootstrap_venv_tests
+from bootstrap_version_check_tests import run_bootstrap_version_check_tests
 from caddy_config_tests import run_caddy_config_tests
 from config_migration_tests import run_config_migration_tests
 from health_probe_tests import run_health_probe_tests
@@ -100,6 +102,7 @@ from mcapp.stall_http_tests import run_stall_http_tests
 from mcapp.stall_tests import run_stall_tests
 from mcapp.storage.ack_match_vectors_tests import run_ack_match_vector_tests
 from mcapp.storage.ack_status_tests import run_ack_status_tests
+from mcapp.storage.classifier_batch_tests import run_classifier_batch_tests
 from mcapp.storage.classifier_tags_tests import run_classifier_tags_tests
 from mcapp.storage.connection_lifecycle_tests import run_connection_lifecycle_tests
 from mcapp.storage.conv_dedup_tests import run_conv_dedup_tests
@@ -109,10 +112,12 @@ from mcapp.storage.internet_feed_state_tests import run_internet_feed_state_test
 from mcapp.storage.label_overrides_tests import run_label_overrides_tests
 from mcapp.storage.linkcheck_ingest_tests import run_linkcheck_ingest_tests
 from mcapp.storage.live_classification_tests import run_live_classification_tests
+from mcapp.storage.message_axes_tests import run_message_axes_tests
 from mcapp.storage.mheard_attribution_tests import run_mheard_attribution_tests
 from mcapp.storage.migration_chain_tests import run_migration_chain_tests
 from mcapp.storage.node_admin_hook_tests import run_node_admin_hook_tests
 from mcapp.storage.node_admin_storage_tests import run_node_admin_storage_tests
+from mcapp.storage.origin_tests import run_origin_tests
 from mcapp.storage.query_tests import run_query_tests
 from mcapp.storage.read_cursor_tests import run_read_cursor_tests
 from mcapp.storage.signal_via_tests import run_signal_via_tests
@@ -206,6 +211,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     classifier_routes_ok = await run_classifier_routes_tests()
     print(f"classifier_routes: {'PASS' if classifier_routes_ok else 'FAIL'}")
+
+    classifier_batch_ok = await run_classifier_batch_tests()
+    print(f"classifier_batch: {'PASS' if classifier_batch_ok else 'FAIL'}")
 
     classifier_tags_ok = await run_classifier_tags_tests()
     print(f"classifier_tags: {'PASS' if classifier_tags_ok else 'FAIL'}")
@@ -366,6 +374,11 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     live_classification_ok = await run_live_classification_tests()
     print(f"live_classification: {'PASS' if live_classification_ok else 'FAIL'}")
+    message_axes_ok = await run_message_axes_tests()
+    print(f"message_axes: {'PASS' if message_axes_ok else 'FAIL'}")
+
+    origin_ok = await run_origin_tests()
+    print(f"origin: {'PASS' if origin_ok else 'FAIL'}")
 
     ingest_dedup_ok = await run_ingest_dedup_tests()
     print(f"ingest_dedup: {'PASS' if ingest_dedup_ok else 'FAIL'}")
@@ -397,6 +410,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     update_runner_ok = run_update_runner_tests()
     print(f"update_runner: {'PASS' if update_runner_ok else 'FAIL'}")
+
+    bootstrap_version_check_ok = run_bootstrap_version_check_tests()
+    print(f"bootstrap_version_check: {'PASS' if bootstrap_version_check_ok else 'FAIL'}")
 
     system_converge_ok = run_system_converge_tests()
     print(f"system_converge: {'PASS' if system_converge_ok else 'FAIL'}")
@@ -439,6 +455,9 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
 
     bootstrap_firewall_ok = run_bootstrap_firewall_tests()
     print(f"bootstrap_firewall: {'PASS' if bootstrap_firewall_ok else 'FAIL'}")
+
+    bootstrap_ssh_hardening_ok = run_bootstrap_ssh_hardening_tests()
+    print(f"bootstrap_ssh_hardening: {'PASS' if bootstrap_ssh_hardening_ok else 'FAIL'}")
 
     bootstrap_port_warning_ok = run_bootstrap_port_warning_tests()
     print(f"bootstrap_port_warning: {'PASS' if bootstrap_port_warning_ok else 'FAIL'}")
@@ -507,6 +526,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and sse_ok
         and classifier_ok
         and classifier_routes_ok
+        and classifier_batch_ok
         and classifier_tags_ok
         and parsing_ok
         and hashtag_dst_ok
@@ -546,6 +566,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and bootstrap_config_backup_ok
         and bootstrap_converge_steps_ok
         and bootstrap_firewall_ok
+        and bootstrap_ssh_hardening_ok
         and bootstrap_port_warning_ok
         and bootstrap_logdirs_ok
         and bootstrap_tunnel_backup_ok
@@ -560,6 +581,8 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and template_override_ok
         and conv_dedup_ok
         and live_classification_ok
+        and message_axes_ok
+        and origin_ok
         and ingest_dedup_ok
         and meteo_ok
         and msg_core_ok
@@ -572,6 +595,7 @@ async def main() -> int:  # noqa: PLR0915 - flat suite registry; one visible lin
         and ble_protocol_ok
         and ble_hydration_ok
         and update_runner_ok
+        and bootstrap_version_check_ok
         and system_converge_ok
         and caddy_config_ok
         and bootstrap_pinning_ok

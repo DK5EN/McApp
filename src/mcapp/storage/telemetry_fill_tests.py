@@ -1,5 +1,5 @@
 """Built-in suite for the telemetry gap fill, Wave 1 (plan
-doc/2026-11-07_1000-telemetry-gap-fill-plan.md).
+doc/archive/2026-11-07_1000-telemetry-gap-fill-plan.md).
 
 Pure rules (`telemetry_fill`), the storage methods on a temp DB, the RF-wins
 change in `store_telemetry`, and the v41 migration step. Every case names the

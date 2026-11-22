@@ -247,7 +247,7 @@ curl -skI https://mcapp.local/ | head -3
   every stored push subscription.
 - Web Push needs outbound internet from the Pi and **degrades silently without it**.
 - TLS is Caddy on :80/:443 in front of lighttpd on :8082. For certificate work follow
-  `doc/tls-maintenance-SOP.md` rather than improvising.
+  `doc/sop/SOP-003-tls-maintenance.md` rather than improvising.
 - **A near-term `notAfter` on this host is NOT an expiry finding.** Caddy's internal CA
   (`issuer=CN=Caddy Local Authority - ECC Intermediate`) issues **12-hour** leaf certs and
   renews them automatically, so a spot check almost always shows a cert expiring within hours —

@@ -1,6 +1,6 @@
 """Startup test suite for the bleak BLE backend (`ble_adapter_bleak.BleakAdapter`).
 
-Wave W5 of doc/2026-10-31_1230-ble-service-macos-backend-design.md (section 7).
+Wave W5 of doc/plans/2026-10-31_1230-ble-service-macos-backend-design.md (section 7).
 Fully offline: bleak is NOT required. The adapter's `scanner_cls` / `client_cls`
 constructor seams take the fakes below, so no radio, serial port or network is
 touched. Convention matches the other suites: `_test_*` coroutines, a

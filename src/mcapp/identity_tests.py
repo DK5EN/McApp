@@ -1420,7 +1420,7 @@ async def _test_status_endpoint_reports_node_firmware_identity(
     (IS1["BDATE"]) -- read live off `cached_ble_registers`, degrading to None
     when the register (or field) is absent, which covers both "never
     connected yet" and "connected to firmware old enough to lack IS1"
-    (see doc/2026-09-25_2041-is1-sn1-registers-plan.md)."""
+    (see doc/archive/2026-09-25_2041-is1-sn1-registers-plan.md)."""
 
     class _StubSSEManager:
         """Only what build_stream_router's /api/status handler touches."""

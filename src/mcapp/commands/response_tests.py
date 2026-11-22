@@ -5,7 +5,7 @@ Table-driven, synchronous, no pytest — mirrors the house pattern in
 ``_record`` helper printing "✅ PASS | label" / "❌ FAIL | label" lines, and a
 final summary line plus ``return all(...)``.
 
-TX-02 residual (doc/2026-09-10_1900-ble-protocol-parity-audit.md):
+TX-02 residual (doc/archive/2026-09-10_1900-ble-protocol-parity-audit.md):
 ``_chunk_response`` caps chunks at ``MAX_RESPONSE_LENGTH`` (140) UTF-8 BYTES,
 but its two fallback paths used to slice by CHARACTERS — a multi-byte
 character (umlauts, emoji) could push a single chunk well over the firmware's

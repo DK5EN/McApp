@@ -2,7 +2,7 @@
 `get_conversation_summary`, `PrefsMixin.set_read_cursor`/`get_read_cursors`/
 `seed_read_cursors_from_counts`).
 
-Backend half of doc/2026-09-06_1200-unread-cursor-plan.md §7, cases 1-4 and 7
+Backend half of doc/archive/2026-09-06_1200-unread-cursor-plan.md §7, cases 1-4 and 7
 (cases 5/6 — SSE burst ordering and the `proxy:read_cursor` echo to a second
 client — belong to the sibling wave touching sse_handler.py/main.py).
 

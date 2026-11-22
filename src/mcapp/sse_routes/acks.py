@@ -5,7 +5,7 @@ which reads the `message_acks` ledger (schema v29) written by
 `IngestMixin._handle_ack`. The webapp's bubble details popover calls this
 lazily when opened, so the initial-load snapshot stays free of per-message
 subqueries; live updates arrive on the `msg:status` SSE event's `from`/`via`
-keys. Design: `doc/2026-09-05_1545-ack-attribution-plan.md`.
+keys. Design: `doc/archive/2026-09-05_1545-ack-attribution-plan.md`.
 """
 
 from __future__ import annotations

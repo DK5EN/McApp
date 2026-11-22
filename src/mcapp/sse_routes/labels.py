@@ -3,7 +3,7 @@
 Reads merge the ICSSW snapshot with operator overrides; writes validate by hand
 so a 422 never echoes the submitted input (no pydantic `input` field). No
 Host/Origin guard: operator decision D7. Plan:
-doc/2026-10-25_0900-conversation-nav-group-labels-plan.md
+doc/plans/2026-10-25_0900-conversation-nav-group-labels-plan.md
 """
 
 from __future__ import annotations

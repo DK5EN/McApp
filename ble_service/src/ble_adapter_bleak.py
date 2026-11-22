@@ -5,7 +5,7 @@ surface of `ble_types.BleBackend`. bleak is imported lazily inside methods so
 this module imports on hosts without bleak; `scanner_cls` / `client_cls` are
 test seams that default to the real classes.
 
-Design: doc/2026-10-31_1230-ble-service-macos-backend-design.md (section 3).
+Design: doc/plans/2026-10-31_1230-ble-service-macos-backend-design.md (section 3).
 """
 
 import asyncio

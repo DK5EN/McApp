@@ -1,6 +1,6 @@
 """Regression suite for Observed sessions (decoded RM1 traffic, read-only).
 
-Plan: doc/2026-10-11_1400-rm1-observed-sessions-plan.md. Fully offline; frames are
+Plan: doc/archive/2026-10-11_1400-rm1-observed-sessions-plan.md. Fully offline; frames are
 built with the real `derive_key` / `rm_tag` / `rm_reply_tag`.
 
 Cases:

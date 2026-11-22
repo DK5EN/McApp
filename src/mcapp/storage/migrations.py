@@ -483,7 +483,7 @@ class MigrationsMixin(StorageBase):
                     _set_schema_version(conn, 26)
 
                 if current_version < 27:  # noqa: PLR2004 - schema migration step
-                    # HEY-path fixes (doc/hey-path-fixes.md F1/F6): the writer's
+                    # HEY-path fixes (doc/archive/hey-path-fixes.md F1/F6): the writer's
                     # `gw` and `lora_mod` fixes do not repair rows already stored
                     # under the old, wrong producer — this is that one-shot repair.
                     #
@@ -682,7 +682,7 @@ class MigrationsMixin(StorageBase):
                     _set_schema_version(conn, 31)
 
                 if current_version < 32:  # noqa: PLR2004 - schema migration step
-                    # Stall tracking (doc/2026-09-15_1530-stall-tracking-plan.md
+                    # Stall tracking (doc/archive/2026-09-15_1530-stall-tracking-plan.md
                     # §2, §6). `stall_events` is the durable record of server-
                     # and client-side "the app looked stuck" events, written by
                     # `mcapp.stalls.StallRecorder` — one row per sample/stall/
@@ -727,7 +727,7 @@ class MigrationsMixin(StorageBase):
 
                 if current_version < 33:  # noqa: PLR2004 - schema migration step
                     # QRZ.com callsign lookup (issue #14,
-                    # doc/2026-10-04_0848-qrz-callsign-lookup-plan.md §7).
+                    # doc/archive/2026-10-04_0848-qrz-callsign-lookup-plan.md §7).
                     # `callsign_info` caches first name/QTH by BASE callsign;
                     # `qrz_lookups` is the ledger the 50/24 h hard cap counts,
                     # written before each request goes out; `qrz_state` is a
@@ -802,7 +802,7 @@ class MigrationsMixin(StorageBase):
                     # password, the monotonic command counter + verified
                     # high-water mark, and the command/reply history. All
                     # timestamps are milliseconds. Plan:
-                    # doc/2026-10-05_1000-node-admin-ui-concept-and-plan.md §4.
+                    # doc/archive/2026-10-05_1000-node-admin-ui-concept-and-plan.md §4.
                     # `node_admin_state` is deliberately separate from the keys
                     # table: removing a key keeps the counter so a re-added key
                     # continues instead of restarting at 1 (silent replay rejects).
@@ -863,7 +863,7 @@ class MigrationsMixin(StorageBase):
                     _set_schema_version(conn, 35)
 
                 if current_version < 36:  # noqa: PLR2004 - schema migration step
-                    # McApp internet feed (doc/2026-10-11_1005-internet-feed-concept.md
+                    # McApp internet feed (doc/plans/2026-10-11_1005-internet-feed-concept.md
                     # §4.1): settings + connection state, one row. `configured` stays 0
                     # until the first settings save and drives the "suggested" defaults.
                     conn.execute("""
@@ -966,7 +966,7 @@ class MigrationsMixin(StorageBase):
                     _set_schema_version(conn, 40)
 
                 if current_version < 41:  # noqa: PLR2004 - schema migration step
-                    # Telemetry gap fill (doc/2026-11-07_1000-telemetry-gap-fill-plan.md):
+                    # Telemetry gap fill (doc/archive/2026-11-07_1000-telemetry-gap-fill-plan.md):
                     # origin NULL = RF, 'meshmap' = filled from the central server.
                     # Existing rows are not rewritten. telemetry_fill_state holds
                     # one resumable cursor per station (ms).
@@ -984,7 +984,7 @@ class MigrationsMixin(StorageBase):
                     _set_schema_version(conn, 41)
 
                 if current_version < 42:  # noqa: PLR2004 - schema migration step
-                    # Telemetry reads (doc/2026-11-07_1400-telemetry-downsampling-plan.md,
+                    # Telemetry reads (doc/archive/2026-11-07_1400-telemetry-downsampling-plan.md,
                     # Wave 8): GROUP BY callsign, timestamp / bucket_ms walks these
                     # expression indexes instead of building a temp B-tree. The
                     # expressions must match query.py's GROUP BY text exactly.
@@ -1005,6 +1005,41 @@ class MigrationsMixin(StorageBase):
                         current_version,
                     )
                     _set_schema_version(conn, 42)
+
+                if current_version < 43:  # noqa: PLR2004 - schema migration step
+                    # Message axes (shared spec, mc-chat axes-backend-spec): timing is
+                    # the live cadence class, echo/echo_of the "repeat of another
+                    # sender's text" flag. NULL = not classified; the startup backfill
+                    # fills existing rows. No new index: the axes queries ride
+                    # idx_messages_type_src_timestamp / idx_messages_type_timestamp, and
+                    # the backfill's INDEXED BY needs idx_messages_timestamp (constants.py).
+                    for col, typedef in [
+                        ("timing", "TEXT"),
+                        ("echo", "INTEGER"),
+                        ("echo_of", "TEXT"),
+                    ]:
+                        try:
+                            conn.execute(f"ALTER TABLE messages ADD COLUMN {col} {typedef}")
+                        except sqlite3.OperationalError:
+                            logger.debug("Column %s already exists in messages, skipping", col)
+                    logger.info(
+                        "Migration v%d → v43: messages.timing, echo, echo_of",
+                        current_version,
+                    )
+                    _set_schema_version(conn, 43)
+
+                if current_version < 44:  # noqa: PLR2004 - schema migration step
+                    # Origin axis (contract schema 2, classifier/origin.py): "human" |
+                    # "machine" plus the deciding rule. NULL = not computed, never "human".
+                    for col, typedef in [("origin", "TEXT"), ("origin_rule", "TEXT")]:
+                        try:
+                            conn.execute(f"ALTER TABLE messages ADD COLUMN {col} {typedef}")
+                        except sqlite3.OperationalError:
+                            logger.debug("Column %s already exists in messages, skipping", col)
+                    logger.info(
+                        "Migration v%d → v44: messages.origin, origin_rule", current_version
+                    )
+                    _set_schema_version(conn, 44)
 
         await asyncio.to_thread(_init_db)
 

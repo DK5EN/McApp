@@ -5,6 +5,51 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.1.26 (2026-11-08)
+
+**Weather history fills its gaps from meshmap, and the 30-day weather charts load faster.** Where McApp
+has no weather samples for a station, it fetches them from meshmap. The 30-day charts read a
+pre-averaged table, and the chart shows a break where no sample exists instead of drawing a line across it.
+
+> Update from the Update page as usual. Schema goes to 42, `SYSTEM_EPOCH` stays at 9. The box now
+> fetches weather history from `meshmap.oevsv.at`, so it needs outbound HTTPS.
+
+### Highlights
+
+- **Gaps in weather history are filled.** McApp asks meshmap for the samples it missed, for the
+  stations shown in the weather picker. Stations without a weather sensor are skipped.
+- **30-day weather charts load faster.** The server returns two-hour means in a compact columnar
+  form, and the medians are computed in SQLite. A cache serves the last result while it refreshes.
+- **Honest gaps.** Central samples are hollow points, and a line breaks where no sample exists.
+- **The 30-day sidebar shows the real last sample** instead of a value from the bucket grid.
+- **Text fields render at 16 px on touch devices**, so iOS no longer zooms in when you tap one.
+- **Easier to read.** Control borders, placeholders and faded text are adjusted toward BITV/WCAG
+  legibility, and the font scale is adjusted.
+
+### Backend (MCProxy)
+
+- Schema 41 adds the storage layer for the gap fill, and a fetch job plus a status route. Schema 42
+  adds expression indexes on the telemetry buckets and builds the JSON arrays in SQLite.
+- The telemetry read path runs off the event loop, so a long chart query no longer stalls live
+  messages.
+- Dependencies refreshed: bleak 3.1.0, sse-starlette 3.7.0, types-regex.
+
+### Frontend (webapp)
+
+- Weather charts read the columnar response and compute their statistics per bucket.
+- Hollow points, breaks at real gaps, and the sidebar's last-sample fix are in the same chart code.
+- Accessibility and touch fixes listed above. Transitive dependencies refreshed in `package-lock.json`.
+
+### Upgrade notes
+
+- **Schema 41 and 42 run on first start.** The telemetry index build was not timed on a Pi; on a large
+  database it can take a while.
+- **Gap fill needs outbound HTTPS to `meshmap.oevsv.at`.** Without it the fill logs warnings and the
+  rest of McApp runs as before.
+- **Soak:** `v2.1.26-dev.5` ran on mcapp.local from 10:39 CET to the release, through the 04:00
+  nightly prune and the overnight meshmap fetches. All 1,379 fetches returned 200, and no gap-fill
+  errors were logged.
+
 ## v2.1.25 (2026-11-06)
 
 **A McApp update no longer breaks other software on the box.** Your own firewall rules, the log folders
@@ -12,7 +57,7 @@ of other services and your own Caddy sites now survive an update. Before McApp o
 it keeps a backup.
 
 > Update from the Update page as usual. `SYSTEM_EPOCH` goes to 9, schema stays at 40. If you run other
-> software next to McApp, read "Running other software on the box" in `doc/operations-reference.md`.
+> software next to McApp, read "Running other software on the box" in `operations-reference-pre-split-2026-11-10.md`.
 
 ### Highlights
 
@@ -93,7 +138,7 @@ the live event stream and the large API responses. On a fast LAN you will barely
 - Responses under 512 bytes stay plain, and static files keep their pre-built Brotli and gzip files.
 - `/events` compresses only on Caddy 2.11.5 or newer, and stays plain and working on an older one.
 - New `scripts/measure_front_door.py` for wire bytes and timing. Full numbers:
-  `doc/2026-11-06_1400-runtime-compression-measurements.md`.
+  `2026-11-06_1400-runtime-compression-measurements.md`.
 
 ### Frontend (webapp)
 
@@ -1423,7 +1468,7 @@ there is no migration, no bootstrap convergence and no contract version change.
   clients. `--info` and `--nodeset` now answer with two frames and use the multi-part query
   delay. `/api/status` reports `node_fwver` and `node_build`, and a change of the node's via
   setting logs one INFO line.
-- `doc/ble-state-machine.md` rewritten for the current two-process BLE architecture.
+- `../reference/ble-state-machine.md` rewritten for the current two-process BLE architecture.
 - Dependencies refreshed (uvicorn 0.54.0), including the standalone `ble_service` lock.
 
 ### Frontend (webapp)
@@ -1972,10 +2017,10 @@ found to restore a stale database. No schema change (stays at **v30**). Push con
 
 ### Documentation
 
-- `doc/MeshCom-ACK.md`: hop mask 0x0F, status 0x02 peer ACK, 13-byte BLE ACK.
+- `../reference/MeshCom-ACK.md`: hop mask 0x0F, status 0x02 peer ACK, 13-byte BLE ACK.
 - `CLAUDE.md`, `hey_path.py`: the MHeard `SRC`/`GW`/`PP` keys were reverted upstream on
   2026-08-28; the parser stays, inert.
-- `doc/2026-09-11_1200-aprs-key-contract-adoption.md`: which of the 17 firmware keys MCProxy
+- `2026-09-11_1200-aprs-key-contract-adoption.md`: which of the 17 firmware keys MCProxy
   types, and why the rest stay in `extras`.
 
 ### Verification
@@ -2050,7 +2095,7 @@ on` after every reconnect, `--wrong command` for a typo) and catch-up replays fl
   on a `False` return, an exception, or a missing client.
 - **[fix]** Inbound text that is not valid UTF-8 is re-read as CP1252 instead of dropping the
   character; one charset filter (Unicode category blacklist) on both transports.
-- **[docs]** `doc/2026-09-10_1900-ble-protocol-parity-audit.md`: the full audit with every
+- **[docs]** `2026-09-10_1900-ble-protocol-parity-audit.md`: the full audit with every
   finding, its evidence in all three code bases, and the ones that did not survive
   verification. CLAUDE.md corrected: the MHeard `SRC`/`GW`/`PP` fields were reverted upstream
   on 2026-08-28; the parser is retained and inert.

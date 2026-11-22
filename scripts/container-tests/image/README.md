@@ -1,6 +1,6 @@
 # Container spike image
 
-Throwaway proof of the container premise in `doc/2026-10-31_0830-container-deployment-concept.md`.
+Throwaway proof of the container premise in `doc/plans/2026-10-31_0830-container-deployment-concept.md`.
 Alpine, `mcapp` package only (no timezonefinder/numpy), SPA taken from release v2.1.22.
 `src/mcapp` is not modified; `launcher.py` patches it at runtime.
 

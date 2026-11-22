@@ -4,7 +4,7 @@ The W2 writers code against these names so their file sets stay disjoint: the
 service (`node_admin_service.py`) implements `NodeAdminService`, the router
 (`sse_routes/node_admin.py`) calls it through `SSEManager.node_admin_service`,
 and `storage/ingest.py` calls the `ReplyHook`. No logic lives here.
-Plan: doc/2026-10-05_1000-node-admin-ui-concept-and-plan.md §5-6.
+Plan: doc/archive/2026-10-05_1000-node-admin-ui-concept-and-plan.md §5-6.
 """
 
 from __future__ import annotations
@@ -87,7 +87,8 @@ class NodeAdminService(Protocol):
     async def observed(self, hours: int) -> list[dict[str, Any]]:
         """Decoded RM1 sessions (own and foreign) of the last `hours`, newest first.
 
-        Read-only, transmits nothing. Plan: doc/2026-10-11_1400-rm1-observed-sessions-plan.md.
+        Read-only, transmits nothing.
+        Plan: doc/archive/2026-10-11_1400-rm1-observed-sessions-plan.md.
         """
         ...
 

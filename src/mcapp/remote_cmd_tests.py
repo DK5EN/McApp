@@ -1,6 +1,6 @@
 """Built-in test suite for the RM1 pure core in ``remote_cmd.py``.
 
-Plan: ``doc/2026-10-05_1000-node-admin-ui-concept-and-plan.md`` (section 6.1,
+Plan: ``doc/archive/2026-10-05_1000-node-admin-ui-concept-and-plan.md`` (section 6.1,
 A1). Pure functions only: no DB, no network, no node. Follows the house
 pattern (``commands/hashtag_dst_tests.py``): PASS/FAIL line per case, a
 summary, and a bool return.

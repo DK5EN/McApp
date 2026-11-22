@@ -36,7 +36,7 @@ def conversation_key_for_sidebar_key(sidebar_key: str, my_base: str) -> str:
     Single source of truth for the sidebar-key -> conversation_key mapping,
     shared by `seed_read_cursors_from_counts`, `repair_read_cursor_dm_keys`
     and the `POST /api/read_cursor` route
-    (doc/2026-09-19_0006-unread-badge-digitless-callsign-plan.md, Wave 1a).
+    (doc/archive/2026-09-19_0006-unread-badge-digitless-callsign-plan.md, Wave 1a).
 
     Shapes, in order:
       * empty                                      -> unchanged
@@ -100,7 +100,7 @@ class PrefsMixin(StorageBase):
     async def get_read_cursors(self) -> dict[str, int]:
         """Get every read cursor: conversation_key -> newest-seen timestamp (ms).
 
-        Unread-cursor rework (doc/2026-09-06_1200-unread-cursor-plan.md §3/§4),
+        Unread-cursor rework (doc/archive/2026-09-06_1200-unread-cursor-plan.md §3/§4),
         replacing the client-count-comparison scheme (`read_counts` above,
         which stays for one release per D6). A missing key here reads as "0" —
         everything in that conversation is unread — never as "all read".
@@ -154,7 +154,7 @@ class PrefsMixin(StorageBase):
 
     async def seed_read_cursors_from_counts(self, my_callsign: str) -> int:
         """One-shot, idempotent seed of `read_cursors` translated from the
-        legacy `read_counts` rows (doc/2026-09-06_1200-unread-cursor-plan.md
+        legacy `read_counts` rows (doc/archive/2026-09-06_1200-unread-cursor-plan.md
         §3 "Seed"). Without this, every conversation's badge lights up once
         after the schema switches from count-comparison to cursors, since a
         brand-new `read_cursors` table has no rows at all (== "everything
@@ -222,7 +222,7 @@ class PrefsMixin(StorageBase):
     async def repair_read_cursor_dm_keys(self, my_callsign: str) -> int:
         """One-shot, idempotent repair of `read_cursors` rows already written
         under a bare, un-translated sidebar key
-        (doc/2026-09-19_0006-unread-badge-digitless-callsign-plan.md, Wave 1a
+        (doc/archive/2026-09-19_0006-unread-badge-digitless-callsign-plan.md, Wave 1a
         item 3) — heals installs that stored a row like 'WLNK' before the
         webapp's `serverKeyForSidebarKey` bug (a digit-less DM partner base,
         e.g. the Winlink gateway alias 'WLNK-1') and this route's own
@@ -429,7 +429,7 @@ class PrefsMixin(StorageBase):
                 # Clean up read_counts for this destination
                 conn.execute("DELETE FROM read_counts WHERE dst = ?", (read_key or dst,))
                 # Clean up the matching read_cursors row (unread-cursor rework,
-                # doc/2026-09-06_1200-unread-cursor-plan.md) — keyed by the SAME
+                # doc/archive/2026-09-06_1200-unread-cursor-plan.md) — keyed by the SAME
                 # conversation_key the delete above just matched on, not by
                 # read_key/dst like read_counts: a deleted conversation must not
                 # leave behind a cursor that silently marks a future, unrelated

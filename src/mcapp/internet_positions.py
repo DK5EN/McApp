@@ -1,6 +1,6 @@
 """RAM cache of node positions fed by meshmap's box feed (internet feed, wave B1a).
 
-Design: doc/2026-10-11_1005-internet-feed-concept.md 4.5. Contract:
+Design: doc/plans/2026-10-11_1005-internet-feed-concept.md 4.5. Contract:
 mcmap docs/proposals/data-mcapp-box-feed.md 4.2 (`positions` event with
 `reset: true` and the full set; `batch` with `positions[]` upserts and
 `removed[]` calls).

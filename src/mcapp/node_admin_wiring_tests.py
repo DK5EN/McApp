@@ -1,6 +1,6 @@
 """Regression suite for the Node Admin integration code in `main.py` (RM1 remote admin).
 
-Plan: doc/2026-10-05_1000-node-admin-ui-concept-and-plan.md §5 (send path, redaction),
+Plan: doc/archive/2026-10-05_1000-node-admin-ui-concept-and-plan.md §5 (send path, redaction),
 §6.1 "Orchestrator". The service, the routes and the ingest hook have their own suites;
 this one covers the glue none of them can see: `MessageRouter.send_node_admin`
 (through the real `_handle_outbound`, `_send_via_ble`, `_send_via_udp` and the RF

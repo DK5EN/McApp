@@ -13,13 +13,18 @@ import contextlib
 import json
 import re
 import sqlite3
+import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from statistics import mean
 from typing import TYPE_CHECKING, Any
 
 from .. import linkcheck
+from ..axes_contract import AxesBackfillState, AxesRuntime, echo_key, format_payload
 from ..ble_protocol import normalise_ack_callsign
+from ..classifier.axes import EchoCandidate, EchoMessage
+from ..classifier.classify import is_beacon_of, origin_for
+from ..classifier.types import legacy_tag_view
 from ..commands.parsing import dst_kind, resolve_dst_target
 from ..logging_setup import get_logger
 from ..util import (
@@ -78,6 +83,37 @@ from .www import WWW_DUPLICATE_KEY, is_www_frame, is_www_src_type
 
 if TYPE_CHECKING:
     from ..node_admin_types import ReplyHook
+
+# --- Message axes (timing / echo stored at ingest, format derived at read time) -------
+# Both queries must stay index-backed (message_axes_tests asserts the plans):
+#   prior times  -> idx_messages_type_src_timestamp (type, src, timestamp DESC)
+#   echo window  -> idx_messages_type_timestamp     (type, timestamp DESC)
+#   backfill     -> idx_messages_timestamp          (timestamp, rowid), no sorter
+_AXES_PRIOR_SQL = (
+    "SELECT DISTINCT timestamp, msg FROM messages"
+    " WHERE type = 'msg' AND src = ? AND timestamp < ?"
+    " ORDER BY timestamp DESC LIMIT ?"
+)
+_AXES_ECHO_SQL = (
+    "SELECT id, src, msg, msg_id, timestamp FROM messages"
+    " WHERE type = 'msg' AND timestamp >= ? AND timestamp < ? AND src != ?"
+)
+_AXES_BACKFILL_SQL = (
+    "SELECT id, msg_id, src, msg, timestamp FROM messages INDEXED BY idx_messages_timestamp"
+    " WHERE type = 'msg' AND id <= ? AND timestamp >= ? AND (timestamp > ? OR id > ?)"
+    " ORDER BY timestamp, id LIMIT ?"
+)
+# Fallback for an out-of-order row on a sender with more history than the streaming state holds.
+_AXES_PRIOR_BEFORE_SQL = (
+    "SELECT DISTINCT timestamp, msg FROM messages"
+    " WHERE type = 'msg' AND src = ? AND timestamp < ? AND id < ?"
+    " ORDER BY timestamp DESC LIMIT ?"
+)
+_AXES_BACKFILL_UPDATE_SQL = "UPDATE messages SET timing = ?, echo = ?, echo_of = ? WHERE id = ?"
+_AXES_BACKFILL_BATCH = 500
+_AXES_YIELD_BUDGET_S = 0.02  # event-loop slice before the backfill yields
+_AXES_MARKER_PREFIX = "axes_backfill_done:"
+_AXES_LOGGED_FAILURES: set[str] = set()
 
 _MAX_FORENSIC_HOPS = 4  # log raw data for messages routed over more hops
 
@@ -259,7 +295,7 @@ def _inline_sto_original(
     return None
 
 
-# Store-and-forward DM status (doc/2026-09-14_1153-store-forward-dm-status-plan.md
+# Store-and-forward DM status (doc/archive/2026-09-14_1153-store-forward-dm-status-plan.md
 # §4; firmware spec MeshCom-Firmware-DEV-Main/docs/client-integration-store-
 # forward.md §2). One monotone rank across the states `messages.delivery_status`
 # can hold: `held` = 2, `failed` = 3, `acked` = 4. Rank 1 (sent/node/gateway) is
@@ -280,6 +316,25 @@ _DELIVERY_STATUS_RANK_CASE_SQL = (
     + "".join(f"WHEN {status!r} THEN {rank} " for status, rank in _DELIVERY_STATUS_RANK.items())
     + "ELSE 0 END"
 )
+
+
+# v7 ids retired as stored tags in v8; they survive only as origin-derived aliases.
+_RETIRED_TAG_IDS = frozenset({"auto_beacon", "qso"})
+
+
+def _wire_tag_fields(stored: list[Any] | None, origin: Any) -> dict[str, Any]:
+    """``tags`` (legacy alias view) + ``topics`` for a message dict.
+
+    v8 stores topics in `tags`; ``topics`` is that minus the retired ids (pre-v8 rows still
+    carry them) and ``tags`` is `legacy_tag_view` so the webapp's client-side hiding by
+    auto_beacon/qso keeps working. ALIAS(one release, classifier rework 2026-11).
+    """
+    clean = [t for t in (stored or []) if isinstance(t, str)]
+    org = origin if origin in ("human", "machine") else None
+    return {
+        "topics": [t for t in clean if t not in _RETIRED_TAG_IDS],
+        "tags": legacy_tag_view(clean, org),
+    }
 
 
 def _classifier_fields(
@@ -316,7 +371,9 @@ def _classifier_fields(
     if category is not None:
         fields["category"] = category
     if tags is not None:
-        fields["tags"] = tags
+        # Stored topics; `topics` + the alias `tags` view are derived by the caller once the
+        # origin is known (`_wire_tag_fields`). ALIAS(one release, classifier rework 2026-11).
+        fields.update(_wire_tag_fields(tags, None))
     if info_score is not None:
         fields["info_score"] = info_score
     if template_hash:
@@ -331,6 +388,266 @@ class IngestMixin(StorageBase):
     # Observe-only; see the call site in `store_message`.
     reply_hook: "ReplyHook | None" = None
 
+    # Message-axes engine (None = feature off: columns stay NULL, wire `format` is null).
+    # Wired by main.py via `set_axes`.
+    _axes: AxesRuntime | None = None
+    # Serialises "compute axes from the table" + "INSERT the row" for chat rows. Store tasks
+    # run concurrently (one ensure_future per www message, plus UDP/BLE); without this two
+    # messages can both compute before either inserts, and ingest then disagrees with the
+    # backfill (which treats a lower row id as earlier). Created by `set_axes`.
+    _axes_insert_lock: asyncio.Lock | None = None
+
+    def set_axes(self, axes: AxesRuntime | None) -> None:
+        """Attach the axes engine so store_message() fills timing/echo inline."""
+        self._axes = axes
+        self._axes_insert_lock = asyncio.Lock() if axes is not None else None
+
+    @staticmethod
+    def _axes_seconds(timestamp: Any) -> int | None:
+        """Integer unix seconds of a stored ms timestamp; None if it is not a number."""
+        if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)):
+            return None
+        return int(timestamp) // 1000
+
+    @staticmethod
+    def _axes_log_failure(exc: Exception, what: str) -> None:
+        """Log once per failure class: a broken engine must not flood the journal."""
+        key = f"{what}:{type(exc).__name__}"
+        if key not in _AXES_LOGGED_FAILURES:
+            _AXES_LOGGED_FAILURES.add(key)
+            logger.error(
+                "Message axes (%s) failed; storing NULL (logged once per class)",
+                what,
+                exc_info=exc,
+            )
+
+    @staticmethod
+    def _is_axes_chat_frame(message: dict[str, Any]) -> bool:
+        """True for a real chat message: the frames `store_message` can insert as a
+        `type = 'msg'` row. Every chat path sets `type: "msg"` (BLE `transform_msg`, the
+        internet feed, node admin, UDP) or omits it, which `store_message` also reads as
+        "msg". BLE register/status frames (`transform_ble`, `transformer == "generic_ble"`,
+        `src_type == "BLE"`) carry `TYP` and no `type`: they are not chat and must not get
+        chat axis keys (the router caches them by reference)."""
+        return (
+            message.get("type", "msg") == "msg"
+            and "TYP" not in message
+            and message.get("transformer") != "generic_ble"
+            and message.get("src_type") != "BLE"
+        )
+
+    def annotate_axes_defaults(self, message: dict[str, Any]) -> None:
+        """Add the four axis keys (None / derived format) to a live chat dict, in place.
+
+        Public because main.py also calls it for blocklist-redirected frames, which are
+        broadcast live without ever reaching `store_message`. Additive only."""
+        if not self._is_axes_chat_frame(message):
+            return
+        message["timing"] = None
+        message["echo"] = None
+        message["echo_of"] = None
+        message["origin"] = None
+        message["origin_rule"] = None
+        text = message.get("msg")
+        message["format"] = self._message_format(text) if isinstance(text, str) else None
+
+    @staticmethod
+    def _refresh_wire_tags(message: dict[str, Any]) -> None:
+        """Re-derive the live dict's alias `tags` once its origin is known (the classifier
+        annotation runs before origin is computed). No-op for an unclassified message."""
+        topics = message.get("topics")
+        if isinstance(topics, list):
+            message.update(_wire_tag_fields(topics, message.get("origin")))
+
+    def _origin_cols(
+        self, src: str, text: str, dst: str, timing: str | None, is_beacon: bool
+    ) -> tuple[str | None, str | None]:
+        """``(origin, origin_rule)`` of a new chat row from its FINAL timing and the
+        classifier's beacon verdict. Degrades without an axes engine (see `origin_for`);
+        ``(None, None)`` without a classifier or on any failure (never breaks ingest)."""
+        classifier = self._classifier
+        if classifier is None:
+            return None, None
+        try:
+            res = origin_for(
+                classifier.engine,
+                None if self._axes is None else self._axes.engine,
+                text,
+                src,
+                dst or "",
+                timing,
+                is_beacon=is_beacon,
+            )
+        except Exception as exc:
+            self._axes_log_failure(exc, "origin")
+            return None, None
+        return (None, None) if res is None else (res.origin, res.rule)
+
+    async def _axes_prior(
+        self, axes: AxesRuntime, src: str, t_sec: int, text: str, before_id: int | None = None
+    ) -> tuple[list[int], list[int]]:
+        """``(prior_times, layout_times)`` of `src` for a row of `text` at `t_sec`.
+
+        prior_times: newest `prior_limit` DISTINCT earlier seconds (index-backed).
+        layout_times: those of them at which the sender also sent a text whose
+        `skeleton` equals the current text's (timing model 2 clock test).
+
+        `before_id` restricts to rows with a lower id (backfill fallback); ingest passes None
+        because every existing row is earlier than the row being inserted."""
+        need = axes.prior_limit
+        limit = need * 2
+        bound = t_sec * 1000
+        skeleton = axes.engine.skeleton
+        layout = skeleton(text)
+        seen: set[int] = set()
+        out: list[int] = []
+        layout_secs: set[int] = set()
+        while True:
+            if before_id is None:
+                rows = await self._query(_AXES_PRIOR_SQL, (src, bound, limit))
+            else:
+                rows = await self._query(_AXES_PRIOR_BEFORE_SQL, (src, bound, before_id, limit))
+            for r in rows:
+                sec = int(r["timestamp"]) // 1000
+                if sec not in seen:
+                    seen.add(sec)
+                    out.append(sec)
+                if isinstance(r["msg"], str) and skeleton(r["msg"]) == layout:
+                    layout_secs.add(sec)
+            # Known exactness limit: we return as soon as len(out) >= need, so when the
+            # need-th distinct second sits at a LIMIT page tail its remaining rows (and a
+            # same-millisecond tie on a continuation page, `timestamp < bound`) can be cut,
+            # which can drop the oldest prior's layout match. That needs >= 2 distinct texts
+            # per second from one sender over its last 128 active seconds, which LoRa airtime
+            # rules out.
+            if len(out) >= need or len(rows) < limit:
+                kept = out[:need]
+                return kept, [x for x in kept if x in layout_secs]
+            bound = int(rows[-1]["timestamp"])
+
+    async def _compute_axes(
+        self, axes: AxesRuntime, src: str, msg: str, timestamp: Any
+    ) -> tuple[str, int, str | None]:
+        """Timing and echo of a row about to be inserted (it is not in the table yet,
+        so every existing row is an earlier row). Raises on any failure; the caller
+        turns that into NULL columns."""
+        t_sec = self._axes_seconds(timestamp)
+        if t_sec is None:
+            raise ValueError("unusable timestamp")
+        engine = axes.engine
+        prior, layout_times = await self._axes_prior(axes, src, t_sec, msg)
+        timing = engine.live_timing(prior, t_sec, layout_times)
+        echo, echo_of = 0, None
+        if len(engine.echo_tokens(msg)) >= axes.echo_min_tokens:
+            rows = await self._query(
+                _AXES_ECHO_SQL,
+                ((t_sec - axes.echo_window_sec) * 1000, (t_sec + 1) * 1000, src),
+            )
+            by_key: dict[str, Any] = {}
+            cands: list[EchoCandidate] = []
+            for r in rows:
+                sec = self._axes_seconds(r["timestamp"])
+                text = r["msg"]
+                if sec is None or not isinstance(text, str):
+                    continue
+                key = echo_key(int(r["id"]))
+                by_key[key] = r["msg_id"]
+                cands.append(EchoCandidate(key=key, src=r["src"], text=text, time_unix=sec))
+            hit = engine.live_echo(EchoMessage(src=src, text=msg, time_unix=t_sec), cands)
+            if hit is not None:
+                echo = 1
+                orig = by_key.get(hit)
+                echo_of = None if orig is None else str(orig)
+        return timing, echo, echo_of
+
+    async def _axes_backfill_row(
+        self, axes: AxesRuntime, state: AxesBackfillState, row: tuple[int, str, str, int]
+    ) -> tuple[Any, ...]:
+        rid, src, text, t = row
+        held = state.prior_for(src, t, rid, text)
+        if held is None:
+            held = await self._axes_prior(axes, src, t, text, before_id=rid)
+        timing, echo, echo_of = state.compute(rid, src, text, t, held)
+        return (timing, echo, None if echo_of is None else str(echo_of), rid)
+
+    async def backfill_message_axes(self, *, batch_size: int = _AXES_BACKFILL_BATCH) -> int | None:
+        """One-shot, streamed (re)computation of timing/echo/echo_of for stored rows.
+
+        Reproduces what ingest computed, whatever the arrival order: "earlier" means a
+        LOWER ROW ID (priors: same src, time < t, id < row id; echo candidates: other src,
+        time in the window, id < row id). Rows are walked in (timestamp, id) order via an
+        index-backed keyset and processed one whole second at a time in id order.
+
+        Gated by a `classifier_meta` marker keyed on the axes contract commit, so a refit
+        contract recomputes once. Returns rows updated, or None when skipped (no engine /
+        marker present). Snapshot `max_id` first: rows ingested after that are ingest's
+        own. Each batch commits separately and the loop yields on a ~20 ms time budget, so
+        neither the writer lock nor the event loop is held for the whole run. A row that
+        fails is written as NULL and the run goes on; the marker is still set.
+        """
+        axes = self._axes
+        if axes is None:
+            return None
+        marker_key = _AXES_MARKER_PREFIX + axes.source_commit
+        if await self.get_meta(marker_key):
+            logger.info("Message axes backfill marker present (%s), skipping", marker_key)
+            return None
+        started = time.monotonic()
+        max_rows = await self._query("SELECT MAX(id) AS m FROM messages WHERE type = 'msg'")
+        max_id = int(max_rows[0]["m"] or 0)
+        state = AxesBackfillState(axes)
+        cursor_ts, cursor_id = -(2**63), 0
+        done = failed = 0
+        slice_start = time.perf_counter()
+        while max_id:
+            rows = await self._query(
+                _AXES_BACKFILL_SQL, (max_id, cursor_ts, cursor_ts, cursor_id, batch_size)
+            )
+            if not rows:
+                break
+            if len(rows) == batch_size:
+                # Hold back the trailing (possibly incomplete) second for the next page, so
+                # each second is processed whole and in id order.
+                last_sec = self._axes_seconds(rows[-1]["timestamp"])
+                kept = [r for r in rows if self._axes_seconds(r["timestamp"]) != last_sec]
+                if kept:
+                    rows = kept
+            cursor_ts, cursor_id = rows[-1]["timestamp"], rows[-1]["id"]
+            rows.sort(key=lambda r: (self._axes_seconds(r["timestamp"]) or 0, r["id"]))
+            updates: list[tuple[Any, ...]] = []
+            for r in rows:
+                t_sec = self._axes_seconds(r["timestamp"])
+                if t_sec is None:
+                    continue  # unparseable timestamp: stays NULL
+                rid, src = int(r["id"]), str(r["src"])
+                text = r["msg"] if isinstance(r["msg"], str) else ""
+                try:
+                    updates.append(
+                        await self._axes_backfill_row(axes, state, (rid, src, text, t_sec))
+                    )
+                except Exception as exc:
+                    failed += 1
+                    self._axes_log_failure(exc, "backfill")
+                    updates.append((None, None, None, rid))
+                state.absorb(rid, src, r["msg_id"], text, t_sec)
+                if time.perf_counter() - slice_start > _AXES_YIELD_BUDGET_S:
+                    await asyncio.sleep(0)
+                    slice_start = time.perf_counter()
+            if updates:
+                await self._execute_many(_AXES_BACKFILL_UPDATE_SQL, updates)
+                done += len(updates)
+            await asyncio.sleep(0)
+            slice_start = time.perf_counter()
+        await self.set_meta(marker_key, datetime.now(UTC).isoformat())
+        logger.info(
+            "Message axes backfill: %d rows (%d failed) in %.1f s (contract %s)",
+            done,
+            failed,
+            time.monotonic() - started,
+            axes.source_commit[:12],
+        )
+        return done
+
     def _claim_recent_ingest(self, callsign: str, msg_id: str, timestamp: int, *, dst: str) -> bool:
         """Race-free half of the message dedup gate. Returns True when this
         (sender, msg_id) is new within DEDUP_WINDOW_MS and records it; False when
@@ -342,7 +659,7 @@ class IngestMixin(StorageBase):
         so two stations collide regularly inside one window and must never
         suppress each other.
 
-        PN retry XOR (doc/2026-09-27_2200-pn-retry-xor-plan.md): for a personal
+        PN retry XOR (doc/archive/2026-09-27_2200-pn-retry-xor-plan.md): for a personal
         `dst`, the firmware's up-to-3 retries of one DM XOR msg_id bits 10-11, so
         the in-memory key is the retry-invariant `msg_core()` instead of the raw
         id — an old-firmware relay forwards each retry copy as its own frame and
@@ -375,7 +692,7 @@ class IngestMixin(StorageBase):
         can never drift apart; drifting would let a relay copy an hour later
         touch the wrong message.
 
-        PN retry XOR (doc/2026-09-27_2200-pn-retry-xor-plan.md): for a personal
+        PN retry XOR (doc/archive/2026-09-27_2200-pn-retry-xor-plan.md): for a personal
         `dst` the match widens to every msg_id sharing this one's retry-invariant
         core (`msg_id_retry_variants`), matching `_claim_recent_ingest`'s in-memory
         key — otherwise an old-firmware relay's forwarded retry copies land as
@@ -1265,7 +1582,7 @@ class IngestMixin(StorageBase):
         # ARE this message's own, the `held` record this late ack completes.
         if target is not None and target["timestamp"] > timestamp - ACK_MSG_ID_WINDOW_MS:
             # Keyed on the TARGET row's own stored msg_id, not the ack frame's
-            # (PN retry XOR, doc/2026-09-27_2200-pn-retry-xor-plan.md §3) —
+            # (PN retry XOR, doc/archive/2026-09-27_2200-pn-retry-xor-plan.md §3) —
             # matching the inline `:ackNNN` path below and `_record_message_ack`'s
             # ledger writes at every call site in this method, so a resolved
             # retry-variant match prunes and records under the same key.
@@ -1315,7 +1632,7 @@ class IngestMixin(StorageBase):
             if acked_rows and target is not None:
                 # Ledger key is the TARGET row's own stored msg_id, matching the
                 # inline `:ackNNN` path — see the prune call's comment above and
-                # doc/2026-09-27_2200-pn-retry-xor-plan.md §3. The published
+                # doc/archive/2026-09-27_2200-pn-retry-xor-plan.md §3. The published
                 # `msg_status` event below still names `ack_for_msg_id` (the
                 # frame's own field), unchanged.
                 await self._record_message_ack(
@@ -1543,7 +1860,7 @@ class IngestMixin(StorageBase):
         `delivery_status` — which is also what the caller needs to tell a
         normal match from one made only by the held carve-out.
 
-        PN retry XOR (doc/2026-09-27_2200-pn-retry-xor-plan.md): when the exact
+        PN retry XOR (doc/archive/2026-09-27_2200-pn-retry-xor-plan.md): when the exact
         id has no match, retry against every id sharing its retry-invariant core
         (`msg_id_retry_variants`). Defensive: firmware folds every 0x41 frame
         for our own DM back to the ORIGINAL msg_id (plan §1), including a
@@ -1790,9 +2107,10 @@ class IngestMixin(StorageBase):
                 " (msg_id, src, dst, msg, type, timestamp, rssi, snr, src_type, raw_json,"
                 "  via, hw_id, lora_mod, max_hop, mesh_info, firmware, fw_sub,"
                 "  last_hw_id, last_sending, transformer, echo_id, conversation_key, fcs_ok,"
-                "  category, tags, info_score, template_hash, classifier_ver)"
+                "  category, tags, info_score, template_hash, classifier_ver,"
+                "  timing, echo, echo_of, origin, origin_rule)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
-                "         ?, ?, ?, ?, ?)",
+                "         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params,
             )
         # sqlite3.Error, not OperationalError: IntegrityError (a NOT NULL/UNIQUE
@@ -1842,6 +2160,14 @@ class IngestMixin(StorageBase):
                 except Exception:
                     logger.exception("node admin reply hook failed")
 
+        # Message axes, live dict: every broadcast path carries all four keys (duplicate,
+        # not-stored beacon, linkcheck, no engine included), None where nothing was computed.
+        # Same additive in-place annotation as the classifier fields (shared SSE dict). It runs
+        # after the two hooks so they observe the inbound dict as it was at call time; the
+        # hooks hold the dict by reference, so this is only safe because the mutation is
+        # additive (new keys, nothing existing changes).
+        self.annotate_axes_defaults(message)
+
         # Filter conditions (matching MessageStorageHandler)
         if self._should_filter_message(message):
             return
@@ -1889,7 +2215,7 @@ class IngestMixin(StorageBase):
             rssi = None
             snr = None
 
-        # BUG-1 (doc/2026-09-16_0807-message-detail-popover-bugfix-report.md):
+        # BUG-1 (doc/archive/2026-09-16_0807-message-detail-popover-bugfix-report.md):
         # rssi=0/snr=0 is the firmware's "no RF reception" sentinel, written
         # unconditionally on every Extern-UDP frame. `_ingest_signal` already
         # excludes it from signal_log/station_positions by `src_type`, not by
@@ -2319,6 +2645,7 @@ class IngestMixin(StorageBase):
         # Classifier.classify() has its own fallback, but we do not rely on that —
         # a misbehaving classifier must not drop the message.
         cls_cols: tuple[Any, ...] = (None, None, None, None, None)
+        beacon_verdict = False
         if self._classifier is not None:
             try:
                 cls = await self._classifier.classify(
@@ -2337,6 +2664,7 @@ class IngestMixin(StorageBase):
                     cls.template_hash,
                     cls.classifier_version,
                 )
+                beacon_verdict = is_beacon_of(cls)
                 # Annotate the INBOUND `message` dict, not just the INSERT
                 # params: `MessageRouter.publish` hands this exact object to
                 # every "mesh_message" subscriber in subscription order, and
@@ -2362,32 +2690,6 @@ class IngestMixin(StorageBase):
             except Exception:
                 logger.exception("Classifier failed for msg from %s; storing unclassified", src)
 
-        params = (
-            msg_id,
-            src,
-            dst,
-            msg,
-            msg_type,
-            timestamp,
-            rssi,
-            snr,
-            src_type,
-            raw,
-            msg_via,
-            hw_id,
-            lora_mod,
-            max_hop,
-            mesh_info,
-            firmware,
-            fw_sub,
-            last_hw_id,
-            last_sending,
-            transformer,
-            echo_id,
-            conversation_key,
-            fcs_ok,
-            *cls_cols,
-        )
         # {ping}/{pong} are protocol frames (linkcheck ADR §1.2), not chat: suppress
         # only the messages-table row, here and not in `_should_filter_message`.
         # `_should_filter_message` returns before `_ingest_signal` runs above, so a
@@ -2395,11 +2697,84 @@ class IngestMixin(StorageBase):
         # ingestion into signal_log/station_positions (implementation plan §1.1/§1.2).
         # Everything upstream of this point — dedup, `_ingest_signal`, classification —
         # must run unchanged for these frames; only this final INSERT is skipped.
-        if not linkcheck.is_link_check_payload(msg):
-            await self._insert_message_row(params, msg_id, dst)
+        if linkcheck.is_link_check_payload(msg):
+            return
 
-    @staticmethod
-    def _build_message_dict(row: dict[str, Any]) -> dict[str, Any]:
+        def _row_params(
+            axes_cols: tuple[Any, ...], origin_cols: tuple[Any, ...] = (None, None)
+        ) -> tuple[Any, ...]:
+            return (
+                msg_id,
+                src,
+                dst,
+                msg,
+                msg_type,
+                timestamp,
+                rssi,
+                snr,
+                src_type,
+                raw,
+                msg_via,
+                hw_id,
+                lora_mod,
+                max_hop,
+                mesh_info,
+                firmware,
+                fw_sub,
+                last_hw_id,
+                last_sending,
+                transformer,
+                echo_id,
+                conversation_key,
+                fcs_ok,
+                *cls_cols,
+                *axes_cols,
+                *origin_cols,
+            )
+
+        # Message axes (timing, echo). Same contract as the classifier above: any failure
+        # stores NULLs and ingest continues. Chat rows only. Compute and INSERT form one
+        # critical section (and nothing else is awaited inside it): the compute reads
+        # the table, so a concurrent store must not insert between the two.
+        axes = self._axes
+        lock = self._axes_insert_lock
+        if (
+            axes is None
+            or lock is None
+            or msg_type != "msg"
+            or not self._is_axes_chat_frame(message)
+        ):
+            # No axes engine (degraded) or not a chat frame: origin_for still gives the
+            # machine-rule / beacon-template verdicts for chat rows (no timing needed).
+            origin_cols = (
+                self._origin_cols(src, msg, dst, None, beacon_verdict)
+                if msg_type == "msg" and self._is_axes_chat_frame(message)
+                else (None, None)
+            )
+            await self._insert_message_row(
+                _row_params((None, None, None), origin_cols), msg_id, dst
+            )
+            if origin_cols != (None, None):
+                message["origin"], message["origin_rule"] = origin_cols
+                self._refresh_wire_tags(message)
+            return
+        async with lock:
+            axes_cols: tuple[Any, ...] = (None, None, None)
+            try:
+                timing, echo, echo_of = await self._compute_axes(axes, src, msg, timestamp)
+                axes_cols = (timing, echo, echo_of)
+            except Exception as exc:
+                self._axes_log_failure(exc, "ingest")
+            origin_cols = self._origin_cols(src, msg, dst, axes_cols[0], beacon_verdict)
+            await self._insert_message_row(_row_params(axes_cols, origin_cols), msg_id, dst)
+        message["origin"], message["origin_rule"] = origin_cols
+        self._refresh_wire_tags(message)
+        # Keys were pre-set to None by `annotate_axes_defaults`; fill what was computed.
+        message["timing"] = axes_cols[0]
+        message["echo"] = None if axes_cols[1] is None else bool(axes_cols[1])
+        message["echo_of"] = axes_cols[2]
+
+    def _build_message_dict(self, row: dict[str, Any]) -> dict[str, Any]:
         """Build a message dict from column values (replaces raw_json reads)."""
         data: dict[str, Any] = {
             "msg_id": row.get("msg_id"),
@@ -2457,7 +2832,29 @@ class IngestMixin(StorageBase):
                 row.get("classifier_ver"),
             )
         )
+        if tags_decoded is not None:
+            data.update(_wire_tag_fields(tags_decoded, row.get("origin")))
+        # Message axes: timing/echo/echo_of are stored columns (NULL = not classified),
+        # `format` is derived here from the text (null only when no engine is attached).
+        if data["type"] == "msg":
+            echo = row.get("echo")
+            data["timing"] = row.get("timing")
+            data["echo"] = None if echo is None else bool(echo)
+            data["echo_of"] = row.get("echo_of")
+            data["origin"] = row.get("origin")
+            data["origin_rule"] = row.get("origin_rule")
+            data["format"] = self._message_format(data["msg"])
         return data
+
+    def _message_format(self, text: Any) -> dict[str, Any] | None:
+        axes = self._axes
+        if axes is None or not isinstance(text, str):
+            return None
+        try:
+            return format_payload(axes, text)
+        except Exception as exc:
+            self._axes_log_failure(exc, "format")
+            return None
 
     # Keys in telemetry dicts that are NOT sensor readings (used for extras extraction)
     _TELEMETRY_META_KEYS = frozenset(
@@ -2860,7 +3257,7 @@ class IngestMixin(StorageBase):
             ),
         )
 
-    # ── Telemetry gap fill (Wave 1; plan doc/2026-11-07_1000-telemetry-gap-fill-plan.md) ──
+    # ── Telemetry gap fill (Wave 1; plan doc/archive/2026-11-07_1000-telemetry-gap-fill-plan.md) ──
     # Deliberately NOT routed through store_telemetry: that path upserts
     # station_positions, so an old filled sample would regress the sidebar's latest
     # value. No blocklist logic here either; the caller filters.

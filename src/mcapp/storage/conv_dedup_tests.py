@@ -1,7 +1,7 @@
 """Regression suite for `_conv_dedup_subquery`'s sender/key/time-fenced
 distinct-message grouping (`storage/query.py`).
 
-doc/2026-09-20_1000-live-classifier-and-dedup-plan.md §F2: the pre-fix
+doc/archive/2026-09-20_1000-live-classifier-and-dedup-plan.md §F2: the pre-fix
 subquery grouped every row sharing a `msg_id` (or, absent one, its own
 rowid) into ONE "message", full stop. A firmware `msg_id` is a node-local
 32-bit counter that gets reused across stations, conversations and days (118
@@ -13,7 +13,7 @@ AND the same resolved sender base (`sender_base_sql`, storage/constants.py —
 shared text, so the two boundaries cannot drift) AND the same conversation
 key, with a data-anchored time fence (never a modulo/division bucket,
 which would split a real <=172 ms transport pair and resurrect the
-unclearable "+1" badge doc/2026-09-19_2140-unread-suppression-plan.md fixed).
+unclearable "+1" badge doc/archive/2026-09-19_2140-unread-suppression-plan.md fixed).
 
 Mirrors `storage.unread_suppression_tests`'s house pattern: a `(label, ok)`
 results list, a PASS/FAIL line per case, a bool return, an ephemeral tempfile
@@ -892,7 +892,7 @@ async def _test_group_by_identity_legs_pin(results: list[tuple[str, bool]]) -> N
 
 
 async def _test_pn_retry_xor_ingest_dedup(results: list[tuple[str, bool]]) -> None:
-    """PN retry XOR (doc/2026-09-27_2200-pn-retry-xor-plan.md): the firmware
+    """PN retry XOR (doc/archive/2026-09-27_2200-pn-retry-xor-plan.md): the firmware
     retries a personal DM up to 3x, XORing msg_id bits 10-11 with the retry
     index; an old-firmware relay forwards each copy under its own msg_id.
     Unlike cases 1/2/7 above (one msg_id, two physical rows engineered by
@@ -919,7 +919,7 @@ async def _test_pn_retry_xor_ingest_dedup(results: list[tuple[str, bool]]) -> No
             )
             # retry k=1 variant (bit 10 flipped), forwarded by an old-firmware
             # relay under its own msg_id, 40 s later (the firmware's retry
-            # cadence) -- see doc/2026-09-27_2200-pn-retry-xor-plan.md §1.
+            # cadence) -- see doc/archive/2026-09-27_2200-pn-retry-xor-plan.md §1.
             await _store_msg(
                 storage,
                 dm_dst,

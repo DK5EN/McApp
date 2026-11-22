@@ -1,6 +1,6 @@
 """Node Admin service: RM1 (HMAC remote admin) send path, reply correlation, state.
 
-Plan: doc/2026-10-05_1000-node-admin-ui-concept-and-plan.md (§1 D1-D5, §3.4, §4-6).
+Plan: doc/archive/2026-10-05_1000-node-admin-ui-concept-and-plan.md (§1 D1-D5, §3.4, §4-6).
 Implements the `NodeAdminService` Protocol of `node_admin_types.py`. Pure core
 is `remote_cmd`, persistence is the `NodeAdminMixin` of `storage/node_admin.py`;
 this module owns the rules in between:

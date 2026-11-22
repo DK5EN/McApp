@@ -140,7 +140,7 @@ _ERROR_CODE_BUSY = "busy"  # == REASON_BUSY; kept as its own name for the error_
 # query-only) -- i.e. every TYP that represents a real, cacheable slice of
 # device config. IS1 (build date, follows I) and SN1 (via state, follows SN)
 # are the newest two, both auto-sent right alongside their parent -- see
-# doc/2026-09-25_2041-is1-sn1-registers-plan.md in the mcapp repo. Deliberately
+# doc/archive/2026-09-25_2041-is1-sn1-registers-plan.md in the mcapp repo. Deliberately
 # excludes two TYPs that DO appear in `D{...}` frames but are not "a register":
 #   - CONFFIN: a burst-terminator marker, not a config value in itself.
 #   - MH: a rolling mheard list, not a stable register -- caching only the

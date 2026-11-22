@@ -1,6 +1,6 @@
 """Internet feed settings endpoints (meshmap box feed).
 
-Design: doc/2026-10-11_1005-internet-feed-concept.md §4.1. The routes talk only
+Design: doc/plans/2026-10-11_1005-internet-feed-concept.md §4.1. The routes talk only
 to `InternetFeedApi`; the box token never leaves the service. Every route sits
 behind the same LAN-only Host + Origin guard as Node Admin. The PUT is the
 complete new state (wholesale replace), never a patch.

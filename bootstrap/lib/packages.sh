@@ -104,7 +104,7 @@ restore_unattended_upgrades() {
 # wpasupplicant, its postinst restarted wpa_supplicant.service, and
 # mcapp.local fell off WiFi for good (the new build advertised WPA3-SAE the
 # Zero 2 W's brcmfmac43436 cannot complete; see
-# doc/2026-09-18_2320-wifi-outage-postmortem.md and raspberrypi/linux#7634).
+# doc/archive/2026-09-18_2320-wifi-outage-postmortem.md and raspberrypi/linux#7634).
 # The bootstrap therefore never upgrades these inline: they are held for the
 # duration of the apt phase and a pending upgrade is REPORTED, to be applied
 # from a console where a link drop is survivable.
@@ -228,7 +228,7 @@ verify_link_state() {
     log_error "Network link lost during the apt phase: ${MCAPP_LINK_IFACE}${MCAPP_LINK_KEYMGMT:+ (${MCAPP_LINK_KEYMGMT})} did not return within ${waited}s"
     log_error "Last NetworkManager / wpa_supplicant lines:"
     journalctl -u NetworkManager -u wpa_supplicant --no-pager -n 20 2>/dev/null | sed 's/^/    /' >&2 || true
-    log_error "Recover from a console: systemctl restart NetworkManager. Background: doc/2026-09-18_2320-wifi-outage-postmortem.md"
+    log_error "Recover from a console: systemctl restart NetworkManager. Background: doc/archive/2026-09-18_2320-wifi-outage-postmortem.md"
     return 1
   fi
   local keymgmt=""

@@ -92,7 +92,7 @@ def strip_ack_suffix(text: str) -> str:
 # changes. A node on that firmware filters the copies before BLE/Extern-UDP; a
 # node on OLDER firmware forwards every copy with its own msg_id, and each one
 # looks like a new message here. Design: firmware `docs/pn-retry-mcapp.md`,
-# campaign state: `doc/2026-09-27_2200-pn-retry-xor-plan.md`.
+# campaign state: `doc/archive/2026-09-27_2200-pn-retry-xor-plan.md`.
 #
 # Bits 10-11 are the two LOW bits of the 22-bit node id
 # (`((_GW_ID & 0x3FFFFF) << 10) | counter`), so the core is NOT unique across

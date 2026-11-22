@@ -1,7 +1,7 @@
 """Startup regression suite for the pure `{ping}`/`{pong}` parser in
 `linkcheck.py`.
 
-See `doc/2026-08-13_1500-linkcheck-ping-pong-ADR.md` §1.2/§1.3/§1.5 and
+See `doc/archive/2026-08-13_1500-linkcheck-ping-pong-ADR.md` §1.2/§1.3/§1.5 and
 `doc/archive/2026-08-13_1500-linkcheck-implementation-plan.md` §1.3 for the protocol
 this suite pins. In particular:
 

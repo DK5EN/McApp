@@ -19,7 +19,10 @@ import hashlib
 import json
 import pathlib
 
+from .axes_contract import DEFAULT_AXES_CONTRACT_PATH, load_axes
+from .classifier.axes import axes_conformance_failures, load_axes_contract_file
 from .classifier.engine import conformance_failures
+from .classifier.origin import message_origin
 from .classifier_contract import DEFAULT_CONTRACT_PATH, load_engine
 from .commands.constants import has_console
 from .commands.parsing import extract_target_callsign, is_group
@@ -48,7 +51,9 @@ _EXPECTED_SHA256 = "b666b2da034cf7609ede8bcc45aeeaa4802595621b63674237af0d084900
 
 # mcmap's exported classifier rule set (mc-chat contract/ subtree). Same drift
 # tripwire as above: re-capture only in the commit that pulls a new export.
-_CLASSIFIER_EXPECTED_SHA256 = "01cfa5eacfe5d2f21d32d7e7bb6bf2a952fe3c9565cf2606338a68c614bf673c"
+_CLASSIFIER_EXPECTED_SHA256 = "c364af31c2d316460d8a671068399560fc9acd97fd9d50117c2345f9cd93eeae"
+# Message-axes contract (mcmap export, subtree-shared from mc-chat). Bump with the contract.
+_AXES_EXPECTED_SHA256 = "00e4971ba3eb60c2b02d8138b484f3acdd6fe7850a19222823c9e00616654de1"
 
 
 def run_contract_parity_tests() -> bool:
@@ -80,6 +85,37 @@ def run_contract_parity_tests() -> bool:
     _record(
         f"classifier engine passes the contract's conformance vectors ({len(failures)} failures)",
         failures == [],
+    )
+
+    # Axes contract: pinned bytes + the engine's own conformance vectors.
+    axes_raw = DEFAULT_AXES_CONTRACT_PATH.read_bytes()
+    _record(
+        "axes_contract.json sha256 matches captured hash (drift tripwire)",
+        hashlib.sha256(axes_raw).hexdigest() == _AXES_EXPECTED_SHA256,
+    )
+    axes_failures = axes_conformance_failures(
+        load_axes_contract_file(DEFAULT_AXES_CONTRACT_PATH), json.loads(axes_raw)
+    )
+    _record(
+        f"axes engine passes the contract's conformance vectors ({len(axes_failures)} failures)",
+        axes_failures == [],
+    )
+
+    # Origin vectors: executed end to end (engine + axes + origin spec) against OUR runtime,
+    # exactly as mc-chat's test_origin_vector_end_to_end_with_axes does on its side.
+    engine = load_engine()
+    axes_engine = load_axes().engine
+    origin_vectors = json.loads(classifier_raw)["origin_vectors"]
+    origin_bad = [
+        v["text"][:40]
+        for v in origin_vectors
+        for got in [message_origin(engine, axes_engine, v["text"], v["from"], v["to"], v["timing"])]
+        if (got.origin, got.rule) != (v["origin"], v["rule"])
+    ]
+    _record(
+        f"classifier origin_vectors: {len(origin_vectors)} vectors yield the expected "
+        f"origin + rule ({len(origin_bad)} failures)",
+        bool(origin_vectors) and origin_bad == [],
     )
 
     # Target extraction

@@ -5,7 +5,7 @@ sits immediately before the final `messages`-table INSERT, AFTER
 `_ingest_signal` has already run — not inside `_should_filter_message`, which
 returns before `_ingest_signal` is reached. See
 `doc/archive/2026-08-13_1500-linkcheck-implementation-plan.md` §1.1/§1.2 and
-`doc/2026-08-13_1500-linkcheck-ping-pong-ADR.md` §1.2/§1.5 for the protocol
+`doc/archive/2026-08-13_1500-linkcheck-ping-pong-ADR.md` §1.2/§1.5 for the protocol
 and the reasoning this suite pins.
 
 Case 1 (pong: no chat row, but signal IS ingested) is the load-bearing

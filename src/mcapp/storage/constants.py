@@ -20,16 +20,16 @@ from ..commands.parsing import is_group, is_hashtag, resolve_dst_target
 # passing suite for a reason unrelated to the change being made. This is not
 # circular with migrations.py: the step numbers there are independent literals,
 # so forgetting either half fails loudly.
-LATEST_SCHEMA_VERSION = 42
+LATEST_SCHEMA_VERSION = 44
 
 # Legacy filter category -> engine tag (classifier unification, issue #17 / Q2).
 # `directed` and `other` have no tag and are dropped on migration.
 CATEGORY_TO_TAG: dict[str, str] = {
-    "timestamp_beacon": "time",
+    "timestamp_beacon": "auto_beacon",
     "wx_beacon": "weather",
-    "node_advert": "node",
-    "sw_advert": "software",
-    "bot_command": "bot",
+    "node_advert": "auto_beacon",
+    "sw_advert": "auto_beacon",
+    "bot_command": "auto_beacon",
     "alert": "alert",
     "test_msg": "test",
     "greeting": "greeting",
@@ -76,7 +76,7 @@ GAP_THRESHOLD_MULTIPLIER = 6
 MIN_DATAPOINTS_FOR_STATS = 10
 # Fallback floor for _build_chart_series when NO callsign reaches
 # MIN_DATAPOINTS_FOR_STATS (fresh-install / sparse-mesh case). Applies only in
-# that circumstance — see doc/plan-mheard-fresh-install-fix.md §2.
+# that circumstance — see doc/archive/plan-mheard-fresh-install-fix.md §2.
 SPARSE_MIN_DATAPOINTS = 1
 SQLITE_BUSY_TIMEOUT_S = 60  # tolerate nightly VACUUM holding the DB longer than the 5s default
 SIGNAL_BACKFILL_WINDOW_HOURS = 192  # 8 days — matches signal_log's own prune retention
@@ -167,7 +167,7 @@ _QFE_PLAUSIBLE_HPA_RANGE = (300, 1100)
 _QNH_PLAUSIBLE_HPA_RANGE = (850, 1100)
 
 # Gateway-uptime ledger (schema v25) — see
-# doc/2026-08-21_2350-gateway-uptime-plan.md §4/§5/§6. `storage/uptime.py` is
+# doc/archive/2026-08-21_2350-gateway-uptime-plan.md §4/§5/§6. `storage/uptime.py` is
 # the only reader/writer; kept here (not inlined there) so retuning any one of
 # these is a single-line edit that touches no logic.
 #
@@ -265,7 +265,7 @@ _MSG_SELECT = (
     " via, hw_id, lora_mod, max_hop, mesh_info, firmware, fw_sub,"
     " last_hw_id, last_sending, transformer, echo_id, acked, send_success,"
     " category, tags, info_score, template_hash, classifier_ver,"
-    " delivery_status, holder"
+    " delivery_status, holder, timing, echo, echo_of, origin, origin_rule"
 )
 
 
@@ -308,7 +308,7 @@ def sender_base_sql(col: str) -> str:
     (storage/ingest.py) uses to resolve the sender base for the ingest dedup
     backstop SELECT, parameterised here on the column reference so
     `storage.query`'s conversation-dedup subquery (`_conv_dedup_subquery`,
-    doc/2026-09-20_1000-live-classifier-and-dedup-plan.md §F2) can share the
+    doc/archive/2026-09-20_1000-live-classifier-and-dedup-plan.md §F2) can share the
     identical rule instead of re-deriving it. The two boundaries — "is this a
     duplicate frame" at ingest and "is this a distinct message" at read time
     — must never drift apart, or a query-side fence narrower or wider than
@@ -403,7 +403,7 @@ def db_read(db_path: Path | str) -> Iterator[sqlite3.Connection]:
     until the cyclic GC happened to reach it. That leaked in production for
     the life of this project; ``closing()`` is the piece that actually closes
     it. See storage/connection_lifecycle_tests.py for the regression coverage
-    and doc/connection-leak-fable-verdict.md for the incident writeup.
+    and doc/archive/connection-leak-fable-verdict.md for the incident writeup.
     """
     with closing(sqlite3.connect(db_path, timeout=SQLITE_BUSY_TIMEOUT_S)) as conn:
         yield conn

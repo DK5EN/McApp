@@ -501,7 +501,7 @@ async def run_ack_status_tests() -> bool:  # noqa: PLR0915 - seven independent A
             )
 
             # --- Store-and-forward DM status (0x03 failed / 0x04 held),
-            # doc/2026-09-14_1153-store-forward-dm-status-plan.md §4/§5;
+            # doc/archive/2026-09-14_1153-store-forward-dm-status-plan.md §4/§5;
             # firmware spec MeshCom-Firmware-DEV-Main/docs/client-integration-
             # store-forward.md §2/§6. ---
 
@@ -1589,7 +1589,7 @@ async def run_ack_status_tests() -> bool:  # noqa: PLR0915 - seven independent A
                 )
             )
 
-            # 19. PN retry XOR (doc/2026-09-27_2200-pn-retry-xor-plan.md): an
+            # 19. PN retry XOR (doc/archive/2026-09-27_2200-pn-retry-xor-plan.md): an
             #     old-firmware relay forwards each of the firmware's retries of
             #     OUR OWN outbound DM under its own XORed msg_id (bits 10-11),
             #     but the ack for it always carries the ORIGINAL msg_id (plan

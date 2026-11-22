@@ -13,7 +13,7 @@ Usage:
     uv run python scripts/replay_stall.py --json saved_row.json --repeat 20
     uv run python scripts/replay_stall.py --summary
 
-See `doc/2026-09-15_1530-stall-tracking-plan.md` §5.
+See `doc/archive/2026-09-15_1530-stall-tracking-plan.md` §5.
 """
 
 from __future__ import annotations

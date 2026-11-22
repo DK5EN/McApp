@@ -20,7 +20,7 @@ The shape used everywhere that writes is therefore BOTH:
 ``with closing(sqlite3.connect(...)) as conn, conn:`` — ``closing`` closes, the
 bare ``conn`` commits on success / rolls back on error. Read paths need only
 ``closing``. Measurements from the incident that motivated this are recorded once,
-in ``doc/connection-leak-fable-verdict.md``; they are deliberately not repeated
+in ``doc/archive/connection-leak-fable-verdict.md``; they are deliberately not repeated
 here, because a leaked-fd count depends on when the cyclic GC happened to run and
 is not reproducible without that context.
 

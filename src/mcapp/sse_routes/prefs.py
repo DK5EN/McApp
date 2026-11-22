@@ -65,7 +65,7 @@ def build_prefs_router(manager: SSEManager) -> APIRouter:  # noqa: PLR0915 - one
         un-translated sidebar key for a digit-less DM partner base (e.g. the
         Winlink alias 'WLNK-1' -> sidebar key 'WLNK'), which would otherwise
         be stored and looked up verbatim and never match the conversation's
-        real key (doc/2026-09-19_0006-unread-badge-digitless-callsign-plan.md).
+        real key (doc/archive/2026-09-19_0006-unread-badge-digitless-callsign-plan.md).
         Every downstream use — the write, the SPAM_GROUP comparison, the
         summary lookup and the broadcast payload — uses this same normalised
         key consistently. With no callsign configured yet, normalisation is

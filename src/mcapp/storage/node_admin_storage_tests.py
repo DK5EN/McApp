@@ -1,6 +1,6 @@
 """Built-in regression suite for the Node Admin storage mixin (storage/node_admin.py, schema v35).
 
-Covers (plan doc/2026-10-05_1000-node-admin-ui-concept-and-plan.md §4, §6.1 A2):
+Covers (plan doc/archive/2026-10-05_1000-node-admin-ui-concept-and-plan.md §4, §6.1 A2):
 
   1. Counter allocation: `MAX(ctr + 1, last_hwm + 1, unix_floor)` for the four
      (ctr, hwm, floor) corners, the 4294967295 refusal (which must not burn a

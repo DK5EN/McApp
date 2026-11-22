@@ -9,7 +9,7 @@ git subtree in other packages without importing meshcom_mock directly.
 from __future__ import annotations
 
 import re
-from collections.abc import Collection
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol, get_args, runtime_checkable
@@ -83,7 +83,7 @@ MessageCategory = Literal[
 # auto-flagged or user-promoted, removes it on demote. Counts as automated.
 AUTO_BEACON_TAG: str = "auto_beacon"
 
-# Fixed tag -> category map, first match wins (doc/2026-10-20_classifier-unification.md,
+# Fixed tag -> category map, first match wins (doc/adr/ADR-0004-classifier-unification.md,
 # "Category derivation"). ``category`` is a derived, read-only column for one
 # release; tags are the source of truth.
 _TAG_CATEGORY_ORDER: tuple[tuple[str, str], ...] = (
@@ -97,10 +97,35 @@ _TAG_CATEGORY_ORDER: tuple[tuple[str, str], ...] = (
 )
 
 
-def derive_category(tags: Collection[str], directed: bool) -> str:
-    """Derive the legacy single-valued category from tags and the directed flag."""
+def legacy_tag_view(topics: Iterable[str], origin: str | None) -> list[str]:
+    """v7 tag list of a v8 row: sorted topics plus the retired origin-derived ids.
+
+    ALIAS(one release, classifier rework 2026-11): ``auto_beacon`` for origin ``machine`` and
+    ``qso`` for origin ``human``, so the webapp's client-side hiding keeps working until it
+    reads ``origin``. Origin None (not computed) adds nothing. Stored legacy tags that already
+    carry either id pass through once (no duplicates).
+    """
+    view = sorted(set(topics))
+    extra = {"machine": AUTO_BEACON_TAG, "human": "qso"}.get(origin or "")
+    if extra is not None and extra not in view:
+        view.append(extra)
+    return view
+
+
+def derive_category(
+    tags: Collection[str],
+    directed: bool,
+    legacy_tags: Collection[str] | None = None,
+) -> str:
+    """Derive the legacy single-valued category from tags and the directed flag.
+
+    ``legacy_tags`` (from the engine, v7) are the tags the matched rules carried before the
+    v7 taxonomy; they decide the automated categories, so timestamp beacons, weather, node,
+    software, bot and alert keep their categories. Without it the tags themselves decide.
+    """
+    category_tags = tags if legacy_tags is None else legacy_tags
     for tag, category in _TAG_CATEGORY_ORDER:
-        if tag in tags:
+        if tag in category_tags:
             return category
     if directed:
         return "directed"
@@ -116,11 +141,6 @@ def derive_category(tags: Collection[str], directed: bool) -> str:
 # Kept as a tuple so it can be used as a frozen set of legal values.
 CATEGORIES: tuple[str, ...] = get_args(MessageCategory)
 
-# Bumped whenever classifier output semantics change (hash algorithm,
-# score formula, category vocabulary).  Rule edits bump the per-DB
-# version counter instead -- this constant tracks code changes only and
-# lives alongside the DB version in ``classifier_ver`` on each row.
-CLASSIFIER_SCHEMA_VERSION: int = 1
 
 # CLS-05: the 12-hex-char SHA-1 prefix length was a bare `[:12]` literal
 # duplicated in template.py's fingerprint() and classify.py's _fallback_hash().
@@ -177,6 +197,9 @@ class StorageProtocol(Protocol):
     async def count_recent_messages_by_template_src(
         self, hash_: str, src: str, since_ms: int
     ) -> int: ...
+    async def template_has_human_history(
+        self, template_hash: str, human_categories: frozenset[str]
+    ) -> bool: ...
     async def clear_stale_auto_beacons(
         self, human_categories: frozenset[str], min_tokens: int
     ) -> int: ...
@@ -204,7 +227,25 @@ class StorageProtocol(Protocol):
         info_score: float,
         template_hash: str,
         classifier_ver: int,
+        origin: str | None = None,
+        origin_rule: str | None = None,
     ) -> None: ...
+    async def update_classification_batch(
+        self,
+        *,
+        changed: list[tuple[str, str, float, str, int, int]],
+        unchanged_ids: list[int],
+        classifier_ver: int,
+        origins: dict[int, tuple[str, str]] | None = None,
+    ) -> None:
+        """Write one reclassify batch in one write unit and one commit.
+
+        ``changed`` tuples are ``(category, tags_json, info_score,
+        template_hash, classifier_ver, row_id)`` (full UPDATE);
+        ``unchanged_ids`` are only stamped with ``classifier_ver``. ``origins`` maps a
+        row id to ``(origin, origin_rule)``; None keeps the stored values.
+        """
+        ...
 
     # Meta / versioning
     async def get_meta(self, key: str) -> str | None: ...
@@ -214,6 +255,7 @@ class StorageProtocol(Protocol):
     # Stats (used by collect_stats)
     async def count_messages_by_category(self, since_ms: int) -> dict[str, int]: ...
     async def count_messages_by_tag(self, since_ms: int) -> dict[str, int]: ...
+    async def count_messages_by_origin(self, since_ms: int) -> dict[str, int]: ...
     async def get_top_beacon_templates(
         self, since_ms: int, limit: int = 10
     ) -> list[dict[str, Any]]: ...

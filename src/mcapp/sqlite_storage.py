@@ -152,7 +152,7 @@ class SQLiteStorage(
     # its page cache. That leak ran in production for the life of this
     # project. See storage/connection_lifecycle_tests.py for the full
     # writeup and the regression coverage, and
-    # doc/connection-leak-fable-verdict.md for the measurements and the
+    # doc/archive/connection-leak-fable-verdict.md for the measurements and the
     # WAL-checkpoint trade-off this fix accepts.
     #
     # `_mutate`/`_execute_many` are the one exception to "every query opens
@@ -1640,7 +1640,7 @@ async def run_startup_tests() -> bool:  # noqa: PLR0915 - test suite lists one c
 
             # D4(b): a classifier whose classify() RAISES must NOT block ingestion — the
             # row is still stored. Design invariant: "the pipeline never blocks on
-            # classifier bugs" (doc/spam-filter-BE.md §5 — store_message() is meant to
+            # classifier bugs" (doc/archive/spam-filter-BE.md §5 — store_message() is meant to
             # fall back to category='other' rather than propagate the exception).
             class _RaisingClassifier:
                 async def classify(self, _message: dict[str, Any]) -> Any:

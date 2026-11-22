@@ -485,7 +485,7 @@ async def _test_conditional_fetch(results: list[tuple[str, bool]]) -> None:
         unchanged = await handler._fetch_sperrliste("https://example.com/sperrliste.json")
         results.append(("a 304 returns the NOT_MODIFIED sentinel", unchanged is NOT_MODIFIED))
 
-        # F4 follow-up (doc/2026-09-16_0900-stall-popover-campaign.md): the SSL
+        # F4 follow-up (doc/archive/2026-09-16_0900-stall-popover-campaign.md): the SSL
         # context is built ONCE off the loop and reused; a fresh
         # `create_ssl_context` per refresh was an 800 ms event-loop stall.
         import ssl

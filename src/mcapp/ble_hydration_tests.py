@@ -1653,7 +1653,7 @@ async def _test_sse_register_replay(record: _RecordFn) -> None:
 async def _test_is1_sn1_dispatch_and_cache(record: _RecordFn) -> None:
     """IS1 (build date, follows I) and SN1 (via state, follows SN) are the
     newest two BLE JSON registers (2026-09-25 firmware, see
-    doc/2026-09-25_2041-is1-sn1-registers-plan.md). Before this fix the
+    doc/archive/2026-09-25_2041-is1-sn1-registers-plan.md). Before this fix the
     dispatcher's allowlist did not include either TYP, so every IS1/SN1 frame
     was dropped with a WARNING ("Type not found!") and never published --
     which also meant it could never reach the register cache. Pins both

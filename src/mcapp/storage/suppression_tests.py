@@ -1,7 +1,7 @@
 """Regression suite for the message-suppression predicate
 (`storage/suppression.py`).
 
-Backend half of doc/2026-09-19_2140-unread-suppression-plan.md §D1 — the
+Backend half of doc/archive/2026-09-19_2140-unread-suppression-plan.md §D1 — the
 predicate itself, built and pinned in isolation from the summary-query wiring
 a later wave adds. Pure functions plus one ephemeral-SQLite-backed loader —
 no TTY, no network, no `/etc/mcapp`. Follows the house pattern used by
@@ -39,6 +39,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from .constants import legacy_categories_to_tags
 from .suppression import (
     NOOP_POLICY,
     MessageView,
@@ -57,7 +58,7 @@ _VECTORS_PATH = Path(__file__).parent.parent / "contract" / "suppression_vectors
 # constant deliberately (and re-check the hand-written cases below still
 # agree with the new corpus) or the change was unintentional and this
 # tripwire just did its job. Mirrors commands/hashtag_dst_tests.py.
-_EXPECTED_SHA256 = "ea9bf85752179700d9b94d89b777d6f41efd59fe3f9b8a537237ed0127de056e"
+_EXPECTED_SHA256 = "e9bfee33c7db5f1f5f74919f29a560b81b5f3975a092df8d89c827302fa02154"
 
 # DDL copied verbatim from storage/migrations.py (migrations v11, v16, v17).
 # Kept as a local copy rather than importing anything from migrations.py: a
@@ -218,7 +219,7 @@ def _test_load_policy(results: list[tuple[str, bool]]) -> None:
         prefs = json.dumps(
             {
                 "enabled": True,
-                "hiddenTags": ["node"],
+                "hiddenTags": ["pota-sota"],
                 "minInfoScore": 0.5,
                 "hideAutoBeacons": True,
             }
@@ -235,7 +236,7 @@ def _test_load_policy(results: list[tuple[str, bool]]) -> None:
         results.append(
             (
                 "load_policy: hiddenTags reflects stored prefs",
-                policy.hidden_tags == frozenset({"node"}),
+                policy.hidden_tags == frozenset({"pota-sota"}),
             )
         )
         results.append(
@@ -355,8 +356,8 @@ def _test_hidden_tags_semantics(results: list[tuple[str, bool]]) -> None:
     default = policy_from_parts({"enabled": True}, [], {})
     results.append(
         (
-            "hiddenTags absent + enabled -> default {time, bot}",
-            default.hidden_tags == frozenset({"time", "bot"}),
+            "hiddenTags absent + enabled -> hides nothing (v7)",
+            default.hidden_tags == frozenset(),
         )
     )
     results.append(
@@ -377,14 +378,42 @@ def _test_hidden_tags_semantics(results: list[tuple[str, bool]]) -> None:
     results.append(
         (
             "hiddenTags: ids outside [a-z][a-z0-9_-]{0,31} are dropped",
-            filtered.hidden_tags == frozenset({"ok-tag_1", "time"}),
+            filtered.hidden_tags == frozenset({"ok-tag_1", "auto_beacon"}),
         )
     )
     legacy = policy_from_parts({"enabled": True, "hiddenCategories": ["node_advert"]}, [], {})
     results.append(
         (
-            "legacy hiddenCategories key is not read (falls to default tags)",
-            legacy.hidden_tags == frozenset({"time", "bot"}),
+            "legacy hiddenCategories key is not read (falls to default: nothing hidden)",
+            legacy.hidden_tags == frozenset(),
+        )
+    )
+
+    legacy_time = policy_from_parts({"enabled": True, "hiddenTags": ["time"]}, [], {})
+    results.append(
+        (
+            "v7: hiddenTags ['time'] hides a message tagged ['auto_beacon']",
+            "auto_beacon" in legacy_time.hidden_tags
+            and "time" not in legacy_time.hidden_tags
+            and is_suppressed(view_from_row({"msg": "x", "tags": ["auto_beacon"]}), legacy_time)
+            and not is_suppressed(view_from_row({"msg": "x", "tags": ["weather"]}), legacy_time),
+        )
+    )
+    all_old = policy_from_parts(
+        {"enabled": True, "hiddenTags": ["bot", "node", "software", "time"]}, [], {}
+    )
+    folded = {"hiddenCategories": ["timestamp_beacon", "node_advert", "sw_advert", "bot_command"]}
+    legacy_categories_to_tags(folded)
+    results.append(
+        (
+            "v7: legacy categories fold into ONE auto_beacon entry (no duplicates)",
+            folded["hiddenTags"] == ["auto_beacon"],
+        )
+    )
+    results.append(
+        (
+            "v7: all four old machine tags collapse into one auto_beacon",
+            all_old.hidden_tags == frozenset({"auto_beacon"}),
         )
     )
 
@@ -406,10 +435,10 @@ def _test_hidden_tags_semantics(results: list[tuple[str, bool]]) -> None:
             True,
         ),
         ("qso message, qso hidden", ["greeting", "qso"], ["qso"], True),
-        ("qso message, other tag of it hidden", ["time", "qso"], ["time"], True),
+        ("qso message, other tag of it hidden", ["auto_beacon", "qso"], ["auto_beacon"], True),
         ("qso-only message, greeting hidden", ["qso"], ["greeting"], False),
-        ("any tag hidden", ["weather", "time"], ["time"], True),
-        ("no tag hidden", ["weather"], ["time"], False),
+        ("any tag hidden", ["weather", "auto_beacon"], ["auto_beacon"], True),
+        ("no tag hidden", ["weather"], ["auto_beacon"], False),
         ("untagged message is never tag-hidden", [], ["time", "bot"], False),
     ]
     for label, tags, hidden_tags, want in cases:
@@ -419,6 +448,55 @@ def _test_hidden_tags_semantics(results: list[tuple[str, bool]]) -> None:
     results.append(
         ("policy_is_noop: enabled + hidden qso -> NOT a no-op", not policy_is_noop(both))
     )
+
+
+def _test_origin_alias(results: list[tuple[str, bool]]) -> None:
+    """v8 rows store topics; auto_beacon/qso are origin aliases.
+    ALIAS(one release, classifier rework 2026-11). MCProxy has no SQL twin of the predicate
+    (unread counting runs `is_suppressed` per candidate row), so the matrix is Python-only."""
+    hide_ab = policy_from_parts({"enabled": True, "hideAutoBeacons": True}, [], {})
+    v8_machine = view_from_row({"msg": "x", "tags": ["weather"], "origin": "machine"})
+    results.append(
+        (
+            "v8 row (topics + origin machine) is hidden by hide_auto_beacons",
+            is_suppressed(v8_machine, hide_ab),
+        )
+    )
+    results.append(
+        (
+            "v8 row with origin human / NULL is not hidden by hide_auto_beacons",
+            not is_suppressed(view_from_row({"msg": "x", "tags": [], "origin": "human"}), hide_ab)
+            and not is_suppressed(view_from_row({"msg": "x", "tags": ["weather"]}), hide_ab),
+        )
+    )
+    # origin x stored-tag shape x hiddenTags -> expected hidden
+    stored_shapes: dict[str, list[str]] = {
+        "v8": ["weather"],
+        "legacy_ab": ["auto_beacon"],
+        "legacy_qso": ["qso"],
+    }
+    for origin in ("machine", "human", None):
+        for shape, stored in stored_shapes.items():
+            for hid in ("auto_beacon", "qso", "bot", "weather"):
+                view = view_from_row({"msg": "x", "tags": stored, "origin": origin})
+                policy = policy_from_parts({"enabled": True, "hiddenTags": [hid]}, [], {})
+                effective = hid  # `bot` folds to auto_beacon (v7 legacy map)
+                if hid == "bot":
+                    effective = "auto_beacon"
+                want = (
+                    (
+                        effective == "auto_beacon"
+                        and (origin == "machine" or "auto_beacon" in stored)
+                    )
+                    or (effective == "qso" and (origin == "human" or "qso" in stored))
+                    or effective in stored
+                )
+                results.append(
+                    (
+                        f"alias matrix origin={origin} stored={shape} hidden={hid}",
+                        is_suppressed(view, policy) == want,
+                    )
+                )
 
 
 async def run_suppression_predicate_tests() -> bool:
@@ -431,6 +509,7 @@ async def run_suppression_predicate_tests() -> bool:
     _test_view_from_row(results)
     _test_policy_is_noop(results)
     _test_hidden_tags_semantics(results)
+    _test_origin_alias(results)
 
     for label, ok in results:
         print(f"    {'✅ PASS' if ok else '❌ FAIL'} | {label}")

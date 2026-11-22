@@ -3,7 +3,7 @@
 `box_feed_vectors.json` is a byte-verbatim copy of the canonical corpus in mcmap
 (`proxy/src/boxFeed/box_feed_vectors.json`, contract: mcmap
 `docs/proposals/data-mcapp-box-feed.md` §8; this repo's consumer design:
-`doc/2026-10-11_1005-internet-feed-concept.md`). mcmap is UPSTREAM: edit the
+`doc/plans/2026-10-11_1005-internet-feed-concept.md`). mcmap is UPSTREAM: edit the
 corpus there and re-copy, never in place here.
 
 Today this suite pins the copy (sha256 drift tripwire) and the wire shapes the

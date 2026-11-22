@@ -9,7 +9,7 @@
 > both later confirmed against real traffic; see ADR §1.5.1.
 
 Date: 2026-08-13
-Reviewed: `doc/2026-08-13_1500-linkcheck-ping-pong-ADR.md` and
+Reviewed: `2026-08-13_1500-linkcheck-ping-pong-ADR.md` and
 `doc/archive/2026-08-13_1500-linkcheck-implementation-plan.md`, first drafts.
 Method: 7 independent finders (protocol, codebase accuracy, concurrency, security, test
 strategy, architectural fit, completeness), then per-claim verification against source by the
@@ -159,7 +159,7 @@ repo replace the entire cross-repo dance.
 
 A pong's `rssi`/`snr` is exactly the "signal at which we heard station X" measurement that
 `signal_log` already models, complete with a `source TEXT` column added for precisely this kind of
-distinction (`migrations.py:322-325`, values `'mheard'`/`'lora'`). `doc/UDP-2.0-impl.md`'s own
+distinction (`migrations.py:322-325`, values `'mheard'`/`'lora'`). `UDP-2.0-impl.md`'s own
 stated principle is "generalize, don't fork — the same physical measurement must feed the same
 tables". A separate table would also have been invisible to the existing map and mHeard views.
 
@@ -229,9 +229,9 @@ additive (`main.py:1993`), and dual-transport is a supported, tested configurati
 
 - **Severity:** medium
 
-`doc/database-reference.md` says "Current schema: v21" in three places against an actual v23. The
+`../reference/database-reference.md` says "Current schema: v21" in three places against an actual v23. The
 draft's schema wave did not include it, which would have taken the drift to three versions.
-`doc/UDP-2.0-impl.md` establishes a documentation wave as this repo's convention; the draft had
+`UDP-2.0-impl.md` establishes a documentation wave as this repo's convention; the draft had
 none.
 
 ### Finding 18: line citations mixed local and upstream numbering

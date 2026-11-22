@@ -1,6 +1,6 @@
 """Node Admin (RM1 remote admin) endpoints.
 
-Plan: doc/2026-10-05_1000-node-admin-ui-concept-and-plan.md §5 ("Guard and
+Plan: doc/archive/2026-10-05_1000-node-admin-ui-concept-and-plan.md §5 ("Guard and
 security", "Routes"). The password is write-only: no endpoint returns it.
 
 Every route sits behind `_guard`, a Host + Origin check that makes the feature

@@ -4,7 +4,7 @@
 (`blockCallNormalize`, `listBuild`, `matchNorm`); `parse_reply_body` mirrors
 `rmFmtBlock` in `rm_format.h`. `build_args` and `write_refusal` are McApp's own
 sender rules (operator decisions 2026-10-24). The cross-repo contract is
-`rm_blocklist_vectors.json` (plan: doc/2026-10-24_1500-rm1-blockcall-plan.md).
+`rm_blocklist_vectors.json` (plan: doc/archive/2026-10-24_1500-rm1-blockcall-plan.md).
 
 This module imports nothing from `remote_cmd` (which imports it) and never reads
 the JSON corpus: runtime code, and the prod tarball ships no corpora.

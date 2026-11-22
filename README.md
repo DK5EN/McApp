@@ -33,7 +33,7 @@ A piped install is pinned: the bootstrap script resolves one release tag
 `--tag`) and fetches its libs, templates, and app from that same tag — the
 command above run again later on the same tag reproduces the same box. See
 [Pinning to a specific release](#pinning-to-a-specific-release) below and
-[`doc/version-logic.md`](doc/version-logic.md) for the resolution rules.
+[`doc/reference/version-logic.md`](doc/reference/version-logic.md) for the resolution rules.
 
 #### Requirements
 
@@ -60,19 +60,19 @@ Use [Raspberry Pi Imager](https://www.raspberrypi.com/software/) to flash the SD
 
 1. Select **Raspberry Pi Zero 2 W** as device model
 
-   ![Select Pi Zero 2W](doc/1_Flash-PiZero2W.png)
+   ![Select Pi Zero 2W](doc/reference/img/1_Flash-PiZero2W.png)
 
 2. Under **Raspberry Pi OS (other)**...
 
-   ![Select Other OS](doc/2_OtherOS.png)
+   ![Select Other OS](doc/reference/img/2_OtherOS.png)
 
 3. ...choose **Raspberry Pi OS Lite (64-bit)** — Debian Trixie, no desktop environment
 
-   ![Select Lite OS](doc/3_LightOS.png)
+   ![Select Lite OS](doc/reference/img/3_LightOS.png)
 
 4. Select your SD card and flash
 
-   ![Select SD Card](doc/4_SelectCard.png)
+   ![Select SD Card](doc/reference/img/4_SelectCard.png)
 
 > **Note:** After selecting the SD card, the Imager prompts you to configure hostname, user, WiFi, and SSH. Set these before writing — this avoids manual setup after first boot.
 
@@ -171,10 +171,10 @@ sudo ./scripts/ssl-tunnel-setup.sh --remove   # Revert to plain HTTP
 
 For more details see:
 
-- [`doc/ssl-tunnel.md`](doc/ssl-tunnel.md) — setup guide (German)
-- [`doc/tls-architecture.md`](doc/tls-architecture.md) — architecture diagrams
-- [`doc/tls-maintenance-SOP.md`](doc/tls-maintenance-SOP.md) — maintenance procedures
-- [`doc/2026-02-10_1200-tls-remote-access-ADR.md`](doc/2026-02-10_1200-tls-remote-access-ADR.md) — design rationale
+- [`doc/runbook/RB-011-tls-remote-access-setup.md`](doc/runbook/RB-011-tls-remote-access-setup.md) — setup guide (German)
+- [`doc/reference/tls-architecture.md`](doc/reference/tls-architecture.md) — architecture diagrams
+- [`doc/sop/SOP-003-tls-maintenance.md`](doc/sop/SOP-003-tls-maintenance.md) — maintenance procedures
+- [`doc/archive/2026-02-10_1200-tls-remote-access-ADR.md`](doc/archive/2026-02-10_1200-tls-remote-access-ADR.md) — design rationale
 
 #### Automatic Updates
 
@@ -235,7 +235,7 @@ curl -fsSL https://raw.githubusercontent.com/DK5EN/McApp/main/bootstrap/mcapp.sh
 script's `main()` calls — an old tag whose libs predate a newer feature
 (e.g. one cut before Caddy/system-epoch support existed) aborts cleanly
 naming the missing functions instead of installing a mismatched pair. See
-[`doc/version-logic.md`](doc/version-logic.md) for the full resolution
+[`doc/reference/version-logic.md`](doc/reference/version-logic.md) for the full resolution
 rules, the GitHub-API-unreachable fallback, and that skew guard.
 
 # Architecture
@@ -263,9 +263,9 @@ graph TD
 
 | Chat                      | Map                    |
 | ------------------------- | ---------------------- |
-| ![Chat](doc/chat.png)     | ![Map](doc/map.png)    |
+| ![Chat](doc/reference/img/chat.png)     | ![Map](doc/reference/img/map.png)    |
 | **MHeard**                | **Weather**            |
-| ![MHeard](doc/mheard.png) | ![Weather](doc/wx.png) |
+| ![MHeard](doc/reference/img/mheard.png) | ![Weather](doc/reference/img/wx.png) |
 
 # McApp Specification
 

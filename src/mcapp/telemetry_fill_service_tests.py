@@ -1,5 +1,5 @@
 """Built-in suite for the telemetry gap-fill service, Wave 2 (plan
-doc/2026-11-07_1000-telemetry-gap-fill-plan.md).
+doc/archive/2026-11-07_1000-telemetry-gap-fill-plan.md).
 
 Fully offline: httpx.MockTransport stands in for meshmap, the clock and the sleep
 are injected. Every case names the rule whose removal it catches.

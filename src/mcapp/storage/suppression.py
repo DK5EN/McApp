@@ -5,7 +5,7 @@ than the read cursor, but the webapp never renders a message its own spam
 filter or blocklist hides — and the read cursor only advances over rendered
 bubbles. A conversation whose *newest* message is one the client hides can
 therefore never have its badge cleared by any client action (see
-doc/2026-09-19_2140-unread-suppression-plan.md, root cause). The fix is to
+doc/archive/2026-09-19_2140-unread-suppression-plan.md, root cause). The fix is to
 teach the server the same "will the client show this?" predicate so `unread`
 can be computed over only the rows the client would actually display.
 
@@ -50,6 +50,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from ..classifier.types import legacy_tag_view
+
 
 @dataclass(frozen=True, slots=True)
 class SuppressionPolicy:
@@ -80,6 +82,8 @@ class MessageView:
     tags: frozenset[str]
     info_score: float | None
     template_hash: str
+    # v8 origin axis (human|machine) or None; `tags` already carries its alias ids.
+    origin: str | None = None
 
 
 # A policy that suppresses nothing, for any input. Returned by
@@ -146,9 +150,19 @@ def _as_optional_float(value: object) -> float | None:
     return None
 
 
-# Hidden tags when the stored prefs carry no `hiddenTags` key at all (and the
-# policy is enabled). An explicit empty list hides nothing.
-DEFAULT_HIDDEN_TAGS: frozenset[str] = frozenset({"time", "bot"})
+# v7 (owner 2026-11-11): the four machine tags are auto_beacon. A stored preference that still
+# names one of the old tags means the same class, so it maps to auto_beacon instead of silently
+# hiding nothing.
+_LEGACY_HIDDEN_TAG: dict[str, str] = {
+    "bot": "auto_beacon",
+    "node": "auto_beacon",
+    "software": "auto_beacon",
+    "time": "auto_beacon",
+}
+
+# Owner 2026-11-11: nothing is hidden by default. Automated messages are labelled
+# (auto_beacon), not removed from view.
+DEFAULT_HIDDEN_TAGS: frozenset[str] = frozenset()
 # Tag ids are lowercase words with `-`/`_` (`pota-sota`, `auto_beacon`). Stored
 # prefs are client-controlled, so user-supplied ids are held to this shape.
 _TAG_ID_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
@@ -190,7 +204,7 @@ def policy_from_parts(
     if enabled:
         hidden_tags = (
             frozenset(
-                t
+                _LEGACY_HIDDEN_TAG.get(t, t)
                 for t in _as_str_frozenset(filter_prefs.get("hiddenTags"))
                 if _TAG_ID_RE.fullmatch(t)
             )
@@ -307,10 +321,15 @@ def view_from_row(row: Mapping[str, Any]) -> MessageView:
     """
     msg = row.get("msg")
     template_hash = row.get("template_hash")
+    origin = row.get("origin")
+    origin = origin if origin in ("human", "machine") else None
 
     return MessageView(
         msg=msg if isinstance(msg, str) else "",
-        tags=_parse_tags(row.get("tags")),
+        # ALIAS(one release, classifier rework 2026-11): stored topics + origin-derived
+        # auto_beacon/qso; legacy rows (origin NULL) keep their stored v7 ids.
+        tags=frozenset(legacy_tag_view(_parse_tags(row.get("tags")), origin)),
+        origin=origin,
         info_score=_as_optional_float(row.get("info_score")),
         template_hash=template_hash if isinstance(template_hash, str) else "",
     )

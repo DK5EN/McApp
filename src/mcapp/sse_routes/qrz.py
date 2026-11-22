@@ -1,7 +1,7 @@
 """QRZ.com callsign lookup endpoints (issue #14).
 
 The password is write-only: no endpoint returns it, status reports only
-whether one is stored. Plan: doc/2026-10-04_0848-qrz-callsign-lookup-plan.md §6.
+whether one is stored. Plan: doc/archive/2026-10-04_0848-qrz-callsign-lookup-plan.md §6.
 """
 
 from __future__ import annotations

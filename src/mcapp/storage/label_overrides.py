@@ -3,7 +3,7 @@
 Per-field overrides, `NULL` = inherit the upstream value; an all-NULL row is
 deleted (= revert). Callsign overrides are keyed by BASE callsign. Merging with
 the ICSSW snapshot / QRZ data happens elsewhere; this mixin only reads and
-writes. Plan: doc/2026-10-25_0900-conversation-nav-group-labels-plan.md (D4/D5).
+writes. Plan: doc/plans/2026-10-25_0900-conversation-nav-group-labels-plan.md (D4/D5).
 """
 
 from __future__ import annotations

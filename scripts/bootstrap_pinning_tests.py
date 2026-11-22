@@ -1,6 +1,6 @@
 """Startup regression suite for the piped-install bootstrap-tag-pinning fix.
 
-See doc/2026-08-09_1600-bootstrap-tag-pinning-plan.md for the full design.
+See doc/plans/2026-08-09_1600-bootstrap-tag-pinning-plan.md for the full design.
 Summary of what is under test (Phase 1, already implemented in
 bootstrap/mcapp.sh): a piped install (``curl ... | sudo bash``) used to source
 its six bootstrap/lib/*.sh files from the ``development`` branch tip no matter
@@ -731,7 +731,7 @@ _URL_LITERAL_RE = re.compile(
 # "simplifies" the fallback back into a literal, unconditional default).
 _FALLBACK_LITERAL_RE = re.compile(r'fallback_branch\s*=\s*"(main|development)"')
 
-# Exactly four sanctioned exceptions (doc/2026-08-09_1600-bootstrap-tag-pinning-plan.md
+# Exactly four sanctioned exceptions (doc/plans/2026-08-09_1600-bootstrap-tag-pinning-plan.md
 # §5 item 6, as amended by this brief -- the plan text itself only names two):
 #   (a) the usage comment at the top of mcapp.sh
 #   (b) the mcapp-update / mcapp-dev-update aliases in lib/deploy.sh

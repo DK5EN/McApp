@@ -101,7 +101,7 @@ class RoutingMixin(CommandHandlerBase):
         # throttle below and get an extra "Command throttled" RF reply.
         # Sender is REQUIRED in the key: bits 10-11 are the low bits of the
         # sending station's own node id, so the core alone collides across
-        # stations (doc/2026-09-27_2200-pn-retry-xor-plan.md §3).
+        # stations (doc/archive/2026-09-27_2200-pn-retry-xor-plan.md §3).
         msg_id = message_data.get("msg_id")
         dedup_key = (
             f"{strip_relay_path(message_data.get('src', 'UNKNOWN'))}|{msg_core(msg_id)}"

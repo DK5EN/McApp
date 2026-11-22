@@ -1,5 +1,5 @@
 """Pure-ASGI stall-recording middleware for the HTTP surface (§4/§6 of
-`doc/2026-09-15_1530-stall-tracking-plan.md`).
+`doc/archive/2026-09-15_1530-stall-tracking-plan.md`).
 
 Starlette's `BaseHTTPMiddleware` buffers the whole response before the
 downstream app's body is visible to it, which breaks a streaming response —

@@ -33,7 +33,7 @@ PAYLOAD_TYPE_ACK = 65  # acknowledgement frame
 # gateway flag) would only be meaningful on this payload type; see
 # `_coerce_gw`'s call site in `transform_mh`. `GW` itself was reverted
 # upstream 2026-08-28 and the current fork-main firmware never emits it —
-# RX-07, doc/2026-09-10_1900-ble-protocol-parity-audit.md.
+# RX-07, doc/archive/2026-09-10_1900-ble-protocol-parity-audit.md.
 _MH_PAYLOAD_TYPE_HEY = 0x40  # '@'
 
 # --- ACK attribution appendix (firmware proposal `docs/ack-wer-hat-quittiert.md`) ---
@@ -193,7 +193,7 @@ _FCS_EXCLUDED_TRAILER_LEN = 11  # FCS covers byte_msg[1 : -_FCS_EXCLUDED_TRAILER
 # above/below; these four are the individual high-nibble bits. `app_offline`
 # marks a frame the node buffered while no phone was attached (catch-up
 # replay), or a command reply / back-pressure notice — the app treats it as
-# do-not-announce. See RX-04, doc/2026-09-10_1900-ble-protocol-parity-audit.md.
+# do-not-announce. See RX-04, doc/archive/2026-09-10_1900-ble-protocol-parity-audit.md.
 _FLAG_MSG_SERVER = 0x80
 _FLAG_MSG_TRACK = 0x40
 _FLAG_APP_OFFLINE = 0x20
@@ -719,7 +719,7 @@ def parse_aprs_telemetry(message: str) -> dict[str, Any] | None:
     mapping is only correct while the node hasn't been reconfigured with a
     custom telemetry keyword list.
 
-    RX-02 (`doc/2026-09-10_1900-ble-protocol-parity-audit.md`): matched with
+    RX-02 (`doc/archive/2026-09-10_1900-ble-protocol-parity-audit.md`): matched with
     `re.search` rather than `re.match` because the BLE `:` text frame carries
     the firmware's 9-char space-padded originator callsign plus a literal
     `:` ahead of the `T#` token (`"%-9.9s:T#%03i,..."`,
@@ -903,7 +903,7 @@ def _coerce_lora_mod(value: Any) -> int | None:
     "modulation not from the last hop" marker
     (`lora_functions.cpp:587`), indistinguishable on the wire until the
     firmware separates them (see
-    `doc/2026-08-28_1700-firmware-mod-nibble-handover.md`). Mask only."""
+    `doc/plans/2026-08-28_1700-firmware-mod-nibble-handover.md`). Mask only."""
     coerced = _coerce_optional_int(value)
     if coerced is None:
         return None
@@ -997,7 +997,7 @@ def _coerce_mh_origin(value: Any) -> str | None:
     not a string, or an unconfigured-node placeholder.
 
     `SRC` was added upstream 2026-08-27 and REVERTED the next day, 2026-08-28
-    (RX-07, doc/2026-09-10_1900-ble-protocol-parity-audit.md); the current
+    (RX-07, doc/archive/2026-09-10_1900-ble-protocol-parity-audit.md); the current
     fork-main firmware's live MH builder never emits it, so this coercer is
     retained and inert — it always sees `None` today — purely so a firmware
     build that re-adds `SRC` is picked up with no code change here.
@@ -1048,7 +1048,7 @@ def _coerce_mh_payload_type(value: Any) -> int | None:
 def transform_mh(input_dict: dict[str, Any]) -> dict[str, Any]:
     """Transform a BLE MHeard beacon.
 
-    RX-07 (doc/2026-09-10_1900-ble-protocol-parity-audit.md): `SRC`/`GW`/`PP`
+    RX-07 (doc/archive/2026-09-10_1900-ble-protocol-parity-audit.md): `SRC`/`GW`/`PP`
     were added to the live MH builder upstream on 2026-08-27 (`SRC`/`GW`:
     commit `c04ed7b0`; `PP`: `fff4010e`) and REVERTED the very next day,
     2026-08-28 (`SRC`/`GW`: `dc7d56d7`; `PP`: `17d1796e`). The current

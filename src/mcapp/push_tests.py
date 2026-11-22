@@ -1605,7 +1605,7 @@ async def _test_mention_uses_full_text_at_the_dispatcher(record: _RecordFn) -> N
     `handle_mesh_message`'s fourth argument from `full_text` to
     `payload["text"]` (or to `full_text[:MAX_TEXT_LEN]`) leaves the whole push
     suite green. That is exactly the trap
-    doc/2026-09-19_1200-mention-push-plan.md A5 exists to prevent:
+    doc/plans/2026-09-19_1200-mention-push-plan.md A5 exists to prevent:
     `_payload_fields` truncates to MAX_TEXT_LEN = 120 and BOTH
     `build_push_payload` and `_build_gate_view` go through it, while a MeshCom
     message runs to ~149 characters — so a mention late in a long message
@@ -1682,7 +1682,7 @@ def _test_mentions(record: _RecordFn) -> None:
     """Contract v11 `mention_semantics`: the pure `mentions_own()` predicate,
     and its wiring into `matches()` as a FOURTH, INDEPENDENT disjunct beside
     dm/broadcast/groups — vectors from the plan
-    (doc/2026-09-19_1200-mention-push-plan.md A2), replayed against mcapp.local
+    (doc/plans/2026-09-19_1200-mention-push-plan.md A2), replayed against mcapp.local
     traffic before implementation.
     """
     own = "DK5EN-98"
