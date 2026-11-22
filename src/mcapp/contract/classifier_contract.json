@@ -4,7 +4,7 @@
   "topics_taxonomy_version": 8,
   "source": {
     "repo": "mcmap",
-    "commit": "ec964281888baa2e252138765d60cbfb5f72b433"
+    "commit": "7c46e61bf6da07b9ff38831f9c1c92ad488004a8"
   },
   "tags": [
     {
@@ -177,6 +177,16 @@
       "flags": "i",
       "tag": "auto_beacon",
       "legacy_tag": "bot",
+      "machine": false
+    },
+    {
+      "priority": 8.6,
+      "name": "Typed ping command",
+      "scope": "msg",
+      "pattern": "^[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?:--|-|—|–|>|!)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?ping(?![\\p{L}\\p{N}_])",
+      "flags": "i",
+      "tag": "test",
+      "legacy_tag": "test",
       "machine": false
     },
     {
@@ -354,6 +364,26 @@
       "name": "Weather remark words",
       "scope": "msg",
       "pattern": "(?<![\\p{L}\\p{N}_])(?:(?<!allerta[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)meteo|wetter(?!fest)|regnet|(?<!(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))aus[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)regen|nieselregen|schnee|schneit|gewitter|nebel|sonnig|bew[öo]lkt|s[łl]onecznie|deszcz|pioggia|temporale|vento[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+forte|rain(?![\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+scatter)|snow|sunny|windy)(?![\\p{L}\\p{N}_])",
+      "flags": "i",
+      "tag": "weather",
+      "legacy_tag": "weather",
+      "machine": false
+    },
+    {
+      "priority": 24.91,
+      "name": "Weather vocabulary extended",
+      "scope": "msg",
+      "pattern": "(?<![\\p{L}\\p{N}_])(?:taupunkt|luftfeuchtigkeit|regenwetter|traumwetter|herbstwetter|sommerwetter|bedeckt(?:em|en|er)|nuages|bew[öo]lkung|geregnet|verregnet\\p{L}*|regnerisch|schlechtwetter|zimno|neblig\\p{L}*|a[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+catinelle|sole|wolkenfrei|wolkenlos|nuvole|b(?:ew|w)?[öo]lkt\\p{L}*|piov(?:endo|ere|uto)|pleut|sturm|brezza|regnen|pluie|soleil|neige|orage|brouillard|pogod[ay]|piovos[oa]|nuvol(?:oso|osa|osi|ose)|blau\\p{L}*[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+himmel)(?![\\p{L}\\p{N}_])|°[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?celsius(?![\\p{L}\\p{N}_])",
+      "flags": "i",
+      "tag": "weather",
+      "legacy_tag": "weather",
+      "machine": false
+    },
+    {
+      "priority": 24.92,
+      "name": "WX temperature Italian gradi",
+      "scope": "msg",
+      "pattern": "(?:^|[^0-9.,/:-])[+-]?[0-9]{1,2}(?:[.,][0-9])?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?gradi(?![\\p{L}\\p{N}_])",
       "flags": "i",
       "tag": "weather",
       "legacy_tag": "weather",
@@ -540,6 +570,16 @@
       "machine": true
     },
     {
+      "priority": 34.05,
+      "name": "Bulletin counter link advert",
+      "scope": "msg",
+      "pattern": "^[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*\\[CNT:[\\p{Nd}]+/[\\p{Nd}]+\\][\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*\\[INT:[\\p{Nd}]+\\][\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?:https?://|www\\.)",
+      "flags": "",
+      "tag": "bulletin",
+      "legacy_tag": "bulletin",
+      "machine": false
+    },
+    {
       "priority": 34.1,
       "name": "POS GPS line",
       "scope": "msg",
@@ -623,7 +663,7 @@
       "priority": 35.85,
       "name": "Bulletin info pointer",
       "scope": "msg",
-      "pattern": "(?<![\\p{L}\\p{N}_])info[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+unter[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:https?://|www\\.)",
+      "pattern": "(?<![\\p{L}\\p{N}_])(?:infos?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+unter|info(?:msg)?)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?:https?://|www\\.)",
       "flags": "i",
       "tag": "bulletin",
       "legacy_tag": "bulletin",
@@ -873,7 +913,7 @@
       "priority": 47.5,
       "name": "Test short",
       "scope": "msg",
-      "pattern": "^(?![\\s\\S]{41})[\\s\\S]*(?:(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))tests?(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))|(?:verbindungs|strecken|reichweiten|funktions|selbst|probe)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?test|(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))testnachricht|(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))testmessage|messaggio[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:di[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?test|radio[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+check|(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))probebetrieb)",
+      "pattern": "^(?![\\s\\S]{41})(?![\\s\\S]*contest)[\\s\\S]*(?:(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))tests?(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))|(?:verbindungs|strecken|reichweiten|funktions|selbst|probe)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?test|(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))testnachricht|(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))testmessage|messaggio[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:di[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?test|radio[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+check|(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))probebetrieb)",
       "flags": "i",
       "tag": "test",
       "legacy_tag": "test",
@@ -904,6 +944,36 @@
       "name": "Test compounds",
       "scope": "msg",
       "pattern": "(?<![\\p{L}\\p{N}_])(?:(?:reichweiten|verbindungs|strecken|funktions|sende|funk|echo|signal)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?test|test[\\p{Nd}]{1,3}|(?:primo|secondo|altro|ultimo)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+test|pr[øo]ve)(?![\\p{L}\\p{N}_])|^check(?:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:[0-9][0-9.]*(?:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+[0-9][0-9.]*)*|ack|dm|test))?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff!.?]*(?![\\s\\S])",
+      "flags": "i",
+      "tag": "test",
+      "legacy_tag": "test",
+      "machine": false
+    },
+    {
+      "priority": 47.661,
+      "name": "Test prefixed words",
+      "scope": "msg",
+      "pattern": "(?<![\\p{L}\\p{N}_])test(?!ament|imon|er|rechner|ing|weiser)\\p{L}{2,}(?![\\p{L}\\p{N}_])",
+      "flags": "i",
+      "tag": "test",
+      "legacy_tag": "test",
+      "machine": false
+    },
+    {
+      "priority": 47.662,
+      "name": "Test abbreviation, participles and Polish testy",
+      "scope": "msg",
+      "pattern": "(?<![\\p{L}\\p{N}_])(?:tst|testy|getestet|tested|testando|testare|testato)(?![\\p{L}\\p{N}_])",
+      "flags": "i",
+      "tag": "test",
+      "legacy_tag": "test",
+      "machine": false
+    },
+    {
+      "priority": 47.663,
+      "name": "Test standalone word",
+      "scope": "msg",
+      "pattern": "^(?![\\s\\S]*contest)[\\s\\S]*?(?<![\\p{L}\\p{N}_])(?:test|testing)(?![\\p{L}\\p{N}_])",
       "flags": "i",
       "tag": "test",
       "legacy_tag": "test",
@@ -973,7 +1043,7 @@
       "priority": 50,
       "name": "Greeting DE/EN",
       "scope": "msg",
-      "pattern": "^(?:[^\\p{L}\\p{N}_]*(73|hallo|servus|moin|nabend|ahoi|guten[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morgen|abend|tag)|gute[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(nacht|reise)|good[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morning|evening|night|afternoon|day)|buon ?giorno|buona? ?s?era|buona ?notte|buonanotte|buon ?pomeriggio|ciao|hello|hi(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))|(?:salut|bonjour|bonsoir|bonne[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:nuit|soir[ée]e|journ[ée]e)|witam|hej|hey|huhu|mahlzeit|cze[sś][cć]|dzie[nń][\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+dobry|dobry[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:wiecz[oó]r|dzie[nń])|dobranoc|ol[aá]|slt|gm|gn|(?:einen[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+|ein[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+)?(?:sch[oö]nen?|sch[oö]nes|guten?|gute)[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:morgen|abend|tag|nacht|wochenstart|wochenende|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag|start)|buona?[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:sera|serata|giornata|notte|mattina|domenica)|buon[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:giorno|pomeriggio|inizio|weekend|fine)|saluti|salve|gr[uü](?:ß|ss|[ßs]e))(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_])))|[^\\p{L}\\p{N}_]*(?:(?:ein[A-Za-z0-9_]*[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?(?:sch[oö]n[A-Za-z0-9_]*|sonnig[A-Za-z0-9_]*|guten?|frohe?|gesegnete?|angenehme?|erholsame?|ruhige?)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:(?:guten?|sch[oö]n[A-Za-z0-9_]*)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?(?:morgen|tag|abend|nachmittag|vormittag|mittag|nacht|woche|wochenende|wochenstart|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag|start|feierabend|feiertag)|gude|tach|pfiat(?:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+di)?|gr[uü](?:ß|ss)e?|buenos[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+d[ií]as|buenas[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:tardes|noches)|hola|alo|dzie[nń][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+dobry|witaj|mi[lł]ego|dobrej[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+nocy|godmorgen|god[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+morgen|buon[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+pranzo|happy[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+meshday)(?![\\p{L}\\p{N}_])|@[A-Za-z0-9/-]{3,12}(?::|[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[^\\p{L}\\p{N}_]*(73|hallo|servus|moin|nabend|ahoi|guten[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morgen|abend|tag)|gute[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(nacht|reise)|good[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morning|evening|night|afternoon|day)|buon ?giorno|buona? ?s?era|buona ?notte|buonanotte|buon ?pomeriggio|ciao|hello|hi(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))|(?:salut|bonjour|bonsoir|bonne[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:nuit|soir[ée]e|journ[ée]e)|witam|hej|hey|huhu|mahlzeit|cze[sś][cć]|dzie[nń][\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+dobry|dobry[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:wiecz[oó]r|dzie[nń])|dobranoc|ol[aá]|slt|gm|gn|(?:einen[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+|ein[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+)?(?:sch[oö]nen?|sch[oö]nes|guten?|gute)[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:morgen|abend|tag|nacht|wochenstart|wochenende|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag|start)|buona?[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:sera|serata|giornata|notte|mattina|domenica)|buon[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:giorno|pomeriggio|inizio|weekend|fine)|saluti|salve|gr[uü](?:ß|ss|[ßs]e))(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))))",
+      "pattern": "^(?:[^\\p{L}\\p{N}_]*((?<!-)73(?:s(?![\\p{L}\\p{N}_]))?(?![\\p{L}\\p{N}_:%°-])(?!/(?!(?:44|55|88)(?!\\p{N})))(?!\\.[0-9])(?!,(?!(?:44|55|88)(?!\\p{N}))[0-9])(?![\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?:[mM][iI][nN]|[mM][iI][nN][uU][tT][eE][nN]|[mM][iI][nN][uU][tT][eE]|[mM][iI][nN][uU][tT][eE][sS]|[sS][eE][kK]|[sS][eE][cC]|[sS][tT][dD]|[sS][tT][uU][nN][dD][eE][nN]|[sS][tT][uU][nN][dD][eE]|[hH][oO][uU][rR][sS]|[tT][aA][gG][eE]|[tT][aA][gG][eE][nN]|[dD][aA][yY][sS]|[kK][mM]|[mM]|[cC][mM]|[mM][mM]|[hH][zZ]|[kK][hH][zZ]|[mM][hH][zZ]|[gG][hH][zZ]|[dD][bB]|[dD][bB][mM]|[vV]|[mM][aA]|[mM][aA][hH]|[wW]|[mM][wW]|[kK][wW]|[kK][bB]|[jJ][aA][hH][rR][eE]|[jJ][aA][hH][rR][eE][nN]|[jJ][aA][hH][rR]|[hH][pP][aA]|[mM][bB][aA][rR]|[yY][eE][aA][rR][sS]|[fF]|[cC]|[kK]|[sS][tT][üÜ][cC][kK]|[eE][uU][rR][oO]|[uU][hH][rR]|[pP][uU][nN][kK][tT][eE]|[lL][eE][uU][tT][eE]|[pP][eE][rR][sS][oO][nN][eE][nN]|[tT][eE][iI][lL][nN][eE][hH][mM][eE][rR]|[sS][tT][aA][tT][iI][oO][nN][eE][nN]|[bB][yY][tT][eE][sS]|[pP][rR][oO][zZ][eE][nN][tT]|[pP][eE][rR][cC][eE][nN][tT]|[gG][rR][aA][dD]|[kK][nN][oO][tT][eE][nN]|[kK][mM][hH]|%|[sS]|[sS][eE][kK][uU][nN][dD][eE][nN]|[nN][oO][dD][eE][sS]|[nN][aA][cC][hH][rR][iI][cC][hH][tT][eE][nN]|[mM][aA][lL]|[sS][tT][uU][eE][cC][kK])(?![\\p{L}\\p{N}_]))|hallo|servus|moin|nabend|ahoi|guten[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morgen|abend|tag)|gute[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(nacht|reise)|good[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morning|evening|night|afternoon|day)|buon ?giorno|buona? ?s?era|buona ?notte|buonanotte|buon ?pomeriggio|ciao|hello|hi(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))|(?:salut|bonjour|bonsoir|bonne[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:nuit|soir[ée]e|journ[ée]e)|witam|hej|hey|huhu|mahlzeit|cze[sś][cć]|dzie[nń][\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+dobry|dobry[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:wiecz[oó]r|dzie[nń])|dobranoc|ol[aá]|slt|gm|gn|(?:einen[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+|ein[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+)?(?:sch[oö]nen?|sch[oö]nes|guten?|gute)[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:morgen|abend|tag|nacht|wochenstart|wochenende|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag|start)|buona?[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:sera|serata|giornata|notte|mattina|domenica)|buon[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:giorno|pomeriggio|inizio|weekend|fine)|saluti|salve|gr[uü](?:ß|ss|[ßs]e))(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_])))|[^\\p{L}\\p{N}_]*(?:(?:ein[A-Za-z0-9_]*[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?(?:sch[oö]n[A-Za-z0-9_]*|sonnig[A-Za-z0-9_]*|guten?|frohe?|gesegnete?|angenehme?|erholsame?|ruhige?)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:(?:guten?|sch[oö]n[A-Za-z0-9_]*)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?(?:morgen|tag|abend|nachmittag|vormittag|mittag|nacht|woche|wochenende|wochenstart|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag|start|feierabend|feiertag)|gude|tach|pfiat(?:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+di)?|gr[uü](?:ß|ss)e?|buenos[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+d[ií]as|buenas[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:tardes|noches)|hola|alo|dzie[nń][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+dobry|witaj|mi[lł]ego|dobrej[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+nocy|godmorgen|god[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+morgen|buon[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+pranzo|happy[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+meshday)(?![\\p{L}\\p{N}_])|@[A-Za-z0-9/-]{3,12}(?::|[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[^\\p{L}\\p{N}_]*((?<!-)73(?:s(?![\\p{L}\\p{N}_]))?(?![\\p{L}\\p{N}_:%°-])(?!/(?!(?:44|55|88)(?!\\p{N})))(?!\\.[0-9])(?!,(?!(?:44|55|88)(?!\\p{N}))[0-9])(?![\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?:[mM][iI][nN]|[mM][iI][nN][uU][tT][eE][nN]|[mM][iI][nN][uU][tT][eE]|[mM][iI][nN][uU][tT][eE][sS]|[sS][eE][kK]|[sS][eE][cC]|[sS][tT][dD]|[sS][tT][uU][nN][dD][eE][nN]|[sS][tT][uU][nN][dD][eE]|[hH][oO][uU][rR][sS]|[tT][aA][gG][eE]|[tT][aA][gG][eE][nN]|[dD][aA][yY][sS]|[kK][mM]|[mM]|[cC][mM]|[mM][mM]|[hH][zZ]|[kK][hH][zZ]|[mM][hH][zZ]|[gG][hH][zZ]|[dD][bB]|[dD][bB][mM]|[vV]|[mM][aA]|[mM][aA][hH]|[wW]|[mM][wW]|[kK][wW]|[kK][bB]|[jJ][aA][hH][rR][eE]|[jJ][aA][hH][rR][eE][nN]|[jJ][aA][hH][rR]|[hH][pP][aA]|[mM][bB][aA][rR]|[yY][eE][aA][rR][sS]|[fF]|[cC]|[kK]|[sS][tT][üÜ][cC][kK]|[eE][uU][rR][oO]|[uU][hH][rR]|[pP][uU][nN][kK][tT][eE]|[lL][eE][uU][tT][eE]|[pP][eE][rR][sS][oO][nN][eE][nN]|[tT][eE][iI][lL][nN][eE][hH][mM][eE][rR]|[sS][tT][aA][tT][iI][oO][nN][eE][nN]|[bB][yY][tT][eE][sS]|[pP][rR][oO][zZ][eE][nN][tT]|[pP][eE][rR][cC][eE][nN][tT]|[gG][rR][aA][dD]|[kK][nN][oO][tT][eE][nN]|[kK][mM][hH]|%|[sS]|[sS][eE][kK][uU][nN][dD][eE][nN]|[nN][oO][dD][eE][sS]|[nN][aA][cC][hH][rR][iI][cC][hH][tT][eE][nN]|[mM][aA][lL]|[sS][tT][uU][eE][cC][kK])(?![\\p{L}\\p{N}_]))|hallo|servus|moin|nabend|ahoi|guten[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morgen|abend|tag)|gute[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(nacht|reise)|good[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morning|evening|night|afternoon|day)|buon ?giorno|buona? ?s?era|buona ?notte|buonanotte|buon ?pomeriggio|ciao|hello|hi(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))|(?:salut|bonjour|bonsoir|bonne[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:nuit|soir[ée]e|journ[ée]e)|witam|hej|hey|huhu|mahlzeit|cze[sś][cć]|dzie[nń][\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+dobry|dobry[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:wiecz[oó]r|dzie[nń])|dobranoc|ol[aá]|slt|gm|gn|(?:einen[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+|ein[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+)?(?:sch[oö]nen?|sch[oö]nes|guten?|gute)[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:morgen|abend|tag|nacht|wochenstart|wochenende|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag|start)|buona?[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:sera|serata|giornata|notte|mattina|domenica)|buon[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:giorno|pomeriggio|inizio|weekend|fine)|saluti|salve|gr[uü](?:ß|ss|[ßs]e))(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))))",
       "flags": "i",
       "tag": "greeting",
       "legacy_tag": "greeting",
@@ -993,7 +1063,7 @@
       "priority": 50,
       "name": "Greeting extra openers",
       "scope": "msg",
-      "pattern": "(?!^(?:[^\\p{L}\\p{N}_]*(73|hallo|servus|moin|nabend|ahoi|guten[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morgen|abend|tag)|gute[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(nacht|reise)|good[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morning|evening|night|afternoon|day)|buon ?giorno|buona? ?s?era|buona ?notte|buonanotte|buon ?pomeriggio|ciao|hello|hi(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))|(?:salut|bonjour|bonsoir|bonne[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:nuit|soir[ée]e|journ[ée]e)|witam|hej|hey|huhu|mahlzeit|cze[sś][cć]|dzie[nń][\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+dobry|dobry[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:wiecz[oó]r|dzie[nń])|dobranoc|ol[aá]|slt|gm|gn|(?:einen[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+|ein[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+)?(?:sch[oö]nen?|sch[oö]nes|guten?|gute)[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:morgen|abend|tag|nacht|wochenstart|wochenende|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag|start)|buona?[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:sera|serata|giornata|notte|mattina|domenica)|buon[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:giorno|pomeriggio|inizio|weekend|fine)|saluti|salve|gr[uü](?:ß|ss|[ßs]e))(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_])))|[^\\p{L}\\p{N}_]*(?:(?:ein[A-Za-z0-9_]*[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?(?:sch[oö]n[A-Za-z0-9_]*|sonnig[A-Za-z0-9_]*|guten?|frohe?|gesegnete?|angenehme?|erholsame?|ruhige?)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:(?:guten?|sch[oö]n[A-Za-z0-9_]*)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?(?:morgen|tag|abend|nachmittag|vormittag|mittag|nacht|woche|wochenende|wochenstart|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag|start|feierabend|feiertag)|gude|tach|pfiat(?:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+di)?|gr[uü](?:ß|ss)e?|buenos[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+d[ií]as|buenas[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:tardes|noches)|hola|alo|dzie[nń][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+dobry|witaj|mi[lł]ego|dobrej[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+nocy|godmorgen|god[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+morgen|buon[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+pranzo|happy[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+meshday)(?![\\p{L}\\p{N}_])|@[A-Za-z0-9/-]{3,12}(?::|[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[^\\p{L}\\p{N}_]*(73|hallo|servus|moin|nabend|ahoi|guten[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morgen|abend|tag)|gute[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(nacht|reise)|good[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morning|evening|night|afternoon|day)|buon ?giorno|buona? ?s?era|buona ?notte|buonanotte|buon ?pomeriggio|ciao|hello|hi(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))|(?:salut|bonjour|bonsoir|bonne[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:nuit|soir[ée]e|journ[ée]e)|witam|hej|hey|huhu|mahlzeit|cze[sś][cć]|dzie[nń][\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+dobry|dobry[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:wiecz[oó]r|dzie[nń])|dobranoc|ol[aá]|slt|gm|gn|(?:einen[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+|ein[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+)?(?:sch[oö]nen?|sch[oö]nes|guten?|gute)[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:morgen|abend|tag|nacht|wochenstart|wochenende|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag|start)|buona?[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:sera|serata|giornata|notte|mattina|domenica)|buon[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:giorno|pomeriggio|inizio|weekend|fine)|saluti|salve|gr[uü](?:ß|ss|[ßs]e))(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_])))))^(?:(?:qsl|ok|okay|ack|roger)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff.,:;!-]+)?(?:[A-Z0-9]{3,8}(?:-[0-9]{1,2})?:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*|@[A-Za-z0-9/-]{3,12}[:\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*)?[^\\p{L}\\p{N}_]*(?:(?:gr[uü](?:ß|ss)e?|guten?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:morgen|abend|tag)|moin|hallo|servus|buon[A-Za-z0-9_]+|ciao|gm|gn|gri[ae](?:ß|ss?)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:eich|di|euch)|aloha|halli(?:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff-]+hallo)?|hel{2,}o|helo|ga[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+a[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+tutti|gumo|tsch[uü]e?ss?|bis[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+sp[aä]ter|salli|liebe[ns]?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+gr[uü](?:ß|ss)e?|bye[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*bye|bonne[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:sieste|soir[ée]e|journ[ée]e|fin|nuit)|(?:ich[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?w[uü]nsche?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:euch[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+|allen[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+|ein[A-Za-z0-9_]*[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)+(?:sch[oö]n[A-Za-z0-9_]*|gut[A-Za-z0-9_]*|angenehm[A-Za-z0-9_]*))(?![\\p{L}\\p{N}_])|(?:ein[A-Za-z0-9_]*[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?sch[oö]n[A-Za-z0-9_]*[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:sonnig[A-Za-z0-9_]*|sch[oö]n[A-Za-z0-9_]*|erholsam[A-Za-z0-9_]*|ruhig[A-Za-z0-9_]*)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:morgen|tag|abend|nacht|woche|wochenende|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag)(?![\\p{L}\\p{N}_]))",
+      "pattern": "(?!^(?:[^\\p{L}\\p{N}_]*((?<!-)73(?:s(?![\\p{L}\\p{N}_]))?(?![\\p{L}\\p{N}_:%°-])(?!/(?!(?:44|55|88)(?!\\p{N})))(?!\\.[0-9])(?!,(?!(?:44|55|88)(?!\\p{N}))[0-9])(?![\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?:[mM][iI][nN]|[mM][iI][nN][uU][tT][eE][nN]|[mM][iI][nN][uU][tT][eE]|[mM][iI][nN][uU][tT][eE][sS]|[sS][eE][kK]|[sS][eE][cC]|[sS][tT][dD]|[sS][tT][uU][nN][dD][eE][nN]|[sS][tT][uU][nN][dD][eE]|[hH][oO][uU][rR][sS]|[tT][aA][gG][eE]|[tT][aA][gG][eE][nN]|[dD][aA][yY][sS]|[kK][mM]|[mM]|[cC][mM]|[mM][mM]|[hH][zZ]|[kK][hH][zZ]|[mM][hH][zZ]|[gG][hH][zZ]|[dD][bB]|[dD][bB][mM]|[vV]|[mM][aA]|[mM][aA][hH]|[wW]|[mM][wW]|[kK][wW]|[kK][bB]|[jJ][aA][hH][rR][eE]|[jJ][aA][hH][rR][eE][nN]|[jJ][aA][hH][rR]|[hH][pP][aA]|[mM][bB][aA][rR]|[yY][eE][aA][rR][sS]|[fF]|[cC]|[kK]|[sS][tT][üÜ][cC][kK]|[eE][uU][rR][oO]|[uU][hH][rR]|[pP][uU][nN][kK][tT][eE]|[lL][eE][uU][tT][eE]|[pP][eE][rR][sS][oO][nN][eE][nN]|[tT][eE][iI][lL][nN][eE][hH][mM][eE][rR]|[sS][tT][aA][tT][iI][oO][nN][eE][nN]|[bB][yY][tT][eE][sS]|[pP][rR][oO][zZ][eE][nN][tT]|[pP][eE][rR][cC][eE][nN][tT]|[gG][rR][aA][dD]|[kK][nN][oO][tT][eE][nN]|[kK][mM][hH]|%|[sS]|[sS][eE][kK][uU][nN][dD][eE][nN]|[nN][oO][dD][eE][sS]|[nN][aA][cC][hH][rR][iI][cC][hH][tT][eE][nN]|[mM][aA][lL]|[sS][tT][uU][eE][cC][kK])(?![\\p{L}\\p{N}_]))|hallo|servus|moin|nabend|ahoi|guten[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morgen|abend|tag)|gute[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(nacht|reise)|good[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morning|evening|night|afternoon|day)|buon ?giorno|buona? ?s?era|buona ?notte|buonanotte|buon ?pomeriggio|ciao|hello|hi(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))|(?:salut|bonjour|bonsoir|bonne[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:nuit|soir[ée]e|journ[ée]e)|witam|hej|hey|huhu|mahlzeit|cze[sś][cć]|dzie[nń][\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+dobry|dobry[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:wiecz[oó]r|dzie[nń])|dobranoc|ol[aá]|slt|gm|gn|(?:einen[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+|ein[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+)?(?:sch[oö]nen?|sch[oö]nes|guten?|gute)[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:morgen|abend|tag|nacht|wochenstart|wochenende|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag|start)|buona?[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:sera|serata|giornata|notte|mattina|domenica)|buon[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:giorno|pomeriggio|inizio|weekend|fine)|saluti|salve|gr[uü](?:ß|ss|[ßs]e))(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_])))|[^\\p{L}\\p{N}_]*(?:(?:ein[A-Za-z0-9_]*[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?(?:sch[oö]n[A-Za-z0-9_]*|sonnig[A-Za-z0-9_]*|guten?|frohe?|gesegnete?|angenehme?|erholsame?|ruhige?)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:(?:guten?|sch[oö]n[A-Za-z0-9_]*)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?(?:morgen|tag|abend|nachmittag|vormittag|mittag|nacht|woche|wochenende|wochenstart|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag|start|feierabend|feiertag)|gude|tach|pfiat(?:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+di)?|gr[uü](?:ß|ss)e?|buenos[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+d[ií]as|buenas[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:tardes|noches)|hola|alo|dzie[nń][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+dobry|witaj|mi[lł]ego|dobrej[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+nocy|godmorgen|god[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+morgen|buon[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+pranzo|happy[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+meshday)(?![\\p{L}\\p{N}_])|@[A-Za-z0-9/-]{3,12}(?::|[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*[^\\p{L}\\p{N}_]*((?<!-)73(?:s(?![\\p{L}\\p{N}_]))?(?![\\p{L}\\p{N}_:%°-])(?!/(?!(?:44|55|88)(?!\\p{N})))(?!\\.[0-9])(?!,(?!(?:44|55|88)(?!\\p{N}))[0-9])(?![\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?:[mM][iI][nN]|[mM][iI][nN][uU][tT][eE][nN]|[mM][iI][nN][uU][tT][eE]|[mM][iI][nN][uU][tT][eE][sS]|[sS][eE][kK]|[sS][eE][cC]|[sS][tT][dD]|[sS][tT][uU][nN][dD][eE][nN]|[sS][tT][uU][nN][dD][eE]|[hH][oO][uU][rR][sS]|[tT][aA][gG][eE]|[tT][aA][gG][eE][nN]|[dD][aA][yY][sS]|[kK][mM]|[mM]|[cC][mM]|[mM][mM]|[hH][zZ]|[kK][hH][zZ]|[mM][hH][zZ]|[gG][hH][zZ]|[dD][bB]|[dD][bB][mM]|[vV]|[mM][aA]|[mM][aA][hH]|[wW]|[mM][wW]|[kK][wW]|[kK][bB]|[jJ][aA][hH][rR][eE]|[jJ][aA][hH][rR][eE][nN]|[jJ][aA][hH][rR]|[hH][pP][aA]|[mM][bB][aA][rR]|[yY][eE][aA][rR][sS]|[fF]|[cC]|[kK]|[sS][tT][üÜ][cC][kK]|[eE][uU][rR][oO]|[uU][hH][rR]|[pP][uU][nN][kK][tT][eE]|[lL][eE][uU][tT][eE]|[pP][eE][rR][sS][oO][nN][eE][nN]|[tT][eE][iI][lL][nN][eE][hH][mM][eE][rR]|[sS][tT][aA][tT][iI][oO][nN][eE][nN]|[bB][yY][tT][eE][sS]|[pP][rR][oO][zZ][eE][nN][tT]|[pP][eE][rR][cC][eE][nN][tT]|[gG][rR][aA][dD]|[kK][nN][oO][tT][eE][nN]|[kK][mM][hH]|%|[sS]|[sS][eE][kK][uU][nN][dD][eE][nN]|[nN][oO][dD][eE][sS]|[nN][aA][cC][hH][rR][iI][cC][hH][tT][eE][nN]|[mM][aA][lL]|[sS][tT][uU][eE][cC][kK])(?![\\p{L}\\p{N}_]))|hallo|servus|moin|nabend|ahoi|guten[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morgen|abend|tag)|gute[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(nacht|reise)|good[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(morning|evening|night|afternoon|day)|buon ?giorno|buona? ?s?era|buona ?notte|buonanotte|buon ?pomeriggio|ciao|hello|hi(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))|(?:salut|bonjour|bonsoir|bonne[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:nuit|soir[ée]e|journ[ée]e)|witam|hej|hey|huhu|mahlzeit|cze[sś][cć]|dzie[nń][\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+dobry|dobry[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:wiecz[oó]r|dzie[nń])|dobranoc|ol[aá]|slt|gm|gn|(?:einen[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+|ein[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+)?(?:sch[oö]nen?|sch[oö]nes|guten?|gute)[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?:morgen|abend|tag|nacht|wochenstart|wochenende|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag|start)|buona?[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:sera|serata|giornata|notte|mattina|domenica)|buon[\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]?(?:giorno|pomeriggio|inizio|weekend|fine)|saluti|salve|gr[uü](?:ß|ss|[ßs]e))(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_])))))^(?:(?:qsl|ok|okay|ack|roger)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff.,:;!-]+)?(?:[A-Z0-9]{3,8}(?:-[0-9]{1,2})?:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*|@[A-Za-z0-9/-]{3,12}[:\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*)?[^\\p{L}\\p{N}_]*(?:(?:gr[uü](?:ß|ss)e?|guten?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:morgen|abend|tag)|moin|hallo|servus|buon[A-Za-z0-9_]+|ciao|gm|gn|gri[ae](?:ß|ss?)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:eich|di|euch)|aloha|halli(?:[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff-]+hallo)?|hel{2,}o|helo|ga[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+a[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+tutti|gumo|tsch[uü]e?ss?|bis[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+sp[aä]ter|salli|liebe[ns]?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+gr[uü](?:ß|ss)e?|bye[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*bye|bonne[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:sieste|soir[ée]e|journ[ée]e|fin|nuit)|(?:ich[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?w[uü]nsche?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:euch[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+|allen[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+|ein[A-Za-z0-9_]*[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)+(?:sch[oö]n[A-Za-z0-9_]*|gut[A-Za-z0-9_]*|angenehm[A-Za-z0-9_]*))(?![\\p{L}\\p{N}_])|(?:ein[A-Za-z0-9_]*[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+)?sch[oö]n[A-Za-z0-9_]*[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:sonnig[A-Za-z0-9_]*|sch[oö]n[A-Za-z0-9_]*|erholsam[A-Za-z0-9_]*|ruhig[A-Za-z0-9_]*)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:morgen|tag|abend|nacht|woche|wochenende|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag)(?![\\p{L}\\p{N}_]))",
       "flags": "i",
       "tag": "greeting",
       "legacy_tag": "greeting",
@@ -1003,7 +1073,7 @@
       "priority": 50.1,
       "name": "Greeting sign-off 73",
       "scope": "msg",
-      "pattern": "(?:(?<![\\p{L}\\p{N}_.:/-])(?<![0-9],)|(?<=[vV][yY]))73(?![\\p{L}\\p{N}_.:/%°-])(?<!(?<![\\p{L}\\p{N}_])(?:[gG][rR][uU][pP][pP][eE]|[gG][rR][oO][uU][pP]|[nN][rR]|[iI][dD]|[kK][aA][nN][aA][lL]|[cC][hH][aA][nN][nN][eE][lL]|[cC][hH]|[sS][eE][iI][tT]|[sS][iI][nN][cC][eE]|[fF][oO][rR]|[nN][aA][cC][hH]|[vV][oO][rR]|[rR][aA][uU][mM]|[rR][oO][oO][mM]|[zZ][iI][mM][mM][eE][rR]|[bB][uU][sS]|[lL][iI][nN][iI][eE]|[lL][iI][nN][eE]|[hH][aA][uU][sS]|[nN][uU][mM][mM][eE][rR]|[nN][uU][mM][bB][eE][rR]|[sS][eE][iI][tT][eE]|[pP][aA][gG][eE]|[pP][lL][aA][tT][zZ])[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?73)(?![\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?:[mM][iI][nN]|[mM][iI][nN][uU][tT][eE][nN]|[mM][iI][nN][uU][tT][eE]|[mM][iI][nN][uU][tT][eE][sS]|[sS][eE][kK]|[sS][eE][cC]|[sS][tT][dD]|[sS][tT][uU][nN][dD][eE][nN]|[sS][tT][uU][nN][dD][eE]|[hH][oO][uU][rR][sS]|[tT][aA][gG][eE]|[tT][aA][gG][eE][nN]|[dD][aA][yY][sS]|[kK][mM]|[mM]|[cC][mM]|[mM][mM]|[hH][zZ]|[kK][hH][zZ]|[mM][hH][zZ]|[gG][hH][zZ]|[dD][bB]|[dD][bB][mM]|[vV]|[mM][aA]|[mM][aA][hH]|[wW]|[mM][wW]|[kK][wW]|[kK][bB]|[jJ][aA][hH][rR][eE]|[jJ][aA][hH][rR]|[yY][eE][aA][rR][sS]|[fF]|[cC]|[kK]|[sS][tT][üÜ][cC][kK]|[eE][uU][rR][oO]|[uU][hH][rR]|[pP][uU][nN][kK][tT][eE]|[lL][eE][uU][tT][eE]|[pP][eE][rR][sS][oO][nN][eE][nN]|[tT][eE][iI][lL][nN][eE][hH][mM][eE][rR]|[sS][tT][aA][tT][iI][oO][nN][eE][nN]|[bB][yY][tT][eE][sS]|[pP][rR][oO][zZ][eE][nN][tT]|[pP][eE][rR][cC][eE][nN][tT]|[gG][rR][aA][dD]|[kK][nN][oO][tT][eE][nN]|[kK][mM][hH])(?![\\p{L}\\p{N}_]))(?=[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?:(?![\\s\\S])|[!?.,;:()\\]…~&-]|\\p{Extended_Pictographic}|[dD][eE](?![\\p{L}\\p{N}_])|(?:55|88)(?![\\p{L}\\p{N}_])|[A-Z0-9]{1,3}[0-9][A-Z]{1,4}(?:-[0-9]{1,2})?(?![\\p{L}\\p{N}_])|(?:[aA][uU][sS]|[fF][rR][oO][mM]|[vV][oO][nN]|[vV][oO][mM]|[aA]|[aA][nN]|[uU][nN][dD]|[eE]|[eE][tT]|[yY]|[eE][sS]|[bB][iI][sS]|[dD][aA]|[iI][nN]|[zZ][uU][mM]|[zZ][uU][rR]|[gG][uU][tT][eE]|[aA][lL][lL]|[tT][oO])(?![\\p{L}\\p{N}_])|\\p{Lu}[\\p{L}-]*[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff!?.,;:)…~]*(?:[A-Z0-9]{1,3}[0-9][A-Z]{1,4}(?:-[0-9]{1,2})?(?![\\p{L}\\p{N}_])[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff!?.,;:)…~]*)?(?![\\s\\S])))(?=[^\\n]{0,40}(?![\\s\\S]))",
+      "pattern": "(?:(?<![\\p{L}\\p{N}_.:/=+-])(?<![0-9],)|(?<=\\p{Ll}{3}[.!?])|(?<=[vV][yY]))73(?<!(?<![\\p{L}\\p{N}_])(?:[gG][rR][uU][pP][pP][eE]|[gG][rR][oO][uU][pP]|[nN][rR]|[iI][dD]|[kK][aA][nN][aA][lL]|[cC][hH][aA][nN][nN][eE][lL]|[cC][hH]|[sS][eE][iI][tT]|[sS][iI][nN][cC][eE]|[fF][oO][rR]|[nN][aA][cC][hH]|[vV][oO][rR]|[rR][aA][uU][mM]|[rR][oO][oO][mM]|[zZ][iI][mM][mM][eE][rR]|[bB][uU][sS]|[lL][iI][nN][iI][eE]|[lL][iI][nN][eE]|[hH][aA][uU][sS]|[nN][uU][mM][mM][eE][rR]|[nN][uU][mM][bB][eE][rR]|[sS][eE][iI][tT][eE]|[pP][aA][gG][eE]|[pP][lL][aA][tT][zZ]|[bB][aA][tT][tT]|[aA][kK][kK][uU]|[hH][uU][mM]|[tT][eE][mM][pP]|[rR][sS][sS][iI]|[sS][nN][rR]|[tT][gG]|[nN][oO][dD][eE]|[cC][aA]|[eE][tT][wW][aA]|[rR][uU][nN][dD]|[üÜ][bB][eE][rR]|[uU][eE][bB][eE][rR]|[aA][bB]|[nN][uU][rR]|[tT][eE][iI][lL][nN][eE][hH][mM][eE][rR]|(?:[bB][aA][tT]|[aA][kK][kK][uU]|[hH][uU][mM]|[tT][eE][mM][pP]|[sS][pP][aA][nN][nN][uU][nN][gG]|[pP][eE][gG][eE][lL]|[pP][oO][rR][tT]|[sS][tT][aA][tT][iI][oO][nN]|[gG][wW]|[dD][iI][sS][tT][aA][nN][zZ]|[hH][oO][pP][sS])\\p{L}*|\\p{L}*[fF][eE][uU][cC][hH][tT]\\p{L}*)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff.:#=]{0,2}73)(?<![\\p{L}\\p{N}_][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]?[:=][\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]{0,2}73)(?:s(?![\\p{L}\\p{N}_]))?(?![\\p{L}\\p{N}_:%°-])(?!/(?!(?:44|55|88)(?!\\p{N})))(?!\\.[0-9])(?!,(?!(?:44|55|88)(?!\\p{N}))[0-9])(?![\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]*(?:[mM][iI][nN]|[mM][iI][nN][uU][tT][eE][nN]|[mM][iI][nN][uU][tT][eE]|[mM][iI][nN][uU][tT][eE][sS]|[sS][eE][kK]|[sS][eE][cC]|[sS][tT][dD]|[sS][tT][uU][nN][dD][eE][nN]|[sS][tT][uU][nN][dD][eE]|[hH][oO][uU][rR][sS]|[tT][aA][gG][eE]|[tT][aA][gG][eE][nN]|[dD][aA][yY][sS]|[kK][mM]|[mM]|[cC][mM]|[mM][mM]|[hH][zZ]|[kK][hH][zZ]|[mM][hH][zZ]|[gG][hH][zZ]|[dD][bB]|[dD][bB][mM]|[vV]|[mM][aA]|[mM][aA][hH]|[wW]|[mM][wW]|[kK][wW]|[kK][bB]|[jJ][aA][hH][rR][eE]|[jJ][aA][hH][rR][eE][nN]|[jJ][aA][hH][rR]|[hH][pP][aA]|[mM][bB][aA][rR]|[yY][eE][aA][rR][sS]|[fF]|[cC]|[kK]|[sS][tT][üÜ][cC][kK]|[eE][uU][rR][oO]|[uU][hH][rR]|[pP][uU][nN][kK][tT][eE]|[lL][eE][uU][tT][eE]|[pP][eE][rR][sS][oO][nN][eE][nN]|[tT][eE][iI][lL][nN][eE][hH][mM][eE][rR]|[sS][tT][aA][tT][iI][oO][nN][eE][nN]|[bB][yY][tT][eE][sS]|[pP][rR][oO][zZ][eE][nN][tT]|[pP][eE][rR][cC][eE][nN][tT]|[gG][rR][aA][dD]|[kK][nN][oO][tT][eE][nN]|[kK][mM][hH]|%|[sS]|[sS][eE][kK][uU][nN][dD][eE][nN]|[nN][oO][dD][eE][sS]|[nN][aA][cC][hH][rR][iI][cC][hH][tT][eE][nN]|[mM][aA][lL]|[sS][tT][uU][eE][cC][kK])(?![\\p{L}\\p{N}_]))",
       "flags": "",
       "tag": "greeting",
       "legacy_tag": "greeting",
@@ -1030,6 +1100,16 @@
       "machine": false
     },
     {
+      "priority": 50.31,
+      "name": "Greeting words anywhere",
+      "scope": "msg",
+      "pattern": "(?<![\\p{L}\\p{N}_])(?:gute[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+nacht|vy[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+73|hallo|hello|sch(?:ö|oe)nen?[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+gr(?:ü|ue)(?:ß|ss)(?:e|en)?)(?![\\p{L}\\p{N}_])",
+      "flags": "i",
+      "tag": "greeting",
+      "legacy_tag": "greeting",
+      "machine": false
+    },
+    {
       "priority": 55,
       "name": "Alert reminder",
       "scope": "msg",
@@ -1037,6 +1117,16 @@
       "flags": "i",
       "tag": "bulletin",
       "legacy_tag": "bulletin",
+      "machine": false
+    },
+    {
+      "priority": 55.1,
+      "name": "Alert level and storm warning",
+      "scope": "msg",
+      "pattern": "(?<![\\p{L}\\p{N}_])(?:alerte|allerta|alarm)[\\t\\n\\x0b\\x0c\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+(?:orange|rouge|rossa?|arancione|gialla?|gelb|rot|verde)(?![\\p{L}\\p{N}_])|⚠️?[^\\n]{0,80}(?:temporal|gewitter|unwetter|storm|sturm)",
+      "flags": "i",
+      "tag": "alert",
+      "legacy_tag": "alert",
       "machine": false
     },
     {
@@ -1247,7 +1337,8 @@
         "test"
       ],
       "rules": [
-        "Test short"
+        "Test short",
+        "Test standalone word"
       ],
       "directed": false,
       "topics": [
@@ -1306,7 +1397,8 @@
         "qso"
       ],
       "rules": [
-        "Greeting DE/EN"
+        "Greeting DE/EN",
+        "Greeting words anywhere"
       ],
       "directed": false,
       "topics": [
@@ -1325,7 +1417,8 @@
       ],
       "rules": [
         "Question mark",
-        "Greeting DE/EN"
+        "Greeting DE/EN",
+        "Greeting words anywhere"
       ],
       "directed": false,
       "topics": [
@@ -1387,7 +1480,9 @@
       ],
       "rules": [
         "Test short",
-        "Greeting DE/EN"
+        "Test standalone word",
+        "Greeting DE/EN",
+        "Greeting words anywhere"
       ],
       "directed": false,
       "topics": [
@@ -1407,7 +1502,8 @@
       ],
       "rules": [
         "QSL",
-        "Greeting DE/EN"
+        "Greeting DE/EN",
+        "Greeting words anywhere"
       ],
       "directed": false,
       "topics": [
@@ -1458,11 +1554,16 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
+        "greeting",
         "qso"
       ],
-      "rules": [],
+      "rules": [
+        "Greeting words anywhere"
+      ],
       "directed": false,
-      "topics": [],
+      "topics": [
+        "greeting"
+      ],
       "machine_rules": []
     },
     {
@@ -1662,7 +1763,8 @@
       ],
       "rules": [
         "Test short",
-        "Test verb forms"
+        "Test verb forms",
+        "Test standalone word"
       ],
       "directed": false,
       "topics": [
@@ -1716,7 +1818,9 @@
       ],
       "rules": [
         "Test short",
-        "Greeting DE/EN"
+        "Test standalone word",
+        "Greeting DE/EN",
+        "Greeting words anywhere"
       ],
       "directed": false,
       "topics": [
@@ -1755,6 +1859,7 @@
       "rules": [
         "Test short",
         "Test verb forms",
+        "Test standalone word",
         "Question mark"
       ],
       "directed": false,
@@ -1872,14 +1977,17 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
+        "greeting",
         "qsl",
         "qso"
       ],
       "rules": [
-        "QSL"
+        "QSL",
+        "Greeting words anywhere"
       ],
       "directed": false,
       "topics": [
+        "greeting",
         "qsl"
       ],
       "machine_rules": []
@@ -1895,7 +2003,8 @@
       ],
       "rules": [
         "QSL",
-        "Greeting DE/EN"
+        "Greeting DE/EN",
+        "Greeting words anywhere"
       ],
       "directed": false,
       "topics": [
@@ -1909,13 +2018,17 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "auto_beacon"
+        "auto_beacon",
+        "test"
       ],
       "rules": [
-        "Bot command prefix"
+        "Bot command prefix",
+        "Typed ping command"
       ],
       "directed": false,
-      "topics": [],
+      "topics": [
+        "test"
+      ],
       "machine_rules": []
     },
     {
@@ -2441,7 +2554,8 @@
         "alert"
       ],
       "rules": [
-        "Alert bot"
+        "Alert bot",
+        "Alert level and storm warning"
       ],
       "directed": false,
       "topics": [
@@ -2896,7 +3010,8 @@
       ],
       "rules": [
         "WX temperature value",
-        "WX bot templates"
+        "WX bot templates",
+        "Weather vocabulary extended"
       ],
       "directed": false,
       "topics": [
@@ -3131,7 +3246,9 @@
       ],
       "rules": [
         "Test word early",
-        "Greeting DE/EN"
+        "Test standalone word",
+        "Greeting DE/EN",
+        "Greeting words anywhere"
       ],
       "directed": false,
       "topics": [
@@ -3150,7 +3267,8 @@
       ],
       "rules": [
         "Test word early",
-        "Test verb forms"
+        "Test verb forms",
+        "Test standalone word"
       ],
       "directed": false,
       "topics": [
@@ -3175,11 +3293,16 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "qso"
+        "qso",
+        "test"
       ],
-      "rules": [],
+      "rules": [
+        "Test standalone word"
+      ],
       "directed": false,
-      "topics": [],
+      "topics": [
+        "test"
+      ],
       "machine_rules": []
     },
     {
@@ -3272,6 +3395,7 @@
       ],
       "rules": [
         "Telemetry CNT/INT",
+        "Test prefixed words",
         "Test beacon"
       ],
       "directed": false,
@@ -3291,6 +3415,7 @@
         "test"
       ],
       "rules": [
+        "Test prefixed words",
         "Test beacon"
       ],
       "directed": false,
@@ -3596,7 +3721,8 @@
       ],
       "rules": [
         "Bot reply templates",
-        "Test word early"
+        "Test word early",
+        "Test standalone word"
       ],
       "directed": false,
       "topics": [
@@ -3673,13 +3799,17 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "auto_beacon"
+        "auto_beacon",
+        "test"
       ],
       "rules": [
-        "File-transfer frames"
+        "File-transfer frames",
+        "Test standalone word"
       ],
       "directed": false,
-      "topics": [],
+      "topics": [
+        "test"
+      ],
       "machine_rules": [
         "File-transfer frames"
       ]
@@ -3921,13 +4051,17 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "auto_beacon"
+        "auto_beacon",
+        "greeting"
       ],
       "rules": [
-        "Bot command prefix"
+        "Bot command prefix",
+        "Greeting words anywhere"
       ],
       "directed": false,
-      "topics": [],
+      "topics": [
+        "greeting"
+      ],
       "machine_rules": []
     },
     {
@@ -3973,7 +4107,8 @@
       ],
       "rules": [
         "Question mark",
-        "Greeting DE/EN"
+        "Greeting DE/EN",
+        "Greeting words anywhere"
       ],
       "directed": false,
       "topics": [
@@ -4067,7 +4202,8 @@
         "test"
       ],
       "rules": [
-        "Test short"
+        "Test short",
+        "Test standalone word"
       ],
       "directed": false,
       "topics": [
@@ -4347,7 +4483,8 @@
       ],
       "rules": [
         "Test short",
-        "Test compounds"
+        "Test compounds",
+        "Test standalone word"
       ],
       "directed": false,
       "topics": [
@@ -4827,7 +4964,8 @@
       ],
       "rules": [
         "Test short",
-        "Test compounds"
+        "Test compounds",
+        "Test standalone word"
       ],
       "directed": false,
       "topics": [
@@ -4845,7 +4983,8 @@
       ],
       "rules": [
         "Test short",
-        "Test compounds"
+        "Test compounds",
+        "Test standalone word"
       ],
       "directed": false,
       "topics": [
@@ -4863,6 +5002,7 @@
       ],
       "rules": [
         "Test short",
+        "Test standalone word",
         "Test message"
       ],
       "directed": false,
@@ -5152,6 +5292,1409 @@
       "machine_rules": [
         "Alert bot Italian"
       ]
+    },
+    {
+      "text": "qsl beste 73 aus Musterstadt wx",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qsl",
+        "qso"
+      ],
+      "rules": [
+        "QSL",
+        "Greeting sign-off 73"
+      ],
+      "directed": false,
+      "topics": [
+        "greeting",
+        "qsl"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "ok 73 int qsl?",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qsl",
+        "qso",
+        "question"
+      ],
+      "rules": [
+        "QSL",
+        "Question mark",
+        "Greeting sign-off 73"
+      ],
+      "directed": false,
+      "topics": [
+        "greeting",
+        "qsl",
+        "question"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "danke.73 de Beispiel",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting sign-off 73"
+      ],
+      "directed": false,
+      "topics": [
+        "greeting"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "vy 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting sign-off 73",
+        "Greeting words anywhere"
+      ],
+      "directed": false,
+      "topics": [
+        "greeting"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "73!",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN",
+        "Greeting sign-off 73"
+      ],
+      "directed": false,
+      "topics": [
+        "greeting"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "73 de XX1ABC",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN",
+        "Greeting sign-off 73"
+      ],
+      "directed": false,
+      "topics": [
+        "greeting"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "73s an alle",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN",
+        "Greeting sign-off 73"
+      ],
+      "directed": false,
+      "topics": [
+        "greeting"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "Baujahr 1973 war gut",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "SNR -7.3",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Wert 73.5 gemessen",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Frequenz 144.73 gerade",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Strecke 73km lang",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Strecke 73 km lang",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Anteil 73% heute",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Winkel 73° heute",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Druck 73 hPa heute",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Hoehe 73 m heute",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Band 73 MHz heute",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Pegel 73 dB heute",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Leistung 73 W heute",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Start 73:10 heute",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Datum 12.73 heute",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "ID CNT:73 heute",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Rufzeichen DL73AB heute",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "QRG 433.73 heute",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "RSSI -73 dBm",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Kanal: 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Batt 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Batterie: 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Hops: 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Wert = 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Batterie 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Humidity 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Luftfeuchte 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Spannung 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Pegel 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Station 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Port 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "GW 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Distanz 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "OK 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting sign-off 73"
+      ],
+      "directed": false,
+      "topics": [
+        "greeting"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "Danke für die Info 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting sign-off 73"
+      ],
+      "directed": false,
+      "topics": [
+        "greeting"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "Tnx 73,55",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting sign-off 73"
+      ],
+      "directed": false,
+      "topics": [
+        "greeting"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "73/88 an alle",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN",
+        "Greeting sign-off 73"
+      ],
+      "directed": false,
+      "topics": [
+        "greeting"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "73/100",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Nr. 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Nr.73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "ID: 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Teilnehmer: 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Sat.73 Ost",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "4.35p.73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Akku 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "hum 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "hum=73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "T=73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "S9+73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "TG 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Node 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Es sind 73 Nodes online",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "73 Nachrichten heute",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Feuchte 73 %",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX humidity percent"
+      ],
+      "directed": false,
+      "topics": [
+        "weather"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "73 Sekunden",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "73 s",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "ca. 73 km",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Version 4.35.73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Kanal 73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "73%",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "73,5",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "-73",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "73 dB",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "73°C",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX temperature value"
+      ],
+      "directed": false,
+      "topics": [
+        "weather"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "73 Minuten",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Alles klar, 73 Peter. Bis morgen",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting sign-off 73"
+      ],
+      "directed": false,
+      "topics": [
+        "greeting"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "schönen Abend und 73.",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting DE/EN",
+        "Greeting sign-off 73"
+      ],
+      "directed": false,
+      "topics": [
+        "greeting"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "Schöne Grüße",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting words anywhere"
+      ],
+      "directed": false,
+      "topics": [
+        "greeting"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "schönen Grüßen",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting words anywhere"
+      ],
+      "directed": false,
+      "topics": [
+        "greeting"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "Viele schöne Grüße",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting words anywhere"
+      ],
+      "directed": false,
+      "topics": [
+        "greeting"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "schoene Gruesse",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting words anywhere"
+      ],
+      "directed": false,
+      "topics": [
+        "greeting"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "Contest: CWops Test (CWT) (1300Z-1400Z)",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bulletin"
+      ],
+      "rules": [
+        "Bulletin calendar bots"
+      ],
+      "directed": false,
+      "topics": [
+        "bulletin"
+      ],
+      "machine_rules": [
+        "Bulletin calendar bots"
+      ]
+    },
+    {
+      "text": "Contest: Mini-Test 40 m (1300Z-1400Z)",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "bulletin"
+      ],
+      "rules": [
+        "Bulletin calendar bots"
+      ],
+      "directed": false,
+      "topics": [
+        "bulletin"
+      ],
+      "machine_rules": [
+        "Bulletin calendar bots"
+      ]
+    },
+    {
+      "text": "Test aus Musterstadt",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "test"
+      ],
+      "rules": [
+        "Test short",
+        "Test standalone word",
+        "Test message"
+      ],
+      "directed": false,
+      "topics": [
+        "test"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "ich mache einen Test",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "test"
+      ],
+      "rules": [
+        "Test short",
+        "Test standalone word"
+      ],
+      "directed": false,
+      "topics": [
+        "test"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "--ping",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "auto_beacon",
+        "test"
+      ],
+      "rules": [
+        "Bot command dash",
+        "Typed ping command",
+        "Bot command single dash"
+      ],
+      "directed": false,
+      "topics": [
+        "test"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "-ping",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "auto_beacon",
+        "test"
+      ],
+      "rules": [
+        "Typed ping command",
+        "Bot command single dash"
+      ],
+      "directed": false,
+      "topics": [
+        "test"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "—ping",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "auto_beacon",
+        "test"
+      ],
+      "rules": [
+        "Bot command dash",
+        "Typed ping command",
+        "Bot command single dash"
+      ],
+      "directed": false,
+      "topics": [
+        "test"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "!ping XX1ABC-1",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "auto_beacon",
+        "test"
+      ],
+      "rules": [
+        "Bot command prefix",
+        "Typed ping command"
+      ],
+      "directed": false,
+      "topics": [
+        "test"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "ping me later",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Er sagt Hallo zu allen",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting words anywhere"
+      ],
+      "directed": false,
+      "topics": [
+        "greeting"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "I say hello to all",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting words anywhere"
+      ],
+      "directed": false,
+      "topics": [
+        "greeting"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "viele schöne Grüße an alle",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting salutations anywhere",
+        "Greeting words anywhere"
+      ],
+      "directed": false,
+      "topics": [
+        "greeting"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "mit schoenen Gruesse an alle",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting words anywhere"
+      ],
+      "directed": false,
+      "topics": [
+        "greeting"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "schöne Grüsse an alle",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting salutations anywhere",
+        "Greeting words anywhere"
+      ],
+      "directed": false,
+      "topics": [
+        "greeting"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "schönen Gruss an alle",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting salutations anywhere"
+      ],
+      "directed": false,
+      "topics": [
+        "greeting"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "Das war nur ein Test gestern",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "test"
+      ],
+      "rules": [
+        "Test short",
+        "Test verb forms",
+        "Test standalone word"
+      ],
+      "directed": false,
+      "topics": [
+        "test"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "we are testing it now",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "test"
+      ],
+      "rules": [
+        "Test standalone word"
+      ],
+      "directed": false,
+      "topics": [
+        "test"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "Der Tester kommt",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Die Testerin kommt",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Das Testrechner Projekt",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Das Testament liegt vor",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
+    },
+    {
+      "text": "Der Contest lief gut",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso"
+      ],
+      "rules": [],
+      "directed": false,
+      "topics": [],
+      "machine_rules": []
     },
     {
       "text": "--info",
@@ -5692,6 +7235,7 @@
       ],
       "rules": [
         "Test word early",
+        "Test standalone word",
         "Test message"
       ],
       "directed": false,
@@ -5812,7 +7356,8 @@
         "test"
       ],
       "rules": [
-        "Test verb forms"
+        "Test verb forms",
+        "Test prefixed words"
       ],
       "directed": false,
       "topics": [
@@ -5912,13 +7457,17 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "auto_beacon"
+        "auto_beacon",
+        "test"
       ],
       "rules": [
-        "Auto reply notice"
+        "Auto reply notice",
+        "Test standalone word"
       ],
       "directed": false,
-      "topics": [],
+      "topics": [
+        "test"
+      ],
       "machine_rules": [
         "Auto reply notice"
       ]
@@ -5944,14 +7493,18 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "auto_beacon"
+        "auto_beacon",
+        "test"
       ],
       "rules": [
         "Help-flag banner",
-        "Node timestamp banner"
+        "Node timestamp banner",
+        "Test prefixed words"
       ],
       "directed": false,
-      "topics": [],
+      "topics": [
+        "test"
+      ],
       "machine_rules": [
         "Help-flag banner",
         "Node timestamp banner"
@@ -6111,17 +7664,145 @@
       "machine_rules": []
     },
     {
-      "text": "-ping",
+      "text": "heute leichte Bewölkung hier",
       "from": "XX1ABC-1",
       "to": "ALL",
       "tags": [
-        "auto_beacon"
+        "weather"
       ],
       "rules": [
-        "Bot command single dash"
+        "Weather vocabulary extended"
       ],
       "directed": false,
-      "topics": [],
+      "topics": [
+        "weather"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "qui ci sono 15 gradi adesso",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "weather"
+      ],
+      "rules": [
+        "WX temperature Italian gradi"
+      ],
+      "directed": false,
+      "topics": [
+        "weather"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "Testnachricht vom neuen Knoten",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "test"
+      ],
+      "rules": [
+        "Test short",
+        "Test prefixed words"
+      ],
+      "directed": false,
+      "topics": [
+        "test"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "habe das Filter getestet",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "test"
+      ],
+      "rules": [
+        "Test abbreviation, participles and Polish testy"
+      ],
+      "directed": false,
+      "topics": [
+        "test"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "ich bin müde, gute Nacht",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "greeting",
+        "qso"
+      ],
+      "rules": [
+        "Greeting words anywhere"
+      ],
+      "directed": false,
+      "topics": [
+        "greeting"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "das ist ein Test",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "qso",
+        "test"
+      ],
+      "rules": [
+        "Test short",
+        "Test verb forms",
+        "Test standalone word"
+      ],
+      "directed": false,
+      "topics": [
+        "test"
+      ],
+      "machine_rules": []
+    },
+    {
+      "text": "[CNT:1/8][INT:60] https://example.org/ov",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "auto_beacon",
+        "bulletin",
+        "url"
+      ],
+      "rules": [
+        "Telemetry CNT/INT",
+        "Bulletin counter link advert",
+        "URL in text"
+      ],
+      "directed": false,
+      "topics": [
+        "bulletin",
+        "url"
+      ],
+      "machine_rules": [
+        "Telemetry CNT/INT"
+      ]
+    },
+    {
+      "text": "Regione Esempio: allerta gialla per vento",
+      "from": "XX1ABC-1",
+      "to": "ALL",
+      "tags": [
+        "alert"
+      ],
+      "rules": [
+        "Alert level and storm warning"
+      ],
+      "directed": false,
+      "topics": [
+        "alert"
+      ],
       "machine_rules": []
     },
     {
@@ -6597,7 +8278,8 @@
         "qso"
       ],
       "rules": [
-        "Greeting DE/EN"
+        "Greeting DE/EN",
+        "Greeting words anywhere"
       ],
       "directed": false,
       "topics": [
@@ -6931,7 +8613,8 @@
         "qso"
       ],
       "rules": [
-        "Greeting DE/EN"
+        "Greeting DE/EN",
+        "Greeting words anywhere"
       ],
       "directed": false,
       "topics": [
@@ -6979,6 +8662,7 @@
       ],
       "rules": [
         "Test short",
+        "Test standalone word",
         "Test message"
       ],
       "directed": false,
@@ -7083,7 +8767,9 @@
       "from": "XX1ABC-1",
       "to": "ALL",
       "timing": null,
-      "topics": [],
+      "topics": [
+        "test"
+      ],
       "machine_rules": [],
       "format_dominant": "PROSE",
       "format_signals": [
