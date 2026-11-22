@@ -21,10 +21,12 @@ if TYPE_CHECKING:
 
 ORIGIN_HUMAN = "human"
 ORIGIN_MACHINE = "machine"
+# origin_rule of a row a machine-flagged contract rule decided (the first rule below).
+ORIGIN_RULE_MACHINE_RULE = "machine-rule"
 
 # Rule names in evaluation order; the contract must list exactly these (ORIGIN_RULES in origin.ts).
 _RULE_NAMES = (
-    "machine-rule",
+    ORIGIN_RULE_MACHINE_RULE,
     "data-format-timed",
     "strong-data-layout",
     "layout-on-clock",

@@ -13,11 +13,11 @@ shows which signals dominate.
     ------  --------------  ---------
     +0.30   len_factor      length in words (caps at 15)
     +0.20   directed        directed flag (L1 or dst predicate)
-    +0.20   group_chat      'qso' in tags
+    +0.20   group_chat      origin is 'human'
     +0.15   freshness       1 / (1 + template_count)
     -0.25   emoji_density   emoji chars / text length
     -0.10   url_density     URL in the text
-    -0.40   known_beacon    any automated tag or 'auto_beacon'
+    -0.40   known_beacon    origin is 'machine'
 
 A +0.5 offset centres a neutral message near 0.5.  The result is
 clamped to [0.0, 1.0].
@@ -28,7 +28,7 @@ from __future__ import annotations
 import re
 from collections.abc import Collection
 
-from .types import AUTO_BEACON_TAG, EMOJI_RE, URL_RE
+from .types import EMOJI_RE, URL_RE
 
 # CLS-05: EMOJI_RE now imported from .types (single canonical definition,
 # shared with template.py -- previously this was a deliberately separate
@@ -68,7 +68,7 @@ def compute(
     tags: Collection[str],
     template_count: int,
     directed: bool = False,
-    automated_tags: Collection[str] = (),
+    origin: str | None = None,
 ) -> float:
     """Return a 0..1 info score.
 
@@ -76,14 +76,14 @@ def compute(
 
         + 0.30 * len_factor       # min(word_count / 15, 1.0)
         + 0.20 * directed         # 1.0 if the directed flag is set
-        + 0.20 * group_chat       # 1.0 if 'qso' in tags else 0.0
+        + 0.20 * group_chat       # 1.0 if origin is 'human' else 0.0
         + 0.15 * freshness        # 1.0 / (1 + template_count)
         - 0.25 * emoji_density    # emoji_count / max(len(text), 1)
         - 0.10 * url_density      # 1.0 if the text contains a URL else 0.0
-        - 0.40 * known_beacon     # 1.0 if an automated tag or 'auto_beacon' is present
+        - 0.40 * known_beacon     # 1.0 if origin is 'machine'
 
-    ``directed`` comes from L1 / the dst predicate, ``automated_tags`` is the
-    engine's automated tag set (the bot clamp keys on the ``bot`` tag).
+    ``directed`` comes from L1 / the dst predicate; ``origin`` is the message origin axis
+    (``human`` | ``machine`` | None when not computed); ``tags`` are the topics.
 
     Final value = clamp(score + 0.5, 0.0, 1.0).
 
@@ -96,7 +96,7 @@ def compute(
     word_count: int = len(re.findall(r"\w+", text))
     len_factor: float = min(word_count / _LEN_CAP, 1.0)
     directed_f: float = 1.0 if directed else 0.0
-    group_chat: float = 1.0 if "qso" in tag_set else 0.0
+    group_chat: float = 1.0 if origin == "human" else 0.0
     freshness: float = 1.0 / (1 + template_count)
 
     # Negative contributors
@@ -106,8 +106,8 @@ def compute(
     has_letters = _LETTER_RE.search(text) is not None
     emoji_density: float = 0.0 if has_letters else emoji_count / max(len(text), 1)
     url_density: float = 1.0 if URL_RE.search(text) else 0.0
-    automated = {AUTO_BEACON_TAG, *automated_tags}
-    known_beacon: float = 1.0 if automated & tag_set else 0.0
+    machine = origin == "machine"
+    known_beacon: float = 1.0 if machine else 0.0
 
     score: float = (
         _W_LEN_FACTOR * len_factor
@@ -121,9 +121,9 @@ def compute(
 
     final: float = max(0.0, min(1.0, score + 0.5))
 
-    # Automated clamp: machine output (auto_beacon: bot replies, node banners, software
+    # Automated clamp: machine output (bot replies, node banners, software
     # announcements, clock lines) is noise regardless of length/directness.
-    if AUTO_BEACON_TAG in tag_set:
+    if machine:
         return min(final, _BOT_COMMAND_CAP)
 
     # Minimal-content clamp: catches raw tokens that slipped past the regex
