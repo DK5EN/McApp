@@ -21,7 +21,7 @@ uv run python scripts/run_startup_tests.py      # tests
 ./scripts/release.sh                            # release (interactive, from development branch)
 ```
 
-All four must be clean before committing. CI's `tests` workflow is disabled and signs off nothing; `./scripts/gate.sh` is the gate both release skills require. It ends with `GATE: PASS` or `GATE: FAIL (<steps>)`; read its exit code directly, never through `| tail`.
+All four must be clean before committing. CI's `tests` workflow runs again since 2026-11-22, mainly to gate and auto-merge Dependabot PRs (`dev-release.yml` then cuts a dev pre-release daily after such merges); `./scripts/gate.sh` stays the gate both release skills require. It ends with `GATE: PASS` or `GATE: FAIL (<steps>)`; read its exit code directly, never through `| tail`.
 
 Branches: `development` (default), `main` (production). Commit format: `[type] description` (feat, fix, perf, refactor, chore, docs, test).
 

@@ -50,6 +50,8 @@ Each repo commits independently (`[type] description`), explicit paths only.
 
 **Expect the push to be rejected**: Dependabot PRs land on `development` while you work.
 
+**CI cuts dev pre-releases too** (since 2026-11-22): `.github/workflows/dev-release.yml` runs `release.sh 1` daily when Dependabot updates were merged in either repo. `release.sh` numbers `-dev.N` from LOCAL tags, so fetch tags in both repos before releasing by hand, or you reuse a number CI already published.
+
 ```bash
 git fetch origin development
 git log --oneline development..origin/development   # look before you touch anything

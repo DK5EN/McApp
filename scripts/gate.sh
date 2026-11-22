@@ -10,8 +10,9 @@
 # code 0 or 1. Read the exit code from this script directly, never through a pipe
 # into tail/head (the pipe reports tail's exit code).
 #
-# CI's `tests` workflow is disabled; this script is the release gate the
-# prod-release and dev-release skills require. bash 3.2 compatible (macOS).
+# This script is the release gate the prod-release and dev-release skills
+# require, and dev-release.yml runs it before cutting a pre-release in CI. CI's
+# `tests` workflow (re-enabled 2026-11-22) gates Dependabot PRs. bash 3.2 compatible (macOS).
 
 set -u
 

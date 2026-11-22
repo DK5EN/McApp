@@ -1,14 +1,15 @@
 version: 2
 
-# Dependabot opens PRs against a repository's DEFAULT branch unless told
-# otherwise, and this repo's GitHub default is still `main` (production).
-# `target-branch: development` is therefore set on every ecosystem below — it is
-# the working branch (see CLAUDE.md, "Git branches"), the only branch CI gates,
-# and the branch scripts/release.sh cuts from. Without it every dependency PR
-# would land on production, bypassing the dev pre-release path entirely.
+# The GitHub default branch is `development` (it used to be `main`).
+# `target-branch: development` stays set on every ecosystem below anyway: it is
+# the working branch (see CLAUDE.md, "Git branches") and the branch
+# scripts/release.sh cuts from, and setting it explicitly means flipping the
+# default branch later cannot silently re-point these PRs to production.
 #
-# Setting it explicitly rather than relying on the default also means flipping
-# the GitHub default branch later cannot silently re-point these PRs.
+# Since 2026-11-22 these PRs are MERGED by CI (tests.yml `automerge`, patch/minor
+# after `test`; uv PRs get ble_service/uv.lock relocked first), and
+# dev-release.yml cuts a dev pre-release after such merges. cooldown: a version
+# must be 3 days old before it is proposed; security updates ignore it.
 updates:
   # Python: the uv ecosystem understands pyproject.toml + uv.lock, which is what
   # this repo actually resolves from — `pip` would read the pyproject constraints
@@ -26,6 +27,8 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    cooldown:
+      default-days: 3
     open-pull-requests-limit: 5
     commit-message:
       # Matches this repo's "[type] description" convention (CLAUDE.md).
@@ -48,6 +51,8 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    cooldown:
+      default-days: 3
     commit-message:
       prefix: "[chore]"
     groups:

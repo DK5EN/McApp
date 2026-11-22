@@ -48,7 +48,7 @@ printf '\n' | ./scripts/release.sh 2 > /tmp/release.log 2>&1; echo "EXIT=$?"
 If `RESUME.md` exists it holds this release's soak checklist: run every check in it before anything else, and delete it together with the post-release health-log entry once nothing is open. Stop if any soak check fails (fix, cut a new dev release, the soak restarts). On 2026-11-08 the v2.1.26 promotion ran five of seven soak checks only after the release. Then run `/ai-ops` and read its verdict. A production cut needs more than a green suite:
 
 - the dev tag has **soaked on the box** (hours, not minutes, `NRestarts` still 0) with zero journal warnings over the window
-- `./scripts/gate.sh` ends `GATE: PASS` on the exact tree you promote (Step 3); CI's `tests` workflow is disabled and the gate script is the release gate (operator decision 2026-11-08)
+- `./scripts/gate.sh` ends `GATE: PASS` on the exact tree you promote (Step 3); the gate script is the release gate (operator decision 2026-11-08); CI's `tests` workflow, re-enabled 2026-11-22, gates and auto-merges Dependabot PRs but signs off no promotion. A dev pre-release cut by `dev-release.yml` after dependency updates is promoted like any other: soak first
 - the working trees are the tag: `git rev-parse HEAD` == `git rev-parse vX.Y.Z-dev.N` in both repos
 
 Append the sweep to `doc/ops-mcapp-health-log.md` **before** releasing: it is the record of what the release was signed off against.
