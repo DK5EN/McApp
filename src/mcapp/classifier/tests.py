@@ -34,11 +34,8 @@ from .engine import Engine, conformance_failures, load_contract
 from .score import compute as score_compute
 from .template import check_only, fingerprint, is_exempt, update_and_check
 from .types import (
-    AUTO_BEACON_TAG,
-    CATEGORIES,
     DIRECTED_DST_RE,
     StorageProtocol,
-    derive_category,
 )
 
 # Host layout: <pkg>/classifier/tests.py next to <pkg>/contract/ (MCProxy:
@@ -226,7 +223,7 @@ async def _suite_directed_dst(results: list[tuple[str, bool]]) -> None:
     exempt_mismatches = [
         v["name"]
         for v in vectors
-        if v["dst"] and is_exempt(long_tokens, {"qso"}, v["dst"]) != v["is_directed"]
+        if v["dst"] and is_exempt(long_tokens, set(), v["dst"]) != v["is_directed"]
     ]
     results.append(
         (
@@ -235,6 +232,15 @@ async def _suite_directed_dst(results: list[tuple[str, bool]]) -> None:
             exempt_mismatches == [],
         )
     )
+
+
+def _schema_rejected(data: dict[str, Any]) -> bool:
+    """A contract of any other schema must be refused, not read."""
+    try:
+        load_contract({**data, "schema": 2})
+    except ValueError:
+        return True
+    return False
 
 
 async def _suite_engine(results: list[tuple[str, bool]]) -> None:
@@ -249,28 +255,13 @@ async def _suite_engine(results: list[tuple[str, bool]]) -> None:
         )
     )
     results.append(("engine: contract id is <taxonomy_version>:<commit>", ":" in cid))
-    results.append(("engine: 'qso' is a taxonomy tag", "qso" in engine.tag_ids))
     results.append(
         (
-            "engine: plain greeting is greeting + qso",
-            engine.classify("Hallo zusammen", "XX1ABC-1", "20").tags >= {"greeting", "qso"},
+            "engine: plain greeting is topic greeting, no origin tag",
+            engine.classify("Hallo zusammen", "XX1ABC-1", "20").topics == ("greeting",),
         )
     )
-    derived = {
-        "wx": derive_category({"weather"}, False),
-        "dm": derive_category({"greeting", "qso"}, True),
-        "plain": derive_category(set(), False),
-        "known": all(c in CATEGORIES for c in ("timestamp_beacon", "qso", "other")),
-    }
-    results.append(
-        (
-            "category: derive_category follows the fixed table",
-            derived["wx"] == "wx_beacon"
-            and derived["dm"] == "directed"
-            and derived["plain"] == "other"
-            and bool(derived["known"]),
-        )
-    )
+    results.append(("engine: only contract schema 3 loads", _schema_rejected(data)))
 
 
 async def _suite_template(storage: StorageProtocol, results: list[tuple[str, bool]]) -> None:
@@ -289,7 +280,7 @@ async def _suite_template(storage: StorageProtocol, results: list[tuple[str, boo
     results.append(
         (
             "template: is_exempt — short token list is exempt",
-            is_exempt(["hi"], {"qso"}, "20"),
+            is_exempt(["hi"], set(), "20"),
         )
     )
     results.append(
@@ -302,20 +293,20 @@ async def _suite_template(storage: StorageProtocol, results: list[tuple[str, boo
     results.append(
         (
             "template: is_exempt — directed dst (callsign-SSID) is exempt",
-            is_exempt(["a", "longer", "message", "body"], {"qso"}, "OE5HWN-12"),
+            is_exempt(["a", "longer", "message", "body"], set(), "OE5HWN-12"),
         )
     )
     results.append(
         (
             "template: is_exempt — long, non-human, non-directed is NOT exempt",
-            not is_exempt(["a", "longer", "conversational", "message"], {"qso"}, "20"),
+            not is_exempt(["a", "longer", "conversational", "message"], set(), "20"),
         )
     )
     results.append(
         (
             "template: check_only matches is_exempt on the same inputs",
-            check_only(_msg(text="a longer conversational message", dst="20"), {"qso"})
-            == is_exempt(["a", "longer", "conversational", "message"], {"qso"}, "20"),
+            check_only(_msg(text="a longer conversational message", dst="20"), set())
+            == is_exempt(["a", "longer", "conversational", "message"], set(), "20"),
         )
     )
 
@@ -327,7 +318,7 @@ async def _suite_template(storage: StorageProtocol, results: list[tuple[str, boo
     now_ms = 1_770_000_000_000
     for i in range(8):
         result = await update_and_check(
-            storage, _msg(text=beacon_text, msg_id=f"BEACON{i:03d}"), now_ms + i, tags={"qso"}
+            storage, _msg(text=beacon_text, msg_id=f"BEACON{i:03d}"), now_ms + i, tags=set()
         )
         if result.transitioned:
             transitioned_at = i
@@ -339,7 +330,7 @@ async def _suite_template(storage: StorageProtocol, results: list[tuple[str, boo
     )
 
     final_check = await update_and_check(
-        storage, _msg(text=beacon_text, msg_id="BEACON999"), now_ms + 100, tags={"qso"}
+        storage, _msg(text=beacon_text, msg_id="BEACON999"), now_ms + 100, tags=set()
     )
     results.append(
         ("template: template stays flagged as beacon after transitioning", final_check.is_beacon)
@@ -361,7 +352,7 @@ async def _suite_template(storage: StorageProtocol, results: list[tuple[str, boo
         _OccurrenceStorage(storage, occ_24h),
         _msg(src="OE24H-1", dst="20", text=text_24h, msg_id="W24H0001"),
         now_24h,
-        tags={"qso"},
+        tags=set(),
     )
     results.append(
         (
@@ -380,7 +371,7 @@ async def _suite_template(storage: StorageProtocol, results: list[tuple[str, boo
         _OccurrenceStorage(storage, occ_72h),
         _msg(src="OE72H-1", dst="20", text=text_72h, msg_id="W72H0001"),
         now_72h,
-        tags={"qso"},
+        tags=set(),
     )
     results.append(
         (
@@ -396,7 +387,7 @@ async def _suite_template(storage: StorageProtocol, results: list[tuple[str, boo
         _OccurrenceStorage(storage, [(fp_below, "OEBLW-1", now_72h - 10 * 3600 * 1000)]),
         _msg(src="OEBLW-1", dst="20", text=text_below, msg_id="WBLW0001"),
         now_72h,
-        tags={"qso"},
+        tags=set(),
     )
     results.append(
         (
@@ -412,7 +403,7 @@ async def _suite_template(storage: StorageProtocol, results: list[tuple[str, boo
         _UserActionStorage(storage, "promote"),
         _msg(src="OEPRM-1", dst="20", text=promo_text, msg_id="PRM00001"),
         now_24h,
-        tags={"qso"},
+        tags=set(),
     )
     results.append(
         (
@@ -430,7 +421,7 @@ async def _suite_template(storage: StorageProtocol, results: list[tuple[str, boo
         _UserActionStorage(storage, "demote"),
         _msg(src="OEDEM-1", dst="20", text=demo_text, msg_id="DEM00001"),
         now_24h,
-        tags={"qso"},
+        tags=set(),
     )
     results.append(
         (
@@ -443,23 +434,21 @@ async def _suite_template(storage: StorageProtocol, results: list[tuple[str, boo
 async def _suite_score(results: list[tuple[str, bool]]) -> None:
     """Layer 3 info-score value range, low-content clamp, and ordering."""
     # ── Layer 3: score ──────────────────────────────────────────────────────
-    score = score_compute(_msg(text="a normal conversational reply here"), {"qso"}, 0)
+    score = score_compute(_msg(text="a normal conversational reply here"), set(), 0, origin="human")
     results.append(("score: compute() returns a value in [0, 1]", 0.0 <= score <= 1.0))
 
-    bot_score = score_compute(
-        _msg(text="!wx"), {AUTO_BEACON_TAG}, 0, automated_tags={AUTO_BEACON_TAG}
-    )
-    results.append(("score: auto_beacon tag is clamped low", bot_score <= 0.25))
+    bot_score = score_compute(_msg(text="!wx"), set(), 0, origin="machine")
+    results.append(("score: machine origin is clamped low", bot_score <= 0.25))
 
     # Ordering property: an informative multi-token sentence must outscore a
     # low-information emoji-only or URL-only body.
     informative_score = score_compute(
         _msg(text="the repeater on the hill is back online after maintenance today"),
-        {"qso"},
+        set(),
         0,
     )
-    emoji_only_score = score_compute(_msg(text="😀😀😀😀😀😀"), {"qso"}, 0)
-    url_only_score = score_compute(_msg(text="https://example.com/a/very/long/path"), {"qso"}, 0)
+    emoji_only_score = score_compute(_msg(text="😀😀😀😀😀😀"), set(), 0)
+    url_only_score = score_compute(_msg(text="https://example.com/a/very/long/path"), set(), 0)
     results.append(
         (
             "score: informative sentence outscores an emoji-only body",
@@ -482,11 +471,11 @@ async def _suite_orchestrator(storage: StorageProtocol, results: list[tuple[str,
     await classifier.load()
 
     cls_live = await classifier.classify(_msg(text="hello there", msg_id="LIVE0001"))
-    results.append(("classify: live path tags a greeting", cls_live.category == "greeting"))
+    results.append(("classify: live path tags a greeting", "greeting" in cls_live.tags))
     results.append(
         (
-            "classify: stored tags are v8 topics (greeting, never auto_beacon/qso)",
-            "greeting" in cls_live.tags and not {AUTO_BEACON_TAG, "qso"} & set(cls_live.tags),
+            "classify: stored tags are topics (greeting, never auto_beacon/qso)",
+            "greeting" in cls_live.tags and not {"auto_beacon", "qso"} & set(cls_live.tags),
         )
     )
     results.append(
@@ -518,7 +507,7 @@ async def _suite_orchestrator(storage: StorageProtocol, results: list[tuple[str,
 
     # ── Orchestrator: reclassify() over a NON-empty batch ────────────────────
     # Persist a few unclassified rows via the real ingestion path (no classifier
-    # attached to storage, so they land with classifier_ver=NULL / category=NULL),
+    # attached to storage, so they land with classifier_ver=NULL),
     # then force a reclassify and assert every row is re-annotated.
     base_ts = 1_770_300_000_000
     for i in range(3):
@@ -552,10 +541,10 @@ async def _suite_orchestrator(storage: StorageProtocol, results: list[tuple[str,
     rcl_rows = [r for r in annotated if str(r.get("msg_id", "")).startswith("RCL")]
     results.append(
         (
-            "reclassify: inserted rows are re-annotated (category + version populated)",
+            "reclassify: inserted rows are re-annotated (tags + version populated)",
             len(rcl_rows) == 3
             and all(
-                r.get("category") is not None and r.get("classifier_ver") == classifier.version
+                r.get("tags") is not None and r.get("classifier_ver") == classifier.version
                 for r in rcl_rows
             ),
         )
