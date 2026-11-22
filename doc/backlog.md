@@ -3,41 +3,23 @@
 Deferred tasks with a due date or a data-collection dependency. One section per item; move
 resolved items to `doc/archive/` with their outcome.
 
-Verified 2026-11-10 against the code: B18 closed (see `archive/2026-11-10-backlog-closed.md`), B20 and B21 confirmed open,
-B15 confirmed open (lighttpd still installed and in the health checks). Verification record: `review-log.md`. Closed on 2026-09-28:
-`doc/archive/2026-09-28-backlog-closed.md` (B2, B3, B4 items 1, 2, 3, 4-8). Review and
-closing plan: `archive/2026-09-28_1035-backlog-review-verdict-and-plan.md`.
+Spot-checked 2026-11-22 (B15, B20, B21 still open in the code; full verification pass 2026-11-10: `review-log.md`). Closed
+items live in `archive/2026-09-28-backlog-closed.md` and `archive/2026-11-10-backlog-closed.md`; B1-B3, B18
+and B24 are closed.
 
-## B4 — memory footprint on mcapp.local (one open question)
+## B4 — does mcapp grow? (memory footprint on mcapp.local)
 
-Measured on mcapp.local 2026-09-28 from `/proc/<pid>/smaps_rollup`, before and after v2.0.17-dev.1
-(W2 + W3), at matched uptime:
+Open question from plan wave W6, no read of a long-lived process yet. mcapp-ble Pss is flat at ~43 MB.
+Baseline: v2.0.16 mcapp Pss 113.4 MB at 46 min and at ~3 h (flat, argues against a leak); v2.0.17-dev.1
+85.9 MB at 3 min, 97.3 MB at 47 min (warm-up as large as the 5 MB/day threshold). Measured 2026-09-28
+from `/proc/<pid>/smaps_rollup`; the 2026-09-15 note (67 MB at import, 85-95 MB live with 40 MB swapped)
+is not comparable.
 
-| Build                   | Uptime | mcapp Pss | mcapp cgroup peak | mcapp-ble Pss |
-| ----------------------- | ------ | --------- | ----------------- | ------------- |
-| v2.0.16 (old)           | 46 min | 113.4 MB  | 158.7 MB          | 43.2 MB       |
-| v2.0.16 (old)           | ~3 h   | 113.4 MB  | —                 | 42.6 MB       |
-| v2.0.17-dev.1 (W2 + W3) | 3 min  | 85.9 MB   | —                 | 43.4 MB       |
-| v2.0.17-dev.1 (W2 + W3) | 47 min | 97.3 MB   | 132.0 MB          | 43.5 MB       |
-
-mcapp is ~16 MB lighter at equal uptime, matching the import-cost estimate (13.4 + ~3). mcapp-ble
-shows no measurable change; the extras drop saved nothing visible there. The old build was flat
-between 46 min and 3 h, which already argues against a leak.
-
-**Open question — does mcapp grow? (plan wave W6; open, no read of the v2.0.17 process yet).** The 2026-09-15
-note measured 67 MB at import and 85-95 MB live with 40 MB swapped; the 2026-09-28 figure is
-113 MB Pss with nothing swapped, so the two are not comparable. Read Pss at ~1 h, ~24 h and
-~72 h uptime: growth under ~5 MB/day that flattens closes this as baseline (page cache +
-arenas); steady linear growth opens a `tracemalloc` investigation behind a dev flag.
-
-Every read must come from ONE process: record its start time with the figure
-(`systemctl show mcapp -p ExecMainStartTimestamp`) and compare only reads that share it. The
-47 min read above belongs to the v2.0.17-dev.1 process, which the v2.0.17 restart at 12:33:37
-replaced, so it is not the ~1 h point of the current series — and dev.1's own warm-up (85.9 to
-97.3 MB in ~44 min) is as large as the 5 MB/day threshold. Any deploy restarts the series, and
-the release cadence has not yet left a 72 h window; the cheaper source is `stall_events`, whose
-server context carries `rss_kb`, `version` and `slot`, so the trend can be read per process
-after the fact (RSS, not Pss — a trend source, not a substitute for the three reads).
+Read Pss at ~1 h, ~24 h and ~72 h uptime of ONE process (record `systemctl show mcapp -p
+ExecMainStartTimestamp` with each figure; any deploy restarts the series). Growth under ~5 MB/day that
+flattens closes this as baseline; steady linear growth opens a `tracemalloc` investigation behind a dev
+flag. The cheaper source is `stall_events`, whose server context carries `rss_kb`, `version` and `slot`
+(RSS, not Pss: a trend source, not a substitute).
 
 ## B5 — Winlink over MeshCom
 
@@ -181,6 +163,10 @@ a LAN box and only still proxied by public-TLS Caddyfiles on existing boxes and 
 those Caddyfiles re-rendered first, plus the health checks in `update-runner.py` and `health.sh`. Decided 2026-10-31 alongside it: no Ansible rewrite of the bootstrap, no nginx.
 Evaluation: `archive/2026-10-31_1100-ansible-and-web-server-evaluation.md`.
 
+Also fixes B19: with the shipped config lighttpd binds `0.0.0.0:8082` or `[::]:8082` despite `server.bind = "127.0.0.1"`
+(seen in a Trixie VM and on a field box; `use-ipv6.pl` is the likely cause). The firewall blocks it, but with the
+firewall off the backend is reachable. `health.sh` exempts the port from its warning.
+
 ## B16 — webapp follow-ups from the container test campaign
 
 Webapp repo. Found while running McApp behind Traefik/Authelia in a container
@@ -200,10 +186,6 @@ Webapp repo. Found while running McApp behind Traefik/Authelia in a container
 - **Test flake:** `node_admin_service_tests.case_e_dropped` failed once in the full runner with
   `OSError: Directory not empty` in `TemporaryDirectory` cleanup (a DB write outliving `svc.stop()` /
   `storage.close()`); 0/10 failures alone.
-
-## B19 — lighttpd listens beyond loopback
-
-With the shipped config it binds `0.0.0.0:8082` or `[::]:8082` despite `server.bind = "127.0.0.1"`: seen in a Trixie VM, and `[::]:8082` on a field box next to `127.0.0.1:8082`. `use-ipv6.pl` is the likely cause. The firewall blocks it, but on a box with the firewall off the backend is reachable. B15 removes it altogether; `health.sh` exempts the port from its warning.
 
 ## B20 — `ssl-tunnel-setup.sh` does not fit the current layout
 
@@ -225,4 +207,4 @@ Finding F14 (health log §59: the update runner reported success without deployi
 
 ## B23 — P6: confirm auto mode respects the `release.sh 2` allow rule
 
-`fc58264` allows `./scripts/release.sh 2` in the project settings. Whether auto mode honours it is untested: it shows only on the next real production release. Check it then; if it still prompts, the rule's pattern is wrong.
+`fc58264` allows `./scripts/release.sh 2` in the project settings. Whether auto mode honours it is untested: it shows only on the next real production release. Check it then; if it still prompts, the rule's pattern is wrong. The gitignored `.claude/settings.local.json` also allows `./scripts/release.sh:*`, which would mask the test: the check only means something where that local entry is absent.
