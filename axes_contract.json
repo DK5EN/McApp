@@ -2,7 +2,7 @@
   "schema": 2,
   "source": {
     "repo": "mcmap",
-    "commit": "ec964281888baa2e252138765d60cbfb5f72b433"
+    "commit": "7c46e61bf6da07b9ff38831f9c1c92ad488004a8"
   },
   "constants": {
     "CADENCE_WINDOW": 8,
@@ -2547,64 +2547,143 @@
         ]
       },
       {
-        "text": "Unbekannter Befehl: foo",
-        "classes": [
-          "WORD",
-          "WORD",
-          "PUNCT",
-          "WORD"
-        ]
-      },
-      {
-        "text": "🌡️ 12",
-        "classes": [
-          "EMOJI",
-          "NUM"
-        ]
-      },
-      {
-        "text": "Pollenwetter heute",
-        "classes": [
-          "WORD",
-          "WORD"
-        ]
-      },
-      {
-        "text": "WX-Daten aktuell",
+        "text": "danke.73 de Beispiel",
         "classes": [
           "WORD",
           "PUNCT",
+          "NUM",
           "WORD",
           "WORD"
         ]
       },
       {
-        "text": "MeshDash V1.11.04 startup",
+        "text": "Baujahr 1973 war gut",
         "classes": [
           "WORD",
-          "CALL",
+          "NUM",
+          "WORD",
+          "WORD"
+        ]
+      },
+      {
+        "text": "Strecke 73 km lang",
+        "classes": [
+          "WORD",
+          "NUM",
+          "WORD",
+          "WORD"
+        ]
+      },
+      {
+        "text": "Band 73 MHz heute",
+        "classes": [
+          "WORD",
+          "NUM",
+          "WORD",
+          "WORD"
+        ]
+      },
+      {
+        "text": "ID CNT:73 heute",
+        "classes": [
+          "WORD",
+          "WORD",
           "PUNCT",
           "NUM",
           "WORD"
         ]
       },
       {
-        "text": "visit <a href=\"x\">here</a>",
+        "text": "Batt 73",
+        "classes": [
+          "WORD",
+          "NUM"
+        ]
+      },
+      {
+        "text": "Humidity 73",
+        "classes": [
+          "WORD",
+          "NUM"
+        ]
+      },
+      {
+        "text": "Port 73",
+        "classes": [
+          "WORD",
+          "NUM"
+        ]
+      },
+      {
+        "text": "Tnx 73,55",
+        "classes": [
+          "WORD",
+          "NUM"
+        ]
+      },
+      {
+        "text": "ID: 73",
         "classes": [
           "WORD",
           "PUNCT",
-          "WORD",
-          "KV"
+          "NUM"
         ]
       },
       {
-        "text": " https://example.org/a ",
+        "text": "hum 73",
         "classes": [
-          "URL"
+          "WORD",
+          "NUM"
         ]
       },
       {
-        "text": "Erdbeben bei Wien",
+        "text": "Node 73",
+        "classes": [
+          "WORD",
+          "NUM"
+        ]
+      },
+      {
+        "text": "73 s",
+        "classes": [
+          "NUM",
+          "WORD"
+        ]
+      },
+      {
+        "text": "73,5",
+        "classes": [
+          "NUM"
+        ]
+      },
+      {
+        "text": "Alles klar, 73 Peter. Bis morgen",
+        "classes": [
+          "WORD",
+          "WORD",
+          "PUNCT",
+          "NUM",
+          "WORD",
+          "PUNCT",
+          "WORD",
+          "WORD"
+        ]
+      },
+      {
+        "text": "schoene Gruesse",
+        "classes": [
+          "WORD",
+          "WORD"
+        ]
+      },
+      {
+        "text": "--ping",
+        "classes": [
+          "CMD"
+        ]
+      },
+      {
+        "text": "ping me later",
         "classes": [
           "WORD",
           "WORD",
@@ -2612,29 +2691,8 @@
         ]
       },
       {
-        "text": "Station A: 21.4C QNH 1013 hPa",
+        "text": "schöne Grüsse an alle",
         "classes": [
-          "WORD",
-          "WORD",
-          "PUNCT",
-          "UNIT",
-          "WORD",
-          "UNIT"
-        ]
-      },
-      {
-        "text": "QSL?",
-        "classes": [
-          "WORD",
-          "PUNCT"
-        ]
-      },
-      {
-        "text": "Wir testen heute die Strecke nach Norden",
-        "classes": [
-          "WORD",
-          "WORD",
-          "WORD",
           "WORD",
           "WORD",
           "WORD",
@@ -2642,81 +2700,231 @@
         ]
       },
       {
-        "text": "Cmds: >help, >ping, >mh",
+        "text": "Die Testerin kommt",
+        "classes": [
+          "WORD",
+          "WORD",
+          "WORD"
+        ]
+      },
+      {
+        "text": "Befehle: --help --info",
         "classes": [
           "WORD",
           "PUNCT",
-          "CMD",
           "CMD",
           "CMD"
         ]
       },
       {
-        "text": "[POTA] SP9NLI @ Park | 18.089 MHz CW - CW",
+        "text": "WX station Temp: 12 C QNH 1013",
         "classes": [
-          "PUNCT",
+          "WORD",
+          "WORD",
           "WORD",
           "PUNCT",
-          "CALL",
+          "UNIT",
+          "WORD",
+          "NUM"
+        ]
+      },
+      {
+        "text": "APRS-Wetter station",
+        "classes": [
+          "WORD",
           "PUNCT",
           "WORD",
-          "PIPE",
+          "WORD"
+        ]
+      },
+      {
+        "text": "Wind 4 BFT",
+        "classes": [
+          "WORD",
+          "NUM",
+          "WORD"
+        ]
+      },
+      {
+        "text": "4.35 73 de XX1ABC",
+        "classes": [
+          "NUM",
           "NUM",
           "WORD",
+          "CALL"
+        ]
+      },
+      {
+        "text": "MH(3): XX1ABC-1 XX2DEF-2",
+        "classes": [
+          "WORD",
+          "PUNCT",
+          "NUM",
+          "PUNCT",
+          "PUNCT",
+          "CALL",
+          "CALL"
+        ]
+      },
+      {
+        "text": "--=== Welcome ===--",
+        "classes": [
+          "PUNCT",
+          "PUNCT",
+          "PUNCT",
+          "PUNCT",
+          "PUNCT",
+          "WORD",
+          "PUNCT",
+          "PUNCT",
+          "PUNCT",
+          "PUNCT",
+          "PUNCT"
+        ]
+      },
+      {
+        "text": "OV-Abend jeden Donnerstag ab 19 Uhr",
+        "classes": [
+          "WORD",
+          "PUNCT",
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD",
+          "NUM",
+          "WORD"
+        ]
+      },
+      {
+        "text": "WARNUNG ZH: Hochwasser (Musterort) | alert.swiss",
+        "classes": [
+          "WORD",
+          "WORD",
+          "PUNCT",
+          "WORD",
+          "PUNCT",
+          "WORD",
+          "PUNCT",
+          "PIPE",
           "WORD",
           "PUNCT",
           "WORD"
         ]
       },
       {
-        "text": "Automatische Antwort von XX1ABC-13: Test erhalten.",
+        "text": "Neue Version v9.99a https://example.org/releases/tag/v9.99a",
         "classes": [
           "WORD",
           "WORD",
           "WORD",
+          "NUM",
+          "WORD",
+          "URL"
+        ]
+      },
+      {
+        "text": "Das ist ein Test der Antenne auf dem Dach heute",
+        "classes": [
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD"
+        ]
+      },
+      {
+        "text": "SISMA M2.7 14:10 Beispielmeer prof 20km",
+        "classes": [
+          "WORD",
           "CALL",
           "PUNCT",
+          "NUM",
+          "TIME",
+          "WORD",
+          "WORD",
+          "NUM",
+          "WORD"
+        ]
+      },
+      {
+        "text": "Hat jemand ein Gateway in der Nähe?",
+        "classes": [
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD",
           "WORD",
           "WORD",
           "PUNCT"
         ]
       },
       {
-        "text": "Rundspruch heute 19:30 Uhr auf 145.500",
+        "text": "POS GPS -33.1,151.2 alt 5m",
         "classes": [
           "WORD",
           "WORD",
-          "TIME",
+          "NUM",
+          "PUNCT",
+          "NUM",
           "WORD",
-          "WORD",
-          "NUM"
+          "NUM",
+          "WORD"
         ]
       },
       {
-        "text": "Luftfeuchte: 82 %",
+        "text": "TERREMOTO zona Nord: prime verifiche in corso",
         "classes": [
+          "WORD",
+          "WORD",
           "WORD",
           "PUNCT",
-          "UNIT"
-        ]
-      },
-      {
-        "text": "Temp=12.5°C Luftdruck=1013mbar Regen=0.0mm Wind=3km/h",
-        "classes": [
-          "KV",
-          "KV",
-          "KV",
-          "KV"
-        ]
-      },
-      {
-        "text": "es regnet hier seit Stunden",
-        "classes": [
-          "WORD",
           "WORD",
           "WORD",
           "WORD",
           "WORD"
+        ]
+      },
+      {
+        "text": "Schau mal rein: https://example.org/cam",
+        "classes": [
+          "WORD",
+          "WORD",
+          "WORD",
+          "PUNCT",
+          "URL"
+        ]
+      },
+      {
+        "text": "Testnachricht vom neuen Knoten",
+        "classes": [
+          "WORD",
+          "WORD",
+          "WORD",
+          "WORD"
+        ]
+      },
+      {
+        "text": "[CNT:1/8][INT:60] https://example.org/ov",
+        "classes": [
+          "PUNCT",
+          "WORD",
+          "PUNCT",
+          "NUM",
+          "PUNCT",
+          "NUM",
+          "PUNCT",
+          "PUNCT",
+          "WORD",
+          "PUNCT",
+          "NUM",
+          "PUNCT",
+          "URL"
         ]
       },
       {
@@ -2739,21 +2947,6 @@
           "WORD",
           "UNIT",
           "PUNCT"
-        ]
-      },
-      {
-        "text": "Das ist ein Test der Antenne auf dem Dach heute",
-        "classes": [
-          "WORD",
-          "WORD",
-          "WORD",
-          "WORD",
-          "WORD",
-          "WORD",
-          "WORD",
-          "WORD",
-          "WORD",
-          "WORD"
         ]
       },
       {
@@ -4478,171 +4671,348 @@
         ]
       },
       {
-        "text": "Unbekannter Befehl: foo",
+        "text": "danke.73 de Beispiel",
         "tokens": [
-          "befehl",
-          "foo",
-          "unbekannter"
+          "73",
+          "beispiel",
+          "danke",
+          "de"
         ]
       },
       {
-        "text": "🌡️ 12",
+        "text": "Baujahr 1973 war gut",
         "tokens": [
-          "12"
+          "1973",
+          "baujahr",
+          "gut",
+          "war"
         ]
       },
       {
-        "text": "Pollenwetter heute",
+        "text": "Strecke 73 km lang",
         "tokens": [
+          "73",
+          "km",
+          "lang",
+          "strecke"
+        ]
+      },
+      {
+        "text": "Band 73 MHz heute",
+        "tokens": [
+          "73",
+          "band",
           "heute",
-          "pollenwetter"
+          "mhz"
         ]
       },
       {
-        "text": "WX-Daten aktuell",
+        "text": "ID CNT:73 heute",
         "tokens": [
-          "aktuell",
-          "daten",
-          "wx"
-        ]
-      },
-      {
-        "text": "MeshDash V1.11.04 startup",
-        "tokens": [
-          "04",
-          "11",
-          "meshdash",
-          "startup",
-          "v1"
-        ]
-      },
-      {
-        "text": "visit <a href=\"x\">here</a>",
-        "tokens": [
-          "here",
-          "href",
-          "visit"
-        ]
-      },
-      {
-        "text": " https://example.org/a ",
-        "tokens": [
-          "example",
-          "https",
-          "org"
-        ]
-      },
-      {
-        "text": "Erdbeben bei Wien",
-        "tokens": [
-          "bei",
-          "erdbeben",
-          "wien"
-        ]
-      },
-      {
-        "text": "Station A: 21.4C QNH 1013 hPa",
-        "tokens": [
-          "1013",
-          "21",
-          "4c",
-          "hpa",
-          "qnh",
-          "station"
-        ]
-      },
-      {
-        "text": "QSL?",
-        "tokens": [
-          "qsl"
-        ]
-      },
-      {
-        "text": "Wir testen heute die Strecke nach Norden",
-        "tokens": [
-          "die",
+          "73",
+          "cnt",
           "heute",
-          "nach",
-          "norden",
-          "strecke",
-          "testen",
-          "wir"
+          "id"
         ]
       },
       {
-        "text": "Cmds: >help, >ping, >mh",
+        "text": "Batt 73",
         "tokens": [
-          "cmds",
-          "help",
-          "mh",
+          "73",
+          "batt"
+        ]
+      },
+      {
+        "text": "Humidity 73",
+        "tokens": [
+          "73",
+          "humidity"
+        ]
+      },
+      {
+        "text": "Port 73",
+        "tokens": [
+          "73",
+          "port"
+        ]
+      },
+      {
+        "text": "Tnx 73,55",
+        "tokens": [
+          "55",
+          "73",
+          "tnx"
+        ]
+      },
+      {
+        "text": "ID: 73",
+        "tokens": [
+          "73",
+          "id"
+        ]
+      },
+      {
+        "text": "hum 73",
+        "tokens": [
+          "73",
+          "hum"
+        ]
+      },
+      {
+        "text": "Node 73",
+        "tokens": [
+          "73",
+          "node"
+        ]
+      },
+      {
+        "text": "73 s",
+        "tokens": [
+          "73"
+        ]
+      },
+      {
+        "text": "73,5",
+        "tokens": [
+          "73"
+        ]
+      },
+      {
+        "text": "Alles klar, 73 Peter. Bis morgen",
+        "tokens": [
+          "73",
+          "alles",
+          "bis",
+          "klar",
+          "morgen",
+          "peter"
+        ]
+      },
+      {
+        "text": "schoene Gruesse",
+        "tokens": [
+          "gruesse",
+          "schoene"
+        ]
+      },
+      {
+        "text": "--ping",
+        "tokens": [
           "ping"
         ]
       },
       {
-        "text": "[POTA] SP9NLI @ Park | 18.089 MHz CW - CW",
+        "text": "ping me later",
         "tokens": [
-          "089",
-          "18",
-          "cw",
-          "mhz",
-          "park",
-          "pota",
-          "sp9nli"
+          "later",
+          "me",
+          "ping"
         ]
       },
       {
-        "text": "Automatische Antwort von XX1ABC-13: Test erhalten.",
+        "text": "schöne Grüsse an alle",
         "tokens": [
-          "13",
-          "antwort",
-          "automatische",
-          "erhalten",
-          "test",
-          "von",
-          "xx1abc"
+          "alle",
+          "an",
+          "grüsse",
+          "schöne"
         ]
       },
       {
-        "text": "Rundspruch heute 19:30 Uhr auf 145.500",
+        "text": "Die Testerin kommt",
         "tokens": [
-          "145",
-          "19",
-          "30",
-          "500",
-          "auf",
-          "heute",
-          "rundspruch",
-          "uhr"
+          "die",
+          "kommt",
+          "testerin"
         ]
       },
       {
-        "text": "Luftfeuchte: 82 %",
+        "text": "Befehle: --help --info",
         "tokens": [
-          "82",
-          "luftfeuchte"
+          "befehle",
+          "help",
+          "info"
         ]
       },
       {
-        "text": "Temp=12.5°C Luftdruck=1013mbar Regen=0.0mm Wind=3km/h",
+        "text": "WX station Temp: 12 C QNH 1013",
         "tokens": [
-          "0mm",
-          "1013mbar",
+          "1013",
           "12",
-          "3km",
-          "luftdruck",
-          "regen",
+          "qnh",
+          "station",
           "temp",
+          "wx"
+        ]
+      },
+      {
+        "text": "APRS-Wetter station",
+        "tokens": [
+          "aprs",
+          "station",
+          "wetter"
+        ]
+      },
+      {
+        "text": "Wind 4 BFT",
+        "tokens": [
+          "bft",
           "wind"
         ]
       },
       {
-        "text": "es regnet hier seit Stunden",
+        "text": "4.35 73 de XX1ABC",
         "tokens": [
-          "es",
-          "hier",
-          "regnet",
-          "seit",
-          "stunden"
+          "35",
+          "73",
+          "de",
+          "xx1abc"
+        ]
+      },
+      {
+        "text": "MH(3): XX1ABC-1 XX2DEF-2",
+        "tokens": [
+          "mh",
+          "xx1abc",
+          "xx2def"
+        ]
+      },
+      {
+        "text": "--=== Welcome ===--",
+        "tokens": [
+          "welcome"
+        ]
+      },
+      {
+        "text": "OV-Abend jeden Donnerstag ab 19 Uhr",
+        "tokens": [
+          "19",
+          "ab",
+          "abend",
+          "donnerstag",
+          "jeden",
+          "ov",
+          "uhr"
+        ]
+      },
+      {
+        "text": "WARNUNG ZH: Hochwasser (Musterort) | alert.swiss",
+        "tokens": [
+          "alert",
+          "hochwasser",
+          "musterort",
+          "swiss",
+          "warnung",
+          "zh"
+        ]
+      },
+      {
+        "text": "Neue Version v9.99a https://example.org/releases/tag/v9.99a",
+        "tokens": [
+          "99a",
+          "example",
+          "https",
+          "neue",
+          "org",
+          "releases",
+          "tag",
+          "v9",
+          "version"
+        ]
+      },
+      {
+        "text": "Das ist ein Test der Antenne auf dem Dach heute",
+        "tokens": [
+          "antenne",
+          "auf",
+          "dach",
+          "das",
+          "dem",
+          "der",
+          "ein",
+          "heute",
+          "ist",
+          "test"
+        ]
+      },
+      {
+        "text": "SISMA M2.7 14:10 Beispielmeer prof 20km",
+        "tokens": [
+          "10",
+          "14",
+          "20km",
+          "beispielmeer",
+          "m2",
+          "prof",
+          "sisma"
+        ]
+      },
+      {
+        "text": "Hat jemand ein Gateway in der Nähe?",
+        "tokens": [
+          "der",
+          "ein",
+          "gateway",
+          "hat",
+          "in",
+          "jemand",
+          "nähe"
+        ]
+      },
+      {
+        "text": "POS GPS -33.1,151.2 alt 5m",
+        "tokens": [
+          "151",
+          "33",
+          "5m",
+          "alt",
+          "gps",
+          "pos"
+        ]
+      },
+      {
+        "text": "TERREMOTO zona Nord: prime verifiche in corso",
+        "tokens": [
+          "corso",
+          "in",
+          "nord",
+          "prime",
+          "terremoto",
+          "verifiche",
+          "zona"
+        ]
+      },
+      {
+        "text": "Schau mal rein: https://example.org/cam",
+        "tokens": [
+          "cam",
+          "example",
+          "https",
+          "mal",
+          "org",
+          "rein",
+          "schau"
+        ]
+      },
+      {
+        "text": "Testnachricht vom neuen Knoten",
+        "tokens": [
+          "knoten",
+          "neuen",
+          "testnachricht",
+          "vom"
+        ]
+      },
+      {
+        "text": "[CNT:1/8][INT:60] https://example.org/ov",
+        "tokens": [
+          "60",
+          "cnt",
+          "example",
+          "https",
+          "int",
+          "org",
+          "ov"
         ]
       },
       {
@@ -4664,21 +5034,6 @@
           "auch",
           "habt",
           "ihr"
-        ]
-      },
-      {
-        "text": "Das ist ein Test der Antenne auf dem Dach heute",
-        "tokens": [
-          "antenne",
-          "auf",
-          "dach",
-          "das",
-          "dem",
-          "der",
-          "ein",
-          "heute",
-          "ist",
-          "test"
         ]
       },
       {
@@ -7692,7 +8047,22 @@
         "skeleton": "PUNCT WORD PUNCT*3 NUM PUNCT NUM PUNCT WORD NUM PUNCT WORD*2 URL"
       },
       {
-        "text": "Unbekannter Befehl: foo",
+        "text": "danke.73 de Beispiel",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD PUNCT NUM WORD*2"
+      },
+      {
+        "text": "Baujahr 1973 war gut",
         "dominant": "PROSE",
         "signals": [
           "mostly-prose"
@@ -7703,14 +8073,55 @@
           "PROSE",
           "PROSE"
         ],
-        "skeleton": "WORD*2 PUNCT WORD"
+        "skeleton": "WORD NUM WORD*2"
       },
       {
-        "text": "🌡️ 12",
+        "text": "Strecke 73 km lang",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD NUM WORD*2"
+      },
+      {
+        "text": "Band 73 MHz heute",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD NUM WORD*2"
+      },
+      {
+        "text": "ID CNT:73 heute",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD*2 PUNCT NUM WORD"
+      },
+      {
+        "text": "Batt 73",
         "dominant": "NUMERIC_REPORT",
         "signals": [
-          "emoji-led",
-          "no-words",
           "mostly-prose",
           "mostly-data"
         ],
@@ -7718,10 +8129,130 @@
           "PROSE",
           "NUMERIC_REPORT"
         ],
-        "skeleton": "EMOJI NUM"
+        "skeleton": "WORD NUM"
       },
       {
-        "text": "Pollenwetter heute",
+        "text": "Humidity 73",
+        "dominant": "NUMERIC_REPORT",
+        "signals": [
+          "mostly-prose",
+          "mostly-data"
+        ],
+        "states": [
+          "PROSE",
+          "NUMERIC_REPORT"
+        ],
+        "skeleton": "WORD NUM"
+      },
+      {
+        "text": "Port 73",
+        "dominant": "NUMERIC_REPORT",
+        "signals": [
+          "mostly-prose",
+          "mostly-data"
+        ],
+        "states": [
+          "PROSE",
+          "NUMERIC_REPORT"
+        ],
+        "skeleton": "WORD NUM"
+      },
+      {
+        "text": "Tnx 73,55",
+        "dominant": "NUMERIC_REPORT",
+        "signals": [
+          "mostly-prose",
+          "mostly-data"
+        ],
+        "states": [
+          "PROSE",
+          "NUMERIC_REPORT"
+        ],
+        "skeleton": "WORD NUM"
+      },
+      {
+        "text": "ID: 73",
+        "dominant": "NUMERIC_REPORT",
+        "signals": [
+          "mostly-data"
+        ],
+        "states": [
+          "PROSE",
+          "NUMERIC_REPORT",
+          "NUMERIC_REPORT"
+        ],
+        "skeleton": "WORD PUNCT NUM"
+      },
+      {
+        "text": "hum 73",
+        "dominant": "NUMERIC_REPORT",
+        "signals": [
+          "mostly-prose",
+          "mostly-data"
+        ],
+        "states": [
+          "PROSE",
+          "NUMERIC_REPORT"
+        ],
+        "skeleton": "WORD NUM"
+      },
+      {
+        "text": "Node 73",
+        "dominant": "NUMERIC_REPORT",
+        "signals": [
+          "mostly-prose",
+          "mostly-data"
+        ],
+        "states": [
+          "PROSE",
+          "NUMERIC_REPORT"
+        ],
+        "skeleton": "WORD NUM"
+      },
+      {
+        "text": "73 s",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "NUM WORD"
+      },
+      {
+        "text": "73,5",
+        "dominant": "PROSE",
+        "signals": [
+          "no-words",
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE"
+        ],
+        "skeleton": "NUM"
+      },
+      {
+        "text": "Alles klar, 73 Peter. Bis morgen",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD*2 PUNCT NUM WORD PUNCT WORD*2"
+      },
+      {
+        "text": "schoene Gruesse",
         "dominant": "PROSE",
         "signals": [
           "mostly-prose"
@@ -7733,7 +8264,91 @@
         "skeleton": "WORD*2"
       },
       {
-        "text": "WX-Daten aktuell",
+        "text": "--ping",
+        "dominant": "PROSE",
+        "signals": [
+          "command-led",
+          "no-words",
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE"
+        ],
+        "skeleton": "CMD"
+      },
+      {
+        "text": "ping me later",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD*3"
+      },
+      {
+        "text": "schöne Grüsse an alle",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD*4"
+      },
+      {
+        "text": "Die Testerin kommt",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD*3"
+      },
+      {
+        "text": "Befehle: --help --info",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD PUNCT CMD*2"
+      },
+      {
+        "text": "WX station Temp: 12 C QNH 1013",
+        "dominant": "NUMERIC_REPORT",
+        "signals": [
+          "mostly-data"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "NUMERIC_REPORT",
+          "NUMERIC_REPORT",
+          "NUMERIC_REPORT",
+          "NUMERIC_REPORT"
+        ],
+        "skeleton": "WORD*3 PUNCT UNIT WORD NUM"
+      },
+      {
+        "text": "APRS-Wetter station",
         "dominant": "PROSE",
         "signals": [
           "mostly-prose"
@@ -7747,91 +8362,110 @@
         "skeleton": "WORD PUNCT WORD*2"
       },
       {
-        "text": "MeshDash V1.11.04 startup",
+        "text": "Wind 4 BFT",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD NUM WORD"
+      },
+      {
+        "text": "4.35 73 de XX1ABC",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "NUM*2 WORD CALL"
+      },
+      {
+        "text": "MH(3): XX1ABC-1 XX2DEF-2",
         "dominant": "SIGNATURE",
         "signals": [],
         "states": [
           "PROSE",
-          "SIGNATURE",
-          "SIGNATURE",
           "NUMERIC_REPORT",
-          "PROSE"
+          "NUMERIC_REPORT",
+          "SIGNATURE",
+          "SIGNATURE",
+          "SIGNATURE",
+          "SIGNATURE"
         ],
-        "skeleton": "WORD CALL PUNCT NUM WORD"
+        "skeleton": "WORD PUNCT NUM PUNCT*2 CALL*2"
       },
       {
-        "text": "visit <a href=\"x\">here</a>",
-        "dominant": "LABELLED_LIST",
+        "text": "--=== Welcome ===--",
+        "dominant": "SIGNATURE",
+        "signals": [],
+        "states": [
+          "SIGNATURE",
+          "SIGNATURE",
+          "SIGNATURE",
+          "SIGNATURE",
+          "SIGNATURE",
+          "SIGNATURE",
+          "SIGNATURE",
+          "SIGNATURE",
+          "SIGNATURE",
+          "SIGNATURE",
+          "SIGNATURE"
+        ],
+        "skeleton": "PUNCT*5 WORD PUNCT*5"
+      },
+      {
+        "text": "OV-Abend jeden Donnerstag ab 19 Uhr",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD PUNCT WORD*4 NUM WORD"
+      },
+      {
+        "text": "WARNUNG ZH: Hochwasser (Musterort) | alert.swiss",
+        "dominant": "MEASUREMENT",
         "signals": [
           "mostly-data"
         ],
         "states": [
           "MEASUREMENT",
+          "MEASUREMENT",
           "SEPARATOR",
-          "LABELLED_LIST",
-          "LABELLED_LIST"
+          "MEASUREMENT",
+          "SEPARATOR",
+          "MEASUREMENT",
+          "SEPARATOR",
+          "SEPARATOR",
+          "MEASUREMENT",
+          "SEPARATOR",
+          "MEASUREMENT"
         ],
-        "skeleton": "WORD PUNCT WORD KV"
+        "skeleton": "WORD*2 PUNCT WORD PUNCT WORD PUNCT PIPE WORD PUNCT WORD"
       },
       {
-        "text": " https://example.org/a ",
+        "text": "Neue Version v9.99a https://example.org/releases/tag/v9.99a",
         "dominant": "PROSE",
         "signals": [
           "url",
-          "no-words",
-          "mostly-prose"
-        ],
-        "states": [
-          "PROSE"
-        ],
-        "skeleton": "URL"
-      },
-      {
-        "text": "Erdbeben bei Wien",
-        "dominant": "PROSE",
-        "signals": [
-          "mostly-prose"
-        ],
-        "states": [
-          "PROSE",
-          "PROSE",
-          "PROSE"
-        ],
-        "skeleton": "WORD*3"
-      },
-      {
-        "text": "Station A: 21.4C QNH 1013 hPa",
-        "dominant": "MEASUREMENT",
-        "signals": [
-          "unit-values",
-          "mostly-data"
-        ],
-        "states": [
-          "MEASUREMENT",
-          "MEASUREMENT",
-          "SEPARATOR",
-          "MEASUREMENT",
-          "MEASUREMENT",
-          "MEASUREMENT"
-        ],
-        "skeleton": "WORD*2 PUNCT UNIT WORD UNIT"
-      },
-      {
-        "text": "QSL?",
-        "dominant": "PROSE",
-        "signals": [
-          "mostly-prose"
-        ],
-        "states": [
-          "PROSE",
-          "PROSE"
-        ],
-        "skeleton": "WORD PUNCT"
-      },
-      {
-        "text": "Wir testen heute die Strecke nach Norden",
-        "dominant": "PROSE",
-        "signals": [
           "mostly-prose"
         ],
         "states": [
@@ -7840,48 +8474,12 @@
           "PROSE",
           "PROSE",
           "PROSE",
-          "PROSE",
           "PROSE"
         ],
-        "skeleton": "WORD*7"
+        "skeleton": "WORD*3 NUM WORD URL"
       },
       {
-        "text": "Cmds: >help, >ping, >mh",
-        "dominant": "PROSE",
-        "signals": [
-          "mostly-prose"
-        ],
-        "states": [
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE"
-        ],
-        "skeleton": "WORD PUNCT CMD*3"
-      },
-      {
-        "text": "[POTA] SP9NLI @ Park | 18.089 MHz CW - CW",
-        "dominant": "PROSE",
-        "signals": [],
-        "states": [
-          "SEPARATOR",
-          "MEASUREMENT",
-          "SEPARATOR",
-          "MEASUREMENT",
-          "SEPARATOR",
-          "MEASUREMENT",
-          "SEPARATOR",
-          "NUMERIC_REPORT",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE"
-        ],
-        "skeleton": "PUNCT WORD PUNCT CALL PUNCT WORD PIPE NUM WORD*2 PUNCT WORD"
-      },
-      {
-        "text": "Automatische Antwort von XX1ABC-13: Test erhalten.",
+        "text": "Das ist ein Test der Antenne auf dem Dach heute",
         "dominant": "PROSE",
         "signals": [
           "mostly-prose"
@@ -7894,12 +8492,14 @@
           "PROSE",
           "PROSE",
           "PROSE",
+          "PROSE",
+          "PROSE",
           "PROSE"
         ],
-        "skeleton": "WORD*3 CALL PUNCT WORD*2 PUNCT"
+        "skeleton": "WORD*10"
       },
       {
-        "text": "Rundspruch heute 19:30 Uhr auf 145.500",
+        "text": "SISMA M2.7 14:10 Beispielmeer prof 20km",
         "dominant": "PROSE",
         "signals": [
           "clock",
@@ -7907,45 +8507,19 @@
         ],
         "states": [
           "PROSE",
-          "PROSE",
+          "SIGNATURE",
+          "SIGNATURE",
+          "NUMERIC_REPORT",
           "NUMERIC_REPORT",
           "PROSE",
           "PROSE",
-          "NUMERIC_REPORT"
+          "PROSE",
+          "PROSE"
         ],
-        "skeleton": "WORD*2 TIME WORD*2 NUM"
+        "skeleton": "WORD CALL PUNCT NUM TIME WORD*2 NUM WORD"
       },
       {
-        "text": "Luftfeuchte: 82 %",
-        "dominant": "MEASUREMENT",
-        "signals": [
-          "mostly-data"
-        ],
-        "states": [
-          "MEASUREMENT",
-          "SEPARATOR",
-          "MEASUREMENT"
-        ],
-        "skeleton": "WORD PUNCT UNIT"
-      },
-      {
-        "text": "Temp=12.5°C Luftdruck=1013mbar Regen=0.0mm Wind=3km/h",
-        "dominant": "LABELLED_LIST",
-        "signals": [
-          "key-value-list",
-          "no-words",
-          "mostly-data"
-        ],
-        "states": [
-          "LABELLED_LIST",
-          "LABELLED_LIST",
-          "LABELLED_LIST",
-          "LABELLED_LIST"
-        ],
-        "skeleton": "KV*4"
-      },
-      {
-        "text": "es regnet hier seit Stunden",
+        "text": "Hat jemand ein Gateway in der Nähe?",
         "dominant": "PROSE",
         "signals": [
           "mostly-prose"
@@ -7955,9 +8529,101 @@
           "PROSE",
           "PROSE",
           "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
           "PROSE"
         ],
-        "skeleton": "WORD*5"
+        "skeleton": "WORD*7 PUNCT"
+      },
+      {
+        "text": "POS GPS -33.1,151.2 alt 5m",
+        "dominant": "NUMERIC_REPORT",
+        "signals": [
+          "mostly-data"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "NUMERIC_REPORT",
+          "SIGNATURE",
+          "NUMERIC_REPORT",
+          "NUMERIC_REPORT",
+          "NUMERIC_REPORT",
+          "PROSE"
+        ],
+        "skeleton": "WORD*2 NUM PUNCT NUM WORD NUM WORD"
+      },
+      {
+        "text": "TERREMOTO zona Nord: prime verifiche in corso",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD*3 PUNCT WORD*4"
+      },
+      {
+        "text": "Schau mal rein: https://example.org/cam",
+        "dominant": "PROSE",
+        "signals": [
+          "url",
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD*3 PUNCT URL"
+      },
+      {
+        "text": "Testnachricht vom neuen Knoten",
+        "dominant": "PROSE",
+        "signals": [
+          "mostly-prose"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "PROSE",
+          "PROSE"
+        ],
+        "skeleton": "WORD*4"
+      },
+      {
+        "text": "[CNT:1/8][INT:60] https://example.org/ov",
+        "dominant": "SIGNATURE",
+        "signals": [
+          "url"
+        ],
+        "states": [
+          "PROSE",
+          "PROSE",
+          "NUMERIC_REPORT",
+          "NUMERIC_REPORT",
+          "SIGNATURE",
+          "NUMERIC_REPORT",
+          "SIGNATURE",
+          "SIGNATURE",
+          "SIGNATURE",
+          "SIGNATURE",
+          "NUMERIC_REPORT",
+          "SIGNATURE",
+          "SIGNATURE"
+        ],
+        "skeleton": "PUNCT WORD PUNCT NUM PUNCT NUM PUNCT*2 WORD PUNCT NUM PUNCT URL"
       },
       {
         "text": "Das Gateway läuft seit gestern wieder stabil",
@@ -7990,26 +8656,6 @@
           "SEPARATOR"
         ],
         "skeleton": "WORD*3 UNIT PUNCT"
-      },
-      {
-        "text": "Das ist ein Test der Antenne auf dem Dach heute",
-        "dominant": "PROSE",
-        "signals": [
-          "mostly-prose"
-        ],
-        "states": [
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE",
-          "PROSE"
-        ],
-        "skeleton": "WORD*10"
       },
       {
         "text": "{CET}2026-01-02 03:04:05",
