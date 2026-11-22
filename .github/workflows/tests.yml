@@ -67,7 +67,11 @@ jobs:
 
       # scripts/run_startup_tests.py is the canonical, exit-code-gated runner.
       # It is fully offline (weather is stubbed) and needs no /etc/mcapp config.
+      # MCAPP_FORCE_CONSOLE: the runner has no TTY, and without it the suites print
+      # only "<suite>: FAIL" with no failing check named.
       - name: Startup test suites
+        env:
+          MCAPP_FORCE_CONSOLE: "1"
         run: uv run python scripts/run_startup_tests.py
 
   automerge:

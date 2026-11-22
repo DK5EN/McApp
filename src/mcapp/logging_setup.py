@@ -7,6 +7,7 @@ Keeps emoji prefixes for visual scanning in logs.
 """
 
 import logging
+import os
 import sys
 from typing import ClassVar
 
@@ -102,8 +103,12 @@ def has_console() -> bool:
     """
     Check if running with a console (TTY).
     Useful for backward compatibility during migration.
+
+    `MCAPP_FORCE_CONSOLE=1` forces it on: CI has no TTY, and without the
+    override every suite gated on this reports only "<suite>: FAIL" with no
+    failing check named.
     """
-    return sys.stdout.isatty()
+    return os.environ.get("MCAPP_FORCE_CONSOLE") == "1" or sys.stdout.isatty()
 
 
 # Module-level logger for this module
