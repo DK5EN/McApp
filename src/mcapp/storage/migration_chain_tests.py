@@ -47,6 +47,71 @@ FINAL_SCHEMA_VERSION = LATEST_SCHEMA_VERSION
 BASE_TS = 1_770_000_000_000  # fixed ms timestamp so the suite is deterministic
 
 
+async def _test_v45_qrz_first_name_rederive(results: list[tuple[str, bool]]) -> None:
+    """Rows stored at v44 with a title as first name ("Dr. Ralph" -> "Dr.") are
+    re-derived from the stored raw `fname` by the v45 step; others are untouched.
+
+    The fixture is a HEAD database rewound to v44, because `callsign_info` gained
+    columns across several steps and the v45 step only reads/writes two of them.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = Path(tmp_dir) / "migration_chain_v45.db"
+        storage = await create_sqlite_storage(db_path)
+        await storage.close()
+
+        seed = [
+            ("DL6RH", "Dr. Ralph", "Dr."),
+            ("OE3GXW", "Ing. Wolfgang", "Ing."),
+            ("DK5EN", "Martin Stefan", "Martin"),
+            ("NOFN", None, "Kept"),
+        ]
+
+        def _rewind_to_v44() -> None:
+            with db_write(db_path) as conn:
+                for call, fname, name in seed:
+                    conn.execute(
+                        "INSERT INTO callsign_info (callsign, status, first_name, fname,"
+                        " fetched_at) VALUES (?, 'found', ?, ?, ?)",
+                        (call, name, fname, BASE_TS),
+                    )
+                conn.execute("UPDATE schema_version SET version = 44")
+                conn.commit()
+
+        await asyncio.to_thread(_rewind_to_v44)
+
+        try:
+            storage = await create_sqlite_storage(db_path)
+        except Exception:
+            logger.exception("v45 qrz first name migration raised")
+            results.append(("v45 qrz first name: migrator runs v44→HEAD without error", False))
+            return
+        results.append(("v45 qrz first name: migrator runs v44→HEAD without error", True))
+        try:
+            version = await _schema_version(storage)
+            results.append(
+                (
+                    f"v45 qrz first name: final schema_version marker is {FINAL_SCHEMA_VERSION}",
+                    version == FINAL_SCHEMA_VERSION,
+                )
+            )
+            rows = await storage._query("SELECT callsign, first_name FROM callsign_info")
+            names = {r["callsign"]: r["first_name"] for r in rows}
+            results.append(
+                (
+                    "v45 qrz first name: titled names re-derived (Dr. -> Ralph, Ing. -> Wolfgang)",
+                    names.get("DL6RH") == "Ralph" and names.get("OE3GXW") == "Wolfgang",
+                )
+            )
+            results.append(
+                (
+                    "v45 qrz first name: correct and fname-less rows untouched",
+                    names.get("DK5EN") == "Martin" and names.get("NOFN") == "Kept",
+                )
+            )
+        finally:
+            await storage.close()
+
+
 async def run_migration_chain_tests() -> bool:
     """Run the schema-migration-chain regression suite. Returns True iff all pass.
 
@@ -69,6 +134,7 @@ async def run_migration_chain_tests() -> bool:
     await _test_v32_stall_events_table(results)
     await _test_v35_node_admin_tables(results)
     await _test_v36_internet_feed_state(results)
+    await _test_v45_qrz_first_name_rederive(results)
 
     for label, ok in results:
         print(f"    {'✅ PASS' if ok else '❌ FAIL'} | {label}")

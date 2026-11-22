@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from ..logging_setup import get_logger
+from ..qrz_client import first_name
 from ..util import ACK_SUFFIX_RE, PLACEHOLDER_CALLSIGN_BASES
 from ._base import StorageBase
 from .constants import (
@@ -1040,6 +1041,37 @@ class MigrationsMixin(StorageBase):
                         "Migration v%d → v44: messages.origin, origin_rule", current_version
                     )
                     _set_schema_version(conn, 44)
+
+                if current_version < 45:  # noqa: PLR2004 - schema migration step
+                    # QRZ first name: a leading title became the name ("Dr. Ralph"
+                    # -> "Dr."). Re-derive from the stored raw `fname`; no lookup.
+                    has_table = conn.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type = 'table'"
+                        " AND name = 'callsign_info'"
+                    ).fetchone()
+                    rows = (
+                        conn.execute(
+                            "SELECT callsign, fname, first_name FROM callsign_info"
+                            " WHERE fname IS NOT NULL"
+                        ).fetchall()
+                        if has_table
+                        else []
+                    )
+                    fixed = 0
+                    for callsign, fname, old_name in rows:
+                        new_name = first_name(fname)
+                        if new_name != old_name:
+                            conn.execute(
+                                "UPDATE callsign_info SET first_name = ? WHERE callsign = ?",
+                                (new_name, callsign),
+                            )
+                            fixed += 1
+                    logger.info(
+                        "Migration v%d → v45: re-derived %d QRZ first names",
+                        current_version,
+                        fixed,
+                    )
+                    _set_schema_version(conn, 45)
 
         await asyncio.to_thread(_init_db)
 

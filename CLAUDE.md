@@ -885,6 +885,11 @@ Plan, threat model and API: `doc/archive/2026-10-04_0848-qrz-callsign-lookup-pla
   QRZ's RAW error text with `Count`, ledger and tier at WARNING. The journal is the instrument for
   learning what QRZ really does on a free account: every login logs `QRZ login ok sub= count=
   plausible= ledger= budget_today=` and every lookup `QRZ lookup CALL -> outcome count= ledger=`.
+- **The shown first name is NOT the first word of QRZ's `fname`.** Operators type their title
+  there (`Dr. Ralph`, `Ing. Wolfgang`, `Dr. med. Karsten`), so `qrz_client.first_name` skips
+  leading titles and single-letter initials (2026-11-22, migration 45 re-derived stored rows
+  from the raw `fname`). Bare `DI` is deliberately NOT a title: `DI PAOLA` is an Italian
+  surname. A title list change needs a new migration, or stored rows keep the old name.
 - MFA on the QRZ account does not apply to the XML API (measured 2026-10-04); a free account
   gets `fname name addr2 state country`, and the login itself costs no lookup.
 
