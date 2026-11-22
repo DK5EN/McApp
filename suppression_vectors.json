@@ -1,12 +1,12 @@
 {
-  "description": "Canonical corpus for the message-suppression predicate (is_suppressed / is_spam_by_classifier / is_text_blocked). Mirrors the webapp's isSpamByClassifier (decision order: disabled -> promoted hash -> demoted hash -> hidden tags -> hide_auto_beacons -> min_info_score) combined with the unconditional isTextBlocked half of passesBaseGuards. Hide semantics over multi-label tags (mcmap's ANY rule): a message is hidden iff ANY of its tags is in hiddenTags; `qso` and `auto_beacon` are ordinary hideable tags; an untagged message is never hidden by tags (no pseudo-tag). A policy without a `hiddenTags` key falls back to the default, which hides nothing since taxonomy v7 (it was [time, bot] before); an explicit empty list hides nothing as well. Field names in `policies` and `message` are the webapp's wire names (camelCase). Canonical home is mc-chat contract/ (subtree-shared to MCProxy); `category` is no longer part of a message.",
+  "description": "Canonical corpus for the message-suppression predicate (is_suppressed / is_spam_by_classifier / is_text_blocked). Mirrors the webapp's isSpamByClassifier (decision order: disabled -> promoted hash -> demoted hash -> hidden topics -> hide_auto_beacons -> min_info_score) combined with the unconditional isTextBlocked half of passesBaseGuards. Messages carry the v8 axes: `tags` are the stored topics (multi-label) and `origin` is human|machine (optional, absent = unknown). Hide semantics over topics (mcmap's ANY rule): a message is hidden iff ANY of its topics is in hiddenTags; an untagged message is never hidden by topics. hideAutoBeacons hides origin machine. Preference ids retired by the classifier rework (qso, auto_beacon, bot, node, software, time) are NOT rewritten and match nothing. A policy without a hiddenTags key hides nothing; an explicit empty list hides nothing as well. Field names in policies and message are the webapp's wire names (camelCase). Canonical home is mc-chat contract/ (subtree-shared to MCProxy).",
   "canonical": "mc-chat/contract/suppression_vectors.json",
-  "version": 3,
+  "version": 4,
   "policies": {
     "disabled_hides_category": {
       "enabled": false,
       "hiddenTags": [
-        "node"
+        "greeting"
       ],
       "minInfoScore": null,
       "hideAutoBeacons": false,
@@ -50,7 +50,7 @@
     "demoted_beats_category": {
       "enabled": true,
       "hiddenTags": [
-        "bot"
+        "greeting"
       ],
       "minInfoScore": null,
       "hideAutoBeacons": false,
@@ -63,10 +63,7 @@
     "group20_regression": {
       "enabled": true,
       "hiddenTags": [
-        "time",
-        "bot",
-        "node",
-        "software"
+        "alert"
       ],
       "minInfoScore": null,
       "hideAutoBeacons": false,
@@ -199,43 +196,10 @@
       "demotedHashes": [],
       "blockedTexts": []
     },
-    "hide_qso": {
-      "enabled": true,
-      "hiddenTags": [
-        "qso"
-      ],
-      "minInfoScore": null,
-      "hideAutoBeacons": false,
-      "promotedHashes": [],
-      "demotedHashes": [],
-      "blockedTexts": []
-    },
     "hide_question": {
       "enabled": true,
       "hiddenTags": [
         "question"
-      ],
-      "minInfoScore": null,
-      "hideAutoBeacons": false,
-      "promotedHashes": [],
-      "demotedHashes": [],
-      "blockedTexts": []
-    },
-    "hide_time": {
-      "enabled": true,
-      "hiddenTags": [
-        "time"
-      ],
-      "minInfoScore": null,
-      "hideAutoBeacons": false,
-      "promotedHashes": [],
-      "demotedHashes": [],
-      "blockedTexts": []
-    },
-    "hide_auto_beacon_tag": {
-      "enabled": true,
-      "hiddenTags": [
-        "auto_beacon"
       ],
       "minInfoScore": null,
       "hideAutoBeacons": false,
@@ -250,6 +214,33 @@
       "promotedHashes": [],
       "demotedHashes": [],
       "blockedTexts": []
+    },
+    "hide_weather": {
+      "enabled": true,
+      "hiddenTags": [
+        "weather"
+      ],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
+    },
+    "hide_retired_ids": {
+      "enabled": true,
+      "hiddenTags": [
+        "qso",
+        "auto_beacon",
+        "bot",
+        "node",
+        "software",
+        "time"
+      ],
+      "minInfoScore": null,
+      "hideAutoBeacons": false,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": []
     }
   },
   "vectors": [
@@ -259,7 +250,7 @@
       "message": {
         "msg": "plain text",
         "tags": [
-          "auto_beacon"
+          "greeting"
         ],
         "info_score": 1.0,
         "template_hash": "abc123abc123"
@@ -305,7 +296,7 @@
       "message": {
         "msg": "hello world",
         "tags": [
-          "auto_beacon"
+          "greeting"
         ],
         "info_score": 1.0,
         "template_hash": "demo456def12"
@@ -313,12 +304,12 @@
       "suppressed": false
     },
     {
-      "name": "group 20 regression: node_advert + low info_score + has_url, hidden -> suppressed",
+      "name": "group 20 regression: link + low info_score + has_url, hidden -> suppressed",
       "policy": "group20_regression",
       "message": {
         "msg": "https://www.varac-hamradio.com/group/varac-hf-discussion-forum/discussion",
         "tags": [
-          "auto_beacon"
+          "alert"
         ],
         "info_score": 0.3,
         "template_hash": ""
@@ -331,7 +322,7 @@
       "message": {
         "msg": "https://www.varac-hamradio.com/group/varac-hf-discussion-forum/discussion",
         "tags": [
-          "auto_beacon"
+          "alert"
         ],
         "info_score": 0.3,
         "template_hash": ""
@@ -339,28 +330,26 @@
       "suppressed": false
     },
     {
-      "name": "hideAutoBeacons true + auto_beacon tag -> suppressed",
+      "name": "hideAutoBeacons true + origin machine -> suppressed",
       "policy": "auto_beacon_hidden",
       "message": {
         "msg": "beacon text",
-        "tags": [
-          "auto_beacon"
-        ],
+        "tags": [],
         "info_score": 1.0,
-        "template_hash": ""
+        "template_hash": "",
+        "origin": "machine"
       },
       "suppressed": true
     },
     {
-      "name": "hideAutoBeacons false + same auto_beacon tag -> not suppressed",
+      "name": "hideAutoBeacons false + origin machine -> not suppressed",
       "policy": "auto_beacon_shown",
       "message": {
         "msg": "beacon text",
-        "tags": [
-          "auto_beacon"
-        ],
+        "tags": [],
         "info_score": 1.0,
-        "template_hash": ""
+        "template_hash": "",
+        "origin": "machine"
       },
       "suppressed": false
     },
@@ -499,139 +488,82 @@
       "suppressed": false
     },
     {
-      "name": "issue #17: greeting bot {greeting, auto_beacon} is hidden when greeting is hidden",
+      "name": "issue #17: greeting bot (greeting, origin machine) is hidden when greeting is hidden",
       "policy": "hide_greeting",
       "message": {
         "msg": "Guten Morgen zusammen",
         "tags": [
-          "greeting",
-          "auto_beacon"
+          "greeting"
         ],
         "info_score": 1.0,
-        "template_hash": ""
+        "template_hash": "",
+        "origin": "machine"
       },
       "suppressed": true
     },
     {
-      "name": "ANY rule: greeting {greeting, qso} is hidden when greeting is hidden",
+      "name": "ANY rule: human greeting is hidden when greeting is hidden",
       "policy": "hide_greeting",
       "message": {
         "msg": "Hallo, wie geht's?",
         "tags": [
-          "greeting",
-          "qso"
+          "greeting"
         ],
         "info_score": 1.0,
-        "template_hash": ""
+        "template_hash": "",
+        "origin": "human"
       },
       "suppressed": true
     },
     {
-      "name": "qso hidden: a human greeting {greeting, qso} is hidden",
-      "policy": "hide_qso",
-      "message": {
-        "msg": "Hallo, wie geht's?",
-        "tags": [
-          "greeting",
-          "qso"
-        ],
-        "info_score": 1.0,
-        "template_hash": ""
-      },
-      "suppressed": true
-    },
-    {
-      "name": "qso hidden: a message without qso and without a hidden tag stays visible",
-      "policy": "hide_qso",
+      "name": "any hidden topic among several hides ({weather, greeting} with weather hidden)",
+      "policy": "hide_weather",
       "message": {
         "msg": "hello",
         "tags": [
+          "weather",
           "greeting"
         ],
         "info_score": 1.0,
         "template_hash": ""
       },
-      "suppressed": false
-    },
-    {
-      "name": "no qso: any hidden tag among several hides ({time, weather} with time hidden)",
-      "policy": "hide_time",
-      "message": {
-        "msg": "hello",
-        "tags": [
-          "weather",
-          "auto_beacon"
-        ],
-        "info_score": 1.0,
-        "template_hash": ""
-      },
       "suppressed": true
     },
     {
-      "name": "ANY rule: {time, qso} is hidden when time is hidden",
-      "policy": "hide_time",
-      "message": {
-        "msg": "hello",
-        "tags": [
-          "auto_beacon",
-          "qso"
-        ],
-        "info_score": 1.0,
-        "template_hash": ""
-      },
-      "suppressed": true
-    },
-    {
-      "name": "auto_beacon is a hideable tag",
-      "policy": "hide_auto_beacon_tag",
-      "message": {
-        "msg": "hello",
-        "tags": [
-          "greeting",
-          "auto_beacon"
-        ],
-        "info_score": 1.0,
-        "template_hash": ""
-      },
-      "suppressed": true
-    },
-    {
-      "name": "auto_beacon tag not hidden -> visible",
+      "name": "origin machine alone does not hide when only greeting is hidden -> visible",
       "policy": "hide_greeting",
       "message": {
         "msg": "hello",
-        "tags": [
-          "auto_beacon"
-        ],
+        "tags": [],
         "info_score": 1.0,
-        "template_hash": ""
+        "template_hash": "",
+        "origin": "machine"
       },
       "suppressed": false
     },
     {
-      "name": "hiddenTags absent: no default hiding (owner 2026-11-11), bot is labelled",
+      "name": "hiddenTags absent: no default hiding (owner 2026-11-11), a machine message is labelled",
       "policy": "hidden_tags_absent_defaults",
       "message": {
         "msg": "hello",
-        "tags": [
-          "auto_beacon"
-        ],
+        "tags": [],
         "info_score": 1.0,
-        "template_hash": ""
+        "template_hash": "",
+        "origin": "machine"
       },
       "suppressed": false
     },
     {
-      "name": "hiddenTags absent: no default hiding (owner 2026-11-11), time beacon is labelled",
+      "name": "hiddenTags absent: no default hiding, a machine weather message is labelled",
       "policy": "hidden_tags_absent_defaults",
       "message": {
         "msg": "hello",
         "tags": [
-          "auto_beacon",
           "weather"
         ],
         "info_score": 1.0,
-        "template_hash": ""
+        "template_hash": "",
+        "origin": "machine"
       },
       "suppressed": false
     },
@@ -649,16 +581,16 @@
       "suppressed": false
     },
     {
-      "name": "hiddenTags absent: default leaves qso visible",
+      "name": "hiddenTags absent: default leaves a human greeting visible",
       "policy": "hidden_tags_absent_defaults",
       "message": {
         "msg": "hello",
         "tags": [
-          "qso",
           "greeting"
         ],
         "info_score": 1.0,
-        "template_hash": ""
+        "template_hash": "",
+        "origin": "human"
       },
       "suppressed": false
     },
@@ -667,11 +599,10 @@
       "policy": "group20_category_not_hidden",
       "message": {
         "msg": "hello",
-        "tags": [
-          "auto_beacon"
-        ],
+        "tags": [],
         "info_score": 1.0,
-        "template_hash": ""
+        "template_hash": "",
+        "origin": "machine"
       },
       "suppressed": false
     },
@@ -687,38 +618,50 @@
       "suppressed": false
     },
     {
-      "name": "ANY rule: {question, qso} is hidden when question is hidden",
+      "name": "ANY rule: human question is hidden when question is hidden",
       "policy": "hide_question",
       "message": {
         "msg": "Wer kennt sich mit DMR aus?",
         "tags": [
-          "question",
-          "qso"
+          "question"
         ],
         "info_score": 1.0,
-        "template_hash": ""
+        "template_hash": "",
+        "origin": "human"
       },
       "suppressed": true
     },
     {
-      "name": "ANY rule: qso-only message stays visible when only greeting is hidden",
+      "name": "ANY rule: human message without topics stays visible when only greeting is hidden",
       "policy": "hide_greeting",
       "message": {
         "msg": "hello",
-        "tags": [
-          "qso"
-        ],
+        "tags": [],
+        "info_score": 1.0,
+        "template_hash": "",
+        "origin": "human"
+      },
+      "suppressed": false
+    },
+    {
+      "name": "retired preference ids are not rewritten: hiddenTags qso does not hide a human message",
+      "policy": "hide_retired_ids",
+      "message": {
+        "msg": "hello",
+        "tags": [],
+        "origin": "human",
         "info_score": 1.0,
         "template_hash": ""
       },
       "suppressed": false
     },
     {
-      "name": "ANY rule: untagged message stays visible when qso is hidden",
-      "policy": "hide_qso",
+      "name": "retired preference ids are not rewritten: hiddenTags auto_beacon/bot do not hide a machine message",
+      "policy": "hide_retired_ids",
       "message": {
         "msg": "hello",
         "tags": [],
+        "origin": "machine",
         "info_score": 1.0,
         "template_hash": ""
       },
