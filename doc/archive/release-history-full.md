@@ -5,6 +5,51 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.1.26 (2026-11-08)
+
+**Weather history fills its gaps from meshmap, and the 30-day weather charts load faster.** Where McApp
+has no weather samples for a station, it fetches them from meshmap. The 30-day charts read a
+pre-averaged table, and the chart shows a break where no sample exists instead of drawing a line across it.
+
+> Update from the Update page as usual. Schema goes to 42, `SYSTEM_EPOCH` stays at 9. The box now
+> fetches weather history from `meshmap.oevsv.at`, so it needs outbound HTTPS.
+
+### Highlights
+
+- **Gaps in weather history are filled.** McApp asks meshmap for the samples it missed, for the
+  stations shown in the weather picker. Stations without a weather sensor are skipped.
+- **30-day weather charts load faster.** The server returns two-hour means in a compact columnar
+  form, and the medians are computed in SQLite. A cache serves the last result while it refreshes.
+- **Honest gaps.** Central samples are hollow points, and a line breaks where no sample exists.
+- **The 30-day sidebar shows the real last sample** instead of a value from the bucket grid.
+- **Text fields render at 16 px on touch devices**, so iOS no longer zooms in when you tap one.
+- **Easier to read.** Control borders, placeholders and faded text are adjusted toward BITV/WCAG
+  legibility, and the font scale is adjusted.
+
+### Backend (MCProxy)
+
+- Schema 41 adds the storage layer for the gap fill, and a fetch job plus a status route. Schema 42
+  adds expression indexes on the telemetry buckets and builds the JSON arrays in SQLite.
+- The telemetry read path runs off the event loop, so a long chart query no longer stalls live
+  messages.
+- Dependencies refreshed: bleak 3.1.0, sse-starlette 3.7.0, types-regex.
+
+### Frontend (webapp)
+
+- Weather charts read the columnar response and compute their statistics per bucket.
+- Hollow points, breaks at real gaps, and the sidebar's last-sample fix are in the same chart code.
+- Accessibility and touch fixes listed above. Transitive dependencies refreshed in `package-lock.json`.
+
+### Upgrade notes
+
+- **Schema 41 and 42 run on first start.** The telemetry index build was not timed on a Pi; on a large
+  database it can take a while.
+- **Gap fill needs outbound HTTPS to `meshmap.oevsv.at`.** Without it the fill logs warnings and the
+  rest of McApp runs as before.
+- **Soak:** `v2.1.26-dev.5` ran on mcapp.local from 10:39 CET to the release, through the 04:00
+  nightly prune and the overnight meshmap fetches. All 1,379 fetches returned 200, and no gap-fill
+  errors were logged.
+
 ## v2.1.25 (2026-11-06)
 
 **A McApp update no longer breaks other software on the box.** Your own firewall rules, the log folders

@@ -3372,3 +3372,32 @@ point, not a finding. Watch whether cold telemetry requests keep producing `loop
 **iPhone:** the operator checked the WX page on iPhone Safari after this run, and it loads well.
 
 **Not measured:** W27 (`mcapp` RSS at matched load) needs a quiet day, and this run was 22 min after a restart.
+
+## 60. 2026-11-22 13:20 CET — pre-release sweep of v2.1.27-dev.11 before the v2.1.27 promotion (short soak)
+
+**Verdict: green, zero findings, with a short soak at the operator's decision.** The backend part of the
+release (schema 44, classifier v8) has run since `v2.1.27-dev.9` at 11:34. `dev.10` and `dev.11` are
+webapp-only (chip cleanup and chip colours, both accepted in the operator's UAT); `dev.11` runs since 12:55.
+
+- **Running:** `webapp/version.html` v2.1.27-dev.11, active slot-0. `mcapp`, `mcapp-ble`, `caddy`, `lighttpd`
+  active, `NRestarts` 0 on both McApp units.
+- **Versions:** schema 44 in the DB, classifier 9 on every message, system epoch 10.
+- **Startup work on dev.9:** migration v43 to v44, axes backfill 9094 rows in 43.3 s (0 failed), reclassify of
+  11329 rows in about 3.5 min. Afterwards every chat message carries an origin (7573 human, 1526 machine);
+  position rows carry none by design.
+- **Data, last hour:** 10 msg, 36 pos. DB 85 MB, 11370 rows.
+- **Journal:** `mcapp -p warning` since 11:34: no entries.
+- **Host:** 196 MB RAM available, swap 25 MB used of 461 MB, disk 11% of 59 G, 42.4 C, uptime 15 days.
+- **Hygiene:** `vapid.json` 0600, `config.json` 0640.
+
+**Absent:** restarts, journal warnings, unclassified messages.
+
+**Gate for this promotion:** `./scripts/gate.sh` PASS after the dependency refresh (uv lock --upgrade, the
+standalone `ble_service` lock, `npm update`). One earlier gate run in this session failed once in
+`node_console` (known load flake, unrelated code); that suite then passed 10 of 10 runs alone.
+
+**Repo state found:** webapp `main` carried an unmerged "Merge development for v2.1.27" from 2026-11-14, an
+aborted attempt that never tagged anything. Merged back into `development` with no tree change.
+
+**Not measured:** a multi-hour soak of the dev.10/dev.11 webapp, and the epoch 9 to 10 converge on a box
+other than this one.
