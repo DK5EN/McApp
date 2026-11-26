@@ -1,7 +1,7 @@
 {
-  "description": "Canonical corpus for the message-suppression predicate (is_suppressed / is_spam_by_classifier / is_text_blocked). Mirrors the webapp's isSpamByClassifier (decision order: disabled -> promoted hash -> demoted hash -> hidden topics -> hide_auto_beacons -> min_info_score) combined with the unconditional isTextBlocked half of passesBaseGuards. Messages carry the v8 axes: `tags` are the stored topics (multi-label) and `origin` is human|machine (optional, absent = unknown). Hide semantics over topics (mcmap's ANY rule): a message is hidden iff ANY of its topics is in hiddenTags; an untagged message is never hidden by topics. hideAutoBeacons hides origin machine. Preference ids retired by the classifier rework (qso, auto_beacon, bot, node, software, time) are NOT rewritten and match nothing. A policy without a hiddenTags key hides nothing; an explicit empty list hides nothing as well. Field names in policies and message are the webapp's wire names (camelCase). Canonical home is mc-chat contract/ (subtree-shared to MCProxy).",
+  "description": "Canonical corpus for the message-suppression predicate (is_suppressed / is_spam_by_classifier / is_text_blocked). Mirrors the webapp's isSpamByClassifier (decision order: disabled -> own-call DM exemption -> promoted hash -> demoted hash -> hidden topics -> hide_auto_beacons -> min_info_score) combined with the unconditional isTextBlocked half of passesBaseGuards. Messages carry the v8 axes: `tags` are the stored topics (multi-label) and `origin` is human|machine (optional, absent = unknown). Hide semantics over topics (mcmap's ANY rule): a message is hidden iff ANY of its topics is in hiddenTags; an untagged message is never hidden by topics. hideAutoBeacons hides origin machine. Preference ids retired by the classifier rework (qso, auto_beacon, bot, node, software, time) are NOT rewritten and match nothing. A policy without a hiddenTags key hides nothing; an explicit empty list hides nothing as well. Field names in policies and message are the webapp's wire names (camelCase). Canonical home is mc-chat contract/ (subtree-shared to MCProxy). Version 5: a vector may carry an optional top-level `ownCall` (the operator's callsign, SSID allowed) and its message an optional `dst`. A message whose dst base callsign (text before the first '-', upper-cased) equals ownCall's base is NEVER suppressed by the classifier half (the exemption sits right after the `enabled` check, before the promoted-hash check); blocked texts still apply unconditionally. Groups, broadcast and hashtags can never equal a callsign base, so they are unaffected. Normalisation: base = text before the first '-', surrounding whitespace trimmed, upper-cased; ownCall is normalised the same way; an empty ownCall or an absent dst never matches. Absent ownCall = no exemption.",
   "canonical": "mc-chat/contract/suppression_vectors.json",
-  "version": 4,
+  "version": 5,
   "policies": {
     "disabled_hides_category": {
       "enabled": false,
@@ -241,6 +241,17 @@
       "promotedHashes": [],
       "demotedHashes": [],
       "blockedTexts": []
+    },
+    "own_dm_beacons_and_blocked": {
+      "enabled": true,
+      "hiddenTags": [],
+      "minInfoScore": null,
+      "hideAutoBeacons": true,
+      "promotedHashes": [],
+      "demotedHashes": [],
+      "blockedTexts": [
+        "spamword"
+      ]
     }
   },
   "vectors": [
@@ -666,6 +677,200 @@
         "template_hash": ""
       },
       "suppressed": false
+    },
+    {
+      "name": "own DM: machine reply to own call is not hidden by hideAutoBeacons",
+      "policy": "auto_beacon_hidden",
+      "ownCall": "DK5EN-98",
+      "message": {
+        "msg": "🕐 22:35:00 Uhr",
+        "tags": [],
+        "origin": "machine",
+        "info_score": 0.25,
+        "template_hash": "",
+        "dst": "DK5EN-98"
+      },
+      "suppressed": false
+    },
+    {
+      "name": "own DM: ownCall with another SSID (same base) is exempt too",
+      "policy": "auto_beacon_hidden",
+      "ownCall": "DK5EN-14",
+      "message": {
+        "msg": "🕐 22:35:00 Uhr",
+        "tags": [],
+        "origin": "machine",
+        "info_score": 0.25,
+        "template_hash": "",
+        "dst": "DK5EN-98"
+      },
+      "suppressed": false
+    },
+    {
+      "name": "own DM: same message without ownCall stays hidden (pre-existing behaviour)",
+      "policy": "auto_beacon_hidden",
+      "message": {
+        "msg": "🕐 22:35:00 Uhr",
+        "tags": [],
+        "origin": "machine",
+        "info_score": 0.25,
+        "template_hash": "",
+        "dst": "DK5EN-98"
+      },
+      "suppressed": true
+    },
+    {
+      "name": "third-party DM (dst other callsign) is still hidden",
+      "policy": "auto_beacon_hidden",
+      "ownCall": "DK5EN-98",
+      "message": {
+        "msg": "🕐 22:35:00 Uhr",
+        "tags": [],
+        "origin": "machine",
+        "info_score": 0.25,
+        "template_hash": "",
+        "dst": "OE5HWN-12"
+      },
+      "suppressed": true
+    },
+    {
+      "name": "group dst never equals a callsign base: still hidden",
+      "policy": "auto_beacon_hidden",
+      "ownCall": "DK5EN-98",
+      "message": {
+        "msg": "🕐 22:35:00 Uhr",
+        "tags": [],
+        "origin": "machine",
+        "info_score": 0.25,
+        "template_hash": "",
+        "dst": "20"
+      },
+      "suppressed": true
+    },
+    {
+      "name": "own DM: low info_score below minInfoScore is not hidden",
+      "policy": "info_score_threshold",
+      "ownCall": "DK5EN-98",
+      "message": {
+        "msg": "🕐 22:35:00 Uhr",
+        "tags": [],
+        "origin": "human",
+        "info_score": 0.25,
+        "template_hash": "",
+        "dst": "DK5EN-98"
+      },
+      "suppressed": false
+    },
+    {
+      "name": "own DM: promoted template hash is exempt (exemption precedes promote)",
+      "policy": "promoted_only",
+      "ownCall": "DK5EN-98",
+      "message": {
+        "msg": "🕐 22:35:00 Uhr",
+        "tags": [],
+        "origin": "human",
+        "info_score": 1.0,
+        "template_hash": "promo123abc1",
+        "dst": "DK5EN-98"
+      },
+      "suppressed": false
+    },
+    {
+      "name": "own DM: blocked text still suppresses (text half unconditional)",
+      "policy": "own_dm_beacons_and_blocked",
+      "ownCall": "DK5EN-98",
+      "message": {
+        "msg": "this has SPAMWORD",
+        "tags": [],
+        "origin": "human",
+        "info_score": 1.0,
+        "template_hash": "",
+        "dst": "DK5EN-98"
+      },
+      "suppressed": true
+    },
+    {
+      "name": "own DM: lower-case dst matches (case-insensitive)",
+      "policy": "auto_beacon_hidden",
+      "ownCall": "DK5EN-98",
+      "message": {
+        "msg": "🕐 22:35:00 Uhr",
+        "tags": [],
+        "origin": "machine",
+        "info_score": 0.25,
+        "template_hash": "",
+        "dst": "dk5en-98"
+      },
+      "suppressed": false
+    },
+    {
+      "name": "own DM: bare dst and bare ownCall match",
+      "policy": "auto_beacon_hidden",
+      "ownCall": "DK5EN",
+      "message": {
+        "msg": "🕐 22:35:00 Uhr",
+        "tags": [],
+        "origin": "machine",
+        "info_score": 0.25,
+        "template_hash": "",
+        "dst": "DK5EN"
+      },
+      "suppressed": false
+    },
+    {
+      "name": "own DM: surrounding whitespace in dst is trimmed",
+      "policy": "auto_beacon_hidden",
+      "ownCall": "DK5EN-98",
+      "message": {
+        "msg": "🕐 22:35:00 Uhr",
+        "tags": [],
+        "origin": "machine",
+        "info_score": 0.25,
+        "template_hash": "",
+        "dst": " DK5EN-98 "
+      },
+      "suppressed": false
+    },
+    {
+      "name": "broadcast dst * never matches an own call: still hidden",
+      "policy": "auto_beacon_hidden",
+      "ownCall": "DK5EN-98",
+      "message": {
+        "msg": "🕐 22:35:00 Uhr",
+        "tags": [],
+        "origin": "machine",
+        "info_score": 0.25,
+        "template_hash": "",
+        "dst": "*"
+      },
+      "suppressed": true
+    },
+    {
+      "name": "hashtag dst #DK5EN never matches an own call: still hidden",
+      "policy": "auto_beacon_hidden",
+      "ownCall": "DK5EN-98",
+      "message": {
+        "msg": "🕐 22:35:00 Uhr",
+        "tags": [],
+        "origin": "machine",
+        "info_score": 0.25,
+        "template_hash": "",
+        "dst": "#DK5EN"
+      },
+      "suppressed": true
+    },
+    {
+      "name": "message without dst never matches an own call: still hidden",
+      "policy": "auto_beacon_hidden",
+      "ownCall": "DK5EN-98",
+      "message": {
+        "msg": "🕐 22:35:00 Uhr",
+        "tags": [],
+        "origin": "machine",
+        "info_score": 0.25,
+        "template_hash": ""
+      },
+      "suppressed": true
     }
   ]
 }
