@@ -1,6 +1,6 @@
 # McApp production health log — mcapp.local
 
-**Newest run:** §63, 2026-11-26 23:41 CET, pre-release sweep of v2.1.28-dev.1 before the v2.1.28 promotion, green, zero findings.
+**Newest run:** §64, 2026-11-26 23:53 CET, post-release sweep of production v2.1.28, green, zero findings.
 
 ## Verifiziert 2026-11-10
 
@@ -3506,3 +3506,25 @@ predicate.
 standalone `ble_service` lock, `npm update`) and the ICSSW label refresh (two new groups).
 
 **Not measured:** a soak of HEAD on the box; stall rows; W27 (`mcapp` RSS at matched load).
+
+## 64. 2026-11-26 23:53 CET — post-release sweep of production v2.1.28 (2 min after the deploy)
+
+**Verdict: green, zero findings.** Deployed from the webapp Update page.
+
+- **Runner:** `Finished: {"status": "success", "version": "v2.1.28", "slot": 0, "converge": "ok", "duration_s": 121}`.
+  Version and slot match the release and `current`.
+- **Running:** `webapp/version.html` v2.1.28, active slot-0. `mcapp`, `mcapp-ble`, `caddy`, `lighttpd` active,
+  `mcapp` restarted 23:51:11, `NRestarts` 0.
+- **Versions:** `LATEST_SCHEMA_VERSION` 46 in the active slot, equal to the DB. System epoch 10, classifier 10 (marker
+  present, so no reclassify ran on this box; it already had contract v10 from dev.1). Auto-beacon backfill promoted 9
+  templates at startup.
+- **The fix is in the artefact:** `is_addressed_to_own` in the active slot's `storage/suppression.py`,
+  `own_base=my_base` in `storage/query.py`, and "Hide machine-generated messages" in the served webapp bundle.
+- **Packaging:** exactly the three runtime data files, no test modules.
+- **Journal:** `mcapp -p warning` over the 10 min after the restart: no entries.
+- **Host:** 198 MB RAM available.
+
+**Absent:** restarts, journal warnings, a version or slot mismatch in the runner's result.
+
+**Not measured:** Helmut's (OE5HWN-12) box after his update; the one-time reclassify on a box coming from v2.1.27
+(contract v9 to v10).
