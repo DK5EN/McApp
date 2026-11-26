@@ -719,7 +719,7 @@ wheels = [
 
 [[package]]
 name = "mcapp"
-version = "2.1.28"
+version = "2.1.29"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
@@ -767,7 +767,7 @@ dev = [
 
 [[package]]
 name = "mcapp-ble-service"
-version = "2.1.28"
+version = "2.1.29"
 source = { editable = "ble_service" }
 dependencies = [
     { name = "bleak", marker = "sys_platform == 'darwin'" },
