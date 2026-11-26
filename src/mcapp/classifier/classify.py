@@ -37,27 +37,23 @@ from .origin import ORIGIN_HUMAN, ORIGIN_MACHINE, OriginResult, message_origin
 from .score import compute as score_compute
 from .template import (
     _AUTO_BEACON_MIN_TOKENS,
-    _HUMAN_CATEGORIES,
     check_only,
     fingerprint,
     update_and_check,
 )
 from .types import (
-    AUTO_BEACON_TAG,
     DIRECTED_DST_RE,
     TEMPLATE_HASH_LEN,
     Classification,
     EventBusProtocol,
     SSEEvent,
     StorageProtocol,
-    derive_category,
 )
 
 if TYPE_CHECKING:
     from .axes import AxesEngine
 
 CONTRACT_ID_META_KEY = "classifier_contract_id"
-_QSO_TAG = "qso"
 # mc-chat extension of the contract origin axis: a human verdict on a message whose L2
 # template is an auto-beacon is overridden to machine with this rule name.
 ORIGIN_RULE_BEACON_TEMPLATE = "beacon-template"
@@ -108,8 +104,7 @@ def origin_for(  # noqa: PLR0913, PLR0917 - positional API mirrors message_origi
 class BeaconClassification(Classification):
     """``Classifier.classify`` result: a ``Classification`` that also carries the L2 verdict.
 
-    ``tags`` are the v8 topics (never ``auto_beacon``/``qso``; those are origin-derived aliases,
-    see ``types.legacy_tag_view``). ``is_beacon`` is the template's auto-beacon decision.
+    ``tags`` are the topics. ``is_beacon`` is the template's auto-beacon decision.
     """
 
     is_beacon: bool = False
@@ -200,8 +195,6 @@ class Classifier:
             text: str = msg.get("msg") or ""
             dst: str = msg.get("dst") or ""
             l1 = self.engine.classify(text, msg.get("src") or "", dst)
-            # tag_set is the INTERNAL v7 set (score + category); topic_set is what is stored.
-            tag_set: set[str] = set(l1.tags)
             topic_set: set[str] = set(l1.topics)
             directed = l1.directed or DIRECTED_DST_RE.search(dst) is not None
             auto_beacon = False
@@ -209,7 +202,7 @@ class Classifier:
             if update_stats:
                 # Layer 2 (live path): upsert stats, decide auto-beacon
                 beacon = await update_and_check(
-                    self.storage, msg, now_ms, tags=l1.tags, directed=directed
+                    self.storage, msg, now_ms, tags=l1.topics, directed=directed
                 )
                 template_hash = beacon.template_hash
                 template_count = beacon.count
@@ -241,31 +234,37 @@ class Classifier:
                         # now also checks directedness, which this reclassify
                         # branch's old private-import reimplementation missed).
                         if is_beacon and not user_action:
-                            is_beacon = not check_only(msg, l1.tags, directed)
+                            is_beacon = not check_only(msg, l1.topics, directed)
                     auto_beacon = is_beacon
                 else:
                     template_count = 0
 
-            if auto_beacon:
-                # mcmap derives qso at L1 without knowing L2: an auto-flagged
-                # template is automated, so it is no conversation.
-                tag_set.add(AUTO_BEACON_TAG)
-                tag_set.discard(_QSO_TAG)
-                # Owner 2026-11-11: a repeated greeting-plus-weather template is a weather
-                # report, the greeting is non-human. A greeting alone stays (greeting bots
-                # are flaggable, issue #17), and a single greeting+weather message keeps both.
-                if "weather" in tag_set:
-                    tag_set.discard("greeting")
-                    topic_set.discard("greeting")
-            category = derive_category(tag_set, directed, l1.legacy_tags)
+            # Owner 2026-11-11: a repeated greeting-plus-weather template is a weather
+            # report, the greeting is non-human. A greeting alone stays (greeting bots
+            # are flaggable, issue #17), and a single greeting+weather message keeps both.
+            if auto_beacon and "weather" in topic_set:
+                topic_set.discard("greeting")
+
+            # Origin feeds the score (human = group chat, machine = clamp); a failure only
+            # leaves it unknown, it does not discard the classification.
+            origin: str | None = None
+            try:
+                res = origin_for(
+                    self.engine,
+                    self.axes,
+                    text,
+                    msg.get("src") or "",
+                    dst,
+                    msg.get("timing"),
+                    is_beacon=auto_beacon,
+                )
+                origin = None if res is None else res.origin
+            except Exception:
+                logger.exception("Origin for score failed for msg_id=%r", msg.get("msg_id"))
 
             # Layer 3: info score
             info_score = score_compute(
-                msg,
-                tag_set,
-                template_count,
-                directed=directed,
-                automated_tags=self.engine.automated_tags,
+                msg, topic_set, template_count, directed=directed, origin=origin
             )
 
         except Exception:
@@ -275,7 +274,6 @@ class Classifier:
             )
             raw_text: str = msg.get("msg") or ""
             return BeaconClassification(
-                category="other",
                 tags=(),
                 info_score=0.5,
                 template_hash=_fallback_hash(raw_text),
@@ -283,11 +281,11 @@ class Classifier:
             )
 
         return BeaconClassification(
-            category=category,
             tags=tuple(sorted(topic_set)),
             info_score=info_score,
             template_hash=template_hash,
             classifier_version=self.version,
+            rules=tuple(l1.rules),
             is_beacon=auto_beacon,
         )
 
@@ -313,9 +311,7 @@ class Classifier:
 
         Returns count of cleared rows.
         """
-        cleared = await self.storage.clear_stale_auto_beacons(
-            _HUMAN_CATEGORIES, _AUTO_BEACON_MIN_TOKENS
-        )
+        cleared = await self.storage.clear_stale_auto_beacons(_AUTO_BEACON_MIN_TOKENS)
         if cleared:
             logger.info("Cleared stale auto_beacon on %d templates", cleared)
         return cleared
@@ -324,7 +320,6 @@ class Classifier:
         self,
         *,
         since_ms: int | None = None,
-        category_filter: str | None = None,
         force: bool = False,
         batch_size: int = 500,
         progress_cb: ProgressCallback | None = None,
@@ -355,7 +350,6 @@ class Classifier:
             self._run_reclassify(
                 job=job,
                 since_ms=since_ms,
-                category_filter=category_filter,
                 target_version=target_version,
                 batch_size=batch_size,
                 progress_cb=progress_cb,
@@ -364,12 +358,11 @@ class Classifier:
         job._task = task  # noqa: SLF001 - framework wiring
         return job
 
-    async def _run_reclassify(  # noqa: PLR0913 - signature fixed by call sites
+    async def _run_reclassify(
         self,
         *,
         job: ReclassifyJob,
         since_ms: int | None,
-        category_filter: str | None,
         target_version: int,
         batch_size: int,
         progress_cb: ProgressCallback | None,
@@ -386,7 +379,6 @@ class Classifier:
             while True:
                 batch = await self.storage.get_messages_to_classify(
                     classifier_ver_below=target_version,
-                    category=category_filter,
                     since_ms=since_ms,
                     limit=batch_size,
                     offset=0,
@@ -439,7 +431,7 @@ class Classifier:
         target_version: int,
     ) -> None:
         """Classify one batch; full-write changed rows, only stamp the rest."""
-        changed: list[tuple[str, str, float, str, int, int]] = []
+        changed: list[tuple[str, float, str, int, int]] = []
         origins: dict[int, tuple[str, str]] = {}
         unchanged_ids: list[int] = []
         results: list[tuple[dict[str, Any], Classification, OriginResult | None]] = []
@@ -453,9 +445,8 @@ class Classifier:
                 job.processed += 1
                 continue
             results.append((row, cls, origin))
-            new = (cls.category, json.dumps(list(cls.tags)), cls.info_score, cls.template_hash)
+            new = (json.dumps(list(cls.tags)), cls.info_score, cls.template_hash)
             old = (
-                row.get("category"),
                 row.get("tags"),
                 row.get("info_score"),
                 row.get("template_hash"),
@@ -486,7 +477,6 @@ class Classifier:
             try:
                 await self.storage.update_message_classification(
                     row["id"],
-                    category=cls.category,
                     tags=list(cls.tags),
                     info_score=cls.info_score,
                     template_hash=cls.template_hash,
@@ -505,9 +495,7 @@ class Classifier:
         Shape::
 
             {
-                "counts": {category: int, ...},       # last 30 days
-                "recent_24h": {category: int, ...},
-                "by_tag": {tag: int, ...},            # stored v8 topics, last 30 days
+                "by_tag": {tag: int, ...},            # stored topics, last 30 days
                 "by_origin": {"human": int, "machine": int, "null": int},  # last 30 days
                 "top_templates": [
                     {"template_hash", "example_msg", "count", "auto_beacon"},
@@ -517,23 +505,12 @@ class Classifier:
             }
         """
         now_ms = int(time.time() * 1000)
-        counts = await self.storage.count_messages_by_category(now_ms - 30 * 24 * 3600 * 1000)
         by_tag = await self.storage.count_messages_by_tag(now_ms - 30 * 24 * 3600 * 1000)
         by_origin = await self.storage.count_messages_by_origin(now_ms - 30 * 24 * 3600 * 1000)
-        recent_24h = await self.storage.count_messages_by_category(now_ms - 24 * 3600 * 1000)
-
-        # timestamp_beacon is not persisted (drop-on-classify); surface the
-        # in-memory 24h counter so the FE badge stays accurate.
-        heartbeat_n = self.storage.get_heartbeat_window_size()
-        if heartbeat_n:
-            recent_24h["timestamp_beacon"] = heartbeat_n
-
         top_templates = await self.storage.get_top_beacon_templates(now_ms - 7 * 24 * 3600 * 1000)
         auto_beacon_total = await self.storage.count_auto_beacon_templates()
 
         return {
-            "counts": counts,
-            "recent_24h": recent_24h,
             "by_tag": by_tag,
             "by_origin": by_origin,
             "top_templates": top_templates,

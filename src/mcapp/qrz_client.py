@@ -67,12 +67,42 @@ def is_lookup_candidate(base: str) -> bool:
     return bool(_CALLSIGN_RE.match(base))
 
 
+# Leading words of QRZ's `fname` that are not the name. Operators type their
+# title there ("Dr. Ralph", "Ing. Wolfgang", "Dr. med. Karsten"), measured on
+# mcapp.local 2026-11-22. Dotted forms are always a title; only the unambiguous
+# ones count without the dot: "DI PAOLA" is an Italian surname, not Diplom-Ingenieur.
+_TITLES_DOTTED = frozenset(
+    {"dr", "prof", "ing", "dipl", "mag", "di", "med", "rer", "nat", "habil", "univ", "phil"}
+)
+_TITLES_BARE = frozenset({"dr", "prof", "ing", "dipl", "mag"})
+_INITIAL_RE = re.compile(r"^\w\.$")
+
+
+def _is_title_or_initial(token: str) -> bool:
+    if _INITIAL_RE.match(token):
+        return True
+    parts = token.lower().split("-")  # "Dipl.-Ing."
+    if token.endswith("."):
+        return all(p.rstrip(".") in _TITLES_DOTTED for p in parts)
+    return all(p.rstrip(".") in _TITLES_BARE for p in parts)
+
+
 def first_name(fname: str | None) -> str | None:
-    """'Martin Stefan' -> 'Martin'."""
+    """'Martin Stefan' -> 'Martin', 'Dr. med. Karsten' -> 'Karsten', 'J. Hermann' -> 'Hermann'.
+
+    Leading titles and single-letter initials are skipped and a lone trailing
+    dot is dropped. A value that is nothing but titles keeps its first word.
+    """
     if not fname:
         return None
     parts = fname.split()
-    return parts[0] if parts else None
+    if not parts:
+        return None
+    name = next((p for p in parts if not _is_title_or_initial(p)), parts[0])
+    # "Robert." -> "Robert"; an acronym like "A.R.I." keeps its dots.
+    if name.endswith(".") and name.count(".") == 1 and len(name) > 1:
+        return name[:-1]
+    return name
 
 
 def qth_from_addr2(addr2: str | None) -> str | None:

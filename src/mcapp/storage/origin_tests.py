@@ -10,9 +10,9 @@
   4. `update_message_classification` / `update_classification_batch` keep a stored origin when
      the new one is None (COALESCE) and write it otherwise; `count_messages_by_origin` shape.
   5. A reclassify sweep fills `origin` from the STORED timing of rows that have none.
-  6. Wire alias tags: `auto_beacon` / `qso` appear in `tags` (never in `topics`) on the live
-     dict (after `_refresh_wire_tags`), on the history dict, and in `get_conversation_summary`'s
-     hideAutoBeacons unread subtraction for a v8 row whose stored tags are topics only.
+  6. Wire: live and history dicts carry `origin` + `topics` only (no `tags` alias, no
+     `category`), and `get_conversation_summary`'s hideAutoBeacons unread subtraction works on
+     a row whose stored tags are topics only.
 
 Ephemeral tempfile SQLite only; no network.
 """
@@ -148,7 +148,6 @@ async def _test_ingest(results: Results, tmp: str) -> None:
         async def _beacon(msg: dict[str, Any]) -> BeaconClassification:
             base = await Classifier.classify(classifier, msg)
             return BeaconClassification(
-                category=base.category,
                 tags=base.tags,
                 info_score=base.info_score,
                 template_hash=base.template_hash,
@@ -193,7 +192,6 @@ async def _test_storage_writes(results: Results, tmp: str) -> None:
             )
         ids = [r["id"] for r in await storage._query("SELECT id FROM messages ORDER BY id")]
         kw: dict[str, Any] = {
-            "category": "other",
             "tags": [],
             "info_score": 0.0,
             "template_hash": "h",
@@ -275,35 +273,29 @@ async def _test_wire_tags(results: Results, tmp: str) -> None:
     try:
         live_m = await _ingest(storage, _chat("DL1BOT-1", "B0000001", t0, _RULE_TEXT, "42"))
         live_h = await _ingest(storage, _chat("DL1HUM-1", "B0000002", t0 + _SEC, _HUMAN_TEXT, "43"))
-        results.append(
-            (
-                "wire live: machine-rule text -> origin machine, auto_beacon in tags not topics",
-                live_m.get("origin") == "machine"
-                and "auto_beacon" in live_m.get("tags", [])
-                and "auto_beacon" not in live_m.get("topics", ["auto_beacon"]),
+        live_by_id = {"B0000001": live_m, "B0000002": live_h}
+        for live, want, label in ((live_m, "machine", "machine"), (live_h, "human", "human")):
+            results.append(
+                (
+                    f"wire live ({label}): origin + topics, no tags alias, no category",
+                    live.get("origin") == want
+                    and isinstance(live.get("topics"), list)
+                    and "tags" not in live
+                    and "category" not in live,
+                )
             )
-        )
-        results.append(
-            (
-                "wire live: human chat text -> qso in tags not topics",
-                live_h.get("origin") == "human"
-                and "qso" in live_h.get("tags", [])
-                and "qso" not in live_h.get("topics", ["qso"]),
-            )
-        )
 
-        for dst, msg_id, want_tag, label in (
-            ("42", "B0000001", "auto_beacon", "machine"),
-            ("43", "B0000002", "qso", "human"),
-        ):
+        for dst, msg_id, label in (("42", "B0000001", "machine"), ("43", "B0000002", "human")):
             page = await storage.get_messages_page(dst, before_timestamp=t0 + 10 * _SEC)
             hist = {m["msg_id"]: m for m in map(json.loads, page["messages"])}.get(msg_id, {})
             results.append(
                 (
-                    f"wire history ({label}): {want_tag} in tags not topics, origin set",
-                    want_tag in hist.get("tags", [])
-                    and want_tag not in hist.get("topics", [want_tag])
-                    and hist.get("origin") == label,
+                    f"wire history ({label}): origin + topics, no tags alias, no category",
+                    hist.get("origin") == label
+                    and isinstance(hist.get("topics"), list)
+                    and hist["topics"] == live_by_id[msg_id].get("topics")
+                    and "tags" not in hist
+                    and "category" not in hist,
                 )
             )
 
@@ -312,7 +304,7 @@ async def _test_wire_tags(results: Results, tmp: str) -> None:
         stored_tags = json.loads(stored[0]["tags"] or "[]")
         results.append(
             (
-                f"wire: stored tags of the machine row hold no retired alias ({stored_tags})",
+                f"wire: stored tags of the machine row hold no retired id ({stored_tags})",
                 "auto_beacon" not in stored_tags and "qso" not in stored_tags,
             )
         )

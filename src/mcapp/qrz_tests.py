@@ -392,7 +392,30 @@ def _test_parser(record: Record) -> None:
         first_name("Martin Stefan") == "Martin"
         and first_name("Helmut") == "Helmut"
         and first_name("") is None
-        and qth_from_addr2("A-4060 Leonding") == "Leonding"
+        and qth_from_addr2("Freising") == "Freising",
+    )
+    # Regression 2026-11-22: a title in `fname` became the shown name ("Dr.",
+    # "Ing."). All values are real QRZ `fname`s stored on mcapp.local.
+    record(
+        "P9b. first name skips leading titles and initials, keeps acronyms and surnames",
+        first_name("Dr. Ralph") == "Ralph"
+        and first_name("Ing. Wolfgang") == "Wolfgang"
+        and first_name("Dr. med. Karsten") == "Karsten"
+        and first_name("Dr Jens") == "Jens"
+        and first_name("Dipl.-Ing. Hans") == "Hans"
+        and first_name("Prof. Dr. Eva") == "Eva"
+        and first_name("J. Hermann") == "Hermann"
+        and first_name("Robert.") == "Robert"
+        and first_name("Roland M.") == "Roland"
+        and first_name("DI PAOLA") == "DI"
+        and first_name("A.R.I. Scandicci") == "A.R.I."
+        and first_name("R.C.S.") == "R.C.S."
+        and first_name("Jean-Luc JL") == "Jean-Luc"
+        and first_name("Dr.") == "Dr",
+    )
+    record(
+        "P9c. QTH normalisation (measured live values)",
+        qth_from_addr2("A-4060 Leonding") == "Leonding"
         and qth_from_addr2("D-85354 Freising") == "Freising"
         and qth_from_addr2("85354 Freising") == "Freising"
         and qth_from_addr2("Leonding 4060") == "Leonding"

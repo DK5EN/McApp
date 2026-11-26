@@ -7,9 +7,11 @@ the secret box uses a temp key and a fixed binding. No test touches the network.
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import logging
 import random
+import shutil
 import tempfile
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
@@ -242,22 +244,45 @@ async def _with_env(
     inputs: Callable[[], IdentityInputs] | None = None,
     **env_kwargs: Any,
 ) -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
-        storage = await create_sqlite_storage(tmp / "feed_test.db")
+    tmp = Path(tempfile.mkdtemp())
+    storage = await create_sqlite_storage(tmp / "feed_test.db")
+    try:
+        env = Env(
+            tmp,
+            storage,
+            inputs or (lambda: IdentityInputs(my_callsign="dk5en-98")),
+            **env_kwargs,
+        )
         try:
-            env = Env(
-                tmp,
-                storage,
-                inputs or (lambda: IdentityInputs(my_callsign="dk5en-98")),
-                **env_kwargs,
-            )
-            try:
-                await fn(env)
-            finally:
-                await env.finish()
+            await fn(env)
         finally:
-            await storage.close()
+            await env.finish()
+    finally:
+        await _close_and_remove(storage, tmp)
+
+
+async def _close_and_remove(storage: SQLiteStorage, tmp: Path) -> None:
+    """Close the storage and delete `tmp`, tolerating a write that outlived its task.
+
+    Cancelling a session task does not stop a storage write already running in
+    a worker thread. If it lands after `close()`, it reopens the writer connection
+    and creates `-wal`/`-shm` while the directory is being removed, and a plain
+    `TemporaryDirectory` exit fails with ENOTEMPTY (seen on CI, 2026-11-22). So
+    close and retry until the directory is really gone.
+    """
+    deadline = asyncio.get_running_loop().time() + WAIT_S
+    while True:
+        await storage.close()
+        try:
+            shutil.rmtree(tmp)
+        except FileNotFoundError:
+            return
+        except OSError:
+            if asyncio.get_running_loop().time() >= deadline:
+                raise
+            await asyncio.sleep(0.05)
+        else:
+            return
 
 
 # ── identity ───────────────────────────────────────────────────────────────
@@ -1414,6 +1439,33 @@ async def _case_pos_callback_raises(env: Env, record: Record, rec: _Rec) -> None
     )
 
 
+async def _test_cleanup_survives_late_write(record: Record) -> None:
+    """Regression (CI 2026-11-22): the harness cleanup must survive a write that
+    lands while the temp directory is being removed. The first `rmtree` fails
+    with ENOTEMPTY exactly as on CI; a single-shot cleanup crashed the case."""
+    tmp = Path(tempfile.mkdtemp())
+    storage = await create_sqlite_storage(tmp / "feed_test.db")
+    real_rmtree = shutil.rmtree
+    attempts: list[Path] = []
+
+    def flaky_rmtree(path: Path) -> None:
+        attempts.append(path)
+        if len(attempts) == 1:
+            raise OSError(errno.ENOTEMPTY, "Directory not empty", str(path))
+        real_rmtree(path)
+
+    shutil.rmtree = flaky_rmtree  # type: ignore[assignment]  # test double for one call site
+    try:
+        await _close_and_remove(storage, tmp)
+        ok = not await asyncio.to_thread(tmp.exists) and len(attempts) == 2
+    except OSError:
+        ok = False
+    finally:
+        shutil.rmtree = real_rmtree
+        real_rmtree(tmp, ignore_errors=True)
+    record("C1 harness cleanup retries a directory a late write re-filled", ok)
+
+
 async def run_internet_feed_tests() -> bool:
     if has_console:
         print("\n🧪 Testing internet feed service:")
@@ -1427,6 +1479,7 @@ async def run_internet_feed_tests() -> bool:
 
     _test_identity(record)
     _test_mapper(record)
+    await _test_cleanup_survives_late_write(record)
 
     cases: list[Callable[[Env], Any]] = [
         lambda e: _case_register_and_batch(e, record),

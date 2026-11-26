@@ -240,7 +240,7 @@ async def _drive_every_connect_site(storage: Any) -> None:
     # storage/classifier_api.py — all three connect sites
     await storage.upsert_beacon_template("abc123def456", "leak probe 0", "DK5EN-1", BASE_TS)
     await storage.backfill_auto_beacon_templates()
-    await storage.clear_stale_auto_beacons(frozenset({"test"}), 3)
+    await storage.clear_stale_auto_beacons(3)
 
     # storage/prefs.py — _set_identifier_list and delete_messages_by_dst
     await storage.set_kickban_callsigns(["OE1ABC-1"])

@@ -9,10 +9,10 @@ no venv. Opens the database read-only and never writes. Usage:
 `--since-ms` is the service's ActiveEnterTimestamp in milliseconds:
     date -d "$(systemctl show mcapp -p ActiveEnterTimestamp --value)" +%s%3N
 
-The human categories and the alert-tag rule in SQL_CONTRADICTIONS mirror
-`_HUMAN_CATEGORIES` (classifier/template.py) and `_history_exempt_sql`
-(storage/classifier_api.py). Re-check both before trusting a verdict from this
-script after a classifier sync.
+The history-exemption rule in SQL_CONTRADICTIONS (alert topic, or a directed non-machine-rule
+message without weather/test topic) mirrors `_history_exempt_sql` (storage/classifier_api.py);
+"directed" is approximated here (no via-routing split): this script is stdlib only.
+Re-check before trusting a verdict from this script after a classifier sync.
 """
 
 import argparse
@@ -21,7 +21,7 @@ import sqlite3
 from datetime import UTC, datetime
 
 SAMPLE = 15
-LEGACY_HIDDEN = frozenset({"bot", "node", "software", "time"})
+RETIRED_IDS = frozenset({"qso", "auto_beacon", "bot", "node", "software", "time"})
 
 # All SQL is static text; every value is a bound parameter.
 SQL_TAG_COUNTS = """
@@ -32,20 +32,17 @@ WHERE m.timestamp >= ? GROUP BY j.value ORDER BY n DESC
 SQL_OBSOLETE = """
 SELECT COUNT(*) FROM messages m,
   json_each(CASE WHEN json_valid(m.tags) THEN m.tags ELSE '[]' END) j
-WHERE m.timestamp >= ? AND j.value IN ('bot', 'node', 'software', 'time')
+WHERE m.timestamp >= ?
+  AND j.value IN ('qso', 'auto_beacon', 'bot', 'node', 'software', 'time')
 """
 SQL_AUTO_SAMPLE = """
 SELECT m.src, m.dst, m.msg, m.template_hash FROM messages m
-WHERE m.timestamp >= ? AND (m.origin = 'machine' OR EXISTS (
-  SELECT 1 FROM json_each(CASE WHEN json_valid(m.tags) THEN m.tags ELSE '[]' END) j
-  WHERE j.value = 'auto_beacon'))
+WHERE m.timestamp >= ? AND m.origin = 'machine'
 ORDER BY m.timestamp DESC LIMIT ?
 """
 SQL_HUMAN_SAMPLE = """
 SELECT m.src, m.dst, m.msg, m.tags FROM messages m
-WHERE m.timestamp >= ? AND m.type = 'msg' AND m.origin IS NOT 'machine' AND NOT EXISTS (
-  SELECT 1 FROM json_each(CASE WHEN json_valid(m.tags) THEN m.tags ELSE '[]' END) j
-  WHERE j.value = 'auto_beacon')
+WHERE m.timestamp >= ? AND m.type = 'msg' AND m.origin IS NOT 'machine'
 ORDER BY m.timestamp DESC LIMIT ?
 """
 SQL_CONTRADICTIONS = """
@@ -53,9 +50,15 @@ SELECT bt.template_hash, bt.example_msg, bt.srcs, bt.count, bt.user_action
 FROM beacon_templates bt
 WHERE bt.auto_beacon = 1 AND EXISTS (
   SELECT 1 FROM messages m WHERE m.template_hash = bt.template_hash
-  AND (m.category IN ('directed', 'alert') OR EXISTS (
-    SELECT 1 FROM json_each(CASE WHEN json_valid(m.tags) THEN m.tags ELSE '[]' END) j
-    WHERE j.value = 'alert')))
+  AND (
+    EXISTS (
+      SELECT 1 FROM json_each(CASE WHEN json_valid(m.tags) THEN m.tags ELSE '[]' END) j
+      WHERE j.value = 'alert')
+    OR (m.dst GLOB '*[A-Za-z]*' AND UPPER(m.dst) NOT IN ('ALL', 'TEST', 'TIME')
+      AND COALESCE(m.origin_rule, '') != 'machine-rule'
+      AND NOT EXISTS (
+        SELECT 1 FROM json_each(CASE WHEN json_valid(m.tags) THEN m.tags ELSE '[]' END) j
+        WHERE j.value IN ('weather', 'test')))))
 """
 
 
@@ -106,15 +109,15 @@ def check_new_rows(conn: sqlite3.Connection, since: int) -> None:
 
     obs_new = q(SQL_OBSOLETE, (since,)).fetchone()[0]
     obs_all = q(SQL_OBSOLETE, (0,)).fetchone()[0]
-    print(f"\n## 2c obsolete tags: new rows {obs_new}, all rows {obs_all}")
+    print(f"\n## 2c retired tag ids: new rows {obs_new}, all rows {obs_all}")
 
 
 def print_samples(conn: sqlite3.Connection, since: int) -> None:
     """Step 2d: rows to read by eye."""
-    print(f"\n## 2d newest {SAMPLE} auto_beacon rows (src > dst | template | text):")
+    print(f"\n## 2d newest {SAMPLE} origin=machine rows (src > dst | template | text):")
     for r in conn.execute(SQL_AUTO_SAMPLE, (since, SAMPLE)):
         print(f"  {r['src']} > {r['dst']} | {r['template_hash']} | {_short(r['msg'])}")
-    print(f"\n## 2d newest {SAMPLE} msg rows WITHOUT auto_beacon (src > dst | tags | text):")
+    print(f"\n## 2d newest {SAMPLE} msg rows NOT origin=machine (src > dst | tags | text):")
     for r in conn.execute(SQL_HUMAN_SAMPLE, (since, SAMPLE)):
         print(f"  {r['src']} > {r['dst']} | {r['tags']} | {_short(r['msg'])}")
 
@@ -123,7 +126,7 @@ def check_templates(conn: sqlite3.Connection, since: int) -> None:
     """Step 3: promotion guard, counts, operator overrides, recent promotions."""
     q = conn.execute
     contra = q(SQL_CONTRADICTIONS).fetchall()
-    print(f"\n## 3a contradictions (auto_beacon=1 with human history): {len(contra)}")
+    print(f"\n## 3a contradictions (promoted template with human history): {len(contra)}")
     for r in contra:
         print(
             f"  {r['template_hash']} n={r['count']} action={r['user_action']} "
@@ -167,11 +170,11 @@ def check_prefs(conn: sqlite3.Connection) -> None:
         return
     prefs = json.loads(row[0]) if row and row[0] else {}
     hidden = prefs.get("hiddenTags")
-    legacy = sorted(set(hidden or []) & LEGACY_HIDDEN)
+    legacy = sorted(set(hidden or []) & RETIRED_IDS)
     print(
         f"\n## 4 filter_prefs: enabled={prefs.get('enabled')} hiddenTags={hidden} "
         f"hideAutoBeacons={prefs.get('hideAutoBeacons')} minInfoScore={prefs.get('minInfoScore')}"
-        f" legacyNames={legacy}"
+        f" retiredIds={legacy}"
     )
 
 

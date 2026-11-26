@@ -9,10 +9,9 @@ git subtree in other packages without importing meshcom_mock directly.
 from __future__ import annotations
 
 import re
-from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Literal, Protocol, get_args, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 # -- Shared compiled patterns (CLS-05) ------------------------------------
 # Previously template.py and score.py each defined their own EMOJI_RE, with
@@ -60,92 +59,14 @@ DIRECTED_DST_PATTERN: str = r"(?i)(?:^|,)\s*(?!(?:ALL|TEST|TIME)\s*$)(?=[^,]*[A-
 
 DIRECTED_DST_RE: re.Pattern[str] = re.compile(DIRECTED_DST_PATTERN)
 
-# -- Category vocabulary ---------------------------------------------------
-# ``other`` is the fallback when no rule matches.
-
-MessageCategory = Literal[
-    "timestamp_beacon",
-    "wx_beacon",
-    "node_advert",
-    "sw_advert",
-    "greeting",
-    "qso",
-    "alert",
-    "directed",
-    "bot_command",
-    # Test/probe messages ("test", "prova", "probe", "essai", ...); derived from
-    # the `test` tag for one release (see derive_category).
-    "test_msg",
-    "other",
-]
-
-# The one tag outside the mcmap taxonomy: Layer 2 adds it when a template is
-# auto-flagged or user-promoted, removes it on demote. Counts as automated.
-AUTO_BEACON_TAG: str = "auto_beacon"
-
-# Fixed tag -> category map, first match wins (doc/adr/ADR-0004-classifier-unification.md,
-# "Category derivation"). ``category`` is a derived, read-only column for one
-# release; tags are the source of truth.
-_TAG_CATEGORY_ORDER: tuple[tuple[str, str], ...] = (
-    ("time", "timestamp_beacon"),
-    ("weather", "wx_beacon"),
-    ("node", "node_advert"),
-    ("software", "sw_advert"),
-    ("bot", "bot_command"),
-    ("alert", "alert"),
-    ("test", "test_msg"),
-)
-
-
-def legacy_tag_view(topics: Iterable[str], origin: str | None) -> list[str]:
-    """v7 tag list of a v8 row: sorted topics plus the retired origin-derived ids.
-
-    ALIAS(one release, classifier rework 2026-11): ``auto_beacon`` for origin ``machine`` and
-    ``qso`` for origin ``human``, so the webapp's client-side hiding keeps working until it
-    reads ``origin``. Origin None (not computed) adds nothing. Stored legacy tags that already
-    carry either id pass through once (no duplicates).
-    """
-    view = sorted(set(topics))
-    extra = {"machine": AUTO_BEACON_TAG, "human": "qso"}.get(origin or "")
-    if extra is not None and extra not in view:
-        view.append(extra)
-    return view
-
-
-def derive_category(
-    tags: Collection[str],
-    directed: bool,
-    legacy_tags: Collection[str] | None = None,
-) -> str:
-    """Derive the legacy single-valued category from tags and the directed flag.
-
-    ``legacy_tags`` (from the engine, v7) are the tags the matched rules carried before the
-    v7 taxonomy; they decide the automated categories, so timestamp beacons, weather, node,
-    software, bot and alert keep their categories. Without it the tags themselves decide.
-    """
-    category_tags = tags if legacy_tags is None else legacy_tags
-    for tag, category in _TAG_CATEGORY_ORDER:
-        if tag in category_tags:
-            return category
-    if directed:
-        return "directed"
-    if "greeting" in tags:
-        return "greeting"
-    if "qso" in tags:
-        return "qso"
-    return "other"
-
-
-# CLS-05: derived from MessageCategory instead of duplicating the same 10
-# strings in a second literal tuple that could silently drift out of sync.
-# Kept as a tuple so it can be used as a frozen set of legal values.
-CATEGORIES: tuple[str, ...] = get_args(MessageCategory)
-
-
 # CLS-05: the 12-hex-char SHA-1 prefix length was a bare `[:12]` literal
 # duplicated in template.py's fingerprint() and classify.py's _fallback_hash().
 TEMPLATE_HASH_LEN: int = 12
 
+
+# Rules whose match marks a message as a clock/timestamp beacon: Storage.store_message does not
+# persist those (ADR-0009). Names come from the mcmap contract; tests pin that both still exist.
+TIMESTAMP_BEACON_RULES: frozenset[str] = frozenset({"CET timestamp", "Time bot reply"})
 
 # -- Timestamp helper -------------------------------------------------------
 # Duplicated from meshcom_mock.storage so the classifier package is self-
@@ -197,12 +118,8 @@ class StorageProtocol(Protocol):
     async def count_recent_messages_by_template_src(
         self, hash_: str, src: str, since_ms: int
     ) -> int: ...
-    async def template_has_human_history(
-        self, template_hash: str, human_categories: frozenset[str]
-    ) -> bool: ...
-    async def clear_stale_auto_beacons(
-        self, human_categories: frozenset[str], min_tokens: int
-    ) -> int: ...
+    async def template_has_human_history(self, template_hash: str) -> bool: ...
+    async def clear_stale_auto_beacons(self, min_tokens: int) -> int: ...
 
     # Classification / backfill
     async def get_classifier_version(self) -> int: ...
@@ -213,7 +130,6 @@ class StorageProtocol(Protocol):
         self,
         *,
         classifier_ver_below: int | None = None,
-        category: str | None = None,
         since_ms: int | None = None,
         limit: int = 500,
         offset: int = 0,
@@ -222,7 +138,6 @@ class StorageProtocol(Protocol):
         self,
         row_id: Any,
         *,
-        category: str,
         tags: list[str],
         info_score: float,
         template_hash: str,
@@ -233,14 +148,14 @@ class StorageProtocol(Protocol):
     async def update_classification_batch(
         self,
         *,
-        changed: list[tuple[str, str, float, str, int, int]],
+        changed: list[tuple[str, float, str, int, int]],
         unchanged_ids: list[int],
         classifier_ver: int,
         origins: dict[int, tuple[str, str]] | None = None,
     ) -> None:
         """Write one reclassify batch in one write unit and one commit.
 
-        ``changed`` tuples are ``(category, tags_json, info_score,
+        ``changed`` tuples are ``(tags_json, info_score,
         template_hash, classifier_ver, row_id)`` (full UPDATE);
         ``unchanged_ids`` are only stamped with ``classifier_ver``. ``origins`` maps a
         row id to ``(origin, origin_rule)``; None keeps the stored values.
@@ -253,14 +168,12 @@ class StorageProtocol(Protocol):
     async def bump_classifier_version(self) -> int: ...
 
     # Stats (used by collect_stats)
-    async def count_messages_by_category(self, since_ms: int) -> dict[str, int]: ...
     async def count_messages_by_tag(self, since_ms: int) -> dict[str, int]: ...
     async def count_messages_by_origin(self, since_ms: int) -> dict[str, int]: ...
     async def get_top_beacon_templates(
         self, since_ms: int, limit: int = 10
     ) -> list[dict[str, Any]]: ...
     async def count_auto_beacon_templates(self) -> int: ...
-    def get_heartbeat_window_size(self) -> int: ...
 
 
 # -- Classification result ----------------------------------------------------
@@ -274,8 +187,9 @@ class Classification:
     the backfill, not of this type.
     """
 
-    category: str
     tags: tuple[str, ...]
     info_score: float
     template_hash: str
     classifier_version: int
+    # Names of the matched L1 rules (engine order); feeds the timestamp-beacon drop.
+    rules: tuple[str, ...] = ()

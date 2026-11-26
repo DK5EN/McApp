@@ -5,96 +5,64 @@ description: Promote a soaked dev pre-release to a McApp production release and 
 
 # Production release → mcapp.local
 
-A production release is a **promotion, not a build**. The code has already been cut as
-`vX.Y.Z-dev.N`, deployed by `/dev-release`, and soaked on the box. This skill turns that exact tree
-into `vX.Y.Z`, merges it to `main` in **both** repos, publishes a stable GitHub release, and rolls
-it onto the Pi.
+A production release is a **promotion, not a build**: the tree was already cut as `vX.Y.Z-dev.N`, deployed by `/dev-release` and soaked on the box. This skill turns that exact tree into `vX.Y.Z`, merges it to `main` in **both** repos, publishes a stable release and rolls it onto the Pi.
 
-`scripts/release.sh 2` does the mechanical part. What it does **not** do is the reason this skill
-exists: it never gates the tree, it aborts on two pre-conditions you have to arrange yourself, and
-it leaves one push undone that silently breaks the _next_ release.
+`scripts/release.sh 2` does the mechanical part. It never gates the tree, it aborts on two pre-conditions you must arrange, and (historically) left a push undone that broke the next release.
 
 ## The one-screen version
 
 ```bash
-# 0. read RESUME.md (if present) and run its checklist; then: is it healthy in the field?
-cat RESUME.md; git log --oneline -5                # the plan and the soak gate live here
+# 0. RESUME.md soak checklist (if present) + health: read recent commits, doc/backlog.md, the health log banner
+git log --oneline -5
 /ai-ops                                            # then read doc/ops-mcapp-health-log.md
 
-# 1. update dependencies in BOTH repos — mandatory, not opportunistic
-uv lock --upgrade && uv sync --all-packages        # + the standalone ble_service lock
+# 1. update dependencies in BOTH repos — mandatory
+uv lock --upgrade && uv sync --all-packages        # + the standalone ble_service lock (see Step 1)
 cd ../webapp && npm update
 
-# 2. re-sync the shared code with ../mc-chat, and check the corpora
+# 2. re-sync shared code with ../mc-chat; check corpora
 diff -rq src/mcapp/contract    ../mc-chat/contract
 diff -rq src/mcapp/classifier  ../mc-chat/meshcom_mock/classifier
 
 # 2b. refresh the ICSSW group label snapshot, review the diff
 uv run python scripts/refresh_group_labels.py && git diff --stat src/mcapp/group_labels_icssw.json
 
-# 3. gate BOTH repos — release.sh gates nothing, and step 1 invalidated your last run
+# 3. gate BOTH repos — step 1 invalidated your last run
 ./scripts/gate.sh > /tmp/gate.out 2>&1; echo "GATE_EXIT=$?"; cat /tmp/gate.out   # GATE: PASS
 
-# 4. pre-conditions (see Stops 1 and 2), then commit the dependency bumps
+# 4. pre-conditions (Stops 1 and 2), commit the dependency bumps and the notes
 for d in . ../webapp; do git -C $d rev-list --count development..origin/main; done   # both 0
-$EDITOR doc/release-history.md doc/archive/release-history-full.md   # new section at the TOP;
-                                                    # condense + archive the previous one (Stop 1)
+$EDITOR doc/release-history.md doc/archive/release-history-full.md   # new section at the TOP
 git add doc/release-history.md doc/archive/release-history-full.md
 git commit -m "[docs] Add release notes for vX.Y.Z" && git push origin development
 
 # 5. publish — newline on stdin, output to a file, read the exit code
 printf '\n' | ./scripts/release.sh 2 > /tmp/release.log 2>&1; echo "EXIT=$?"
 
-# 6. deploy: webapp → version chip (bottom right) → Update to vX.Y.Z → Start Update
-#    then check the runner's Finished line: version == vX.Y.Z (Step 6)
+# 6. deploy: webapp → version chip (bottom right) → Update to vX.Y.Z → Start Update; check the runner's Finished line
 # 7. verify against the ACTIVE slot, not the banner; /ai-ops + health-log entry (mandatory)
 ```
 
 ## Step 0 — Decide whether it is fit to promote
 
-**Read `RESUME.md` first, if it exists, and the newest commits.** It carries the plan for this
-release and, usually, the soak checklist that gates it. Run every check in it before anything else,
-and stop if one fails: note the failure where the file says, fix it, cut a new dev release, and
-the soak restarts. On 2026-11-08 the v2.1.26 promotion skipped this file: five of its seven soak
-checks ran only after the release, and the operator had to interrupt to get the overnight checks run.
+If `RESUME.md` exists it holds this release's soak checklist: run every check in it before anything else, and delete it together with the post-release health-log entry once nothing is open. Stop if any soak check fails (fix, cut a new dev release, the soak restarts). On 2026-11-08 the v2.1.26 promotion ran five of seven soak checks only after the release. Then run `/ai-ops` and read its verdict. A production cut needs more than a green suite:
 
-Then run `/ai-ops` and read its verdict. A production cut needs more than a green suite:
-
-- the dev tag has **soaked on the box** — hours, not minutes, with `NRestarts` still 0
-- zero journal warnings over the soak window
-- `./scripts/gate.sh` ends with `GATE: PASS` on the exact tree you are promoting (Step 3). CI's
-  `tests` workflow is disabled (`disabled_manually` since 2026-08-31) and signs off nothing; the
-  gate script is the release gate, by operator decision 2026-11-08.
+- the dev tag has **soaked on the box** (hours, not minutes, `NRestarts` still 0) with zero journal warnings over the window
+- `./scripts/gate.sh` ends `GATE: PASS` on the exact tree you promote (Step 3); the gate script is the release gate (operator decision 2026-11-08); CI's `tests` workflow, re-enabled 2026-11-22, gates and auto-merges Dependabot PRs but signs off no promotion. A dev pre-release cut by `dev-release.yml` after dependency updates is promoted like any other: soak first
 - the working trees are the tag: `git rev-parse HEAD` == `git rev-parse vX.Y.Z-dev.N` in both repos
 
-Append the sweep to `doc/ops-mcapp-health-log.md` **before** releasing. It is the record of what the
-release was signed off against, and it is worthless written afterwards from memory.
+Append the sweep to `doc/ops-mcapp-health-log.md` **before** releasing: it is the record of what the release was signed off against.
 
 ## Step 1 — Update dependencies, in both repos
 
-**Every production release ships current dependencies.** This is a release step, not an
-opportunistic chore: a patch release is the moment the whole fleet takes the new tree, so it is
-the moment the dependency set should be current. Doing it any later means the next security bump
-waits for the release after.
+Every production release ships current dependencies: a patch release is the moment the fleet takes the new tree.
 
 ```bash
-# MCProxy (workspace root — covers mcapp and the ble_service member)
-uv lock --upgrade
-uv sync --all-packages
-
-# webapp
-cd ../webapp && npm update
+uv lock --upgrade && uv sync --all-packages       # workspace root: mcapp + ble_service member
+cd ../webapp && npm update                         # npm outdated shows direct deps only; update refreshes the shipped transitive pins
 ```
 
-`npm outdated` reports **direct** dependencies only. `npm update` is what refreshes the
-transitive pins in `package-lock.json`, which is what actually ships.
-
-### The `ble_service` standalone lock does not update itself
-
-`ble_service` is a `[tool.uv.workspace]` member **and** ships its own `ble_service/uv.lock`, used
-when `mcapp-ble.service` is deployed independently. Running `uv lock --upgrade` _inside_
-`ble_service/` walks up, finds the root workspace, and updates the **root** lock instead — while
-its dry-run output misleadingly reports the bump you wanted. Regenerate it outside the workspace:
+**The `ble_service` standalone lock does not update itself.** `ble_service` is a workspace member AND ships its own `ble_service/uv.lock` (used when `mcapp-ble.service` deploys independently). `uv lock --upgrade` run inside `ble_service/` walks up to the root workspace and updates the ROOT lock while its dry run reports the bump you wanted. Regenerate it outside the workspace:
 
 ```bash
 tmp=$(mktemp -d)
@@ -104,272 +72,99 @@ uv sync --directory "$tmp" --no-install-project     # prove it installs
 cp "$tmp"/uv.lock ble_service/uv.lock
 ```
 
-Dependabot edits `ble_service/pyproject.toml` and never regenerates this lock, so its recorded
-specifiers drift behind the pyproject silently. Diff the `specifier =` lines, not just the
-versions.
+Dependabot edits `ble_service/pyproject.toml` and never regenerates this lock; diff the `specifier =` lines, not just versions.
 
-### Then re-run the whole gate
-
-A dependency bump is a change like any other. **The tree you release is not the tree you tested
-until you have re-tested it** — so Step 3 runs _after_ this, never before. If `uv.lock` or
-`package-lock.json` moved, the previous green run is void.
-
-Commit the bumps in each repo independently, before the release notes.
+A bump voids the previous green run: Step 3 runs AFTER this. Commit the bumps in each repo independently, before the release notes.
 
 ## Step 2 — Re-sync the shared code with `../mc-chat`
 
-Two directories in this repo are `git subtree`s from mc-chat, and four vector corpora are
-hand-copied between three repos with nothing to sync them for you. A release is the checkpoint
-where they must agree.
+Silence from the two `diff -rq` commands is the pass. Output is drift, and **the direction decides**:
+
+- **mc-chat is ahead** (normal): split and pull per `CLAUDE.md` § Vendored Subtrees (prefix and split-branch table there).
+- **MCProxy is ahead**: someone edited a subtree in place. Do NOT pull (it would revert the local improvement). Port the change into mc-chat, verify it THERE (the other branch of any host-repo conditional runs there), commit, then split and pull back.
+
+**Hand-copied corpora** (canonical here, no subtree to move them): see `CLAUDE.md` § Key Gotchas for the six and which sibling carries which. Compare hashes:
 
 ```bash
-diff -rq src/mcapp/contract    ../mc-chat/contract
-diff -rq src/mcapp/classifier  ../mc-chat/meshcom_mock/classifier
-```
-
-Silence is the pass. Any output is drift, and **which direction it points decides what to do**:
-
-- **mc-chat is ahead** → the normal case. Split and pull:
-
-  ```bash
-  git -C ../mc-chat subtree split --prefix=<upstream prefix> -b <split branch>
-  git subtree pull --prefix=<path> mc-chat <split branch> --squash
-  ```
-
-  | Path                    | Upstream prefix           | Split branch       |
-  | ----------------------- | ------------------------- | ------------------ |
-  | `src/mcapp/classifier/` | `meshcom_mock/classifier` | `classifier`       |
-  | `src/mcapp/contract/`   | `contract`                | `contract-subtree` |
-
-- **MCProxy is ahead** → someone edited a vendored subtree in place, which is the thing the
-  subtree rules forbid. Do **not** "fix" it by pulling: the pull would revert the local
-  improvement. Port the change into mc-chat, verify it _there_ (mc-chat is where the other branch
-  of any host-repo conditional actually executes), commit, then split and pull it back. This has
-  happened: `classifier/tests.py` carried an MCProxy-only mypy-portability fix for weeks.
-
-### The four hand-copied corpora
-
-`commands/group_dst_vectors.json`, `storage/conversation_key_vectors.json`,
-`blocklist_decision_vectors.json` and `commands/hashtag_dst_vectors.json` are canonical **here**
-and copied by hand to mc-chat (`tests/fixtures/`) and the webapp (`src/**/__tests__/`). They are
-not a subtree; no pull will move them.
-
-```bash
-for f in group_dst_vectors conversation_key_vectors hashtag_dst_vectors blocklist_decision_vectors; do
+for f in group_dst_vectors conversation_key_vectors hashtag_dst_vectors blocklist_decision_vectors ack_match_vectors rm_blocklist_vectors; do
   find . ../mc-chat ../webapp -name "$f.json" -not -path "*/node_modules/*" -exec shasum -a 256 {} +
 done
 ```
 
-Equal hashes per corpus, or fix it. If you change one, copy it to both siblings **and** bump the
-webapp's `EXPECTED_SHA256`. Both repos carry a `.prettierignore` covering these files, because a
-formatter run is enough to break byte equality while leaving the content identical — which is the
-hardest version of this to spot.
+Equal hashes per corpus, or fix it (copy to every carrier and bump the webapp's `EXPECTED_SHA256`). Both siblings carry a `.prettierignore` for these files, since a formatter run breaks byte equality while leaving content identical.
 
 ## Step 2b — Refresh the ICSSW group label snapshot
 
-Group numbers get their Präfix / Hinweis / remark from a snapshot of the ICSSW GRC list
-(<https://icssw.org/meshcom-grc-gruppen/>) that ships inside the package as
-`src/mcapp/group_labels_icssw.json`. The Pi never fetches it, so every production release
-refreshes it here, on the Mac:
+`src/mcapp/group_labels_icssw.json` ships in the package; the Pi never fetches it, so every production release refreshes it here:
 
 ```bash
 uv run python scripts/refresh_group_labels.py      # rewrites the JSON; exits non-zero on < 50 rows
 git diff src/mcapp/group_labels_icssw.json         # read it: renamed groups, new ranges, removals
 ```
 
-- **No diff** is the normal case: nothing to commit.
-- **A diff** goes into the dependency-bump commit of step 4 (`fetched_at` alone changing is not
-  worth a commit — revert it with `git checkout src/mcapp/group_labels_icssw.json`).
-- **Non-zero exit** means the page layout changed and the parser no longer finds the table. Do not
-  hand-edit the JSON; keep the shipped snapshot, release anyway, and fix the parser afterwards
-  (`group_labels_tests.py` pins its behaviour).
-- A removed or renamed upstream entry never touches operator overrides: those live in the
-  McApp DB (`group_label_overrides`), per field, and win over the snapshot.
+- No diff is normal. A diff goes into the dependency-bump commit (`fetched_at` alone is not worth a commit: `git checkout src/mcapp/group_labels_icssw.json`).
+- Non-zero exit = the page layout changed. Do not hand-edit the JSON; release with the shipped snapshot and fix the parser afterwards (`group_labels_tests.py`).
+- Upstream removals never touch operator overrides (`group_label_overrides` in the DB).
 
-## Step 3 — Gate both repos yourself
+## Step 3 — Gate both repos
 
-`release.sh` runs `npm run build:strict` and **nothing else**. No ruff, no mypy, no backend suite,
-no eslint, no vitest. A red tree releases silently.
+`release.sh` runs `npm run build:strict` and nothing else. `./scripts/gate.sh > /tmp/gate.out 2>&1; echo "GATE_EXIT=$?"; cat /tmp/gate.out` runs every step in both repos even after a failure. Read `GATE_EXIT`, never an exit code through `| tail`. `./scripts/gate.sh mcproxy` or `webapp` scopes it while iterating; the release needs the full run.
 
-```bash
-./scripts/gate.sh > /tmp/gate.out 2>&1; echo "GATE_EXIT=$?"; cat /tmp/gate.out
-```
-
-It runs ruff check, ruff format, mypy and `run_startup_tests.py` here, then the webapp's typecheck,
-lint, format check and tests, every step even after a failure, and ends with one line:
-`GATE: PASS`, or `GATE: FAIL (<steps>)` with each failing step's log path and tail. **Read
-`GATE_EXIT`, never an exit code through `| tail`**: the pipe reports tail's. Scope it with
-`./scripts/gate.sh mcproxy` or `webapp` while iterating; the release needs the full run.
-
-`config_migration` reports `SKIPPED — NOT VERIFIED` on macOS (the suite is bash-4-only by design and
-macOS ships bash 3.2). That is an instrument gap, not a coverage gap. CI no longer runs it, so run it
-for real on the Pi against the dev tag (`/dev-release`, "A dev build can run the real gate on the
-box") when a release touches `bootstrap/` config migration. Do not treat the skip as a failure, and
-do not treat it as coverage either.
+`config_migration` reports `SKIPPED — NOT VERIFIED` on macOS (bash-4-only suite, macOS ships 3.2): an instrument gap, not coverage. When a release touches `bootstrap/` config migration, run it on the Pi against the dev tag (`/dev-release` "A dev build can run the real gate on the box").
 
 ## The version is not a parameter
 
-`release.sh` reads the version from `pyproject.toml` and releases `v${that}`. There is **no
-override**. The value is whatever the previous production release's `post_release_prep` left behind
-(it bumps the patch and commits `[chore] Prep vX.Y.Z for next dev cycle`).
-
-To release a minor or major instead, edit both `pyproject.toml` and `ble_service/pyproject.toml`,
-commit and push, **then** release. Changing it mid-run is not possible — the value is read once,
-before anything is tagged.
+`release.sh` releases `v${pyproject version}`; there is no override. The value is what the previous release's `post_release_prep` left behind (patch bump, commit `[chore] Prep vX.Y.Z for next dev cycle`). For a minor or major, edit both `pyproject.toml` and `ble_service/pyproject.toml`, commit and push, THEN release.
 
 ## Stop 1 — Release notes must be committed BEFORE you start the script
 
-This is the ordering trap, and it looks backwards.
+`release.sh` offers to take the notes at a prompt, but `validate_repos_clean` runs at the top of `main()`, so a repo with uncommitted notes aborts with "MCProxy has uncommitted changes" before the prompt. Write the notes, commit, push, THEN run the script; `commit_release_notes` then logs `release-history.md / release-history-full.md unchanged (already committed)`, which is the success path.
 
-`release.sh` _offers_ to handle the notes: it prints a prompt, waits for you to write
-`doc/release-history.md`, then `commit_release_notes` commits it. But `validate_repos_clean` runs at
-the **top of `main()`**, long before that — so a repo with uncommitted notes never reaches the
-prompt. It aborts with "MCProxy has uncommitted changes".
+**Top-section guard**: after Enter at the prompt, `validate_release_notes_top` aborts (before any commit, merge or tag) unless the first `## ` heading is `## vX.Y.Z` (a date suffix is fine; `## v2.0.1` for 2.0.17 does not match) and the section is non-empty.
 
-So the working order is: **write the notes, commit them, push, then run the script.**
-`commit_release_notes` then finds nothing to do and logs
-`release-history.md / release-history-full.md unchanged (already committed)`. That is the
-success path, not a warning.
+**What the notes look like.** `upload_production` publishes ONLY the top `## vX.Y.Z` section (plus a footer link) as the GitHub release body, and the webapp's Update page renders the same section per release (`ReleaseNotesCard` in `src/views/Update.vue`). So it must stand alone: `## vX.Y.Z (YYYY-MM-DD)`, a lead paragraph, `### Highlights`, `### Backend (MCProxy)`, `### Frontend (webapp)`, `### Upgrade notes`, written for the operator, not as a commit transcript. Only the newest release keeps full notes; when adding the new section:
 
-### The top-section guard
+1. Fetch the previous top section **as published**: `git show v<prev>:doc/release-history.md` (the working copy may carry post-publication edits).
+2. Prepend it unchanged to `doc/archive/release-history-full.md` (top, under its intro, newest first).
+3. Replace it in `release-history.md` with a 1-3 bullet `### vX.Y.Z (date)` entry under `## Earlier releases, in brief`'s intro paragraph (blank line after the intro).
+4. The brief entry keeps schema, `SYSTEM_EPOCH` and contract changes and one-off operator actions (reboot, firmware minimum); measurements and field numbers belong in the full section only.
 
-Right after you press Enter at the notes prompt, `validate_release_notes_top` re-reads
-`doc/release-history.md` and aborts — before any commit, merge or tag — unless the first `## `
-heading is `## vX.Y.Z` (the `(YYYY-MM-DD)` date suffix is expected; a prefix such as `## v2.0.1`
-for 2.0.17 does not match) and that section is non-empty. This is what would have caught the
-v1.6.8 incident, where the body sitting under Enter was actually the old v1.6.4 section.
-
-`commit_release_notes` then stages and commits whichever of `doc/release-history.md` and
-`doc/archive/release-history-full.md` changed.
-
-### What the notes have to look like
-
-`upload_production` publishes **only the top `## vX.Y.Z` section** of `doc/release-history.md`
-(heading excluded, up to the next `## `), plus a trailing footer line pointing back at the full
-file — not the whole file anymore. So:
-
-- the new section goes at the **top**, directly under `# Release History`
-- **the top section has to stand alone.** It is now the entire GitHub release body, and it is also
-  exactly what the webapp's Update page renders per release (`src/views/Update.vue`'s
-  `ReleaseNotesCard`) — nothing outside it reaches either surface.
-- follow the existing shape: `## vX.Y.Z (YYYY-MM-DD)`, a lead paragraph, `### Highlights`,
-  `### Backend (MCProxy)`, `### Frontend (webapp)`, `### Upgrade notes`
-- **only the newest release keeps its full notes.** When you add the new section:
-  1. Fetch the previous top section **as it was actually published**:
-     `git show v<prev>:doc/release-history.md` — not the working copy, which may carry
-     post-publication edits that were never in the release body.
-  2. Prepend that published text, unchanged, to `doc/archive/release-history-full.md` (at the top,
-     under its intro — newest first).
-  3. Replace it in `release-history.md` with a 1-3 bullet `### vX.Y.Z (date)` entry, placed under
-     `## Earlier releases, in brief`'s own intro paragraph (leave a blank line after the intro,
-     then the new entry) — not directly under the `##` heading.
-  4. Keep schema, `SYSTEM_EPOCH` and contract changes and any one-off operator action (a reboot, a
-     firmware minimum) in the brief entry; drop the rest.
-
-Get the material from the commit range in both repos:
-
-```bash
-git log v<prev>..HEAD --oneline --no-merges
-git -C ../webapp log v<prev>..HEAD --oneline --no-merges
-```
-
-Write what changed **for the operator**, not a commit transcript. If the release shipped a metric or
-a measurement, put the field numbers in the release's own **full** section — that section is what
-gets published, then archived verbatim, so it is where a future reader actually finds them. The
-brief entry that replaces it next release keeps only what the condense rule above lists
-(schema/epoch/contract changes, one-off operator actions) — measurements do not survive into the
-brief.
-
-Run `npx --yes prettier@3 --write doc/release-history.md doc/archive/release-history-full.md`, then
-`uvx ruff format --check .` — in that order. A docs-only commit has turned CI red here twice,
-because `ruff format` also formats fenced `python` blocks inside `.md`.
+Material: `git log v<prev>..HEAD --oneline --no-merges` in both repos. Then `npx --yes prettier@3 --write doc/release-history.md doc/archive/release-history-full.md` followed by `uvx ruff format --check .` (ruff also formats fenced `python` blocks in `.md`).
 
 ## Stop 2 — `main` must not be ahead of `development`, in EITHER repo
 
-`validate_main_mergeable` fetches `origin/main` in both repos and aborts if
-`development..origin/main` is non-empty:
-
-```
-[ERROR] webapp: main has 1 commit(s) not in development (diverged)
-[ERROR] Resolve this manually before releasing.
-```
-
-**The webapp is the repo that used to drift**, and it drifted because `post_release_prep` never
-pushed it. That root cause is fixed (see Stop 4), so this check should now always pass — which is
-exactly why it is still worth running: a non-zero count means something outside the release flow
-touched `main`. Check both before you start:
+`validate_main_mergeable` aborts if `development..origin/main` is non-empty in either repo (`[ERROR] webapp: main has 1 commit(s) not in development (diverged)`). It should always pass now; a non-zero count means something outside the release flow touched `main`.
 
 ```bash
-for d in . ../webapp; do
-  git -C $d fetch origin --quiet
-  echo "$d behind: $(git -C $d rev-list --count development..origin/main)"   # must be 0
-done
+for d in . ../webapp; do git -C $d fetch origin --quiet; echo "$d behind: $(git -C $d rev-list --count development..origin/main)"; done   # must be 0
 ```
 
-The fix is the same merge-back `release.sh` performs after every production release, so it is safe
-and non-destructive — never rewrite a pushed `main`:
+Fix with the same merge-back `release.sh` performs (never rewrite a pushed `main`):
 
 ```bash
 git -C ../webapp merge main --no-ff -m "[chore] Merge main back into development after <what>"
 git -C ../webapp push origin development
 ```
 
-If the trees are identical (`git diff --stat <dev> <main>` is empty) the merge is purely
-topological, which is the usual case — a merge commit on `main` that was never merged back.
+## Stop 3 — The script blocks on a bare `read`; `< /dev/null` kills it
 
-## Stop 3 — The script blocks on a bare `read`, and `< /dev/null` kills it
-
-`./scripts/release.sh 2` takes the mode as `argv[1]` (`1` = dev, `2` = production), so the menu is
-skipped. But the production path still calls `wait_for_release_notes`, which is a bare `read -r`.
-
-Under `set -euo pipefail` a `read` at EOF returns 1 → the script dies → the **rollback trap fires**.
-So `< /dev/null` does not make it non-interactive, it makes it fail. Feed it a newline:
+`./scripts/release.sh 2` skips the menu, but the production path still calls `wait_for_release_notes` (a bare `read -r`). Under `set -euo pipefail` a `read` at EOF returns 1 and the rollback trap fires, so `< /dev/null` makes it fail. Feed a newline:
 
 ```bash
 printf '\n' | ./scripts/release.sh 2 > /tmp/release.log 2>&1; echo "EXIT=$?"
 ```
 
-**Never pipe the script through `tail`/`head`** — the pipeline reports _tail's_ exit code, so a
-rolled-back release reads as a clean one. Redirect to a file, echo `$?`, then read the file.
+**Never pipe the script through `tail`/`head`** (the exit code becomes tail's; a rolled-back release reads as clean).
 
-## What the script does, in order
+## What the script does
 
-Production path, after `validate_tools` / `validate_on_development` / `validate_repos_clean`:
+After `validate_tools` / `validate_on_development` / `validate_repos_clean`: resolve `v${version}` (refuse if the tag exists in either repo) → `validate_main_mergeable` → notes prompt, `validate_release_notes_top`, commit notes if dirty → merge `development` → `main` in both repos → `npm run build:strict` (writes `version.html`) → combined tarball → annotated tag in both repos → push `main` + tag in both repos BEFORE the release exists → sha256, `gh release create --verify-tag` (stable) and upload → verify, clean up, set `_RELEASE_SUCCESS=true` (published and irreversible from here) → housekeeping: back to `development`, merge `main` back in both repos, `post_release_prep` (bump both `pyproject.toml`s, the local-package lines in `uv.lock` and `ble_service/uv.lock`, the webapp's `package.json`/`package-lock.json`, commit in each, push BOTH repos' `development`).
 
-1. resolve `v${pyproject version}`; refuse if that tag already exists in either repo
-2. `validate_main_mergeable` (Stop 2)
-3. print the notes prompt, wait for Enter (Stop 3), `validate_release_notes_top` (Stop 1), commit
-   the notes if dirty (Stop 1)
-4. merge `development` → `main` in **both** repos
-5. `npm run build:strict` — writes `version.html` with the new tag
-6. build the combined tarball (backend + webapp)
-7. annotated tag `vX.Y.Z` in both repos
-8. push `main` + tag in both repos — **before** the release exists, so `gh` cannot invent its own
-9. sha256, `gh release create --verify-tag` (stable, not pre-release), upload both assets
-10. sha256 verified, artefacts cleaned up — **and `_RELEASE_SUCCESS=true` is set here**, because
-    from this point the release is published and irreversible
-11. post-publish housekeeping: back to `development`, merge `main` back in **both** repos, then
-    `post_release_prep` — bump both `pyproject.toml`s, the local-package version lines in
-    `uv.lock` and `ble_service/uv.lock` (so `uv lock --check` stays clean), and the webapp's
-    `package.json` / `package-lock.json` (via `npm version --no-git-tag-version`), commit in each,
-    and push **both** repos' `development`
+**The rollback covers only the steps before `_RELEASE_SUCCESS`**: the trap removes local and remote tags in both repos, the GitHub release and artefacts, and restores the checkout. A failed run leaves nothing behind: diagnose and re-run.
 
-**The rollback only covers steps 1-9.** On a failure there the `EXIT` trap removes local + remote
-tags in both repos, the GitHub release, the tarball and checksum, and restores the branch checkout —
-a failed run leaves nothing behind, so diagnose and re-run.
+## If housekeeping fails — the release is already published
 
-## If step 11 fails — the release is already published
-
-Step 11 is housekeeping, not release work, and it is deliberately outside the rollback. If it fails
-the script prints a block headed **"Release vX.Y.Z IS PUBLISHED"** and exits non-zero.
-
-**Do not re-run `./scripts/release.sh 2`.** There is no resume. `post_release_prep` may already have
-bumped and pushed `pyproject.toml`, so a re-run resolves `v${current}` to the **next** version and
-cuts a second, unreviewed production release. This is the trap the message exists to prevent.
-
-The failure block lists each sub-step as `[done]` or `[pending]` — checkout, merge-back, MCProxy
-bump/push, webapp bump, webapp push — and prints the commands to finish by hand. Work through it,
-then confirm the invariant that matters for next time:
+The script prints a block headed **"Release vX.Y.Z IS PUBLISHED"** and exits non-zero. **Do NOT re-run `./scripts/release.sh 2`**: there is no resume, and `post_release_prep` may already have bumped `pyproject.toml`, so a re-run resolves the NEXT version and cuts a second, unreviewed production release. The block lists each sub-step as `[done]`/`[pending]` and prints the commands to finish by hand. Then confirm:
 
 ```bash
 for d in . ../webapp; do
@@ -379,63 +174,21 @@ for d in . ../webapp; do
 done
 ```
 
-An unpushed webapp `development` is what aborts the **next** release at Stop 2.
+An unpushed webapp `development` aborts the NEXT release at Stop 2 (this is what blocked v2.0.1: `post_release_prep` once pushed MCProxy only). Check these counts after every release; `scripts/release_prep_tests.py` pins the fix against the remotes.
 
-## Stop 4 — The push `release.sh` used to forget (fixed — verify it)
+## Step 6 — Deploy from the webapp Update page
 
-**Historical, and the reason Stop 2 exists.** `post_release_prep` pushed **MCProxy**
-`development` only. The webapp's merge-back from step 10 was committed and never pushed:
+**Not `curl | sudo bash`** (classifier-blocked, 429 rate limits, an unresolved version "deploys" the old slot green). The self-converging update path is the supported one.
 
-```
-## development...origin/development [ahead 2]
-```
+1. Open `https://mcapp.local/` in Chrome, click the **version chip** (bottom-right) → `/webapp/update`.
+2. **Version Status** should read `LATEST RELEASE vX.Y.Z — Update available`; if it shows the old release GitHub's API has not caught up: wait, do not re-cut.
+3. **Update to vX.Y.Z** → confirm (`Mode: Production`) → **Start Update**; the modal streams `PREPARE → DEPLOY → ACTIVATE → HEALTH → DONE`.
 
-That left webapp `origin/main` ahead of `origin/development` — precisely the diverged state that
-aborts the **next** release at Stop 2. The failure therefore surfaced one release later, with an
-error naming the webapp rather than the release that caused it. It is what blocked the v2.0.1 cut.
-
-`post_release_prep` now bumps and pushes both repos, and `scripts/release_prep_tests.py` pins it —
-asserting against the **remotes**, because the old code committed in the webapp and simply never
-pushed, so a working-tree assertion would have passed while the bug was live.
-
-Still confirm it after every release, because this is cheap and its absence is expensive:
+The deploy takes several minutes. Do not poll turn by turn: arm ONE background wait (Bash `run_in_background: true`, never chained `sleep`). **Record the old state BEFORE clicking Start Update**, because the terminal condition is "moved off it":
 
 ```bash
-for d in . ../webapp; do
-  git -C $d fetch origin --quiet
-  echo "$d unpushed: $(git -C $d rev-list --count origin/development..development)"   # both 0
-done
+ssh mcapp.local 'readlink -f ~/mcapp-slots/current; systemctl show mcapp -p ActiveEnterTimestampMonotonic --value'   # -> OLD_SLOT / OLD_START
 ```
-
-If either is non-zero, push it and work out why the script did not — do not just paper over it.
-
-## Step 6 — Deploy to the Pi from the webapp Update page
-
-**Not `curl | sudo bash`.** That line is classifier-blocked, GitHub rate-limits the Pi at 429, and an
-unresolved version "deploys" the old slot green. The self-converging update path is the supported
-one for a production tag.
-
-1. open `https://mcapp.local/` in Chrome
-2. click the **version chip** in the bottom-right status bar → `/webapp/update`
-3. **Version Status** should read `LATEST RELEASE vX.Y.Z — Update available`. If it still shows the
-   old release, GitHub's API has not caught up; wait, do not re-cut.
-4. **Update to vX.Y.Z** → confirm dialog (`Mode: Production`) → **Start Update**
-5. the modal streams `PREPARE → DEPLOY → ACTIVATE → HEALTH → DONE` over SSE
-
-The deploy takes several minutes on a Pi Zero 2W. **Do not poll it turn by turn.** Arm one
-background wait with a terminal condition and do something else until it fires. The loop below runs
-up to 20 minutes, longer than a foreground tool call may take: start it with the Bash tool's
-`run_in_background: true` and wait for its completion notice. Never chain `sleep` calls to wait.
-
-**Record the old state BEFORE you click Start Update**, because the terminal condition is "the
-service moved off it":
-
-```bash
-ssh mcapp.local 'readlink -f ~/mcapp-slots/current; systemctl show mcapp -p ActiveEnterTimestampMonotonic --value'
-# e.g. /home/martin/mcapp-slots/slot-2  and  168412345678  -> OLD_SLOT / OLD_START below
-```
-
-Then, after Start Update:
 
 ```bash
 ssh mcapp.local 'OLD_SLOT=/home/martin/mcapp-slots/slot-N OLD_START=<monotonic>
@@ -451,109 +204,49 @@ for i in $(seq 1 80); do
 done; echo "TIMEOUT: not on vX.Y.Z in a new slot after 20 min"; exit 1'
 ```
 
-**`version.html` alone fires too early.** The runner copies the webapp bundle to
-`/var/www/html/webapp` during DEPLOY, before ACTIVATE switches `current` and restarts the
-services. During the v2.0.15 promotion a loop keyed only on `version.html` printed DONE while the
-modal was still at ACTIVATE and `mcapp` was running the old slot from the previous deploy — the
-service restarted about two minutes later. All three conditions are needed: the tag (new bundle),
-a different `current` (the switch happened) and a changed `ActiveEnterTimestampMonotonic` (the
-service actually restarted onto it). On an in-place re-deploy of the same version `current` does
-not move — then drop the slot condition and rely on the restart.
+- **`version.html` alone fires too early**: the runner copies the webapp bundle during DEPLOY, before ACTIVATE switches `current` and restarts services. All three conditions are needed (new tag, different `current`, changed `ActiveEnterTimestampMonotonic`). On an in-place re-deploy of the same version `current` does not move: drop the slot condition and rely on the restart.
+- **Poll from the Pi, not the Mac**: from the Mac each request first spends ~5 s on the mDNS lookup and a `--max-time 5` loop never matched. On the Pi `127.0.0.1` needs no lookup. The 80 x 15 s bound turns a deploy that never lands into `TIMEOUT`.
+- **Never key it on `/api/status`**: its `version` is the pyproject version, identical for a dev tag and the release it becomes (it read `v2.0.11` before the deploy started). `version.html` is the only field telling them apart.
+- Auto-rollback is armed: if health checks fail the previous slot stays active.
 
-**Poll from the Pi, not from the Mac, and give the loop an end.** From the Mac every request to
-`mcapp.local` first spends ~5 s on the mDNS lookup. The earlier version of this loop ran there with
-`--max-time 5`, so every attempt was cut off before an answer arrived. It never matched and polled
-silently forever: during the v2.0.14 promotion it was still running long after the box was on
-`v2.0.14`. On the Pi, `127.0.0.1` needs no name lookup at all. The 80 × 15 s bound turns a
-deploy that never lands into a `TIMEOUT` line and exit code 1, instead of a wait that never ends.
-
-**Never key it on `/api/status`.** `/api/status`'s `version` field is the **pyproject version**,
-not the deployed tag — and a dev pre-release is built from the same `pyproject` version as the
-production release it becomes. Promoting `v2.0.11-dev.4` to `v2.0.11`, the box reported
-`version: v2.0.11` **before the deploy had started**, so a loop keyed on that field fires
-instantly and reports success against the old code. `version.html` is the only field that tells a
-dev tag from its release — which is why it stays in the condition, just not alone.
-
-Auto-rollback is armed: if the health checks fail the previous slot stays active and the service
-keeps running the old code.
-
-### Then read the runner's own result — "Update completed successfully" is not evidence
+### Read the runner's own result — "Update completed successfully" is not evidence
 
 ```bash
 ssh mcapp.local 'sudo journalctl -u mcapp-update --since "-30min" --no-pager | grep -E "Finished:|WARN.*(unresolved|Cannot determine)"'
 # want: [UPDATE-RUNNER] Finished: {"status": "success", "version": "vX.Y.Z", "slot": N, ...}
 ```
 
-**`version` must be the tag you released and `slot` must be the slot `current` points to.** Anything
-else stops the flow: do not start Step 7, do not call the release deployed. On 2026-11-08 (F14,
-health log §59) the Pi could not reach the GitHub API, the bootstrap rebuilt the old slot in place,
-and the runner still logged `"status": "success", "version": "v2.1.26-dev.3", "slot": 2` and pointed
-`current` at that stale slot, while the modal showed DONE. The fix (the runner now reports
-`"status": "failed", "reason": "version_unresolved"` instead) only takes effect once a slot carrying
-it drives an update, because the runner and bootstrap that run are the ACTIVE slot's. A `failed` with
-`version_unresolved` means: nothing was deployed, wait for GitHub, start the update again.
+**`version` must be the tag you released and `slot` the slot `current` points to.** Anything else stops the flow: do not start Step 7 or call it deployed. On 2026-11-08 (F14, health log §59) the Pi could not reach the GitHub API, the bootstrap rebuilt the old slot in place, and the runner logged `"status": "success", "version": "v2.1.26-dev.3"` while the modal showed DONE. The fix (`"status": "failed", "reason": "version_unresolved"`) only takes effect once a slot carrying it drives an update, because the ACTIVE slot's runner and bootstrap run (backlog B22). `failed` / `version_unresolved` means nothing was deployed: wait for GitHub, start the update again.
 
 ## Step 7 — Verify
 
-The modal's DONE is not verification. Check the box:
+The modal's DONE is not verification.
 
 ```bash
-curl -sk https://mcapp.local/webapp/version.html                   # THE tag check; NOT /version.html — that 404s
-curl -sk https://mcapp.local/api/status | python3 -m json.tool     # pyproject version, not the tag (see above)
+curl -sk https://mcapp.local/webapp/version.html                   # THE tag check; NOT /version.html (404)
+curl -sk https://mcapp.local/api/status | python3 -m json.tool     # pyproject version, not the tag
 ssh mcapp.local '
   readlink -f ~/mcapp-slots/current
   systemctl is-active mcapp mcapp-ble caddy lighttpd
   systemctl show mcapp -p NRestarts --value          # still 0
   grep -h "^LATEST_SCHEMA_VERSION" ~/mcapp-slots/current/src/mcapp/storage/constants.py
-  find ~/mcapp-slots/current/src/mcapp -name "*_tests.py" -o -name "*.json" | wc -l'   # 3 on production (classifier_contract, axes_contract, group_labels_icssw), see below
+  find ~/mcapp-slots/current/src/mcapp -name "*_tests.py" -o -name "*.json" | wc -l'   # exactly 3 on production
 ```
 
-**A production tarball carries no test harness, by design.** `build_tarball`'s second argument
-selects the shape: production ships runtime code only — no `*_tests.py`, no `tests.py`, none of
-the `.json` corpora under `src/mcapp/` (nothing but those test modules reads them; 13 at
-v2.1.6-dev.1, and the count grows) except the three runtime data files `contract/classifier_contract.json`,
-`contract/axes_contract.json` and `group_labels_icssw.json`, and not
-`run_startup_tests.py`. A dev pre-release ships all four, which is why the gate can be run on the
-box against a dev tag but not against a production one. So the count above is **3 on production
-(exactly those runtime files) and far larger on dev** — if a production slot has more, the predicate regressed.
+- **A production tarball carries no test harness, by design**: no `*_tests.py`, `tests.py`, `run_startup_tests.py` and none of the `.json` corpora except three runtime data files (`contract/classifier_contract.json`, `contract/axes_contract.json`, `group_labels_icssw.json`). The count is 3 on production and far larger on dev; more on a production slot means the predicate regressed. `main.py` must never import a test module at import time (a module-level import makes every production build refuse to start); pinned by `scripts/webapp_deploy_tests.py`.
+- `version.html` reports what was deployed, not what the browser runs: reload past the service worker ("Update available — Reload") before believing a frontend change is live.
+- If the release changed the schema, the DB's `schema_version` must equal `LATEST_SCHEMA_VERSION` in the **active slot**; a mismatch is the loudest finding there is.
 
-This is also why `main.py` must never import a test module at import time: it loads `router_tests`
-lazily and the one caller treats `ImportError` as "skipped, no harness in this build". A
-module-level import makes every production build refuse to start. Both shapes and that import
-discipline are pinned by `scripts/webapp_deploy_tests.py`, which drives the real `build_tarball()`.
+### Post-release sweep — mandatory
 
-- `version.html` reports what was **deployed**, not what the browser is running. Reload past the
-  service worker (the "Update available — Reload" banner) before believing a frontend change is live.
-- Slot order is not fixed: `get_target_slot` takes the empty-or-oldest of `slot-{0,1,2}`.
-- If the release changed the schema, confirm the migration ran: the DB's `schema_version` must equal
-  `LATEST_SCHEMA_VERSION` in the **active slot**. A mismatch is the loudest finding there is.
-
-### Post-release sweep — mandatory, the release is not done without it
-
-Run `/ai-ops` once the box has settled and append the post-release sweep to
-`doc/ops-mcapp-health-log.md` as a new numbered section, banner updated, before you report the
-release as done. Record anything the deploy got wrong as a finding (`F<n>`) even if a second run
-fixed it. Then, if `RESUME.md` exists and nothing in it is left open, delete it in the same commit
-as the health-log entry; if something is left open, keep it and say what.
+Run `/ai-ops` once the box has settled and append the sweep to `doc/ops-mcapp-health-log.md` as a new numbered section (banner updated) before reporting the release done. Record anything the deploy got wrong as an `F<n>` finding even if a second run fixed it.
 
 ## Rollback
 
-The update page has an **Activate** button on every non-active populated slot row, and the
-previous release is still sitting in its slot — so reverting is a slot activation (code + webapp
-bundle + service restarts), not a re-deploy. Use it before considering a hotfix release. Activation
-never touches the database: migrations are forward-only and additive, so the previous release's
-code runs fine against whatever the current schema is.
+The update page has an **Activate** button on every non-active populated slot; the previous release is still in its slot, so reverting is a slot activation (code + webapp bundle + services), not a re-deploy. Use it before considering a hotfix release. Activation never touches the database (forward-only additive migrations; see `CLAUDE.md` § Deployment).
 
-Never delete or move a published production tag to "fix" a release. Cut `vX.Y.Z+1` instead; the
-version is already bumped and waiting in `pyproject.toml`.
+Never delete or move a published production tag to "fix" a release; cut `vX.Y.Z+1` (the version is already bumped in `pyproject.toml`).
 
 ## Related
 
-- `/dev-release` — cutting and installing the `vX.Y.Z-dev.N` that this skill promotes
-- `/ai-ops` — the health check that decides whether promotion is warranted, and its log
-- `doc/reference/version-logic.md` — how dev/production versions and tags resolve
-- `doc/release-history.md` — the notes file; only its top `## vX.Y.Z` section (plus a footer link)
-  is published as the GitHub release body, see Stop 1
-- `doc/archive/release-history-full.md` — full text of every earlier release, archived verbatim at
-  promotion time
-- `bootstrap/README.md` — installer flags, for the cases the Update page cannot cover
+`/dev-release` (the `-dev.N` this promotes), `/ai-ops` (the health check and its log), `doc/reference/version-logic.md`, `doc/release-history.md` / `doc/archive/release-history-full.md`, `bootstrap/README.md`.

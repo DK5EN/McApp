@@ -1,0 +1,122 @@
+name: dev-release
+
+# Daily: when Dependabot updates were merged into development of McApp or webapp since the newest
+# McApp release tag, cut a dev pre-release vX.Y.Z-dev.N with scripts/release.sh 1 -- the same
+# script the dev-release skill runs on the Mac. GitHub notifies release watchers; installing it on
+# mcapp.local (webapp Update page or bootstrap --dev --tag) and promoting it to production
+# (prod-release skill, soak first) stay manual. Owner decision 2026-11-22.
+#
+# The pre-release ships everything on development of BOTH repos since the last release, not only
+# the dependency bumps.
+#
+# Secrets (McApp repo):
+#   WEBAPP_TOKEN    fine-grained PAT, DK5EN/webapp Contents read/write: checks out the private
+#                   webapp and pushes the shared tag there (release.sh tags both repos).
+#   VITE_CARTO_KEY  baked into the webapp build (gitignored webapp/.env on the Mac).
+# Safe in a public repo: this workflow runs only on schedule and dispatch, never on fork PRs.
+
+on:
+  schedule:
+    - cron: '0 10 * * *' # daily, 10:00 UTC (after Monday's Dependabot runs)
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Release even if no Dependabot update landed since the last release'
+        type: boolean
+        default: false
+
+concurrency:
+  group: dev-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write # push the tag to McApp and create the pre-release
+
+jobs:
+  release:
+    name: Dev pre-release
+    if: github.ref == 'refs/heads/development'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # Side by side, as scripts/release.sh expects (../webapp relative to the repo). ref
+      # `development` gives a local branch of that name, which release.sh checks for.
+      - uses: actions/checkout@v7
+        with:
+          ref: development
+          path: MCProxy
+          fetch-depth: 0
+      - uses: actions/checkout@v7
+        with:
+          repository: DK5EN/webapp
+          ref: development
+          path: webapp
+          fetch-depth: 0
+          token: ${{ secrets.WEBAPP_TOKEN }}
+
+      - name: Dependabot updates since the last release?
+        id: check
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          LAST=$(git -C MCProxy tag -l 'v*' --sort=-creatordate | head -1)
+          [ -n "$LAST" ] || { echo "no release tag found" >&2; exit 1; }
+          since() {
+            if git -C "$1" rev-parse -q --verify "refs/tags/$LAST" >/dev/null; then
+              git -C "$1" log --format="$1: %h %s" --author='dependabot\[bot\]' "$LAST..HEAD"
+            fi
+          }
+          DEPS=$( { since MCProxy; since webapp; } )
+          {
+            echo "## Since $LAST"
+            echo '```'
+            echo "${DEPS:-no Dependabot commits}"
+            echo '```'
+            echo "Force: ${FORCE:-false}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$DEPS" ] || [ "$FORCE" = "true" ]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.check.outputs.release == 'true'
+        uses: astral-sh/setup-uv@v10.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: MCProxy/uv.lock
+      - if: steps.check.outputs.release == 'true'
+        run: uv python install 3.11
+      - if: steps.check.outputs.release == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: webapp/package-lock.json
+      # Keep in sync with "packageManager" in webapp/package.json.
+      - if: steps.check.outputs.release == 'true'
+        run: npm install -g npm@12.2.2
+      - if: steps.check.outputs.release == 'true'
+        run: npm ci
+        working-directory: webapp
+
+      - name: Carto key for the webapp build
+        if: steps.check.outputs.release == 'true'
+        env:
+          VITE_CARTO_KEY: ${{ secrets.VITE_CARTO_KEY }}
+        run: |
+          [ -n "$VITE_CARTO_KEY" ] || { echo "secret VITE_CARTO_KEY is missing" >&2; exit 1; }
+          printf 'VITE_CARTO_KEY=%s\n' "$VITE_CARTO_KEY" > webapp/.env
+
+      # The release gate. release.sh does not gate (dev-release skill), so this must pass first.
+      - name: Gate (scripts/gate.sh, both repos)
+        if: steps.check.outputs.release == 'true'
+        working-directory: MCProxy
+        run: ./scripts/gate.sh
+
+      - name: Cut the dev pre-release
+        if: steps.check.outputs.release == 'true'
+        working-directory: MCProxy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: printf '\n' | ./scripts/release.sh 1

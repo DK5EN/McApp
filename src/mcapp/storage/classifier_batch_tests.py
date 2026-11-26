@@ -16,15 +16,15 @@ from typing import Any
 
 from ..sqlite_storage import create_sqlite_storage
 
-_COLS = "id, category, tags, info_score, template_hash, classifier_ver"
+_COLS = "id, tags, info_score, template_hash, classifier_ver"
 
 
 async def _seed(storage: Any, n: int = 4) -> list[int]:
     for i in range(n):
         await storage._mutate(
-            "INSERT INTO messages (msg_id, src, dst, msg, type, timestamp, category, tags,"
+            "INSERT INTO messages (msg_id, src, dst, msg, type, timestamp, tags,"
             " info_score, template_hash, classifier_ver)"
-            " VALUES (?, 'DK5EN-1', '20', 'x', 'msg', ?, 'old', '[\"old\"]', 0.1, 'oldh', 1)",
+            " VALUES (?, 'DK5EN-1', '20', 'x', 'msg', ?, '[\"old\"]', 0.1, 'oldh', 1)",
             (f"A{i}", 1_700_000_000_000 + i),
         )
     rows = await storage._query("SELECT id FROM messages ORDER BY id")
@@ -38,10 +38,10 @@ async def _snapshot(storage: Any) -> list[dict[str, Any]]:
     return rows
 
 
-def _changed(ids: list[int]) -> list[tuple[str, str, float, str, int, int]]:
+def _changed(ids: list[int]) -> list[tuple[str, float, str, int, int]]:
     return [
-        ("qso", json.dumps(["qso", "directed"]), 0.8, "h-a", 7, ids[0]),
-        ("bot", json.dumps(["bot"]), 0.2, "h-b", 7, ids[1]),
+        (json.dumps(["alert", "greeting"]), 0.8, "h-a", 7, ids[0]),
+        (json.dumps(["test"]), 0.2, "h-b", 7, ids[1]),
     ]
 
 
@@ -61,10 +61,9 @@ async def _test_equivalence(results: list[tuple[str, bool]]) -> None:
             except AttributeError:
                 results.append(("batch: method exists", False))
                 return
-            for cat, tags_json, score, th, ver, rid in _changed(ids_b):
+            for tags_json, score, th, ver, rid in _changed(ids_b):
                 await b.update_message_classification(
                     rid,
-                    category=cat,
                     tags=json.loads(tags_json),
                     info_score=score,
                     template_hash=th,
@@ -77,8 +76,7 @@ async def _test_equivalence(results: list[tuple[str, bool]]) -> None:
             results.append(
                 (
                     "changed rows get full values",
-                    snap_a[0]["category"] == "qso"
-                    and json.loads(snap_a[0]["tags"]) == ["qso", "directed"]
+                    json.loads(snap_a[0]["tags"]) == ["alert", "greeting"]
                     and snap_a[0]["template_hash"] == "h-a"
                     and snap_a[0]["classifier_ver"] == 7,
                 )
@@ -87,8 +85,7 @@ async def _test_equivalence(results: list[tuple[str, bool]]) -> None:
                 (
                     "unchanged rows only get the version",
                     all(
-                        r["category"] == "old"
-                        and r["tags"] == '["old"]'
+                        r["tags"] == '["old"]'
                         and r["template_hash"] == "oldh"
                         and r["info_score"] == 0.1
                         and r["classifier_ver"] == 7

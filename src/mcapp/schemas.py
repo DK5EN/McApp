@@ -389,5 +389,4 @@ class ReclassifyRequest(BaseModel):
     """POST /api/classifier/reclassify — re-run classification over history."""
 
     since: int | None = None
-    category: str | None = None
     force: bool = False

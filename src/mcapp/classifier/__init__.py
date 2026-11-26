@@ -12,7 +12,7 @@ Three layers plus an orchestrator:
     classify.py   -- glue that runs all three per message
     types.py      -- shared dataclasses (Classification, ...)
 
-Public surface: ``Classification``, ``CATEGORIES``.
+Public surface: ``Classification``, ``Classifier``.
 """
 
 from __future__ import annotations
@@ -28,27 +28,17 @@ from .origin import (
     origin_of,
 )
 from .types import (
-    AUTO_BEACON_TAG,
-    CATEGORIES,
     Classification,
-    MessageCategory,
-    derive_category,
-    legacy_tag_view,
 )
 
 __all__ = [
-    "AUTO_BEACON_TAG",
-    "CATEGORIES",
     "ORIGIN_HUMAN",
     "ORIGIN_MACHINE",
     "Classification",
     "Classifier",
-    "MessageCategory",
     "OriginResult",
     "OriginSpec",
     "carries_values",
-    "derive_category",
-    "legacy_tag_view",
     "message_origin",
     "origin_of",
 ]

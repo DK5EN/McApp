@@ -5,6 +5,63 @@ as the GitHub release body and rendered on the webapp's Update page, so it keeps
 the newest release only. These are the notes as they were published, unchanged, newest first;
 each production release adds the section it condenses at the top.
 
+## v2.1.27 (2026-11-22)
+
+**Every message now says what it is about and whether a person or a bot sent it, and the chat
+shows only the chips that help you read it.** The classifier from meshmap (mcmap 7c46e61) sorts
+messages into nine topics and tells human-typed messages from automated ones. Background details
+such as timing and writing style stay in the message details.
+
+> Update from the Update page as usual. Schema goes from 42 to 44, `SYSTEM_EPOCH` goes from 9 to 10.
+> After the update McApp re-sorts every stored message once: about 4 minutes on a Pi Zero 2W for
+> 11,000 messages, while the app stays usable.
+
+### Highlights
+
+- **Topics and origin on every message.** Greeting, Weather, QSL, Test, Question, Bulletin,
+  POTA/SOTA, Alert and URL, plus Bot for automated messages. Each topic chip has its own colour in
+  light and dark mode, with text contrast of at least 6.4:1 (BITV/WCAG AA asks for 4.5:1).
+- **A calmer chat bubble.** It shows the topic chips, Bot and echo. Whether a person typed it,
+  its timing (one-shot, scheduled, burst, jittered) and its writing style (prose, measurement,
+  ...) are in the details you open by tapping the bubble.
+- **Filters match what you see.** Settings > Filters shows each option with the same chip as the
+  chat. "Machine" is now "Bot". The option "Messages typed by a person" is gone; if you had it
+  ticked, it is cleared, so those messages show again.
+- **Nothing is hidden by default.** A new install shows every message until you hide a topic.
+- **A failed update can no longer look successful.** If the update could not install the
+  release you picked, the Update page reports a failure instead of "success" on the old version.
+- **Stronger SSH settings** with post-quantum key exchange, applied to existing boxes on update.
+
+### Backend (MCProxy)
+
+- Schema 43 stores each message's timing and echo, schema 44 its origin (human or bot) and the
+  rule that decided it. Both are computed when a message arrives, and once at startup for older
+  messages.
+- Classifier and contracts follow mc-chat (taxonomy v8, 102 rules). Saved hides of the retired
+  bot, node, software and time tags now mean Bot.
+- The update runner fails closed when the installer did not deploy the target version, and the
+  health check warns when the served webapp is not the version that was deployed.
+- `SYSTEM_EPOCH` 10 rewrites the SSH hardening drop-in: post-quantum key exchange, ed25519 host
+  keys, RSA keys of at least 3072 bits. A backup is kept, and the old file comes back if `sshd -t`
+  rejects the new one.
+- Dependencies refreshed (pydantic 2.14.4, certifi, regex, ruff 0.17.6).
+
+### Frontend (webapp)
+
+- Topic, Bot and echo chips on the bubble; timing, format and origin in the detail popover.
+- Chip colours for QSL, Question, Bulletin and POTA/SOTA; a darker neutral grey for Test, URL and
+  Bot in light mode.
+- Charts load only when a chart is opened, so the first page load is smaller.
+- Drag-and-drop sorting uses VueUse instead of the unmaintained vuedraggable.
+- npm 12, dependencies refreshed.
+
+### Upgrade notes
+
+- Allow about 4 minutes after the update for the one-time re-sort of stored messages. Badges and
+  filters are correct once it finishes.
+- Reload the webapp once after the update (Cmd+Shift+R in a desktop browser) if the chips still
+  look the old way.
+
 ## v2.1.26 (2026-11-08)
 
 **Weather history fills its gaps from meshmap, and the 30-day weather charts load faster.** Where McApp

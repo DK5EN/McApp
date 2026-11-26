@@ -51,9 +51,9 @@ _EXPECTED_SHA256 = "b666b2da034cf7609ede8bcc45aeeaa4802595621b63674237af0d084900
 
 # mcmap's exported classifier rule set (mc-chat contract/ subtree). Same drift
 # tripwire as above: re-capture only in the commit that pulls a new export.
-_CLASSIFIER_EXPECTED_SHA256 = "c364af31c2d316460d8a671068399560fc9acd97fd9d50117c2345f9cd93eeae"
+_CLASSIFIER_EXPECTED_SHA256 = "e8e29ea94bf9db6899dd354f961b7027f0491fdae56c47cb7be78e514fb9d130"
 # Message-axes contract (mcmap export, subtree-shared from mc-chat). Bump with the contract.
-_AXES_EXPECTED_SHA256 = "00e4971ba3eb60c2b02d8138b484f3acdd6fe7850a19222823c9e00616654de1"
+_AXES_EXPECTED_SHA256 = "2e86525471916409ba9339d0cf7fbecff5596ff33456e873612590fd52cd7512"
 
 
 def run_contract_parity_tests() -> bool:

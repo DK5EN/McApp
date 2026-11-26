@@ -1,5 +1,10 @@
 name: tests
 
+# Gates every push and pull request (public repo: Actions minutes are free). Re-enabled
+# 2026-11-22 for Dependabot: the `automerge` job merges Dependabot patch/minor PRs once `test`
+# passed, and dev-release.yml cuts a dev pre-release after such merges. scripts/gate.sh stays the
+# release gate for promotion (prod-release skill).
+
 on:
   push:
     branches: [development, main]
@@ -10,6 +15,9 @@ on:
 concurrency:
   group: tests-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -59,5 +67,63 @@ jobs:
 
       # scripts/run_startup_tests.py is the canonical, exit-code-gated runner.
       # It is fully offline (weather is stubbed) and needs no /etc/mcapp config.
+      # MCAPP_FORCE_CONSOLE: the runner has no TTY, and without it the suites print
+      # only "<suite>: FAIL" with no failing check named.
       - name: Startup test suites
+        env:
+          MCAPP_FORCE_CONSOLE: "1"
         run: uv run python scripts/run_startup_tests.py
+
+  automerge:
+    name: Auto-merge Dependabot
+    needs: test
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - id: meta
+        uses: dependabot/fetch-metadata@v3
+      - id: ok
+        if: steps.meta.outputs.update-type == 'version-update:semver-patch' || steps.meta.outputs.update-type == 'version-update:semver-minor'
+        run: echo "merge=true" >> "$GITHUB_OUTPUT"
+
+      # ble_service ships its own standalone uv.lock (used when mcapp-ble.service deploys
+      # independently). Dependabot edits ble_service/pyproject.toml but never regenerates that
+      # lock, and `uv lock` inside ble_service/ walks up to the workspace root. Relock it in a
+      # temp dir OUTSIDE the workspace (same recipe as the prod-release skill, without
+      # --upgrade: only follow the new specifiers), prove it installs, and commit it to the PR
+      # branch before merging. The `test` job above does not read this lock.
+      - if: steps.ok.outputs.merge == 'true' && steps.meta.outputs.package-ecosystem == 'uv'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - if: steps.ok.outputs.merge == 'true' && steps.meta.outputs.package-ecosystem == 'uv'
+        uses: astral-sh/setup-uv@v10.3.2
+      - name: Relock ble_service standalone
+        if: steps.ok.outputs.merge == 'true' && steps.meta.outputs.package-ecosystem == 'uv'
+        run: |
+          tmp=$(mktemp -d)
+          cp ble_service/pyproject.toml ble_service/uv.lock "$tmp"/
+          uv lock --directory "$tmp"
+          uv sync --directory "$tmp" --no-install-project
+          if cmp -s "$tmp/uv.lock" ble_service/uv.lock; then
+            echo "ble_service/uv.lock already current"
+            exit 0
+          fi
+          cp "$tmp/uv.lock" ble_service/uv.lock
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ble_service/uv.lock
+          git commit -q -m "[chore] Relock ble_service standalone lock"
+          git push origin HEAD
+
+      - name: Merge patch/minor
+        if: steps.ok.outputs.merge == 'true'
+        run: gh pr merge "$PR" --squash --delete-branch --repo "$REPO"
+        env:
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

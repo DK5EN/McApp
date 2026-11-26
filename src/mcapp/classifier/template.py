@@ -30,7 +30,7 @@ from .types import StorageProtocol as Storage
 # The lifetime rule counts the template's posts across ALL senders, so it only
 # applies to a SINGLE-SENDER template (``len(srcs) == 1``): eight different
 # people writing "Guten Morgen zusammen" are a conversation, not a beacon, and
-# auto_beacon would strip their ``qso`` tag (McApp issue #17).  The windowed
+# auto_beacon would make them machine origin (McApp issue #17).  The windowed
 # rules are per-(src, template) already and need no such guard.  The same
 # predicate lives in storage.backfill_auto_beacon_templates().
 
@@ -57,10 +57,6 @@ _AUTO_BEACON_MIN_TOKENS: int = 2
 # ``greeting`` is deliberately NOT exempt: daily greeting bots must be flaggable
 # (McApp issue #17).
 EXEMPT_TAG: str = "alert"
-
-# Derived categories storage.clear_stale_auto_beacons() treats as exempt when it
-# sweeps stored rows (it still joins on the derived ``category`` column).
-_HUMAN_CATEGORIES: frozenset[str] = frozenset({"directed", "alert"})
 
 # ── Public compiled patterns ─────────────────────────────────────────────
 # CLS-05: now defined once in types.py and re-exported here -- this
@@ -144,7 +140,7 @@ def is_short_token_exempt(text: str, min_tokens: int) -> bool:
     need the short-token half of ``is_exempt()``'s exemption check (e.g.
     ``Storage.clear_stale_auto_beacons``'s periodic sweep re-evaluating
     stored ``example_msg`` text against the current ``min_tokens``
-    threshold), not the full category/directedness decision.
+    threshold), not the full topic/directedness decision.
     """
     return len(tokenize_normalized(text)) <= min_tokens
 
@@ -166,7 +162,7 @@ def check_only(msg: dict[str, Any], tags: Collection[str] = (), directed: bool =
 @dataclass(frozen=True, slots=True)
 class BeaconResult:
     template_hash: str
-    is_beacon: bool  # should the classifier emit an 'auto_beacon' tag
+    is_beacon: bool  # is the template an auto-beacon (origin machine)
     transitioned: bool  # True iff this call flipped auto_beacon from 0 to 1
     count: int  # current template row count after upsert
     user_action: str | None  # 'promote' | 'demote' | None
@@ -298,7 +294,7 @@ async def update_and_check(  # noqa: PLR0911 - complex handler kept intact
     # Same history exemption as the periodic cleanup, consulted only when
     # promotion would happen, so the hot path stays cheap and the two cannot
     # ping-pong (promote here, clear on the next reclassify).
-    if triggered and await storage.template_has_human_history(hash_, _HUMAN_CATEGORIES):
+    if triggered and await storage.template_has_human_history(hash_):
         triggered = False
 
     if triggered:

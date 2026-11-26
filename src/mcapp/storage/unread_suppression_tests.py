@@ -18,7 +18,7 @@ their logic. No TTY, no network, no `/etc/mcapp`.
 Fixture note: `create_sqlite_storage` leaves `_classifier` unset (`None`, see
 `sqlite_storage.py`), so `store_message` always writes NULL classifier
 columns here — there is no rule-based classifier wired into this ephemeral
-DB. `_classify()` below stamps `category`/`tags`/`info_score`/`template_hash`
+DB. `_classify()` below stamps `origin`/`tags`/`info_score`/`template_hash`
 onto an already-inserted row directly (white-box `UPDATE`, the same pattern
 `read_cursor_tests.py`'s `_test_transport_duplicates` uses for its second
 transport copy), which is the only way to get a deterministic classification
@@ -26,12 +26,12 @@ into a fixture row without standing up the full classifier.
 
 Coverage (per the wave brief):
   1. The group-20 regression, end to end: a group conversation whose NEWEST
-     message is `category='node_advert'` with `filter_prefs` hiding
-     `node_advert`, cursor sitting on the previous (visible) message ->
+     message is `origin='machine'` with `filter_prefs` hiding
+     it (`hideAutoBeacons`), cursor sitting on the previous (visible) message ->
      `unread == 0`. Proven to FAIL before the query.py fix (see the module
      docstring note in the wave's report; this suite is written against the
      failing baseline first).
-  2. Same fixture with `hiddenCategories: []` -> `unread == 1`.
+  2. Same fixture with `hideAutoBeacons: False` -> `unread == 1`.
   3. `count`/`last_ts` are IDENTICAL between cases 1 and 2 — only `unread`
      differs.
   4. A blocked-text message as the newest row is not counted, including with
@@ -53,7 +53,7 @@ Coverage (per the wave brief):
   9. The `key=` narrowing path returns the same `unread` for that key as the
      full scan does.
   10. The own-sender early return in `_subtract_suppressed_row` is load-
-      bearing: an own message stamped with a hidden category (e.g. an
+      bearing: an own message stamped origin machine (e.g. an
       operator's own `!wx`) must never cancel a foreign, visible message's
       unread just because both are candidates in the same conversation.
   11. SPAM_GROUP subtraction judges a rebucketed row against `newer_spam`
@@ -102,15 +102,15 @@ async def _classify(storage: Any, src: str, ts: int, fields: dict[str, Any]) -> 
     """White-box: stamp classifier columns onto the row `_store_msg` just
     inserted for (src, ts). See the module docstring's fixture note for why
     this is necessary rather than incidental. `fields` accepts any of
-    `category`/`tags`/`info_score`/`template_hash`; anything omitted is
+    `origin`/`tags`/`info_score`/`template_hash`; anything omitted is
     written as NULL, matching `view_from_row`'s tolerant defaults.
     """
     tags = fields.get("tags")
     await storage._mutate(
-        "UPDATE messages SET category = ?, tags = ?, info_score = ?, template_hash = ?"
+        "UPDATE messages SET origin = ?, tags = ?, info_score = ?, template_hash = ?"
         " WHERE src = ? AND timestamp = ?",
         (
-            fields.get("category"),
+            fields.get("origin"),
             json.dumps(tags) if tags is not None else None,
             fields.get("info_score"),
             fields.get("template_hash"),
@@ -121,7 +121,7 @@ async def _classify(storage: Any, src: str, ts: int, fields: dict[str, Any]) -> 
 
 
 async def _test_group20_regression(results: list[tuple[str, bool]]) -> None:
-    """Case 1/2/3: the field regression itself, plus the hiddenCategories: []
+    """Case 1/2/3: the field regression itself, plus the hideAutoBeacons: False
     control and the count/last_ts invariance across both runs.
     """
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -137,8 +137,8 @@ async def _test_group20_regression(results: list[tuple[str, bool]]) -> None:
             await _store_msg(storage, "OE1REAL-1", group_key, "real chat", t0)
 
             # The newest message: a bare URL classified as node_advert,
-            # exactly the live row (HB9VQQ-1 -> 20, category=node_advert,
-            # info_score=0.3, tags=["auto_beacon"]).
+            # exactly the live row (HB9VQQ-1 -> 20, origin=machine,
+            # info_score=0.3).
             advert_ts = t0 + 10
             await _store_msg(
                 storage,
@@ -151,31 +151,19 @@ async def _test_group20_regression(results: list[tuple[str, bool]]) -> None:
                 storage,
                 "HB9VQQ-1",
                 advert_ts,
-                {"category": "node_advert", "tags": ["auto_beacon"], "info_score": 0.3},
+                {"origin": "machine", "info_score": 0.3},
             )
 
             await storage.set_read_cursor(group_key, t0)  # cursor on the visible message
 
-            # A LEGACY hiddenCategories POST (old webapp): the storage maps it
-            # to hiddenTags on write, so this also pins that path end to end.
-            await storage.set_filter_prefs(
-                {
-                    "enabled": True,
-                    "hiddenCategories": [
-                        "timestamp_beacon",
-                        "bot_command",
-                        "node_advert",
-                        "sw_advert",
-                    ],
-                }
-            )
+            await storage.set_filter_prefs({"enabled": True, "hideAutoBeacons": True})
 
             summary_hidden = await storage.get_conversation_summary(MY_CALLSIGN)
             entry_hidden = summary_hidden.get(group_key, {})
             results.append(
                 (
                     (
-                        "group-20 regression: node_advert hidden -> unread == 0"
+                        "group-20 regression: origin machine hidden -> unread == 0"
                         " (the badge the client can never clear before this fix)"
                     ),
                     entry_hidden.get("unread") == 0,
@@ -191,14 +179,14 @@ async def _test_group20_regression(results: list[tuple[str, bool]]) -> None:
                 )
             )
 
-            # Case 2: hiddenCategories: [] -> the advert is visible again,
+            # Case 2: hideAutoBeacons False -> the advert is visible again,
             # unread reverts to 1.
-            await storage.set_filter_prefs({"enabled": True, "hiddenCategories": []})
+            await storage.set_filter_prefs({"enabled": True, "hideAutoBeacons": False})
             summary_visible = await storage.get_conversation_summary(MY_CALLSIGN)
             entry_visible = summary_visible.get(group_key, {})
             results.append(
                 (
-                    "group-20 control: hiddenCategories: [] -> unread == 1",
+                    "group-20 control: hideAutoBeacons False -> unread == 1",
                     entry_visible.get("unread") == 1,
                 )
             )
@@ -313,14 +301,12 @@ async def _test_own_message_exclusion_unaffected(results: list[tuple[str, bool]]
             await _store_msg(storage, "DK5EN-14", dm_dst, "hello from -14", t0 + 10)
             reply_ts = t0 + 20
             await _store_msg(storage, dm_dst, "DK5EN-98", "reply from partner", reply_ts)
-            await _classify(
-                storage, dm_dst, reply_ts, {"category": "node_advert", "tags": ["auto_beacon"]}
-            )
+            await _classify(storage, dm_dst, reply_ts, {"origin": "machine"})
 
             # Active, non-noop policy: hides node_advert, which is the
             # partner's reply — but the own-message rule is evaluated first
             # for count/unread purposes and must not be disturbed by it.
-            await storage.set_filter_prefs({"enabled": True, "hiddenTags": ["node"]})
+            await storage.set_filter_prefs({"enabled": True, "hideAutoBeacons": True})
 
             summary = await storage.get_conversation_summary(MY_CALLSIGN)
             entry = summary.get(key, {})
@@ -337,9 +323,10 @@ async def _test_own_message_exclusion_unaffected(results: list[tuple[str, bool]]
                 (
                     (
                         "own-message exclusion holds under an active suppression policy:"
-                        " the partner's reply is suppressed -> unread == 0, not 1"
+                        " the partner's machine reply is a DM to the operator, so the"
+                        " own-call exemption keeps it -> unread == 1 (own rows add none)"
                     ),
-                    entry.get("unread") == 0,
+                    entry.get("unread") == 1,
                 )
             )
         finally:
@@ -381,8 +368,7 @@ async def _test_transport_duplicates_suppressed(results: list[tuple[str, bool]])
             # depend on which physical row the earliest-copy aggregation
             # happens to read from.
             await storage._mutate(
-                "UPDATE messages SET category = 'node_advert', tags = '[\"auto_beacon\"]'"
-                " WHERE msg_id = 'E686400E'"
+                "UPDATE messages SET origin = 'machine' WHERE msg_id = 'E686400E'"
             )
 
             # A second, DISTINCT, VISIBLE foreign message in the same key,
@@ -392,7 +378,7 @@ async def _test_transport_duplicates_suppressed(results: list[tuple[str, bool]])
             visible_ts = t0 + 1_000
             await _store_msg(storage, "OE1REAL-1", "*", "real chat", visible_ts)
 
-            await storage.set_filter_prefs({"enabled": True, "hiddenTags": ["node"]})
+            await storage.set_filter_prefs({"enabled": True, "hideAutoBeacons": True})
 
             summary = await storage.get_conversation_summary(MY_CALLSIGN)
             entry = summary.get("*", {})
@@ -437,11 +423,9 @@ async def _test_spam_group_rebucket_subtraction(results: list[tuple[str, bool]])
             await _store_msg(storage, "OE1REAL-1", group_key, "real chat", t0)
             spam_ts = t0 + 10
             await _store_msg(storage, spam_src, group_key, "buy now", spam_ts)
-            await _classify(
-                storage, spam_src, spam_ts, {"category": "node_advert", "tags": ["auto_beacon"]}
-            )
+            await _classify(storage, spam_src, spam_ts, {"origin": "machine"})
 
-            await storage.set_filter_prefs({"enabled": True, "hiddenTags": ["node"]})
+            await storage.set_filter_prefs({"enabled": True, "hideAutoBeacons": True})
 
             def _filter(data: dict[str, Any]) -> dict[str, Any] | None:
                 if data.get("src") == spam_src:
@@ -496,9 +480,7 @@ async def _test_key_narrowing_matches_full_scan(results: list[tuple[str, bool]])
             await _store_msg(storage, "OE1ABC-1", group_key, "g1", t0)
             advert_ts = t0 + 10
             await _store_msg(storage, "OE1ABC-1", group_key, "advert", advert_ts)
-            await _classify(
-                storage, "OE1ABC-1", advert_ts, {"category": "node_advert", "tags": ["auto_beacon"]}
-            )
+            await _classify(storage, "OE1ABC-1", advert_ts, {"origin": "machine"})
 
             # Unrelated second conversation, so the full scan has more than
             # one key to prove the narrowing actually narrows.
@@ -509,7 +491,7 @@ async def _test_key_narrowing_matches_full_scan(results: list[tuple[str, bool]])
             # unread deterministically 0, the same shape as the group-20
             # regression above.
             await storage.set_read_cursor(group_key, t0)
-            await storage.set_filter_prefs({"enabled": True, "hiddenTags": ["node"]})
+            await storage.set_filter_prefs({"enabled": True, "hideAutoBeacons": True})
 
             full_summary = await storage.get_conversation_summary(MY_CALLSIGN)
             narrowed_summary = await storage.get_conversation_summary(MY_CALLSIGN, key=group_key)
@@ -539,8 +521,8 @@ async def _test_own_suppressed_message_does_not_cancel_foreign_unread(
     """Case 10: the own-sender early return in `_subtract_suppressed_row`
     (`if sender_base == my_base: return`) must fire BEFORE the suppression
     check — an own message that happens to carry a hidden category (the real
-    shape: the operator's own `!wx` is classified `bot_command`, a hidden
-    category) was never added to `unread` by `_apply_conversation_row` in
+    shape: the operator's own `!wx` is classified origin machine, a hidden
+    class) was never added to `unread` by `_apply_conversation_row` in
     the first place (own traffic is excluded by sender there), so it must
     never be subtracted either. Without the guard, a suppressed own message
     wrongly cancels a foreign, visible message's unread in the SAME
@@ -557,15 +539,13 @@ async def _test_own_suppressed_message_does_not_cancel_foreign_unread(
             # The operator's own weather-bot command: hidden, and a
             # candidate row (newer than the unset -> 0 cursor).
             await _store_msg(storage, MY_CALLSIGN, dm_dst, "!wx", t0)
-            await _classify(
-                storage, MY_CALLSIGN, t0, {"category": "bot_command", "tags": ["auto_beacon"]}
-            )
+            await _classify(storage, MY_CALLSIGN, t0, {"origin": "machine"})
 
             # The partner's reply: foreign, visible, newer still.
             reply_ts = t0 + 10
             await _store_msg(storage, dm_dst, MY_CALLSIGN, "sunny today", reply_ts)
 
-            await storage.set_filter_prefs({"enabled": True, "hiddenTags": ["bot"]})
+            await storage.set_filter_prefs({"enabled": True, "hideAutoBeacons": True})
 
             summary = await storage.get_conversation_summary(MY_CALLSIGN)
             entry = summary.get(key, {})
@@ -592,7 +572,7 @@ async def _test_spam_group_subtract_uses_rebucketed_cursor(
     cursor entirely.
 
     Two rebucketed rows from the same blocklisted src, both suppressible
-    (hidden category), with the SPAM_GROUP cursor sitting BETWEEN their
+    (origin machine), with the SPAM_GROUP cursor sitting BETWEEN their
     timestamps: the OLDER row is already read under SPAM_GROUP
     (`newer_spam == False`, even though it still reads `newer == True`
     under its untouched original key) and must not be subtracted at all —
@@ -614,9 +594,7 @@ async def _test_spam_group_subtract_uses_rebucketed_cursor(
             newer_ts = t0 + 100
 
             await _store_msg(storage, spam_src, group_key, "buy now (old)", older_ts)
-            await _classify(
-                storage, spam_src, older_ts, {"category": "node_advert", "tags": ["auto_beacon"]}
-            )
+            await _classify(storage, spam_src, older_ts, {"origin": "machine"})
             # The newer row is left unclassified (visible) on purpose — see
             # the docstring above: only the OLDER row's mis-handling can
             # move `unread` here.
@@ -628,7 +606,7 @@ async def _test_spam_group_subtract_uses_rebucketed_cursor(
             # of the SPAM_GROUP cursor.
             await storage.set_read_cursor(SPAM_GROUP, spam_cursor_ts)
 
-            await storage.set_filter_prefs({"enabled": True, "hiddenTags": ["node"]})
+            await storage.set_filter_prefs({"enabled": True, "hideAutoBeacons": True})
 
             def _filter(data: dict[str, Any]) -> dict[str, Any] | None:
                 if data.get("src") == spam_src:
@@ -653,6 +631,45 @@ async def _test_spam_group_subtract_uses_rebucketed_cursor(
             await storage.close()
 
 
+async def _test_dm_to_own_call_exempt(results: list[tuple[str, bool]]) -> None:
+    """Case 12: a machine-origin DM addressed to the operator's base callsign
+    (any SSID) is never classifier-hidden, so it counts as unread; the same
+    classification on a group message stays suppressed."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = Path(tmp_dir) / "own_dm_exempt_test.db"
+        storage = await create_sqlite_storage(db_path)
+        try:
+            partner = "OE5HWN-12"
+            dm_dst = "DK5EN-14"  # other SSID than MY_CALLSIGN (DK5EN-98)
+            dm_key = compute_conversation_key(partner, dm_dst) or ""
+            t0 = now_ms() - 100_000
+            await _store_msg(storage, partner, dm_dst, "earlier", t0)
+            reply_ts = t0 + 10
+            await _store_msg(storage, partner, dm_dst, "!time reply", reply_ts)
+            await _classify(storage, partner, reply_ts, {"origin": "machine", "info_score": 0.25})
+            await _store_msg(storage, partner, "20", "bot in group", t0 + 20)
+            await _classify(storage, partner, t0 + 20, {"origin": "machine", "info_score": 0.25})
+            await storage.set_read_cursor(dm_key, t0 + 5)
+            await storage.set_read_cursor("20", t0)
+            await storage.set_filter_prefs({"enabled": True, "hideAutoBeacons": True})
+
+            summary = await storage.get_conversation_summary(MY_CALLSIGN)
+            results.append(
+                (
+                    "own-call exemption: machine DM to the operator counts unread == 1",
+                    summary.get(dm_key, {}).get("unread") == 1,
+                )
+            )
+            results.append(
+                (
+                    "own-call exemption: machine message in group 20 stays suppressed (unread 0)",
+                    summary.get("20", {}).get("unread") == 0,
+                )
+            )
+        finally:
+            await storage.close()
+
+
 async def run_unread_suppression_tests() -> bool:
     """Run the unread-suppression regression suite. Returns True iff every
     case passes."""
@@ -667,6 +684,7 @@ async def run_unread_suppression_tests() -> bool:
     await _test_key_narrowing_matches_full_scan(results)
     await _test_own_suppressed_message_does_not_cancel_foreign_unread(results)
     await _test_spam_group_subtract_uses_rebucketed_cursor(results)
+    await _test_dm_to_own_call_exempt(results)
 
     for label, ok in results:
         print(f"    {'✅ PASS' if ok else '❌ FAIL'} | {label}")

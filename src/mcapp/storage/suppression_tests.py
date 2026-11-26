@@ -9,7 +9,7 @@ no TTY, no network, no `/etc/mcapp`. Follows the house pattern used by
 list, a PASS/FAIL line per case, and a bool return.
 
 Coverage:
-  1. `contract/suppression_vectors.json` (v3, tags, ANY rule) sha256 drift tripwire (pattern from
+  1. `contract/suppression_vectors.json` (v4, topics + origin) sha256 drift tripwire (pattern from
      `commands.hashtag_dst_tests`) plus every vector in the corpus replayed
      through the real `is_suppressed`.
   2. `load_policy` against a from-scratch ephemeral SQLite DB (schema copied
@@ -39,11 +39,11 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from .constants import legacy_categories_to_tags
 from .suppression import (
     NOOP_POLICY,
     MessageView,
     SuppressionPolicy,
+    is_addressed_to_own,
     is_suppressed,
     load_policy,
     policy_from_parts,
@@ -58,7 +58,7 @@ _VECTORS_PATH = Path(__file__).parent.parent / "contract" / "suppression_vectors
 # constant deliberately (and re-check the hand-written cases below still
 # agree with the new corpus) or the change was unintentional and this
 # tripwire just did its job. Mirrors commands/hashtag_dst_tests.py.
-_EXPECTED_SHA256 = "e9bfee33c7db5f1f5f74919f29a560b81b5f3975a092df8d89c827302fa02154"
+_EXPECTED_SHA256 = "1c46e12723f710c9497a88ee9b21616753b5ce0e95fc7633a500240710e6b305"
 
 # DDL copied verbatim from storage/migrations.py (migrations v11, v16, v17).
 # Kept as a local copy rather than importing anything from migrations.py: a
@@ -136,7 +136,7 @@ def _test_corpus_vectors(results: list[tuple[str, bool]]) -> None:
 
     version = contract.get("version")
     results.append(
-        (f"contract/suppression_vectors.json version == 3 (got {version!r})", version == 3)
+        (f"contract/suppression_vectors.json version == 5 (got {version!r})", version == 5)
     )
 
     policies = {name: _policy_from_spec(spec) for name, spec in contract["policies"].items()}
@@ -144,7 +144,7 @@ def _test_corpus_vectors(results: list[tuple[str, bool]]) -> None:
     for vector in contract["vectors"]:
         policy = policies[vector["policy"]]
         view = view_from_row(vector["message"])
-        actual = is_suppressed(view, policy)
+        actual = is_suppressed(view, policy, own_base=vector.get("ownCall", ""))
         expected = vector["suppressed"]
         results.append((f"vector: {vector['name']}", actual == expected))
 
@@ -351,8 +351,7 @@ def _test_policy_is_noop(results: list[tuple[str, bool]]) -> None:
 
 def _test_hidden_tags_semantics(results: list[tuple[str, bool]]) -> None:
     """Q1 (classifier unification): default hidden tags, allowlist for user
-    tag ids, the ANY rule (mcmap's; qso is an ordinary tag), and a legacy
-    hiddenCategories key being inert."""
+    tag ids, the ANY rule (mcmap's), and retired ids staying inert."""
     default = policy_from_parts({"enabled": True}, [], {})
     results.append(
         (
@@ -378,7 +377,7 @@ def _test_hidden_tags_semantics(results: list[tuple[str, bool]]) -> None:
     results.append(
         (
             "hiddenTags: ids outside [a-z][a-z0-9_-]{0,31} are dropped",
-            filtered.hidden_tags == frozenset({"ok-tag_1", "auto_beacon"}),
+            filtered.hidden_tags == frozenset({"ok-tag_1", "time"}),
         )
     )
     legacy = policy_from_parts({"enabled": True, "hiddenCategories": ["node_advert"]}, [], {})
@@ -389,31 +388,17 @@ def _test_hidden_tags_semantics(results: list[tuple[str, bool]]) -> None:
         )
     )
 
-    legacy_time = policy_from_parts({"enabled": True, "hiddenTags": ["time"]}, [], {})
-    results.append(
-        (
-            "v7: hiddenTags ['time'] hides a message tagged ['auto_beacon']",
-            "auto_beacon" in legacy_time.hidden_tags
-            and "time" not in legacy_time.hidden_tags
-            and is_suppressed(view_from_row({"msg": "x", "tags": ["auto_beacon"]}), legacy_time)
-            and not is_suppressed(view_from_row({"msg": "x", "tags": ["weather"]}), legacy_time),
-        )
-    )
-    all_old = policy_from_parts(
-        {"enabled": True, "hiddenTags": ["bot", "node", "software", "time"]}, [], {}
-    )
-    folded = {"hiddenCategories": ["timestamp_beacon", "node_advert", "sw_advert", "bot_command"]}
-    legacy_categories_to_tags(folded)
-    results.append(
-        (
-            "v7: legacy categories fold into ONE auto_beacon entry (no duplicates)",
-            folded["hiddenTags"] == ["auto_beacon"],
-        )
+    retired = policy_from_parts(
+        {"enabled": True, "hiddenTags": ["qso", "auto_beacon", "bot", "node", "software", "time"]},
+        [],
+        {},
     )
     results.append(
         (
-            "v7: all four old machine tags collapse into one auto_beacon",
-            all_old.hidden_tags == frozenset({"auto_beacon"}),
+            "retired ids are NOT rewritten: kept verbatim, match no topic",
+            retired.hidden_tags
+            == frozenset({"qso", "auto_beacon", "bot", "node", "software", "time"})
+            and not is_suppressed(view_from_row({"msg": "x", "tags": ["greeting"]}), retired),
         )
     )
 
@@ -422,81 +407,73 @@ def _test_hidden_tags_semantics(results: list[tuple[str, bool]]) -> None:
         return is_suppressed(view_from_row({"msg": "x", "tags": tags}), policy)
 
     cases: list[tuple[str, list[str], list[str], bool]] = [
-        (
-            "bot greeting (greeting+auto_beacon), greeting hidden",
-            ["greeting", "auto_beacon"],
-            ["greeting"],
-            True,
-        ),
-        (
-            "human greeting (greeting+qso), greeting hidden",
-            ["greeting", "qso"],
-            ["greeting"],
-            True,
-        ),
-        ("qso message, qso hidden", ["greeting", "qso"], ["qso"], True),
-        ("qso message, other tag of it hidden", ["auto_beacon", "qso"], ["auto_beacon"], True),
-        ("qso-only message, greeting hidden", ["qso"], ["greeting"], False),
-        ("any tag hidden", ["weather", "auto_beacon"], ["auto_beacon"], True),
-        ("no tag hidden", ["weather"], ["auto_beacon"], False),
-        ("untagged message is never tag-hidden", [], ["time", "bot"], False),
+        ("two topics, one hidden", ["greeting", "question"], ["greeting"], True),
+        ("other topic hidden", ["question"], ["greeting"], False),
+        ("weather hidden", ["weather", "greeting"], ["weather"], True),
+        ("weather not hidden", ["weather"], ["greeting"], False),
+        ("untagged message is never tag-hidden", [], ["greeting", "alert"], False),
     ]
     for label, tags, hidden_tags, want in cases:
         results.append((f"ANY rule: {label}", hidden(tags, hidden_tags) == want))
 
-    both = policy_from_parts({"enabled": True, "hiddenTags": ["qso"]}, [], {})
+    both = policy_from_parts({"enabled": True, "hiddenTags": ["greeting"]}, [], {})
     results.append(
-        ("policy_is_noop: enabled + hidden qso -> NOT a no-op", not policy_is_noop(both))
+        ("policy_is_noop: enabled + hidden topic -> NOT a no-op", not policy_is_noop(both))
     )
 
 
-def _test_origin_alias(results: list[tuple[str, bool]]) -> None:
-    """v8 rows store topics; auto_beacon/qso are origin aliases.
-    ALIAS(one release, classifier rework 2026-11). MCProxy has no SQL twin of the predicate
-    (unread counting runs `is_suppressed` per candidate row), so the matrix is Python-only."""
-    hide_ab = policy_from_parts({"enabled": True, "hideAutoBeacons": True}, [], {})
-    v8_machine = view_from_row({"msg": "x", "tags": ["weather"], "origin": "machine"})
-    results.append(
-        (
-            "v8 row (topics + origin machine) is hidden by hide_auto_beacons",
-            is_suppressed(v8_machine, hide_ab),
+def _test_addressed_to_own(results: list[tuple[str, bool]]) -> None:
+    """Direct checks of the own-call exemption helper."""
+
+    def addr(dst: str, own: str) -> bool:
+        return is_addressed_to_own(MessageView("", frozenset(), None, "", dst=dst), own)
+
+    cases = [
+        ("same SSID", addr("DK5EN-98", "DK5EN-98"), True),
+        ("other SSID", addr("DK5EN-14", "DK5EN-98"), True),
+        ("bare dst, SSID own", addr("DK5EN", "DK5EN-98"), True),
+        ("lower-case dst", addr("dk5en-14", "DK5EN-98"), True),
+        ("other call", addr("OE5HWN-12", "DK5EN-98"), False),
+        ("group 20", addr("20", "DK5EN-98"), False),
+        ("broadcast *", addr("*", "DK5EN-98"), False),
+        ("hashtag #DK5EN", addr("#DK5EN", "DK5EN-98"), False),
+        ("empty own", addr("DK5EN-98", ""), False),
+        ("empty dst and own", addr("", ""), False),
+    ]
+    for label, actual, expected in cases:
+        results.append((f"is_addressed_to_own: {label}", actual == expected))
+
+
+def _test_origin_hiding(results: list[tuple[str, bool]]) -> None:
+    """hideAutoBeacons keys on origin machine; stored retired ids are inert topics.
+    MCProxy has no SQL twin of the predicate (unread counting runs `is_suppressed` per
+    candidate row), so the matrix is Python-only."""
+    # (stored tags, origin, hideAutoBeacons, hiddenTags, suppressed)
+    cases: list[tuple[list[str], str | None, bool, list[str], bool]] = [
+        (["weather"], "machine", True, [], True),
+        (["weather"], "human", True, [], False),
+        (["weather"], None, True, [], False),  # origin NULL: no fallback to stored tags
+        (["weather", "auto_beacon"], None, True, [], False),  # retired stored tag is inert
+        (["weather"], "machine", False, ["auto_beacon"], False),  # retired ids do not alias origin
+        (["weather"], "human", False, ["qso"], False),
+        (["weather"], "machine", False, ["weather"], True),  # topics still hide
+        ([], "machine", True, [], True),
+    ]
+    for stored, origin, hide_ab, hidden_ids, want in cases:
+        policy = policy_from_parts(
+            {"enabled": True, "hideAutoBeacons": hide_ab, "hiddenTags": hidden_ids}, [], {}
         )
-    )
-    results.append(
-        (
-            "v8 row with origin human / NULL is not hidden by hide_auto_beacons",
-            not is_suppressed(view_from_row({"msg": "x", "tags": [], "origin": "human"}), hide_ab)
-            and not is_suppressed(view_from_row({"msg": "x", "tags": ["weather"]}), hide_ab),
+        view = view_from_row({"msg": "x", "tags": stored, "origin": origin})
+        results.append(
+            (
+                f"origin={origin} stored={stored} hideAB={hide_ab} hidden={hidden_ids}",
+                is_suppressed(view, policy) == want,
+            )
         )
+    v = view_from_row({"msg": "x", "tags": ["greeting"], "origin": "machine"})
+    results.append(
+        ("view tags are the stored topics only (nothing derived)", v.tags == {"greeting"})
     )
-    # origin x stored-tag shape x hiddenTags -> expected hidden
-    stored_shapes: dict[str, list[str]] = {
-        "v8": ["weather"],
-        "legacy_ab": ["auto_beacon"],
-        "legacy_qso": ["qso"],
-    }
-    for origin in ("machine", "human", None):
-        for shape, stored in stored_shapes.items():
-            for hid in ("auto_beacon", "qso", "bot", "weather"):
-                view = view_from_row({"msg": "x", "tags": stored, "origin": origin})
-                policy = policy_from_parts({"enabled": True, "hiddenTags": [hid]}, [], {})
-                effective = hid  # `bot` folds to auto_beacon (v7 legacy map)
-                if hid == "bot":
-                    effective = "auto_beacon"
-                want = (
-                    (
-                        effective == "auto_beacon"
-                        and (origin == "machine" or "auto_beacon" in stored)
-                    )
-                    or (effective == "qso" and (origin == "human" or "qso" in stored))
-                    or effective in stored
-                )
-                results.append(
-                    (
-                        f"alias matrix origin={origin} stored={shape} hidden={hid}",
-                        is_suppressed(view, policy) == want,
-                    )
-                )
 
 
 async def run_suppression_predicate_tests() -> bool:
@@ -509,7 +486,8 @@ async def run_suppression_predicate_tests() -> bool:
     _test_view_from_row(results)
     _test_policy_is_noop(results)
     _test_hidden_tags_semantics(results)
-    _test_origin_alias(results)
+    _test_origin_hiding(results)
+    _test_addressed_to_own(results)
 
     for label, ok in results:
         print(f"    {'✅ PASS' if ok else '❌ FAIL'} | {label}")

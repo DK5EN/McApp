@@ -1,5 +1,7 @@
 # McApp production health log — mcapp.local
 
+**Newest run:** §63, 2026-11-26 23:41 CET, pre-release sweep of v2.1.28-dev.1 before the v2.1.28 promotion, green, zero findings.
+
 ## Verifiziert 2026-11-10
 
 Code cross-check of the open findings, watch points and structural values in this log, with grep against the working tree. No live box was touched and no git command was run, so every "live" reading below is still the one recorded in its section. Nothing was deleted; stale statements are named, not corrected in place (the one exception is the header's open-watch-point list, see below).
@@ -3373,7 +3375,7 @@ point, not a finding. Watch whether cold telemetry requests keep producing `loop
 
 **Not measured:** W27 (`mcapp` RSS at matched load) needs a quiet day, and this run was 22 min after a restart.
 
-## 60. 2026-11-22 13:20 CET — pre-release sweep of v2.1.27-dev.11 before the v2.1.27 promotion (short soak)
+## 60. 2026-11-22 13:05 CET — pre-release sweep of v2.1.27-dev.11 before the v2.1.27 promotion (short soak)
 
 **Verdict: green, zero findings, with a short soak at the operator's decision.** The backend part of the
 release (schema 44, classifier v8) has run since `v2.1.27-dev.9` at 11:34. `dev.10` and `dev.11` are
@@ -3401,3 +3403,106 @@ aborted attempt that never tagged anything. Merged back into `development` with 
 
 **Not measured:** a multi-hour soak of the dev.10/dev.11 webapp, and the epoch 9 to 10 converge on a box
 other than this one.
+
+## 61. 2026-11-22 13:16 CET — post-release sweep of production v2.1.27 (3 min after the deploy)
+
+**Verdict: green, zero findings.** Deployed from the webapp Update page.
+
+- **Runner:** `Finished: {"status": "success", "version": "v2.1.27", "slot": 2, "converge": "ok",
+"duration_s": 117}`. Version and slot match the release and `current`.
+- **Running:** `webapp/version.html` v2.1.27, active slot-2. `mcapp`, `mcapp-ble`, `caddy`, `lighttpd` active,
+  `mcapp` restarted 13:13:32, `NRestarts` 0.
+- **Versions:** `LATEST_SCHEMA_VERSION` 44 in the active slot, equal to the DB. System epoch 10.
+- **Packaging:** the production slot holds exactly the three runtime data files (`classifier_contract.json`,
+  `axes_contract.json`, `group_labels_icssw.json`) and no test modules.
+- **Journal:** `mcapp -p warning` over the 10 min after the restart: no entries.
+- **Host:** 198 MB RAM available.
+
+**Absent:** restarts, journal warnings, a version or slot mismatch in the runner's result.
+
+**Not measured:** the one-time reclassify on a box coming from v2.1.26 (this box had already run it on
+dev.9; about 4 min for 11329 rows there), and the epoch 9 to 10 converge on another box.
+
+## 62. 2026-11-22 13:16 CET — /ai-ops sweep of production v2.1.27 (2 min after the restart)
+
+**Verdict: green, zero findings, one new watch point (W29).** Same day as §60/§61; this run adds the full
+phase set (status surface, journal, stall rows, uptime ledger, TLS).
+
+| Anchor                 | Value                                                              |
+| ---------------------- | ------------------------------------------------------------------ |
+| Running                | `webapp/version.html` v2.1.27, slot-2, `mcapp` up since 13:13:32   |
+| Restarts               | `NRestarts` 0 on `mcapp` and `mcapp-ble`                           |
+| Versions               | schema 44 = `LATEST_SCHEMA_VERSION`, system epoch 10, classifier 9 |
+| Classifier markers     | `backfill_done:v9` 2026-11-22 10:39 UTC                            |
+| Window for rates below | 24 h unless stated                                                 |
+
+- **Services:** `mcapp`, `mcapp-ble`, `caddy`, `lighttpd` active. `/health` healthy.
+- **`/api/status`:** `udp_target_kind` `config` 137 s after the restart, as in §54/§56 (W11);
+  `udp_multiple_sources` false, no untrusted IPs, 0 suppressed target changes. Features `node_admin`,
+  `internet_feed`.
+- **Database:** 11358 rows, 326 stations, 3756 `signal_log` rows. 85.1 MB, WAL 1.0 MB. 0 `{CET}` rows, 0
+  chat messages without classifier 9 in the last hour, 0 chat messages without an origin.
+- **Rates:** 151 msg / 24 h; last hour 10 msg (8 jittered, 2 one-shot, all human), 37 pos, 55 signal rows.
+- **Uptime ledger:** last `{CET}` beacon 586 s ago (cadence 606.5 s), heartbeat 30 s. Three `gap` rows in
+  24 h of 20 to 24 min each (21:11, 07:08, 11:24), i.e. one missed beacon each, upstream (W20). 0 new `dark`.
+- **Stall rows, non-sample, 24 h:** 29 `loop_lag` (14 critical) and 13 `handler` (2 critical), against 50 and
+  21 in §59. The 2.5-2.7 s `loop_lag` pairs sit within 30 s of each of the four restarts (11:35, 12:34,
+  12:55, 13:13): import and startup work, as in §18-§20. `/api/classifier/templates` 2.0-2.5 s on the first
+  Settings load after a restart, as in earlier runs. Two `handler` criticals (3.2 s at 10:01, 2.5 s at
+  12:32) are `_storage_handler` on BLE MH position frames, with loop lag 0.5 ms and an idle pool.
+- **Journal:** `mcapp` + `mcapp-ble` `-p warning` over 24 h: 1 line, the "no entries" marker, so 0 warnings.
+- **Host:** 196 MB RAM available of 462, swap 27 MB used of 462 MB, disk 11% of 59 G, 46.2 C, load 0.42,
+  uptime 15 days. RSS: `mcapp` 94 MB, `mcapp-ble` (uvicorn) 46 MB, `caddy` 25 MB.
+- **Hygiene:** `vapid.json` 0600, `config.json` 0640. TLS leaf from the Caddy internal CA, 08:07 to 20:07 UTC,
+  mid-life.
+
+**Absent:** restarts, journal warnings, untrusted UDP sources, unclassified or origin-less chat messages,
+`{CET}` rows, new `dark` segments.
+
+### W29 — `/api/telemetry/fill` answers in 5.7-6.3 s
+
+Three `http` criticals at 12:35 and 12:56 (6012, 6281, 5688 ms), each from the operator's browser shortly
+after a restart, 3.5 kB response. Loop lag at the time 0.5-0.7 ms and the pool idle, so nothing else
+stalled: the request waits, it does not block. Likely the gap-fill status route waiting on the meshmap
+fetch it reports on. Watch whether it repeats outside restart windows; if it does, the route should
+answer from cached state instead of waiting.
+
+**Not measured:** W27 (`mcapp` RSS at matched load), since this run is 2 min after a restart.
+
+## 63. 2026-11-26 23:41 CET — pre-release sweep of v2.1.28-dev.1 before the v2.1.28 promotion (no soak of HEAD)
+
+**Verdict: green, zero findings.** The box runs `v2.1.28-dev.1` since 2026-11-22 18:35 (4 days). The promoted tree is
+HEAD, not that tag: it adds the own-call DM exemption (MCProxy `07a4fab`, webapp `45e2470`, suppression corpus v5), a
+CI test fix and docs. Promoting HEAD without a dev release and soak is the operator's decision (2026-11-26): bot
+replies to remote commands are hidden on 2.1.27 boxes (OE5HWN-12 report), and the change since dev.1 is a read-path
+predicate.
+
+| Anchor      | Value                                                                    |
+| ----------- | ------------------------------------------------------------------------ |
+| Running     | `webapp/version.html` v2.1.28-dev.1, slot-1, `mcapp` up since 2026-11-22 |
+| Restarts    | `NRestarts` 0 on `mcapp` and `mcapp-ble` over 4 days                     |
+| Versions    | schema 46 = `LATEST_SCHEMA_VERSION`, system epoch 10, classifier 10      |
+| Rate window | last hour unless stated                                                  |
+
+- **Services:** `mcapp`, `mcapp-ble`, `caddy`, `lighttpd` active. `/health` healthy.
+- **`/api/status`:** `udp_target_kind` `identified`, `udp_multiple_sources` false, no untrusted IPs, 0 suppressed
+  target changes. Features `node_admin`, `internet_feed`.
+- **Database:** 14974 rows, 332 stations, 10663 `signal_log` rows. 85 MB, WAL 5.2 MB. 0 `{CET}` rows.
+- **Rates:** 35 msg, 33 pos, 70 signal rows in the last hour.
+- **Uptime ledger:** last `{CET}` beacon 105 s ago, heartbeat 7 s.
+- **Journal:** `mcapp -p warning` over 24 h: 1 line, the "no entries" marker, so 0 warnings.
+- **Host:** 213 MB RAM available of 462, swap 67 MB used of 462 MB, disk 11% (50 G free), 40.8 C, load 0.10,
+  uptime 20 days.
+- **Hygiene:** `vapid.json` 0600 (raw key, not PEM), `config.json` 0640. TLS leaf from the Caddy internal CA,
+  18:07 to 06:07 UTC, mid-life.
+
+**Absent:** restarts, journal warnings, untrusted UDP sources, `{CET}` rows, schema or epoch mismatch.
+
+**Field report behind this release:** OE5HWN-12 sent `!dice`, `!time`, `!help`, `!mheard`, `!pos` to DK5EN-98 on
+2026-11-26 22:12-22:36. Every reply went out (node echo on Extern-UDP) and was acked by his node (`:ack365` to
+`:ack381`); his 2.1.27 webapp hid them because they are origin machine with info score 0.25.
+
+**Gate for this promotion:** `./scripts/gate.sh` PASS after the dependency refresh (uv lock --upgrade, the
+standalone `ble_service` lock, `npm update`) and the ICSSW label refresh (two new groups).
+
+**Not measured:** a soak of HEAD on the box; stall rows; W27 (`mcapp` RSS at matched load).

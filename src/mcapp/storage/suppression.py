@@ -29,6 +29,11 @@ Mirrors, verbatim in decision order, two independent webapp functions
 a message is hidden if EITHER the text is blocked OR the classifier calls it
 spam.
 
+Own-call DM exemption (mirrors mc-chat `meshcom_mock/suppression.py`, corpus v5):
+a message whose `dst` base callsign equals the operator's base callsign is never
+hidden by the CLASSIFIER half (bot replies are origin machine, low info score).
+Blocked texts stay unconditional. Callers pass `own_base`; empty disables it.
+
 Own-message whitelist (webapp, not mirrored here): the webapp exempts a
 message whose `src` base callsign equals the operator's own base callsign
 from BOTH halves of this predicate, at its call sites, one level ABOVE
@@ -49,8 +54,6 @@ import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
-
-from ..classifier.types import legacy_tag_view
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,8 +85,10 @@ class MessageView:
     tags: frozenset[str]
     info_score: float | None
     template_hash: str
-    # v8 origin axis (human|machine) or None; `tags` already carries its alias ids.
+    # v8 origin axis (human|machine) or None; `tags` holds the stored topics only.
     origin: str | None = None
+    # Destination callsign / group / tag; only used by the own-call exemption.
+    dst: str = ""
 
 
 # A policy that suppresses nothing, for any input. Returned by
@@ -150,20 +155,12 @@ def _as_optional_float(value: object) -> float | None:
     return None
 
 
-# v7 (owner 2026-11-11): the four machine tags are auto_beacon. A stored preference that still
-# names one of the old tags means the same class, so it maps to auto_beacon instead of silently
-# hiding nothing.
-_LEGACY_HIDDEN_TAG: dict[str, str] = {
-    "bot": "auto_beacon",
-    "node": "auto_beacon",
-    "software": "auto_beacon",
-    "time": "auto_beacon",
-}
-
 # Owner 2026-11-11: nothing is hidden by default. Automated messages are labelled
-# (auto_beacon), not removed from view.
+# (origin machine), not removed from view. Stored ids retired by the classifier rework
+# (qso, auto_beacon, bot, node, software, time) are deliberately NOT rewritten: they match no
+# topic and simply stop hiding anything (owner 2026-11-22).
 DEFAULT_HIDDEN_TAGS: frozenset[str] = frozenset()
-# Tag ids are lowercase words with `-`/`_` (`pota-sota`, `auto_beacon`). Stored
+# Topic ids are lowercase words with `-`/`_` (`pota-sota`). Stored
 # prefs are client-controlled, so user-supplied ids are held to this shape.
 _TAG_ID_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 
@@ -204,7 +201,7 @@ def policy_from_parts(
     if enabled:
         hidden_tags = (
             frozenset(
-                _LEGACY_HIDDEN_TAG.get(t, t)
+                t
                 for t in _as_str_frozenset(filter_prefs.get("hiddenTags"))
                 if _TAG_ID_RE.fullmatch(t)
             )
@@ -323,15 +320,15 @@ def view_from_row(row: Mapping[str, Any]) -> MessageView:
     template_hash = row.get("template_hash")
     origin = row.get("origin")
     origin = origin if origin in ("human", "machine") else None
+    dst = row.get("dst")
 
     return MessageView(
         msg=msg if isinstance(msg, str) else "",
-        # ALIAS(one release, classifier rework 2026-11): stored topics + origin-derived
-        # auto_beacon/qso; legacy rows (origin NULL) keep their stored v7 ids.
-        tags=frozenset(legacy_tag_view(_parse_tags(row.get("tags")), origin)),
+        tags=_parse_tags(row.get("tags")),
         origin=origin,
         info_score=_as_optional_float(row.get("info_score")),
         template_hash=template_hash if isinstance(template_hash, str) else "",
+        dst=dst if isinstance(dst, str) else "",
     )
 
 
@@ -347,24 +344,38 @@ def is_text_blocked(msg: str, policy: SuppressionPolicy) -> bool:
 
 def _tag_hidden(tags: frozenset[str], hidden: frozenset[str]) -> bool:
     """ANY rule (mcmap's): a message is hidden when any of its tags is hidden.
-    `qso` and `auto_beacon` are ordinary hideable tags; an untagged message is
-    never hidden by tags."""
+    an untagged message is never hidden by topics."""
     return not tags.isdisjoint(hidden)
 
 
-def is_spam_by_classifier(view: MessageView, policy: SuppressionPolicy) -> bool:
+def _call_base(value: str) -> str:
+    """Base callsign: text before the first '-', stripped and upper-cased."""
+    return value.split("-", 1)[0].strip().upper()
+
+
+def is_addressed_to_own(view: MessageView, own_base: str) -> bool:
+    """True iff the message's dst base callsign is the operator's. `own_base`
+    may carry an SSID. Groups, `*` and `#TAG` can never equal a callsign base."""
+    own = _call_base(own_base)
+    return bool(own) and _call_base(view.dst) == own
+
+
+def is_spam_by_classifier(
+    view: MessageView, policy: SuppressionPolicy, *, own_base: str = ""
+) -> bool:
     """Mirrors the webapp's `isSpamByClassifier` in its exact decision
     order — do not reorder these clauses, the order itself is the contract:
 
       1. disabled                        -> False (stop)
+      1b. dst base == own base (a DM to the operator) -> False (stop)
       2. template_hash in promoted       -> True  (stop)
       3. template_hash in demoted        -> False (stop)
       4. hidden tag (see `_tag_hidden`)  -> True  (stop)
-      5. hide_auto_beacons + auto_beacon -> True  (stop)
+      5. hide_auto_beacons + origin machine -> True  (stop)
       6. info_score below min_info_score -> True
       7. otherwise                       -> False
     """
-    if not policy.enabled:
+    if not policy.enabled or is_addressed_to_own(view, own_base):
         return False
 
     template_hash = view.template_hash
@@ -375,7 +386,7 @@ def is_spam_by_classifier(view: MessageView, policy: SuppressionPolicy) -> bool:
 
     if _tag_hidden(view.tags, policy.hidden_tags):
         return True
-    if policy.hide_auto_beacons and "auto_beacon" in view.tags:
+    if policy.hide_auto_beacons and view.origin == "machine":
         return True
 
     return (
@@ -385,9 +396,12 @@ def is_spam_by_classifier(view: MessageView, policy: SuppressionPolicy) -> bool:
     )
 
 
-def is_suppressed(view: MessageView, policy: SuppressionPolicy) -> bool:
+def is_suppressed(view: MessageView, policy: SuppressionPolicy, *, own_base: str = "") -> bool:
     """A message is hidden from the client if EITHER half says so — the same
     combination the webapp applies at each of its filter call sites
     (`passesBaseGuards`'s blocklist check plus a separate `isSpamByClassifier`
-    check alongside it, never one without the other)."""
-    return is_text_blocked(view.msg, policy) or is_spam_by_classifier(view, policy)
+    check alongside it, never one without the other). A DM to `own_base` is
+    never classifier-hidden; blocked texts still apply."""
+    return is_text_blocked(view.msg, policy) or is_spam_by_classifier(
+        view, policy, own_base=own_base
+    )

@@ -4,12 +4,14 @@ Pins the MCProxy side of mc-chat 4300263 (doc/adr/ADR-0004-classifier-unificatio
 
   1. `count_messages_by_tag` (incl. malformed `tags` JSON never raising).
   2. `backfill_auto_beacon_templates`: single-sender templates only, on every arm.
-  3. `clear_stale_auto_beacons`: a message tagged `alert` exempts its template.
-  4. `set_filter_prefs` maps a legacy `hiddenCategories` write to `hiddenTags`.
+  3. `clear_stale_auto_beacons`: human history exempts a template (the `alert` topic, or a
+     directed message that no machine rule and no weather/test topic marks automated).
+  4. `set_filter_prefs` stores prefs verbatim: no compatibility layer folds a retired
+     `hiddenCategories` key into `hiddenTags`.
   5. The v38 migration: custom classifier rules are saved to
      `classifier_rules_retired.json` next to the DB (never overwritten, WARNING
-     logged), the table is dropped, stored `hiddenCategories` becomes
-     `hiddenTags` (junk-tolerant, merging, idempotent).
+     logged), the table is dropped; stored filter prefs are left untouched.
+  6. The v46 migration drops `messages.category` and its index (idempotent, data kept).
 
 Ephemeral tempfile SQLite only; no network.
 """
@@ -63,11 +65,18 @@ async def _add_template(
     )
 
 
-async def _add_message(storage: Any, hash_: str, category: str, tags: Any) -> None:
+async def _add_message(
+    storage: Any,
+    hash_: str,
+    tags: Any,
+    *,
+    dst: str = "20",
+    origin_rule: str | None = None,
+) -> None:
     await storage._mutate(
         "INSERT INTO messages (msg_id, src, dst, msg, type, timestamp, template_hash,"
-        " category, tags) VALUES ('A1', 'DK5EN-1', '20', 'x', 'msg', ?, ?, ?, ?)",
-        (now_ms(), hash_, category, tags),
+        " tags, origin_rule) VALUES ('A1', 'DK5EN-1', ?, 'x', 'msg', ?, ?, ?, ?)",
+        (dst, now_ms(), hash_, tags, origin_rule),
     )
 
 
@@ -80,10 +89,10 @@ async def _test_count_by_tag(results: list[tuple[str, bool]]) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         storage = await create_sqlite_storage(Path(tmp) / "t.db")
         try:
-            await _add_message(storage, "h", "qso", json.dumps(["qso", "greeting"]))
-            await _add_message(storage, "h", "other", json.dumps(["greeting"]))
-            await _add_message(storage, "h", "other", "not-json{")
-            await _add_message(storage, "h", "other", None)
+            await _add_message(storage, "h", json.dumps(["weather", "greeting"]))
+            await _add_message(storage, "h", json.dumps(["greeting"]))
+            await _add_message(storage, "h", "not-json{")
+            await _add_message(storage, "h", None)
             try:
                 counts = await storage.count_messages_by_tag(0)
             except AttributeError:
@@ -91,7 +100,7 @@ async def _test_count_by_tag(results: list[tuple[str, bool]]) -> None:
             results.append(
                 (
                     "count_messages_by_tag: per-tag counts, malformed/NULL tags skipped",
-                    counts == {"qso": 1, "greeting": 2},
+                    counts == {"weather": 1, "greeting": 2},
                 )
             )
             try:
@@ -144,28 +153,36 @@ async def _test_backfill_exemptions(results: list[tuple[str, bool]]) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         storage = await create_sqlite_storage(Path(tmp) / "t.db")
         try:
-            for h in ("plain", "human", "alerted", "short"):
+            for h in ("plain", "human", "alerted", "short", "machine", "wxdm", "testdm"):
                 await _add_template(storage, h, ["A"], 9, 1)
             await storage._mutate(
                 "UPDATE beacon_templates SET example_msg = 'ok thanks'"
                 " WHERE template_hash = 'short'"
             )
-            await _add_message(storage, "human", "directed", json.dumps([]))
-            await _add_message(storage, "alerted", "other", json.dumps(["alert"]))
-            await _add_message(storage, "plain", "other", json.dumps(["time"]))
+            await _add_message(storage, "human", json.dumps([]), dst="DK5EN-2")
+            await _add_message(storage, "alerted", json.dumps(["alert"]))
+            await _add_message(storage, "plain", json.dumps(["time"]))
+            # A directed message does not count when a machine rule decided its origin, or
+            # when it carries a weather/test topic (a typed command's reply is no human talk).
+            await _add_message(
+                storage, "machine", json.dumps([]), dst="DK5EN-2", origin_rule="machine-rule"
+            )
+            await _add_message(storage, "wxdm", json.dumps(["weather"]), dst="DK5EN-2")
+            await _add_message(storage, "testdm", json.dumps(["test"]), dst="DK5EN-2")
             n = await storage.backfill_auto_beacon_templates()
             results.append(
                 (
                     "backfill exemptions: human-history and short-token templates not promoted",
-                    n == 1 and await _flagged(storage) == {"plain"},
+                    n == 4 and await _flagged(storage) == {"plain", "machine", "wxdm", "testdm"},
                 )
             )
-            # No ping-pong: the cleanup leaves the promoted template alone.
-            cleared = await storage.clear_stale_auto_beacons(frozenset({"directed", "alert"}), 2)
+            # No ping-pong: the cleanup leaves the promoted templates alone.
+            cleared = await storage.clear_stale_auto_beacons(2)
             results.append(
                 (
                     "backfill exemptions: cleanup does not clear what backfill promoted",
-                    cleared == 0 and await _flagged(storage) == {"plain"},
+                    cleared == 0
+                    and await _flagged(storage) == {"plain", "machine", "wxdm", "testdm"},
                 )
             )
         finally:
@@ -174,7 +191,7 @@ async def _test_backfill_exemptions(results: list[tuple[str, bool]]) -> None:
 
 async def _test_live_human_history(results: list[tuple[str, bool]]) -> None:
     """update_and_check consults template_has_human_history when a rule triggers."""
-    from ..classifier.template import _HUMAN_CATEGORIES, update_and_check
+    from ..classifier.template import update_and_check
     from .classifier_api import _history_exempt_sql
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -188,7 +205,10 @@ async def _test_live_human_history(results: list[tuple[str, bool]]) -> None:
                 res = await update_and_check(storage, msg, now_ms(), (), False)
                 hashes[name] = res.template_hash
                 await _add_message(
-                    storage, res.template_hash, "directed" if name == "human" else "other", "[]"
+                    storage,
+                    res.template_hash,
+                    "[]",
+                    dst="DK5EN-2" if name == "human" else "20",
                 )
                 try:
                     for _ in range(7):  # lifetime rule: count >= 8, single sender
@@ -214,19 +234,17 @@ async def _test_live_human_history(results: list[tuple[str, bool]]) -> None:
             results.append(
                 (
                     "live: template_has_human_history true/false per template",
-                    await storage.template_has_human_history(hashes["human"], _HUMAN_CATEGORIES)
-                    and not await storage.template_has_human_history(
-                        hashes["plain"], _HUMAN_CATEGORIES
-                    )
-                    and not await storage.template_has_human_history("nosuch", _HUMAN_CATEGORIES),
+                    await storage.template_has_human_history(hashes["human"])
+                    and not await storage.template_has_human_history(hashes["plain"])
+                    and not await storage.template_has_human_history("nosuch"),
                 )
             )
             plan = await storage._query(
-                "EXPLAIN QUERY PLAN SELECT "  # noqa: S608 - placeholders only
-                + _history_exempt_sql(2)
+                "EXPLAIN QUERY PLAN SELECT "  # noqa: S608 - fixed SQL fragment
+                + _history_exempt_sql()
                 + " FROM beacon_templates"
                 " WHERE template_hash = ?",
-                ("directed", "alert", "x"),
+                ("x",),
             )
             results.append(
                 (
@@ -250,14 +268,14 @@ async def _test_clear_stale(results: list[tuple[str, bool]]) -> None:
                     " WHERE template_hash = ?",
                     (long_msg, h),
                 )
-            await _add_message(storage, "alerted", "other", json.dumps(["alert", "weather"]))
-            await _add_message(storage, "directed", "directed", json.dumps([]))
-            await _add_message(storage, "plain", "other", json.dumps(["time"]))
-            await _add_message(storage, "badtags", "other", "not-json{")
-            cleared = await storage.clear_stale_auto_beacons(frozenset({"directed", "alert"}), 3)
+            await _add_message(storage, "alerted", json.dumps(["alert", "weather"]))
+            await _add_message(storage, "directed", json.dumps([]), dst="DK5EN-2")
+            await _add_message(storage, "plain", json.dumps(["time"]))
+            await _add_message(storage, "badtags", "not-json{")
+            cleared = await storage.clear_stale_auto_beacons(3)
             results.append(
                 (
-                    "clear_stale: alert-tagged and directed templates are un-flagged only",
+                    "clear_stale: alert-topic and directed-human templates are un-flagged only",
                     cleared == 2 and await _flagged(storage) == {"plain", "badtags"},
                 )
             )
@@ -266,6 +284,7 @@ async def _test_clear_stale(results: list[tuple[str, bool]]) -> None:
 
 
 async def _test_prefs_write(results: list[tuple[str, bool]]) -> None:
+    """No compatibility layer: a retired `hiddenCategories` key is stored as posted."""
     with tempfile.TemporaryDirectory() as tmp:
         storage = await create_sqlite_storage(Path(tmp) / "t.db")
         try:
@@ -277,21 +296,8 @@ async def _test_prefs_write(results: list[tuple[str, bool]]) -> None:
             prefs = await storage.get_filter_prefs()
             results.append(
                 (
-                    "set_filter_prefs: legacy hiddenCategories -> hiddenTags, key removed",
-                    "hiddenCategories" not in prefs
-                    and prefs.get("hiddenTags") == ["auto_beacon", "qso"]
-                    and prefs.get("enabled") is True,
-                )
-            )
-            results.append(
-                ("set_filter_prefs: caller's dict is not mutated", "hiddenCategories" in posted)
-            )
-            await storage.set_filter_prefs({"hiddenTags": ["node"], "hiddenCategories": ["alert"]})
-            prefs = await storage.get_filter_prefs()
-            results.append(
-                (
-                    "set_filter_prefs: legacy list merges into an existing hiddenTags",
-                    prefs.get("hiddenTags") == ["node", "alert"],
+                    "set_filter_prefs: retired hiddenCategories is stored verbatim, not folded",
+                    prefs == posted and "hiddenTags" not in prefs,
                 )
             )
             await storage.set_filter_prefs({"hiddenTags": ["greeting"]})
@@ -418,10 +424,8 @@ async def _test_migration(results: list[tuple[str, bool]]) -> None:
             p = await storage.get_filter_prefs()
             results.append(
                 (
-                    "v38: hiddenCategories -> hiddenTags, merged after existing, junk dropped",
-                    "hiddenCategories" not in p
-                    and p.get("hiddenTags") == ["time", "weather", "qso"]
-                    and p.get("enabled") is True,
+                    "v38: stored filter prefs are NOT rewritten (retired ids just stop matching)",
+                    p == json.loads(prefs),
                 )
             )
         finally:
@@ -435,8 +439,7 @@ async def _test_migration(results: list[tuple[str, bool]]) -> None:
                 (
                     "v38: re-open is a no-op (no new files, prefs unchanged)",
                     _glob(tmp, "*.json") == before
-                    and (await storage.get_filter_prefs()).get("hiddenTags")
-                    == ["time", "weather", "qso"],
+                    and await storage.get_filter_prefs() == json.loads(prefs),
                 )
             )
         finally:
@@ -467,6 +470,50 @@ async def _test_migration(results: list[tuple[str, bool]]) -> None:
             results.append(("v38: first backup uses the plain file name", first.exists()))
         finally:
             await storage.close()
+
+
+async def _test_drop_category(results: list[tuple[str, bool]]) -> None:
+    """v46: `messages.category` and `idx_messages_category` are dropped, rows survive."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db = Path(tmp) / "c.db"
+        storage = await create_sqlite_storage(db)
+        await storage.close()
+
+        def _make_v45() -> None:
+            with db_write(db) as conn:
+                conn.execute("ALTER TABLE messages ADD COLUMN category TEXT")
+                conn.execute("CREATE INDEX idx_messages_category ON messages(category)")
+                conn.execute(
+                    "INSERT INTO messages (msg_id, src, dst, msg, type, timestamp, category, tags)"
+                    " VALUES ('K1', 'DK5EN-1', '20', 'keep me', 'msg', 1700000000000, 'qso',"
+                    " '[\"greeting\"]')"
+                )
+                conn.execute("DELETE FROM schema_version")
+                conn.execute("INSERT INTO schema_version (version) VALUES (45)")
+
+        await asyncio.to_thread(_make_v45)
+        for label in ("first open", "second open (idempotent)"):
+            storage = await create_sqlite_storage(db)
+            try:
+                cols = {r["name"] for r in await storage._query("PRAGMA table_info(messages)")}
+                idx = await storage._query(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'index'"
+                    " AND name = 'idx_messages_category'"
+                )
+                rows = await storage._query("SELECT msg, tags FROM messages WHERE msg_id = 'K1'")
+                ver = (await storage._query("SELECT version FROM schema_version"))[0]["version"]
+                results.append(
+                    (
+                        f"v46 {label}: category column + index gone, row and tags kept, version ok",
+                        "category" not in cols
+                        and not idx
+                        and rows == [{"msg": "keep me", "tags": '["greeting"]'}]
+                        and ver == LATEST_SCHEMA_VERSION
+                        and ver >= 46,
+                    )
+                )
+            finally:
+                await storage.close()
 
 
 async def _test_backfill_race(results: list[tuple[str, bool]]) -> None:
@@ -500,8 +547,8 @@ async def _test_backfill_race(results: list[tuple[str, bool]]) -> None:
                     )
                     conn.execute(
                         "INSERT INTO messages (msg_id, src, dst, msg, type, timestamp,"
-                        " template_hash, category, tags) VALUES ('Z1', 'DK5EN-1', 'DK5EN-2',"
-                        " 'x', 'msg', ?, 'directed_mid', 'directed', '[]')",
+                        " template_hash, tags) VALUES ('Z1', 'DK5EN-1', 'DK5EN-2',"
+                        " 'x', 'msg', ?, 'directed_mid', '[]')",
                         (now_ms(),),
                     )
                     conn.commit()
@@ -538,6 +585,7 @@ async def run_classifier_tags_tests() -> bool:
     await _test_clear_stale(results)
     await _test_prefs_write(results)
     await _test_migration(results)
+    await _test_drop_category(results)
     for label, ok in results:
         print(f"    {'✅ PASS' if ok else '❌ FAIL'} | {label}")
     passed = all(ok for _, ok in results)

@@ -1,66 +1,61 @@
 # Release History
 
-## v2.1.27 (2026-11-22)
+## v2.1.28 (2026-11-26)
 
-**Every message now says what it is about and whether a person or a bot sent it, and the chat
-shows only the chips that help you read it.** The classifier from meshmap (mcmap 7c46e61) sorts
-messages into nine topics and tells human-typed messages from automated ones. Background details
-such as timing and writing style stay in the message details.
+**Bot answers to your commands show up again.** In v2.1.27, replies to `!time`, `!help`, `!mheard`,
+`!pos`, `!dice` and similar commands could be hidden even though they arrived: the new classifier
+labels them as automated (Bot) with a low info score, and the spam filter hid them when "Hide
+auto-detected beacons" or a minimum info score was set. A direct message to your own callsign is now
+never hidden by the spam filter.
 
-> Update from the Update page as usual. Schema goes from 42 to 44, `SYSTEM_EPOCH` goes from 9 to 10.
-> After the update McApp re-sorts every stored message once: about 4 minutes on a Pi Zero 2W for
-> 11,000 messages, while the app stays usable.
+> Update from the Update page as usual. Schema goes from 44 to 46, `SYSTEM_EPOCH` stays at 10. After
+> the update McApp re-sorts every stored message once (about 4 minutes on a Pi Zero 2W), while the app
+> stays usable.
 
 ### Highlights
 
-- **Topics and origin on every message.** Greeting, Weather, QSL, Test, Question, Bulletin,
-  POTA/SOTA, Alert and URL, plus Bot for automated messages. Each topic chip has its own colour in
-  light and dark mode, with text contrast of at least 6.4:1 (BITV/WCAG AA asks for 4.5:1).
-- **A calmer chat bubble.** It shows the topic chips, Bot and echo. Whether a person typed it,
-  its timing (one-shot, scheduled, burst, jittered) and its writing style (prose, measurement,
-  ...) are in the details you open by tapping the bubble.
-- **Filters match what you see.** Settings > Filters shows each option with the same chip as the
-  chat. "Machine" is now "Bot". The option "Messages typed by a person" is gone; if you had it
-  ticked, it is cleared, so those messages show again.
-- **Nothing is hidden by default.** A new install shows every message until you hide a topic.
-- **A failed update can no longer look successful.** If the update could not install the
-  release you picked, the Update page reports a failure instead of "success" on the old version.
-- **Stronger SSH settings** with post-quantum key exchange, applied to existing boxes on update.
+- **Direct messages to you are always shown.** The spam filter (topics, Bot, minimum info score) no
+  longer applies to messages addressed to your callsign, whatever the SSID. Your blocked-texts list
+  still applies. Unread badges count the same way, so no badge gets stuck.
+- **Clearer filter wording.** The toggle is now called "Hide machine-generated messages": it hides
+  everything classified as automated (beacons, bot replies, telemetry), the same as hiding the Bot
+  chip. The minimum-score preview no longer counts direct messages to you.
+- **First names from QRZ.com without titles.** "Dr. Ralph" or "Ing. Wolfgang" now show as Ralph and
+  Wolfgang.
 
 ### Backend (MCProxy)
 
-- Schema 43 stores each message's timing and echo, schema 44 its origin (human or bot) and the
-  rule that decided it. Both are computed when a message arrives, and once at startup for older
-  messages.
-- Classifier and contracts follow mc-chat (taxonomy v8, 102 rules). Saved hides of the retired
-  bot, node, software and time tags now mean Bot.
-- The update runner fails closed when the installer did not deploy the target version, and the
-  health check warns when the served webapp is not the version that was deployed.
-- `SYSTEM_EPOCH` 10 rewrites the SSH hardening drop-in: post-quantum key exchange, ed25519 host
-  keys, RSA keys of at least 3072 bits. A backup is kept, and the old file comes back if `sshd -t`
-  rejects the new one.
-- Dependencies refreshed (pydantic 2.14.4, certifi, regex, ruff 0.17.6).
+- The server's unread count applies the new rule, through the shared suppression test corpus (v5,
+  from mc-chat).
+- Schema 45 re-derives stored QRZ first names; schema 46 removes the old `category` column. Messages
+  now carry only topics and origin; the classifier's compatibility layer for older settings is gone.
+- ICSSW group labels refreshed (Portugal, Corrèze).
+- Dependencies refreshed (httpx 0.29, sse-starlette 3.7.1, regex).
 
 ### Frontend (webapp)
 
-- Topic, Bot and echo chips on the bubble; timing, format and origin in the detail popover.
-- Chip colours for QSL, Question, Bulletin and POTA/SOTA; a darker neutral grey for Test, URL and
-  Bot in light mode.
-- Charts load only when a chart is opened, so the first page load is smaller.
-- Drag-and-drop sorting uses VueUse instead of the unmaintained vuedraggable.
-- npm 12, dependencies refreshed.
+- The spam filter takes your callsign into account in the chat, the sidebar and the unread badges.
+- New label and description for the machine-generated toggle in Settings > Filters.
+- Topics and origin come straight from the server; the old category fallback is gone.
+- Dependencies refreshed.
 
 ### Upgrade notes
 
-- Allow about 4 minutes after the update for the one-time re-sort of stored messages. Badges and
-  filters are correct once it finishes.
-- Reload the webapp once after the update (Cmd+Shift+R in a desktop browser) if the chips still
-  look the old way.
+- Allow about 4 minutes after the update for the one-time re-sort of stored messages.
+- Reload the webapp once after the update (Cmd+Shift+R in a desktop browser).
+- A hidden topic saved under a name from before v2.1.27 (qso, time, node, software) no longer hides
+  anything. If something you had hidden shows again, hide it in Settings > Filters.
 
 ## Earlier releases, in brief
 
 One entry per release. The full notes as published are in
 [`doc/archive/release-history-full.md`](https://github.com/DK5EN/McApp/blob/development/doc/archive/release-history-full.md).
+
+### v2.1.27 (2026-11-22)
+
+- Classifier v8: nine topics plus Bot/human origin on every message; chips on the bubble, details in the popover.
+- Schema 44, `SYSTEM_EPOCH` 10 (SSH hardening rewrite); one-time re-sort of stored messages after the update.
+- Update runner fails closed when the installer did not deploy the target version.
 
 ### v2.1.26 (2026-11-08)
 

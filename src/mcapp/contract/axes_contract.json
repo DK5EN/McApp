@@ -1,8 +1,8 @@
 {
-  "schema": 2,
+  "schema": 3,
   "source": {
     "repo": "mcmap",
-    "commit": "7c46e61bf6da07b9ff38831f9c1c92ad488004a8"
+    "commit": "97feb342dfd8130bbda91e1548148b8fb84fef19"
   },
   "constants": {
     "CADENCE_WINDOW": 8,
@@ -16,7 +16,6 @@
     "TOLERANCE": 0.05,
     "MIN_SHARE": 0.75,
     "MAX_MULTIPLE": 12,
-    "MIN_MEDIAN_SEC": 30,
     "LIVE_TIMING_GAPS": 32,
     "ECHO_WINDOW_SEC": 300,
     "ECHO_MIN_TOKENS": 4,

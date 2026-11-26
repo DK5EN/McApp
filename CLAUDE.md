@@ -2,19 +2,13 @@
 
 ## Project Overview
 
-McApp is a message proxy service for MeshCom (LoRa mesh network for ham radio operators). It bridges MeshCom nodes with web clients via SSE/REST (FastAPI), supporting both UDP and Bluetooth Low Energy (BLE) connections. Runs on Raspberry Pi; Caddy terminates TLS on :80/:443, serves the Vue.js SPA from pre-compressed sidecars and reverse-proxies the API. lighttpd on :8082 only remains for public-TLS boxes and older slots (B15).
+McApp is a message proxy for MeshCom (LoRa mesh for ham radio). It bridges MeshCom nodes (UDP and BLE) with web clients via SSE/REST (Starlette via `weblite`, no FastAPI). Runs on a Raspberry Pi; Caddy terminates TLS on :80/:443, serves the Vue SPA from pre-compressed sidecars and reverse-proxies the API. lighttpd on :8082 remains only for public-TLS boxes and older slots (backlog B15).
 
-Companion frontend: `/Users/martinwerner/WebDev/webapp` (separate git repo — commit each repo independently).
-
-## Architecture
-
-Entry point: `src/mcapp/main.py` → `MessageRouter` (central pub/sub hub connecting UDP, BLE, SSE, and command handlers). All source in `src/mcapp/`. The `commands/` package uses mixin-based architecture assembled in `handler.py`.
-
-Detail lives in `doc/` — start at `doc/README.md`. Layers: decisions in `doc/adr/` (ADR-NNNN), rules in `doc/policy/` (POL-NNN), procedures in `doc/sop/` (SOP-NNN), commands in `doc/runbook/` (RB-NNN), stable reference in `doc/reference/` (`architecture-reference.md`, `dataflow.md`, `database-reference.md`, `configuration.md`, `firewall.md`). Deferred work: `doc/backlog.md`. Verification history and open questions: `doc/review-log.md`.
+Companion frontend: `/Users/martinwerner/WebDev/webapp` (separate git repo, commit each repo independently). Entry point `src/mcapp/main.py` → `MessageRouter` (pub/sub hub for UDP, BLE, SSE, command handlers). Start at `doc/README.md`: decisions `doc/adr/`, rules `doc/policy/`, procedures `doc/sop/`, commands `doc/runbook/`, reference `doc/reference/`. Deferred work: `doc/backlog.md`; open questions: `doc/review-log.md`.
 
 ## Development Commands
 
-**Python: `uv` only — NEVER `pip` or `venv`.** Frontend (webapp repo): `npm`.
+Python: `uv` only, never `pip` or `venv`. Frontend (webapp repo): `npm`.
 
 ```bash
 export MCAPP_ENV=dev                            # verbose logging + /etc/mcapp/config.dev.json
@@ -27,43 +21,26 @@ uv run python scripts/run_startup_tests.py      # tests
 ./scripts/release.sh                            # release (interactive, from development branch)
 ```
 
-All four must be clean before committing. CI's `tests` workflow (`.github/workflows/tests.yml`) is
-disabled and signs off nothing; `./scripts/gate.sh` is the gate both release skills require. It ends
-with `GATE: PASS` or `GATE: FAIL (<steps>)`; read its exit code directly, never through `| tail`.
+All four must be clean before committing. CI's `tests` workflow runs again since 2026-11-22, mainly to gate and auto-merge Dependabot PRs (`dev-release.yml` then cuts a dev pre-release daily after such merges); `./scripts/gate.sh` stays the gate both release skills require. It ends with `GATE: PASS` or `GATE: FAIL (<steps>)`; read its exit code directly, never through `| tail`.
+
+Branches: `development` (default), `main` (production). Commit format: `[type] description` (feat, fix, perf, refactor, chore, docs, test).
 
 ## Code Quality
 
-- `uvx ruff check` and `uvx ruff format --check .` are mandatory — zero tolerance for errors and warnings
-- **`ruff format` also formats ` ```python ` blocks inside `.md` files.** A docs-only commit can and
-  did turn CI red (twice, 2026-08-14) because a fenced example in `doc/` had non-ruff spacing.
-  Run `uvx ruff format --check .` — not just on `*.py` — before committing **any** file, docs
-  included. Note prettier and ruff both touch markdown, so run prettier first, then ruff-format check.
-- **Ruff config** lives in `pyproject.toml` — see `[tool.ruff]` / `[tool.ruff.lint]` for line length, target version, the full rule set and documented ignores
-- **Keep all `[tool.ruff*]` sections identical** across `pyproject.toml`, `ble_service/pyproject.toml` and mc-chat's `pyproject.toml` — the classifier subtree must lint clean under the same rules in both repos
-- New `# noqa` markers need a trailing reason comment and should stay rare — prefer a real fix
-- **Git branches**: `development` (default), `main` (production)
-- **Commit format**: `[type] description` — types: feat, fix, perf, refactor, chore, docs, test
+- **`ruff format` also formats ` ```python ` blocks inside `.md` files.** A docs-only commit turned CI red twice because of this. Run `uvx ruff format --check .` (not just on `*.py`) before committing any file; run prettier first, then the ruff check.
+- Ruff config is in `pyproject.toml`. Keep all `[tool.ruff*]` sections identical across `pyproject.toml`, `ble_service/pyproject.toml` and mc-chat's `pyproject.toml` (the classifier subtree must lint clean in both repos).
+- A new `# noqa` or `# type: ignore` needs a reason (`# type: ignore[code]  # reason`; ruff `PGH` enforces the latter).
+- `mypy --strict` is clean on both source roots, tests included, with no baseline. Run it as `uv run mypy`, never `uvx mypy`/`pipx run mypy`: an ephemeral runner can pull another Python and emit bogus `[syntax]` errors on version-gated stubs (numpy). Run `uv sync --all-packages` first. For untyped libs you do not control, prefer an `ignore_missing_imports` override (`pyproject.toml` `[tool.mypy]`) over `*-stubs`.
 
 ## Testing
 
-No pytest. **The canonical, authoritative test runner is `scripts/run_startup_tests.py`** — it runs every suite with isolated/ephemeral state, is exit-code gated (0 = all passed), and is fully offline (the command suite stubs the weather fetch). It needs no TTY and no `/etc/mcapp`. CI and releases must trust this runner, not the in-app run.
+No pytest (ADR-0016). **`scripts/run_startup_tests.py` is the authoritative runner**: isolated state, exit-code gated, fully offline, no TTY and no `/etc/mcapp` needed. **Suites are registered in its `main()`; a suite not wired in there is gated by nothing.**
 
-Suites are registered in `main()` of that script. **Add new suites there** — a suite not wired into that `main()` is not gated by anything.
-
-The in-app startup path (when `has_console()` is true) runs only a **non-fatal smoke check**: the suppression suite (read-only, pure `router.validator` logic). It proceeds on failure because the service is a resilient always-on proxy. The command suite is deliberately **not** run in-app — `run_all_tests()` mutates the live handler (blocked_callsigns, group responses, active pings, beacons) while UDP/BLE are already listening, so it belongs only in the isolated headless runner.
-
-## Type Checking (mypy --strict)
-
-The whole workspace is `mypy --strict` clean — **both source roots must stay at zero errors** (no WIP baseline; regressions are failures, not warnings). `uv run mypy src/mcapp ble_service/src` must print "Success: no issues found".
-
-- **Run it through the project env (`uv run mypy`), NEVER `uvx mypy`/`pipx run mypy`.** mypy parses with the _running interpreter's_ grammar; an ephemeral runner can pull a different Python and emit bogus `[syntax]` errors on version-gated stubs (e.g. numpy's `type` statements). In a workspace the env must contain every member's deps — run `uv sync --all-packages` first.
-- Config in root `pyproject.toml` `[tool.mypy]`. Untyped third-party libs (`http_ece`, `py_vapid`, `timezonefinder`) are silenced via `ignore_missing_imports`; numpy (transitive) uses `follow_imports = "skip"` because its py.typed stubs need 3.12+ grammar. **Prefer an `ignore_missing_imports` override over installing `*-stubs` for libs you don't control.**
-- Test files are strict-clean too and stay that way.
-- `# type: ignore` is a documented last resort: always `# type: ignore[code]  # reason` (ruff `PGH` enforces this).
+The in-app startup path runs only a non-fatal smoke check (the read-only suppression suite). The command suite is deliberately not run in-app: `run_all_tests()` mutates the live handler while UDP/BLE are already listening.
 
 ## Vendored Subtrees (do not edit in place)
 
-Two directories are `git subtree`s from mc-chat. **Edits belong in mc-chat and are synced here** — editing them locally guarantees drift. The `mc-chat` remote is a local path remote already configured in this repo.
+`src/mcapp/classifier/` and `src/mcapp/contract/` are `git subtree`s from mc-chat. Edits belong in mc-chat and arrive by split + pull; a local edit guarantees drift. The `mc-chat` remote is a local path remote, already configured.
 
 | Path                    | Upstream prefix           | Split branch       |
 | ----------------------- | ------------------------- | ------------------ |
@@ -71,1085 +48,305 @@ Two directories are `git subtree`s from mc-chat. **Edits belong in mc-chat and a
 | `src/mcapp/contract/`   | `contract`                | `contract-subtree` |
 
 ```bash
-cd /Users/martinwerner/WebDev/mc-chat
-git subtree split --prefix=<upstream prefix> -b <split branch>
-
-cd /Users/martinwerner/WebDev/MCProxy
-git subtree pull --prefix=<path> mc-chat <split branch> --squash
+cd /Users/martinwerner/WebDev/mc-chat && git subtree split --prefix=<upstream prefix> -b <split branch>
+cd /Users/martinwerner/WebDev/MCProxy && git subtree pull --prefix=<path> mc-chat <split branch> --squash
 ```
 
-Both `command_contract.json` and `push_contract.json` are inside mc-chat's `contract/` prefix,
-so the pull above carries both. `push_contract.json` was **outside** it (at mc-chat's
-`tests/fixtures/`) until 2026-07-26, which meant every `contract` subtree pull silently
-**deleted** MCProxy's copy and broke `push_tests.py` (`_CONTRACT_PATH`) along with the whole
-gated `run_startup_tests.py`. **All three** contract suites now pin a sha256 of their local copy —
-`push_tests.py`, `dedup_contract_tests.py` and, since 2026-08-20, `contract_parity_tests.py`
-(`command_contract.json` was the last one unpinned, which mattered because that suite runs
-production against whatever the corpus contains: a local edit would have made production pass
-against the edited corpus and silently stop testing parity with mc-chat at all). mc-chat is
-upstream, so a contract edit starts there and reaches this repo by split + pull — and the pull and
-the re-captured hash belong in the same commit.
-
-**Classifier** — every inbound message is annotated inline in `store_message()` with multi-label `tags` (JSON array: mcmap's taxonomy plus `auto_beacon`), `info_score ∈ [0, 1]`, a 12-char `template_hash`, and a legacy `category` derived from the tags for one release. Messages are never dropped; the webapp decides what to hide (a message is hidden iff any of its tags is hidden, as in mcmap; vectors in `contract/suppression_vectors.json` v3). L1 is `classifier/engine.py` running `contract/classifier_contract.json`, **generated by mcmap** (`npm run classifier:export`) and vendored via mc-chat — never edit rules here or in mc-chat. Custom rules are retired (v38 dropped `classifier_rules`, backing user rules up to `classifier_rules_retired.json` next to the DB). L2 templates (`template.py`) and L3 score (`score.py`) remain; a new contract id bumps `classifier_ver`, and startup runs `backfill_auto_beacon_templates()` before the reclassify. The production release ships `classifier_contract.json` explicitly (`scripts/release.sh`). Plan: mc-chat `doc/adr/ADR-0004-classifier-unification.md`; older design: `doc/archive/spam-filter-BE.md`.
-
-**Message axes** — next to the tags, every chat message carries mcmap's three HMM axes: `timing` (one-shot | scheduled | burst | jittered) and `echo` / `echo_of` are computed in `store_message()` from earlier rows only and stored (v43 columns), `format` (`{dominant, signals}`) is computed at read time. The engine is `classifier/axes.py` running `contract/axes_contract.json`, both vendored from mc-chat, the contract **generated by mcmap** (`npm run classifier:export-axes`). "Earlier" means a lower row id: the startup backfill (`backfill_message_axes`, marker keyed on the contract commit) reproduces ingest exactly on that rule, which is why compute + INSERT share one asyncio lock. Only real chat frames are annotated, never BLE `TYP` frames (the router caches those dicts by reference). The release ships `axes_contract.json` explicitly. Display only in the webapp. Design: mc-chat `doc/adr/ADR-0016-live-message-axes.md`.
-
-**Command contract** (`contract/command_contract.json`) — the shared parity corpus (target extraction, suppression decisions, `format_for_lora`) that both implementations must satisfy. `contract_parity_tests.py` runs production against it; mc-chat's `tests/test_contract_parity.py` runs the mock against the same corpus. When you change command routing, suppression, or weather formatting, update the corpus in mc-chat and re-sync — otherwise one side fails its parity test.
+- Keep shared files **inside** the prefix: `push_contract.json` once sat outside it, and every `contract` pull silently deleted it and broke `push_tests.py` and the whole gated runner.
+- `push_tests.py`, `dedup_contract_tests.py` and `contract_parity_tests.py` each pin a sha256 of their local contract copy. A contract edit starts in mc-chat; the pull and the re-captured hash go in the same commit.
+- **Classifier**: every inbound message is annotated in `store_message()` with `tags`, `info_score`, `template_hash` and a legacy `category`. Messages are never dropped; the webapp decides what to hide. The rules (`contract/classifier_contract.json`) are **generated by mcmap** — never edit them here or in mc-chat. New contract id bumps `classifier_ver`; startup runs `backfill_auto_beacon_templates()` before the reclassify. The prod release ships `classifier_contract.json` and `axes_contract.json` explicitly (`scripts/release.sh`). Plan: mc-chat `doc/adr/ADR-0004-classifier-unification.md`.
+- **Message axes** (`timing`, `echo`/`echo_of` stored in `store_message()`, `format` computed at read time): engine `classifier/axes.py` on `contract/axes_contract.json` (mcmap-generated). "Earlier" means lower row id; the startup backfill reproduces ingest exactly on that rule, which is why compute + INSERT share one asyncio lock. Only real chat frames are annotated, never BLE `TYP` frames (the router caches those dicts by reference). Design: mc-chat `doc/adr/ADR-0016-live-message-axes.md`.
+- **Command contract** (`contract/command_contract.json`) is the shared parity corpus (target extraction, suppression, `format_for_lora`). When you change command routing, suppression or weather formatting, update the corpus in mc-chat and re-sync, or one side fails its parity test.
 
 ## Schema Migrations
 
-Add columns/tables via a `current_version < N` block in the chain in `storage/migrations.py` (driven from `sqlite_storage.initialize()`) and bump `LATEST_SCHEMA_VERSION` in `storage/constants.py` in the same commit — that constant is the single production source for the migration terminus and both `migration_chain_tests.py` and `connection_lifecycle_tests.py` assert against it (the latter via a `FINAL_SCHEMA_VERSION` alias re-exported from `migration_chain_tests.py`, kept only for import-site stability). The step numbers in `migrations.py` are independent literals, not derived from the constant, so forgetting either half fails the migration-chain suite loudly rather than silently drifting.
+Add columns/tables via a `current_version < N` block in `storage/migrations.py` and bump `LATEST_SCHEMA_VERSION` in `storage/constants.py` in the same commit. Step numbers in `migrations.py` are independent literals, so forgetting either half fails `migration_chain_tests` loudly.
 
 ## System Epoch
 
-System-level machine state (packages, firewall, web front door) is versioned by `SYSTEM_EPOCH` in `bootstrap/mcapp.sh` and mirrored by `REQUIRED_SYSTEM_EPOCH` in `src/mcapp/system_converge.py` — bump both together, a startup test enforces parity. Installed state is marked at `/var/lib/mcapp/system-epoch`; `mcapp.sh --converge` runs `setup_system` + `install_packages` idempotently to bring a box up to date. The update runner converges the newly deployed slot after every successful update, and the app's converge watchdog self-heals boxes whose update was driven by a pre-epoch runner.
+System-level machine state is versioned by `SYSTEM_EPOCH` in `bootstrap/mcapp.sh`, mirrored by `REQUIRED_SYSTEM_EPOCH` in `src/mcapp/system_converge.py`. Bump both together (a startup test enforces parity). Installed state is `/var/lib/mcapp/system-epoch`; `mcapp.sh --converge` brings a box up to date, the update runner converges every newly deployed slot, and the app's converge watchdog self-heals boxes updated by a pre-epoch runner.
 
-**A converge runs only what changed.** Each step in `bootstrap/lib/converge.sh` carries the epoch it last changed in, and runs only if the installed epoch is below it. Changing a step means raising its row to the new `SYSTEM_EPOCH` in the same commit, or existing boxes skip the change. `ensure_web_frontend` always runs; the apt upgrade does not. The table lives beside `setup_system` and `install_packages`, and the parity test fails if they gain a function without a row. A full `mcapp.sh` run still runs everything, so a step must be safe on an installed box regardless.
+**A converge runs only what changed.** Each step in `bootstrap/lib/converge.sh` carries the epoch it last changed in and runs only if the installed epoch is below it. Changing a step means raising its row to the new `SYSTEM_EPOCH` in the same commit, or existing boxes skip it. `ensure_web_frontend` always runs; the apt upgrade does not. The parity test fails if `setup_system` / `install_packages` gain a function without a row. A full `mcapp.sh` run still runs everything, so every step must be safe on an installed box.
 
 ## Coexisting with other software
 
-A McApp update must not break what else runs on the box. Field report 2026-11-06: an operator saved `nft list ruleset` over `/etc/nftables.conf` to open :8080, the dump lost our marker, and a bootstrap run replaced the file. Operator guide: `doc/archive/operations-reference-pre-split-2026-11-10.md`, "Running other software on the box". Plan and evidence: `doc/archive/2026-11-06_2053-install-coexistence-plan.md`.
+A McApp update must not break what else runs on the box (field report 2026-11-06: an operator saved `nft list ruleset` over `/etc/nftables.conf`, the dump lost our marker, and a bootstrap run replaced the file). Plan: `doc/archive/2026-11-06_2053-install-coexistence-plan.md`; operator guide: `doc/runbook/RB-005-other-software-on-the-box.md`.
 
-- **A firewall file with real rules and no marker belongs to the operator.** `_mcapp_nft_has_own_rules` keeps it byte-identical, and nothing is applied. An empty deny-all chain counts as a rule. Only a rule-free stock file is replaced. An unreadable file is kept.
-- **A marked file is edited, never rewritten.** Staged copy, `nft -c`, install, reload. **Never `systemctl restart nftables`:** its `ExecStop` is `nft flush ruleset`, which also deletes Docker's and fail2ban's tables. A stopped service stays stopped.
-- **`table inet filter` + `delete table inet filter`, not `destroy`.** `destroy` needs kernel 6.3, and on an older vendor kernel the generated file and the boot fallback would both fail, leaving no firewall.
-- **The custom include sits inside `chain input`, before the drops.** A separate table cannot work: a drop in our table still wins over an accept in theirs. Hence `/etc/mcapp/nftables.d`, not the generic `/etc/nftables.d`, where another tool's whole-table file would break the chain.
-- **Boot fallback drop-in.** `nft -f` failing on a faulty custom file would leave no firewall at all, so `mcapp-fallback.conf` retries without the include line.
-- **Bookworm flushes only on a real first install:** no `[iptables DROP]` line in `rules.v4` AND no epoch marker. Otherwise `iptables -C || -A`. Policies are set after the rules, and INPUT is opened before the flush, so an abort cannot lock anyone out.
-- **SSH ports other than 22 stay open on wholesale paths**, from `sshd -T` (`Port`, `port` and `ListenAddress`) and `SSH_CONNECTION`.
-- **`configure_logdirs` is its own step at epoch 9, and `configure_tmpfs` must stay at 8:** re-running it can re-mount `/var/log` and `/tmp` over live services on a customised box. On a first install the generator must run BEFORE the mount, because it reads the real folders. It merges real folder > its own earlier line > package default, so a scan of an empty tmpfs loses nothing.
-- **`backup_config_file` before every overwrite** of a config file, inside the branch that writes. It always returns 0. Copies are 0600, because `config.json` and `caddy.env` hold secrets. A new write site needs an entry in `bootstrap_config_backup_tests.py`.
-- **A step's table read must not sit on stdin:** `converge_system_steps` reads on fd 3, because `apt-get` or `systemd-run` reading stdin would eat the remaining rows and silently skip steps.
-- **`check_coexistence` is advisory** and never flips `health_check`. A false "allowed" is worse than noise. 2981, 8081 and 8082 are exempt.
+- **A firewall file with real rules and no marker belongs to the operator**: `_mcapp_nft_has_own_rules` keeps it byte-identical and applies nothing. An empty deny-all chain counts as a rule; only a rule-free stock file is replaced; an unreadable file is kept.
+- **A marked file is edited, never rewritten** (staged copy, `nft -c`, install, reload). **Never `systemctl restart nftables`**: its `ExecStop` is `nft flush ruleset`, which also deletes Docker's and fail2ban's tables. A stopped service stays stopped.
+- **`table inet filter` + `delete table inet filter`, not `destroy`** (needs kernel 6.3; on an older vendor kernel both the generated file and the boot fallback would fail, leaving no firewall).
+- **The custom include sits inside `chain input`, before the drops**; a separate table cannot work because a drop in ours still beats an accept in theirs. Hence `/etc/mcapp/nftables.d`, not the generic `/etc/nftables.d`.
+- **Boot fallback drop-in** `mcapp-fallback.conf` retries without the include line, because `nft -f` failing on a faulty custom file would leave no firewall.
+- **Bookworm flushes only on a real first install** (no `[iptables DROP]` in `rules.v4` AND no epoch marker); otherwise `iptables -C || -A`. INPUT is opened before the flush so an abort cannot lock anyone out.
+- **SSH ports other than 22 stay open on wholesale paths** (from `sshd -T` and `SSH_CONNECTION`).
+- **`configure_logdirs` is its own step at epoch 9; `configure_tmpfs` must stay at 8**: re-running it can re-mount `/var/log` and `/tmp` over live services. On a first install the generator runs BEFORE the mount (it reads the real folders).
+- **`backup_config_file` before every overwrite** of a config file, inside the branch that writes (always returns 0; copies 0600 because `config.json` and `caddy.env` hold secrets). A new write site needs an entry in `bootstrap_config_backup_tests.py`.
+- **A step's table read must not sit on stdin**: `converge_system_steps` reads on fd 3, because `apt-get`/`systemd-run` reading stdin would eat the remaining rows and silently skip steps.
+- **`check_coexistence` is advisory** and never flips `health_check`. 2981, 8081 and 8082 are exempt.
 
-## Memory Footprint (B4)
+## Memory Footprint (Pi Zero 2W)
 
-Reduced the usable-RAM squeeze on mcapp.local's Pi Zero 2W (512 MB physical, 415 MB seen by
-Linux, only ~144 MB usable for kernel non-movable allocations before this work) — shipped
-2026-09-15 alongside stall tracking in the same campaign. Plan and the PSS measurements:
-`doc/backlog.md` B4, `doc/archive/2026-09-15_1530-stall-tracking-plan.md` §8.
+mcapp.local is a 512 MB Pi Zero 2W. Plan and PSS measurements: `doc/archive/2026-09-15_1530-stall-tracking-plan.md` §8; open question in `doc/backlog.md` B4.
 
-- **The 512/415/144 MB budget was never a RAM shortage — it was a CMA reservation.** The stock
-  boot config reserved 64 MB for the GPU plus a 256 MB CMA pool on a headless box with no HDMI
-  or audio load, which is what actually pushed processes into zram swap under normal operation.
-  `gpu_mem=16` and shrinking the KMS overlay's CMA to `cma-64` (`dtoverlay=vc4-kms-v3d,cma-64`,
-  `dtparam=audio=off`) are the largest single win, in `bootstrap/lib/system.sh`'s
-  `configure_boot_memory` / `_mcapp_configure_config_txt`.
-- **Boot-config changes need a reboot and are marked, never assumed applied.** A change writes
-  `/var/lib/mcapp/reboot-required`; the converge path must check that marker rather than assume
-  the new `gpu_mem`/`cma-64`/`cgroup_enable=memory` values are already live.
-- **`gpu_mem` must land in `[all]` or before any section header — a Pi Zero 2 W trap.**
-  `_mcapp_configure_config_txt` appends a `[all]` block with a begin/end marker comment pair so a
-  re-run can find and update it idempotently instead of duplicating it.
-- **`cmdline.txt` must stay exactly ONE line.** `_mcapp_configure_cmdline_txt` appends
-  `cgroup_enable=memory cgroup_memory=1` to the existing single line rather than writing a new
-  one — a second line makes the bootloader ignore the file.
-- **`MALLOC_ARENA_MAX=2` plus a direct venv `ExecStart`** in both `bootstrap/templates/*.service`
-  — `uv run` is no longer used at exec time (still used by `deploy.sh` to build the venv), which
-  removes an idle wrapper process and a resolver step per restart. `WorkingDirectory` is
-  load-bearing for the BLE service specifically: uvicorn's CLI inserts the CWD into `sys.path` via
-  its `--app-dir` default, which is how `ble_service.src.main:app` resolves at all.
-- **journald `RuntimeMaxUse=8M`** (`configure_journald`, was 20M) and **Caddy
-  `GOMEMLIMIT=48MiB` + `GOGC=50` via the drop-in `/etc/systemd/system/caddy.service.d/memory.conf`**
-  written by `configure_caddy_sudo` in `bootstrap/lib/packages.sh`. mcapp.local runs the DISTRO
-  caddy unit, so `bootstrap/templates/caddy/caddy.service` is never installed there — an edit to
-  that template reaches no running box (found 2026-09-15 when the first attempt did exactly that).
-- **`unattended-upgrades.service` disabled, its timers kept.** `configure_unattended_upgrades`
-  disables only the `unattended-upgrade-shutdown --wait-for-signal` shutdown hook (7 MB RSS);
-  `apt-daily-upgrade.timer` keeps running the actual upgrades on schedule. Do not re-enable the
-  service as a "fix" for missed updates — the timer is what does the work, this unit only trims a
-  shutdown-time nicety.
-- **`SYSTEM_EPOCH` bumped to 3, then 4 for the Caddy drop-in** (`bootstrap/mcapp.sh` / `REQUIRED_SYSTEM_EPOCH` in
-  `system_converge.py`) alongside these changes, per the existing System Epoch convergence
-  contract above.
+- **The squeeze was a CMA reservation, not a RAM shortage**: `gpu_mem=16` and `dtoverlay=vc4-kms-v3d,cma-64` (`configure_boot_memory` / `_mcapp_configure_config_txt` in `bootstrap/lib/system.sh`).
+- **Boot-config changes need a reboot and are marked** in `/var/lib/mcapp/reboot-required`; the converge path must check the marker rather than assume the values are live.
+- **`gpu_mem` must land in `[all]` or before any section header** (Pi Zero 2 W trap); the `[all]` block carries a begin/end marker pair so a re-run updates it instead of duplicating it.
+- **`cmdline.txt` must stay exactly ONE line**; `_mcapp_configure_cmdline_txt` appends to the existing line (a second line makes the bootloader ignore the file).
+- **`MALLOC_ARENA_MAX=2` plus a direct venv `ExecStart`** in `bootstrap/templates/*.service` (`uv run` is used only by `deploy.sh` to build the venv). `WorkingDirectory` is load-bearing for the BLE service: uvicorn inserts the CWD into `sys.path`, which is how `ble_service.src.main:app` resolves.
+- **mcapp.local runs the DISTRO caddy unit**, so `bootstrap/templates/caddy/caddy.service` is never installed there; the Caddy memory limits (`GOMEMLIMIT=48MiB`, `GOGC=50`) come from the drop-in `/etc/systemd/system/caddy.service.d/memory.conf` written by `configure_caddy_sudo` (`bootstrap/lib/packages.sh`). Editing the template reaches no running box.
+- **`unattended-upgrades.service` is disabled, its timers are kept**: only the shutdown hook is off; `apt-daily-upgrade.timer` does the upgrades. Do not re-enable the service as a "fix" for missed updates.
 
 ## Stall Tracking (`stall_events`, `/api/stalls`)
 
-Every stall between the webapp and the API — server- and client-observed — recorded with the
-parameters needed to reproduce it, keyed by one correlation id, retrievable by a coding agent
-through `/api/stalls`. No UI; this is capture-and-upload only. Design and the interface contract:
-`doc/archive/2026-09-15_1530-stall-tracking-plan.md`.
+Every server- and client-observed stall is recorded with the parameters needed to reproduce it, keyed by one correlation id, and retrievable through `/api/stalls`. Capture-and-upload only, no UI. Design: `doc/archive/2026-09-15_1530-stall-tracking-plan.md`, ADR-0007, RB-007.
 
-- **A stall is any call that crosses a duration threshold, recorded by `kind` into
-  `stall_events`.** `http` (server ASGI middleware), `client_http` (webapp fetch wrapper,
-  includes the Caddy/lighttpd hop), `sse_answer` (`page_request` → SSE `response`, missing after
-  10 s → `sse_answer_missing`) and `handler` (one `MessageRouter.publish` subscriber) are
-  **0.5 s = stall, 2 s = critical**, plus a **1-in-50 sample of every sub-threshold call**
-  (`severity="sample"`) so there is a healthy baseline to diff against. `loop_lag` (event-loop
-  drift watchdog) and `pool_wait` (queue wait before a `to_thread` job ran) are far tighter —
-  **100 ms stall / 500 ms critical** — because they measure infrastructure health, not a
-  user-facing SLO: a 100 ms event-loop hesitation is already abnormal. `client_timeout` (10 s
-  fetch abort), `client_error` (network error / HTTP ≥ 400) and `sse_heartbeat` (90 s reconnect
-  watchdog) are recorded unconditionally — there is no sub-threshold case for "it failed." All
-  thresholds live under the `stalls` key in `config.json` (`StallsConfig`,
-  `src/mcapp/config_loader.py`); an absent key means the defaults above.
-- **Correlation is `X-Request-Id`, minted by the client and echoed by the server** on the
-  response and stored on both ends' rows; `X-Session-Id` (per browser tab) rides alongside it.
-  `mcapp.stalls.current_request_id` is a `ContextVar[str | None]` set by the middleware for the
-  request's lifetime, so a `handler` stall triggered by that request can still report the id. The
-  `page_request` path is the one exception — it already carried its own `request_id`
-  (webapp `messages.ts`, echoed on `proxy:messages_page`) before this work existed, and the
-  client's `sse_answer` timer keys on that pre-existing id instead of minting a new one.
-- **The middleware is PURE ASGI, never `BaseHTTPMiddleware`.** `BaseHTTPMiddleware` buffers the
-  whole response before the downstream body is visible, which would turn `/events` and
-  `/update-stream` — long-lived SSE streams — into "one very slow request" or break them outright.
-  `StallMiddleware` (`src/mcapp/stall_middleware.py`) taps `receive`/`send` chunk by chunk instead,
-  and passes `/events*`, `/update-stream` and `/health` through completely untouched: no id, no
-  header, no timing.
-- **Added after `CORSMiddleware` so it is the OUTERMOST layer** (`sse_handler.py`,
-  `_create_app`) — Starlette applies middleware innermost-first in registration order, so timing
-  from outside CORS covers the whole stack, not just what CORS lets through.
-- **The recorder has its OWN writer thread and never touches the shared executor.** `record()`
-  and `ingest_client()` are non-blocking: they push onto a bounded `queue.Queue(maxsize=1000)` and
-  return, drained by one dedicated `mcapp-stalls-writer` thread with its own SQLite connection. A
-  starved thread pool must not make the stall logger itself stall, or stall reporting would fail
-  exactly when it is most needed; a full queue drops the row and counts the drop rather than
-  blocking.
-- **The counting executor is installed BEFORE any `to_thread` call.** `install_executor()` swaps
-  in a `ThreadPoolExecutor` subclass as the loop's default executor, in `build_app()` before
-  `create_sqlite_storage` runs — installed any later and the first `to_thread` calls would already
-  be running on the un-instrumented default, invisibly to `pool_wait`.
-- **The recorder's own DDL duplicates migration 32 on purpose.** `StallRecorder.start()` issues
-  the identical `CREATE TABLE/INDEX IF NOT EXISTS stall_events` statements as a defensive
-  fallback; migration 32 (`storage/migrations.py`) is the canonical, schema-versioned source.
-  Keep the two texts byte-identical if either changes.
-- **Redaction replaces VALUES, not keys**, for push-subscription fields (`endpoint`, `keys`,
-  `p256dh`, `auth`) and anything named `*api_key*`/`authorization` (`redact()` in
-  `src/mcapp/stalls.py`) — applied to `body`/`detail`/`context` on both server records and
-  client-submitted ones (redacted again server-side in `ingest_client`, never trusted from the
-  client). **Message text is deliberately kept** — it is ham radio traffic, not a secret, and is
-  often exactly what a coding agent needs to reproduce a slow handler.
-- **`/api/stalls` (full records, coding-agent interface) and `/api/stalls/summary`
-  (per-path p50/p95/p99/max baseline) are read surfaces; `POST /api/stalls/client` is how the
-  webapp uploads its own observations** (`src/mcapp/sse_routes/stalls.py`, one or an array of
-  records, capped at 100/call). `scripts/replay_stall.py --id <row>` re-issues the recorded
-  `method path?query`+`body` against a running instance and prints new p50/p95/max next to the
-  recorded duration and server context — the reproduce tool, not a dashboard.
-- **Row cap is `max_rows` (default 5000)**, enforced by the writer thread pruning the oldest rows
-  every 200 inserts — not a nightly job, and not schema-enforced.
-- **`db_write` runs at `synchronous=NORMAL`, and the first stall data proved why.** The
-  0.5-1.25 s `handler` rows of v2.0.8-dev.3 were NOT many DB calls (a real message makes 2-6)
-  but the WAL fsync every commit does at the default `FULL` on the SD card: 15 ms typical,
-  1.7 s outliers, measured 2026-09-16 against a copy of the live DB. NORMAL keeps WAL
-  crash-safe (fsync at checkpoints) and trades the last transactions on power loss. Measure on
-  the Pi's ext4 root, never in `/tmp` — it is tmpfs there and hides the whole effect.
-- **`loop_lag` rows carry the blocker's stack** (`detail.stack`, `samples`, `sampled_at_ms`).
-  The lag loop runs ON the loop and cannot see what blocked it, so a daemon thread
-  (`mcapp-stalls-lagsampler`) compares a heartbeat every 50 ms and reads the loop thread's frame
-  through `sys._current_frames()` only once overdue. An unsampled lag omits the key entirely.
-- **`sse_heartbeat` from a hidden tab is a `sample`, not `critical`** (webapp
-  `recordSseHeartbeatTimeout`): iOS suspends the PWA and wakes it hourly while still hidden.
-- **`/api/weather` at 0.5-1.5 s is the upstream fetch and is CLOSED as a non-issue** (decision
-  2026-09-18, `doc/archive/2026-09-18_2200-stall-followup-plan.md`). It runs off-loop via `to_thread`,
-  stalls nothing else, and 8 of 12 calls crossing the 0.5 s threshold is the weather provider's
-  latency from the Pi, not ours. Do not re-open it from a stall report; a webapp-side cache is the
-  only lever, and it is a frontend change.
-- **Per-call write connections were the second half of the handler stalls.** Closing the LAST
-  connection to a WAL database checkpoints and deletes the WAL, a DB-file fsync per write:
-  23.7 ms vs 0.2 ms on a persistent connection, measured 2026-09-18 on the Pi's ext4 root. The
-  query plans were never the problem (every ingest-path query is `SEARCH ... USING INDEX`, < 1 ms
-  on the live DB), so a "full table scan" hypothesis for `_storage_handler` stalls has already
-  been checked and rejected; look at fsync counts first.
-- **`ble_connected` handles property-vs-method.** `is_connected` is a property on the remote BLE
-  client (and on every current client); the gauge (`_ble_connected` in `main.py`) tolerates a method too and calls it
-  only when callable, mirroring the same pattern the BLE code already uses elsewhere.
+- Kinds `http`, `client_http`, `sse_answer` (missing after 10 s → `sse_answer_missing`) and `handler`: **0.5 s stall, 2 s critical**, plus a 1-in-50 `sample` of sub-threshold calls as a baseline. `loop_lag` and `pool_wait` are tighter (**100 ms / 500 ms**) because they measure infrastructure health. `client_timeout`, `client_error` and `sse_heartbeat` (90 s) are recorded unconditionally. Thresholds live under the `stalls` key in `config.json` (`StallsConfig`, `config_loader.py`).
+- **Correlation is `X-Request-Id`, minted by the client and echoed by the server** (`X-Session-Id` per tab rides alongside). `mcapp.stalls.current_request_id` is a `ContextVar` set by the middleware. `page_request` keeps its own pre-existing `request_id`, and the client's `sse_answer` timer keys on that.
+- **The middleware is PURE ASGI, never `BaseHTTPMiddleware`**: that buffers the response and would break `/events*` and `/update-stream`. `StallMiddleware` (`stall_middleware.py`) passes `/events*`, `/update-stream` and `/health` through untouched, and is added after `CORSMiddleware` so it is OUTERMOST (`sse_handler._create_app`; Starlette applies middleware innermost-first).
+- **The recorder has its OWN writer thread and never touches the shared executor.** `record()`/`ingest_client()` push onto a bounded `queue.Queue(1000)` (drops are counted, never blocking) drained by `mcapp-stalls-writer` with its own SQLite connection, so a starved pool cannot make stall logging stall.
+- **The counting executor is installed BEFORE any `to_thread` call** (`install_executor()` in `build_app()`, before `create_sqlite_storage`), or early calls are invisible to `pool_wait`.
+- **`StallRecorder.start()` duplicates migration 32's DDL on purpose**; keep the two texts byte-identical.
+- **Redaction replaces VALUES, not keys** (push fields, `*api_key*`, `authorization`, `*password*`; `redact()` in `stalls.py`), applied again server-side to client-submitted records. Message text is deliberately kept (ham traffic, not a secret).
+- `/api/stalls` and `/api/stalls/summary` are read surfaces; `POST /api/stalls/client` takes the webapp's observations (cap 100/call; `sse_routes/stalls.py`). `scripts/replay_stall.py --id <row>` re-issues a recorded request. Row cap `max_rows` (5000) is enforced by the writer thread pruning every 200 inserts.
+- **`db_write` runs at `synchronous=NORMAL`**: the 0.5-1.25 s `handler` stalls were the WAL fsync of every commit at `FULL` on the SD card, not query plans (all ingest queries are index searches). Per-call write connections were the second half (closing the last WAL connection checkpoints and deletes the WAL), hence a persistent write connection. Measure on the Pi's ext4 root, never `/tmp` (tmpfs hides the effect). Look at fsync counts before suspecting a table scan.
+- **`loop_lag` rows carry the blocker's stack** (`detail.stack`) from the daemon thread `mcapp-stalls-lagsampler`, which reads the loop thread's frame via `sys._current_frames()` once overdue. An `sse_heartbeat` from a hidden tab is a `sample`, not `critical` (iOS suspends the PWA).
+- **`/api/weather` at 0.5-1.5 s is the upstream fetch and is CLOSED as a non-issue** (decision 2026-09-18, `doc/archive/2026-09-18_2200-stall-followup-plan.md`). Do not re-open it from a stall report.
+- `_ble_connected` in `main.py` tolerates `is_connected` being a property or a method.
 
 ## Bootstrap Network Safety (system epoch 5)
 
-Rules that keep a `mcapp.sh` run from taking the box off the network, born from the 2026-09-18
-outage (`doc/archive/2026-09-18_2320-wifi-outage-postmortem.md`, raspberrypi/linux#7634): the bootstrap's
-in-session `apt-get upgrade` replaced wpasupplicant with Raspberry Pi's `2:2.10-24+rpt1`, whose
-one patch makes the supplicant advertise WPA3-SAE, NetworkManager 1.52 then forces SAE for every
-`wpa-psk` profile, and the Zero 2 W's brcmfmac43436 never completes it against a WPA2/WPA3
-transition-mode AP. Design: `doc/archive/2026-09-18_2330-bootstrap-network-safety-plan.md`.
+Rules that keep a `mcapp.sh` run from taking the box off the network (2026-09-18 outage: `doc/archive/2026-09-18_2320-wifi-outage-postmortem.md`, ADR-0014). A new wpasupplicant (`2:2.10-24+rpt1`) advertises WPA3-SAE, NetworkManager then forces SAE for `wpa-psk` profiles, and the Zero 2 W's brcmfmac never completes it against a transition-mode AP.
 
-- **wpasupplicant and network-manager are never upgraded inline.** `hold_network_packages` puts
-  them on `apt-mark hold` for the apt phase and `report_deferred_network_upgrades` prints what was
-  kept back with the console command. An operator's pre-existing hold is never released. Do not
-  "simplify" this into skipping the upgrade: the rest of the system still upgrades.
-- **wpasupplicant is pinned to Debian `2:2.10-24` on trixie** by `configure_wpasupplicant_pin`
-  (`/etc/apt/preferences.d/mcapp-wpasupplicant`, priority 1001). trixie's NetworkManager has NO
-  configuration-level opt-out from SAE for `wpa-psk` in station mode (the upstream fix b00c6749 is
-  in 1.56+), and Raspberry Pi's own `rpi-brcmfmac.conf` mask (`feature_disable=0x282000`) clears
-  SAE but not `SAE_EXT` (bit 25 in the 6.18 driver), which is the bit that sets
-  `NL80211_FEATURE_SAE`. Removal criteria are in the plan; until one holds, the pin stays.
-- **apt runs under `systemd-run --wait --collect`** (`run_apt_detached`) so a dropped SSH session
-  cannot interrupt dpkg mid-transaction. Exit status is captured with `|| rc=$?`; reading `$?`
-  after an `if` returns 0 and silently swallowed failures in the first version.
-- **Every run is mirrored to `/var/lib/mcapp/bootstrap.log`** via `tee -p` (`start_bootstrap_log`).
-  `-p` is load-bearing: a plain `tee` dies of SIGPIPE when the ssh side goes away and takes the
-  bootstrap down with it. `/tmp` and `/var/log` are tmpfs, so this is the only run output that
-  survives a reboot.
-- **The default route must be back after the apt phase** (`verify_link_state`, 45 s) or the run
-  stops with the last NetworkManager/wpa_supplicant lines. A changed `key_mgmt` is warned about:
-  that one line would have named the 2026-09-18 cause.
-- **The journal is persistent, 16 MB, on `/var/lib/mcapp/journal` bind-mounted to
-  `/var/log/journal`** while `/var/log` stays tmpfs (`configure_journald`, fstab line inside the
-  McApp tmpfs block). Before this the box had no on-disk evidence at all; the only record of the
-  outage was rpizero's shipped copy, which ended at the second the link dropped.
-- **Except on boards with `armbian-ramlog` / `orangepi-ramlog` (epoch 6).** Those boards mount
-  zram over `/var/log` and restore it from `/var/log.hdd`, which shadowed our tmpfs AND the journal
-  bind (field report 2026-10-20, Orange Pi Zero 2W: journal lost every boot, lighttpd log dir
-  ownership mangled). There the bootstrap writes neither line and strips both from our fstab
-  block; the ramlog's own `syncToDisk` persists the journal to `/var/log.hdd/journal` and links it
-  back. Never bind-mount onto `/var/log/journal` on such a board: `syncToDisk` `mv`s a real
-  `journal` directory across filesystems. Detection: `systemctl is-enabled` plus `ENABLED` in
-  `/etc/default/<name>` (`detect_ramlog_service`, `bootstrap/lib/system.sh`).
-- **Symptom to cause:** ssh drops during a bootstrap run and the box never comes back on WiFi
-  means a network-critical package was replaced. Read rpizero's peer journal first
-  (`sudo -n journalctl -D /run/journalxship`), then `/var/lib/mcapp/bootstrap.log` on the box.
+- **wpasupplicant and network-manager are never upgraded inline**: `hold_network_packages` puts them on `apt-mark hold` for the apt phase and `report_deferred_network_upgrades` prints what was kept back. An operator's pre-existing hold is never released. Do not "simplify" this into skipping the whole upgrade.
+- **wpasupplicant is pinned to Debian `2:2.10-24` on trixie** (`configure_wpasupplicant_pin`, `/etc/apt/preferences.d/mcapp-wpasupplicant`, priority 1001): trixie's NetworkManager has no config-level opt-out from SAE and RPi's `rpi-brcmfmac.conf` mask misses `SAE_EXT`. Removal criteria are in the plan; until one holds, the pin stays.
+- **apt runs under `systemd-run --wait --collect`** (`run_apt_detached`) so a dropped SSH session cannot interrupt dpkg. Capture exit status with `|| rc=$?`; `$?` after an `if` reads 0 and swallowed failures.
+- **Every run is mirrored to `/var/lib/mcapp/bootstrap.log` via `tee -p`** (`start_bootstrap_log`). `-p` is load-bearing: a plain `tee` dies of SIGPIPE when ssh drops and takes the bootstrap with it. `/tmp` and `/var/log` are tmpfs, so this is the only run output surviving a reboot.
+- **The default route must be back after the apt phase** (`verify_link_state`, 45 s) or the run stops with the last NetworkManager/wpa_supplicant lines; a changed `key_mgmt` is warned about.
+- **Persistent journal**: 16 MB on `/var/lib/mcapp/journal` bind-mounted to `/var/log/journal` while `/var/log` stays tmpfs (`configure_journald`).
+- **Except on boards with `armbian-ramlog` / `orangepi-ramlog` (epoch 6)**: they mount zram over `/var/log`, which shadows our tmpfs and the journal bind. There the bootstrap writes neither line and strips both from our fstab block; the ramlog's `syncToDisk` persists the journal. Never bind-mount onto `/var/log/journal` there (`syncToDisk` `mv`s a real `journal` directory across filesystems). Detection: `detect_ramlog_service` (`bootstrap/lib/system.sh`).
+- **Symptom**: ssh drops during a bootstrap run and the box never returns on WiFi means a network-critical package was replaced. Read rpizero's peer journal first (`sudo -n journalctl -D /run/journalxship`), then `/var/lib/mcapp/bootstrap.log`.
 
 ## Node Time Zone (`SN1.TZ`, `set_time()`)
 
-TZ-01 firmware keeps a POSIX TZ rule on the node, and `--utcoff` CLEARS it. Plan and decisions:
-`doc/archive/2026-10-04_1600-node-tz-implementation-plan.md`; contract: `doc/reference/2026-10-04_1500-node-tz-ble-contract.md`.
+TZ-01 firmware keeps a POSIX TZ rule on the node, and `--utcoff` CLEARS it. Plan: `doc/archive/2026-10-04_1600-node-tz-implementation-plan.md`; contract: `doc/reference/2026-10-04_1500-node-tz-ble-contract.md`; ADR-0020.
 
-- **`set_time()` classifies the node before it sends any offset** (`ble_adapter.py`, `node_tz.py`).
-  Rule set: `0x20` only. Empty rule and policy `host_if_unset` (default; `MCAPP_NODE_TZ_POLICY=never`
-  opts out): the host rule (TZif footer of `/etc/localtime`, `MCAPP_NODE_TZ` overrides) is pushed
-  once with `--settz` and confirmed through the `SN1` push. Old firmware (no `TZ` key): the
-  byte-identical `--utcoff` then `0x20`. The branch is reported in the `/api/ble/settime` message.
-- **Unknown or unverified means `0x20` only, never `--utcoff`.** UTC is always right; a wrong
-  `--utcoff` can destroy a rule. An unverified `--settz` is NOT followed by `--utcoff` either: the
-  node may have accepted it (amends plan D5).
-- **The register cache is not proof of the node's current state.** It survives a same-MAC
-  reconnect, and the node pushes `SN1` after a console-set rule only when the command came over
-  BLE. A cached non-RULE classification is trusted only once an `SN1` arrived since hello
-  (`send_hello` and the DST loop arm it); otherwise `--nodeset` probes. A verify wait accepts only
-  an `SN1` whose `TZ` equals the rule: the first `SN1` after `--settz` can be the stale answer to
-  our own probe.
-- `set_time()` runs about 4.4 s after hello on the HTTP connect route, before the node's `SN1`
-  (about 5 s), so a probe on a first connect is expected, not a bug.
-- MH `DATE`/`TIME` conversion through `SN.UTCOF` is deliberately deferred (`doc/backlog.md`).
+- **`set_time()` classifies the node before it sends any offset** (`ble_adapter.py`, `node_tz.py`). Rule set: `0x20` only. Empty rule + policy `host_if_unset` (default; `MCAPP_NODE_TZ_POLICY=never` opts out): the host rule (TZif footer of `/etc/localtime`, `MCAPP_NODE_TZ` overrides) is pushed once with `--settz` and confirmed via the `SN1` push. Old firmware (no `TZ` key): byte-identical `--utcoff` then `0x20`.
+- **Unknown or unverified means `0x20` only, never `--utcoff`** (UTC is always right; a wrong `--utcoff` can destroy a rule). An unverified `--settz` is not followed by `--utcoff` either.
+- **The register cache is not proof of the node's state.** It survives a same-MAC reconnect, and the node pushes `SN1` after a console-set rule only when the command came over BLE. A cached non-RULE classification is trusted only once an `SN1` arrived since hello; otherwise `--nodeset` probes. A verify wait accepts only an `SN1` whose `TZ` equals the rule (the first `SN1` after `--settz` can be the stale answer to our own probe).
+- `set_time()` runs ~4.4 s after hello on the HTTP connect route, before the node's `SN1` (~5 s), so a probe on a first connect is expected. MH `DATE`/`TIME` conversion via `SN.UTCOF` is deferred (backlog B7).
 
 ## Link Check (`{ping}` / `{pong}`)
 
-Probes whether a station answers on **direct RF**, using the firmware's `v4.35p.07.24.2` ping
-feature. Design and the on-air measurements: `doc/archive/2026-08-13_1500-linkcheck-ping-pong-ADR.md`.
+Probes whether a station answers on direct RF (firmware `v4.35p.07.24.2` ping). ADR-0005; on-air measurements: `doc/archive/2026-08-13_1500-linkcheck-ping-pong-ADR.md`.
 
-- **Correlation has two representations and both are load-bearing.** The Extern-UDP `msg_id` field
-  is an 8-digit **hex string** (`"1AE1E057"`); the pong payload embeds the same 32-bit value in
-  **decimal**, and roughly half the fleet emits it **negative** (`{pong}{-427408969}` — real
-  traffic, `SendPong()` formats an `unsigned int` with the signed `%i`). Normalise both with
-  `& 0xFFFFFFFF` — `linkcheck.normalise_id()`. A `\d+` pattern silently never matches half the
-  stations.
-- **Prefix-match the ping, never equality.** `sendMessage()` appends an unterminated ACK suffix, so
-  ours reads `{ping}{087` on the wire.
-- **The routing hook must come BEFORE the echo/ACK branches** in `commands/routing.py`. ctcping's
-  `_ECHO_SUFFIX_RE` (`\{\d{3}$`) also matches `{ping}{087`; wired after it, ctcping swallows every
-  echo, the session never learns its `msg_id`, and every attempt times out with no visible cause.
-- **The ingest guard sits before `_insert_message_row`, NOT in `_should_filter_message`.** The
-  latter returns before `_ingest_signal`, so a guard there deletes the pong's signal ingestion,
-  which already works. `linkcheck_ingest_tests.py` case 1 pins exactly that pair.
-- **It does not measure a round-trip time.** Measured 21-43 s on air with official firmware,
-  dominated by the node's TX queue and the firmware's 40 s retransmit steps (12 s on the fixed fork
-  firmware, ADR §9.5). Report reachability + reply RSSI/SNR; never label a number RTT. Attempt
-  timeout is 90 s for that reason, and attempts are sequential.
-- **RSSI/SNR belongs to the target only when the pong arrives with no via-path** (`hops == 0`);
-  relayed pongs are the observed norm and carry the last hop's signal.
-- **Nothing we send survives the round trip** — `getExtern()` reads only `dst` and `msg`, so our
-  own echo cannot be tagged and the echo-claim can only be narrowed, never closed.
-- A proxy-originated ping is **~4 keyings over 2 minutes on official firmware** (retransmission is
-  armed for any DM not starting `{CET}`/`{MCP}`/`{SET}`); DK5EN fork builds from 2026-09-24 key it
-  once (ADR §9.2). Set caps for the four-keying case — the fleet is mixed. Caps are enforced
-  server-side; the endpoint has no auth.
-- **We cannot ping ourselves** — the firmware refuses a DM to its own callsign.
-- **The ping goes over BLE when BLE is connected, else UDP** (ADR §8). With EXTUDP off the node
-  never reads UDP, so a UDP-sent ping is silently never transmitted. The node echoes a BLE-sent
-  ping back over BLE (`src` == our callsign) with its real msg_id. Live BLE frames carry
-  `src_type:"ble_remote"`, not `"ble"` — test fixtures must use it.
-- **A pong counts from either transport; the echo is optional** (ADR §8, 2026-09-24). BLE copy
-  without `msg_server` = RF, with it = internet path. Without the Extern-UDP echo the pong is
-  matched through our node's id — the top 22 bits of every firmware msg_id, learned from the BLE
-  `I` register's `ID`. **Official firmware does not forward a `{pong}` for us to BLE** (display
-  only); DK5EN fork builds from 2026-09-24 do (ADR §9.1, verified live 2026-09-25 on DK5EN-98). So
-  on an official-firmware node a box whose EXT IP points elsewhere (MeshCom WebDesk) sees no pong.
-  Symptom: link check always times out while the node's console shows `[PONG]` → check the node's
-  firmware, then EXT IP.
-- **An unreleased `fork-main` build between 2026-09-13 and 2026-09-25 cannot ping at all** (ADR §9.3): its DM
-  stage 0 rewrites `{` to `(`, so the ping leaves as `(ping}{NNN`, the target ACKs it as a plain DM
-  and never pongs. Symptom: timeout, no `[PONG]` anywhere, an ACK in the monitor instead. Fixed in
-  `fork-main` `313a52ed` (2026-09-25); no released build was ever affected.
+- **Correlation has two representations.** The Extern-UDP `msg_id` is an 8-digit **hex string**; the pong payload embeds the same 32-bit value in **decimal**, and about half the fleet emits it **negative** (`{pong}{-427408969}`). Normalise both with `& 0xFFFFFFFF` (`linkcheck.normalise_id()`); a `\d+` pattern silently never matches half the stations.
+- **Prefix-match the ping, never equality**: `sendMessage()` appends an unterminated ACK suffix (`{ping}{087`).
+- **The routing hook must come BEFORE the echo/ACK branches** in `commands/routing.py`: ctcping's `_ECHO_SUFFIX_RE` (`\{\d{3}$`) also matches `{ping}{087` and would swallow every echo, so every attempt times out with no visible cause.
+- **The ingest guard sits before `_insert_message_row`, NOT in `_should_filter_message`** (that returns before `_ingest_signal` and would delete the pong's signal ingestion). `linkcheck_ingest_tests.py` case 1 pins the pair.
+- **It does not measure RTT** (21-43 s on air, dominated by the node's TX queue and 40 s retransmit steps). Report reachability + reply RSSI/SNR, never label a number RTT. Attempt timeout 90 s, attempts sequential.
+- RSSI/SNR belong to the target only when the pong arrives with no via-path (`hops == 0`). Nothing we send survives the round trip (`getExtern()` reads only `dst` and `msg`), so our own echo cannot be tagged.
+- A proxy-originated ping is ~4 keyings over 2 minutes on official firmware (retransmission is armed for any DM not starting `{CET}`/`{MCP}`/`{SET}`), once on DK5EN fork builds from 2026-09-24. Caps are enforced server-side; the endpoint has no auth. We cannot ping ourselves (the firmware refuses a DM to its own callsign).
+- **The ping goes over BLE when BLE is connected, else UDP.** With EXTUDP off the node never reads UDP, so a UDP-sent ping is silently never transmitted. Live BLE frames carry `src_type:"ble_remote"`, not `"ble"`; test fixtures must use it.
+- **A pong counts from either transport; the echo is optional.** Without the Extern-UDP echo the pong is matched through our node's id (top 22 bits of every msg_id, learned from the BLE `I` register's `ID`). **Official firmware does not forward a `{pong}` to BLE**; DK5EN fork builds from 2026-09-24 do. So a box on official firmware whose EXT IP points elsewhere sees no pong. Symptom: link check always times out while the node console shows `[PONG]` → check firmware, then EXT IP.
 
 ## Gateway Uptime (`{CET}` link)
 
-Availability of the `{CET}` time-beacon link (node uplink → MeshCom server), charted by the
-webapp's Gateway Availability card in Settings. Design and the on-air measurements:
-`doc/archive/2026-08-21_2350-gateway-uptime-plan.md`.
+Availability of the `{CET}` time-beacon link (node uplink → MeshCom server), charted by the webapp's Gateway Availability card. ADR-0015; plan `doc/archive/2026-08-21_2350-gateway-uptime-plan.md`.
 
-- **The beacon is never persisted, so the hook must sit BEFORE `_should_filter_message`.** That
-  guard drops `{CET}` before any INSERT and returns early (`storage/ingest.py`), so a recorder
-  placed after it never fires — the identical trap the link-check ingest guard documents above.
-  The hook only observes; it must never change what gets filtered.
-- **The gate is hop-count 0, NOT `not via`.** The same beacon arrives in up to three copies:
-  `udp` (no `via`), `ble_remote` (`via == src`, because `split_path` strips our own callsign and
-  leaves the originator behind), and a **foreign** gateway's multi-hop `lora` relay that must not
-  count. The webapp watchdog's `!element.via` rule rejects the BLE copy, which would break a
-  BLE-only box — do not copy it into the backend. Contract: `is_uplink_time_beacon` in
-  `storage/uptime.py`, pinned by `storage/uptime_tests.py` against all three real captured frames.
-- **`GAP_TOLERANCE_MS` must stay above the beacon cadence, and the cadence is NOT a constant.** It
-  is set upstream by the MeshCom server, not by our node, and OE1KBC has already halved it once:
-  **303 s** until 2026-08-22 (`23:40:31 → 23:45:34 → 23:50:37`), **606.5 s** since (measured
-  2026-08-28 over 12 consecutive intervals, all 10.11 min). A tolerance at or below the cadence
-  records a gap on every healthy cycle — at 6 min against the new 606.5 s the card read **0.0%
-  uptime for six days while beacons were arriving normally**, and the footer showed "No time sync"
-  for ~45% of every cycle. It is **12 min** for that reason (same 1.19x margin 6 min had over
-  303 s). **Symptom → cause:** uptime near zero while beacons are visibly arriving means this value
-  is under the cadence — re-measure before suspecting the link.
-- **Retune all four thresholds together.** `GAP_TOLERANCE_MS` and `SILENT_MS` (12 min) and `OFF_MS`
-  (30 min, ~3 cadences) in `storage/constants.py`, plus the webapp's `WATCHDOG_TIMEOUT_MS`
-  (`src/constants/index.ts`, 12 min). `GAP_TOLERANCE_MS` is the **only** one baked into stored
-  history — the amber/red split is applied at read time and stays retunable — so raising it does
-  NOT repair rows already written. Migration 28 scrubbed the 210 spurious gaps recorded between
-  2026-08-27 07:45:59 (where they became contiguous) and the retune, and deliberately KEPT the 37
-  earlier ones: the cadence still alternated there, so those are genuinely ambiguous.
-- **`gap` and `dark` are different claims and must never be conflated.** `gap` = proxy running, no
-  beacon → counts against UPTIME. `dark` = proxy not running, nothing observed → counts against
-  COVERAGE only. Startup reconciliation writes the `dark` row and resets `last_beacon_ms`, so a
-  deploy restart can never look like a link outage — and it must run before the heartbeat task
-  starts, or the first tick papers over the very downtime it exists to record.
-- **`disabled` is a third claim, from the `SN` register's `GW`** (schema v40, plan
-  `doc/archive/2026-11-06_0020-gateway-availability-fix.md`). A node with gateway off gets no hop-0 beacon, so
-  without it the card reports one endless outage. It counts against COVERAGE only, like `dark`. A
-  counted beacon overrides a stale `GW=false`. **A replayed `SN` only seeds a NULL ledger:**
-  `_replay_cached_registers` feeds ble_service's age-less cache through the live path on every SSE
-  attach, and firmware pushes `SN` only on a BLE-driven change, so that copy can be days old
-  (`register_replay_active`). A UDP-only box has no `SN` and stays unknown, which measures as before.
-- **Year and month bars come from `buckets`, never from `segments`.** The old bar floored each
-  outage to 2 px of an assumed 280 px, taken from `up`: 131 gaps erased all green and squeezed `dark`
-  from 79% to 46%, while the stats were right. `_downsample` is worst-wins and lies the same way past
-  500 segments, so buckets are computed from the exact list.
-- **The metric's resolution is one cadence.** A 20-minute outage between beacons reads as 20 min +
-  606 s, and nothing shorter than the tolerance (~12 min) is visible at all. Inherent to a
-  heartbeat-driven metric, and it got twice as coarse when the cadence halved.
+- **The beacon is never persisted, so the hook must sit BEFORE `_should_filter_message`** (`storage/ingest.py`): that guard drops `{CET}` before any INSERT and returns early. The hook only observes.
+- **The gate is hop-count 0, NOT `not via`.** The beacon arrives as `udp` (no `via`), `ble_remote` (`via == src`) and a foreign gateway's multi-hop `lora` relay that must not count. The webapp watchdog's `!element.via` rule rejects the BLE copy and would break a BLE-only box; do not copy it here. Contract: `is_uplink_time_beacon` in `storage/uptime.py`, pinned by `storage/uptime_tests.py` against three real frames.
+- **`GAP_TOLERANCE_MS` must stay above the beacon cadence, and the cadence is NOT a constant**: it is set upstream by the MeshCom server and was halved once (303 s → 606.5 s from 2026-08-22). Tolerance at or below the cadence records a gap on every healthy cycle (the card read 0.0% uptime for six days while beacons arrived). It is 12 min. **Symptom → cause:** uptime near zero while beacons are visibly arriving means this value is under the cadence; re-measure before suspecting the link.
+- **Retune all thresholds together**: `GAP_TOLERANCE_MS`, `SILENT_MS` (12 min), `OFF_MS` (30 min) in `storage/constants.py` plus the webapp's `WATCHDOG_TIMEOUT_MS` (`src/constants/index.ts`, 12 min). `GAP_TOLERANCE_MS` is the only one baked into stored history; raising it does not repair rows already written (migration 28 scrubbed the spurious ones).
+- **`gap`, `dark` and `disabled` are different claims.** `gap` = proxy running, no beacon (counts against UPTIME). `dark` = proxy not running (COVERAGE only). `disabled` = the `SN` register's `GW` is off, so no hop-0 beacon is expected (COVERAGE only; a counted beacon overrides a stale `GW=false`; schema v40). Startup reconciliation writes the `dark` row and resets `last_beacon_ms`, and must run before the heartbeat task starts. **A replayed `SN` only seeds a NULL ledger** (`register_replay_active`): ble_service's age-less cache can be days old. A UDP-only box has no `SN` and stays unknown.
+- **Year and month bars come from `buckets`, never from `segments`** (`_downsample` is worst-wins and lies past 500 segments).
+- The metric's resolution is one cadence: nothing shorter than the tolerance (~12 min) is visible.
 
 ## MHeard Register (`SRC` / `GW` / `PP`)
 
-The BLE `TYP: "MH"` register. **`SRC`, `GW` and `PP` were added upstream on 2026-08-27 and
-REVERTED on 2026-08-28** (fork-main `dc7d56d7` for `SRC`/`GW`, `17d1796e` for `PP`; the dead
-clamp code went on 2026-09-01). The live builder emits exactly 13 keys: `TYP CALL DATE TIME PLT
-HW MOD RSSI SNR DIST PL MESH NCNT`. The parser is deliberately RETAINED and inert: all three are
-read with `.get()`, every coercer is `None`-safe, so a firmware that re-adds them is picked up
-without a code change. Against current firmware `hey_path.py`, the `"heard"` upsert and the
-BLE-path `gw` write never fire, and on a BLE-only box `station_positions.gw` is not set from
-MHeard. Do not chase a missing `SRC`/`GW`/`PP` as a bug. The rules below describe the reverted
-wire contract and stay authoritative for the parser (audit: RX-07 in
-`doc/archive/2026-09-10_1900-ble-protocol-parity-audit.md`; adoption plan and field evidence:
-`doc/archive/2026-08-28_0900-firmware-4.35p.08.28-adoption.md`).
+BLE `TYP: "MH"` register. **`SRC`, `GW` and `PP` were added upstream 2026-08-27 and REVERTED 2026-08-28** (fork-main `dc7d56d7`, `17d1796e`). The live builder emits exactly 13 keys: `TYP CALL DATE TIME PLT HW MOD RSSI SNR DIST PL MESH NCNT` (the `--mheard` table dump never carried them either). The parser for the three is deliberately RETAINED and inert (`.get()`, `None`-safe coercers), so a firmware that re-adds them works without a code change; `hey_path.py`, the `"heard"` upsert and the BLE-path `gw` write never fire against current firmware. **Do not chase a missing `SRC`/`GW`/`PP` as a bug**, and never subscript them. The rules below stay authoritative for the parser (audit RX-07 in `doc/archive/2026-09-10_1900-ble-protocol-parity-audit.md`; `doc/archive/2026-08-28_0900-firmware-4.35p.08.28-adoption.md`).
 
-- **`CALL` is the LAST HOP, `SRC` is the ORIGINATOR, and they are different claims.** `CALL` is the
-  station whose transmission the frame's own `RSSI`/`SNR` measured; roughly two thirds of HEY
-  observations are relayed, so `SRC != CALL` is the common case. `transform_mh` therefore keeps
-  `src = CALL` and the signal write stays on that row — rekeying it onto `SRC` re-creates exactly the
-  bug migration v22 fixed. `SRC` gets a signal-free `"heard"` upsert (`last_seen` + `gw` only).
-  `hw_id`/`lora_mod`/`mesh` also describe the heard transmission and must never land on `SRC`'s row.
-- **The `"heard"` upsert must run BEFORE `_store_mheard`'s early return** (`storage/ingest.py`).
-  `_store_mheard` returns True on a throttle hit and `store_message` returns on that same line, so
-  code one branch later is skipped for every throttled frame — most of them under real traffic. Third
-  instance of this trap in this repo; see Link Check and Gateway Uptime above.
-- **`GW` describes `SRC`, never `CALL` — but only on a HEY frame.** It comes from the beacon's
-  destination path (`"HG"` vs `"H"`), which the originator sets and relays never modify. That path
-  is only a gateway claim when the payload type is `'@'`; on a text, position or ACK frame the
-  destination is something else entirely and the firmware's `GW: 0` is not a claim about anything.
-  `transform_mh` therefore gates `gw` on `PLT == 0x40` and emits `None` otherwise (fail closed when
-  `PLT` is absent). Within that gate the old rule stands: `0` is authoritative and correctly
-  overwrites a stored `1`; absent (`None`) leaves it alone. Ungating this — reading `GW` on every
-  frame, as we did until schema v27 — makes a relay's non-HEY traffic overwrite a real gateway flag,
-  which is exactly the 2026-08-28 `DF2SI-12` flip. Feeds the pre-existing `station_positions.gw`
-  column; migration 27 nulled the zeros stored under the old rule, because a wrong `0` and a real
-  one are indistinguishable after the fact.
-- **`MOD` is a packed byte, not a number.** `msg_source_mod = (getMOD() & 0xF) | (node_country << 4)`
-  (`aprs_functions.cpp:113`): low nibble modulation (3..8), high nibble country index (0..15). It
-  arrives on two paths — the binary GATT footer and the MH register's `MOD` — and both are masked
-  with `& 0x0F` in `ble_protocol.py`. Storing the raw byte made every non-EU node's "modulation"
-  wrong (country 8 → `0x83` → 131). The country nibble is deliberately not persisted: `0xF` is both
-  country `PL` and the firmware's "modulation not from the last hop" marker
-  (`lora_functions.cpp:587`), so it is ambiguous on the wire — a handover asking for that to be
-  separated is with the firmware maintainers
-  (`doc/plans/2026-08-28_1700-firmware-mod-nibble-handover.md`).
-- **`PP` carries RSSI as a POSITIVE MAGNITUDE.** `appendHeySignalReport()` emits
-  `String(rssi*-1.0, 0)`, so `-101 dBm` is on the wire as `101`. `hey_path.parse_hey_chain()` negates
-  it. A parser that trusts the sign inverts every reading and still looks plausible.
-- **Legacy-shape detection is by COMMA COUNT in the leading token**, mirroring the firmware
-  (`mheard_functions.cpp:436-451`): 0 commas (`R99;`) and 2 (`R99,99,99;`) are valid, **1 comma
-  (`R99,99;`) is invalid**. Do not invent a different rule.
-- **An absent `PP` says nothing about the hop count.** The firmware drops it (then `DIST`) once the
-  register JSON would exceed 244 chars, which starts at ~5 relay hops — precisely the deep chains
-  where it would be most interesting. Never read "no chain" as "no relays".
-- **`PP` is deliberately NOT persisted.** It carries no callsigns, so it identifies the POSITION of a
-  weak link, never the station, and it self-censors at depth. Parsed and passed through for the live
-  view only. Revisit if hop identities ever reach the wire.
-- **Two schemas share `TYP: "MH"`.** The live builder used to send `SRC`/`GW`/`PP`; those keys were
-  reverted upstream 2026-08-28 (`dc7d56d7`, `17d1796e`) and the current `MH` register carries 13 keys
-  instead: `TYP CALL DATE TIME PLT HW MOD RSSI SNR DIST PL MESH NCNT`. The `--mheard` table dump
-  (`mheard_functions.cpp:651`) never sent `SRC`/`GW`/`PP` either, because it reconstructs from a
-  stored `|`-separated string that never held them. MCProxy's parser for the three reverted keys
-  stays in the tree — inert against current firmware, ready if an older node is still in the field or
-  the fields are re-adopted — and all three stay optional — never subscript them.
+- **`CALL` is the LAST HOP, `SRC` the ORIGINATOR.** `RSSI`/`SNR` measure `CALL`'s transmission, and ~2/3 of HEY observations are relayed. `transform_mh` keeps `src = CALL` and the signal write stays on that row (rekeying onto `SRC` re-creates the bug migration v22 fixed). `SRC` gets a signal-free `"heard"` upsert (`last_seen` + `gw` only). `hw_id`/`lora_mod`/`mesh` describe the heard transmission and never land on `SRC`'s row.
+- **The `"heard"` upsert must run BEFORE `_store_mheard`'s early return** (`storage/ingest.py`): throttled frames return there and skip anything later. Third instance of the "hook after an early return never fires" trap (see Link Check, Gateway Uptime).
+- **`GW` describes `SRC`, never `CALL`, and only on a HEY frame** (destination path `HG` vs `H`, a gateway claim only for payload type `'@'`). `transform_mh` gates `gw` on `PLT == 0x40` and emits `None` otherwise (fail closed). Within the gate `0` is authoritative and overwrites a stored `1`; `None` leaves it alone. Ungated reading let a relay's non-HEY traffic flip a real gateway flag (2026-08-28 `DF2SI-12`; migration 27 nulled the zeros).
+- **`MOD` is a packed byte**: `(getMOD() & 0xF) | (node_country << 4)`. Both the GATT footer and the MH register are masked `& 0x0F` in `ble_protocol.py`; storing the raw byte made every non-EU node's modulation wrong. The country nibble is not persisted (`0xF` is both country `PL` and a "not from last hop" marker; handover `doc/plans/2026-08-28_1700-firmware-mod-nibble-handover.md`).
+- **`PP` carries RSSI as a POSITIVE MAGNITUDE** (`101` for -101 dBm); `hey_path.parse_hey_chain()` negates it. An absent `PP` says nothing about hop count (the firmware drops it, then `DIST`, once the register JSON exceeds 244 chars, ~5 hops). `PP` is deliberately NOT persisted (no callsigns; identifies a link position, never a station).
+- **Legacy-shape detection is by COMMA COUNT in the leading token**, mirroring the firmware (`mheard_functions.cpp:436-451`): 0 commas and 2 commas are valid, **1 comma is invalid**.
 
 ## ACK Attribution (`message_acks`, "who acknowledged?")
 
-Attribution behind the single-flag `send_success` / `acked`: which station sent the Node,
-Gateway or Peer ACK. Plan and the compatibility matrix: `doc/archive/2026-09-05_1545-ack-attribution-plan.md`;
-firmware side: `MeshCom-Firmware-DEV-Main/docs/ack-wer-hat-quittiert.md`.
+Which station sent the Node, Gateway or Peer ACK. ADR-0010; plan `doc/archive/2026-09-05_1545-ack-attribution-plan.md`; firmware: `MeshCom-Firmware-DEV-Main/docs/ack-wer-hat-quittiert.md`.
 
-- **Vocabulary is `node` / `gateway` / `peer`** (`ack_kind` on `msg:status`, `ACK_KIND_BY_TYPE`
-  in `ble_protocol.py`). The proposal's "heard" / "server reached" are explanations, not
-  identifiers. Do not rename on the wire: the webapp's ctcping ordering guard keys on `sent`.
-- **The BLE appendix is length-prefixed at GATT byte 7**, not separator-terminated. Old firmware
-  sends `0x00` there, which IS the legacy format. A bad appendix drops the appendix, never the ACK
-  (`parse_ack_appendix`). The 4-byte timestamp is never read; `transform_ack` stamps arrival.
-- **`from` / `via` are on `msg_status` ONLY when known.** Legacy payloads are byte-identical and
-  pinned by `ack_status_tests` cases 1-6; adding `from: None` breaks them and mc-chat parity.
-- **`message_acks.from_call` is `''`, never NULL, for an unattributed frame** so the
-  `(msg_id, kind, from_call)` key collapses repeats once firmware stops gating "first ACK only".
-- **`echo_id` identifies NOTHING on its own — the inline `:ackNNN` match needs the ack's addressing
-  AND a 1-hour window.** It is the firmware's `{NNN` counter: three digits, minted per sender,
-  unique only within that sender and roughly an hour. The lookup was `WHERE echo_id = ? ORDER BY
-timestamp DESC LIMIT 1`, so any station's ack marked whichever message last used that number —
-  on mcapp.local an own DM to DK1TCP-77 rendered ✓✓ Delivered because an unrelated DH6MAV pair
-  reused 201 forty-four minutes later (5 of 82 acked rows mis-attributed; 25 of 200 live counter
-  values already shared by >1 sender). Same user-visible failure as the 2026-08-19 ctcping bug.
-  `_inline_ack_original` now requires the original's sender to be who the ack is addressed TO and
-  its target to be who it came FROM, inside `DEDUP_WINDOW_MS`. **Both halves are load-bearing and
-  each is mutation-pinned.** Do NOT widen the window to cover a store-and-forward hold: past the
-  counter's horizon a "match" is not evidence, and a held DM's real ack still arrives exactly as a
-  binary `0x02` frame carrying the true msg_id — **except for a message already at
-  `delivery_status = 'held'`**, which gets `HELD_ACK_WINDOW_MS` (168 h, the firmware's
-  `--storetime` max) instead. That exception is not optional: a held DM legitimately sits in a
-  mailbox until the destination reappears, so a flat 1 h window refuses every late ack and strands
-  it at `held` forever. Leaning on `0x02` alone does not cover it — the extUDP path has no binary
-  ack, and neither does mc-chat, so for them the text IS the only signal. Widening it only for
-  already-held rows keeps the ambiguity small: a false match needs the same pair, the same
-  counter, AND the older message still held — and since the counter is ours, reusing it means
-  1000 messages to that station in between.
-- **A `msg_id` identifies a message only for 4 hours — `ACK_MSG_ID_WINDOW_MS`.** It is
-  `((_GW_ID & 0x3FFFFF) << 10) | node_msgid` with `node_msgid` wrapping at 999
-  (`msgid_counter.h`), so it is unique across STATIONS but repeats every ~1000 frames one node
-  originates — a frame count, not a period: median **24.8 h** on DK5EN-98 (min 24.75 h, max
-  499 h), and it shortens as traffic grows. Every binary-ack binding goes through
-  `_resolve_ack_target` (`storage/ingest.py`), which clamps the `msg_id` lookup to 4 h, and
-  `_write_delivery_status` now takes a REQUIRED `row_id` so nothing re-resolves independently.
-  Unclamped, a group-20 broadcast displayed "Acknowledged by OE5HWN-12" from the peer ack of an
-  unrelated DM sent 24.75 h earlier under the same msg_id 1AE1E066 (2026-09-21; 13 of 85 ledger
-  ids on the live DB matched more than one message row). Same carve-out as the inline path: a row
-  at `delivery_status = 'held'` keeps `HELD_ACK_WINDOW_MS`.
-- **The `message_acks` key carries no message identity, so a reused msg_id SWALLOWS the new
-  message's acks.** `(msg_id, kind, from_call)` has no timestamp, so the previous owner of the
-  counter is still sitting under the key and `INSERT OR IGNORE` drops the new rows as duplicates —
-  the 2026-09-21 message lost all three of its node acks that way. `_prune_stale_message_acks`
-  runs once per ack frame in `_handle_ack`, before any branch records, and only when the ack bound
-  INSIDE the window (a held-carve-out match's older rows are that message's own). `get_message_acks`
-  applies the same clamp on READ, anchored on the newest ack for the id, which is what makes rows
-  written before the prune existed read correctly without a migration or backfill.
-- **The newest-ack anchor is wrong for the OLDER message, so the popover sends `?since=`.**
-  Anchored on the newest ack, an older message's popover listed the acks of the newer message that
-  reused its msg_id. The webapp passes the bubble's own `timestamp` as `since`, and
-  `get_message_acks` then returns `[since - ACK_SINCE_SLACK_MS, since + 4 h)`, or 168 h when a
-  `held` row lies inside the NARROW window, and ignores the newest ack. The held probe must stay
-  narrow: probed over 168 h it finds a NEWER reuser's `held` row and widens the older message
-  back over that message's acks (pinned by `ack_status_tests` case 20c2). A message's own first
-  `held` always binds within 4 h, so nothing real is lost. Without `since` it behaves exactly as
-  before, which is what older webapps get. The older message's own rows are already gone (pruned
-  at write), so it shows nothing rather than the wrong station.
-- **Never key the inline match on the ack payload's padded callsign.** `%-9.9s:ack%03i` TRUNCATES
-  at 9 chars (`OE1ABCD-12` arrives as `OE1ABCD-1`) and real traffic shows the no-separator case
-  (`DK1TCP-77:ack622`). The frame's `src`/`dst` carry the same identities untruncated. The padded
-  field holds the ORIGINAL SENDER, not the acking station — a test fixture said otherwise until
-  2026-09-14.
-- **The webapp runs the same inline match client-side, and `ack_match_vectors.json` pins the
-  two together.** Its `findAckMessage` (webapp `services/messageProcessor/ackMatch.ts`) was looser
-  until 2026-10-04 (SSID stripped, ack addressee never checked), so an overheard ack between two
-  other stations marked our own DM ✓✓ and the `proxy:initial` `acks[]` replay re-set it on every
-  reconnect (`doc/archive/2026-10-04_1842-ack-matcher-fix-plan.md`). `storage/ack_match_vectors.json` is
-  canonical here, replayed through production `store_message` by `ack_match_vectors_tests.py`, and
-  hand-copied to the webapp. Change the inline rule here and the corpus, its sha256 and the
-  webapp's copy move in the same change, or the two sides drift silently again.
-- **The extUDP `{"type":"ack"}` datagram has no `msg` key** and must be claimed in
-  `_handle_non_chat_frame` before the DEBUG-only non-chat log, which is where it used to vanish.
+- **Vocabulary is `node` / `gateway` / `peer`** (`ack_kind` on `msg:status`, `ACK_KIND_BY_TYPE` in `ble_protocol.py`). Do not rename on the wire: the webapp's ctcping ordering guard keys on `sent`.
+- **The BLE appendix is length-prefixed at GATT byte 7** (old firmware sends `0x00`, which IS the legacy format). A bad appendix drops the appendix, never the ACK (`parse_ack_appendix`). The 4-byte timestamp is never read.
+- **`from` / `via` are on `msg_status` ONLY when known** (legacy payloads are byte-identical, pinned by `ack_status_tests` cases 1-6; adding `from: None` breaks them and mc-chat parity). `message_acks.from_call` is `''`, never NULL, so the `(msg_id, kind, from_call)` key collapses repeats.
+- **`echo_id` identifies nothing on its own.** It is the firmware's per-sender `{NNN` counter (three digits, unique only per sender and roughly an hour). The inline `:ackNNN` match (`_inline_ack_original`) therefore requires the original's sender to be who the ack is addressed TO, its target to be who it came FROM, inside `DEDUP_WINDOW_MS`. **Both halves are load-bearing and mutation-pinned.** Do NOT widen the window for store-and-forward: a message at `delivery_status = 'held'` gets `HELD_ACK_WINDOW_MS` (168 h, the firmware's `--storetime` max) instead, which is not optional (a flat 1 h refuses every late ack and strands it at `held`), and the extUDP path and mc-chat have no binary ack, so for them the text is the only signal.
+- **A `msg_id` identifies a message only for 4 h (`ACK_MSG_ID_WINDOW_MS`)**: it is `((_GW_ID & 0x3FFFFF) << 10) | node_msgid` with `node_msgid` wrapping at 999, so it repeats every ~1000 frames one node originates (median 24.8 h on DK5EN-98). Every binary-ack binding goes through `_resolve_ack_target` (`storage/ingest.py`), which clamps to 4 h; `_write_delivery_status` takes a REQUIRED `row_id` so nothing re-resolves independently. A `held` row keeps `HELD_ACK_WINDOW_MS`.
+- **The `message_acks` key carries no message identity, so a reused msg_id SWALLOWS the new message's acks** (`INSERT OR IGNORE`). `_prune_stale_message_acks` runs once per ack frame in `_handle_ack`, before any branch records, and only when the ack bound inside the window. `get_message_acks` applies the same clamp on read, anchored on the newest ack. For the OLDER message the popover sends `?since=<bubble timestamp>` and gets `[since - ACK_SINCE_SLACK_MS, since + 4 h)`, or 168 h only when a `held` row lies inside the NARROW window (probing 168 h finds a newer reuser's `held` row and widens back over its acks; pinned by `ack_status_tests` case 20c2). Keeping the older message's own rows is backlog B6.
+- **Never key the inline match on the ack payload's padded callsign**: `%-9.9s:ack%03i` truncates at 9 chars (`OE1ABCD-12` → `OE1ABCD-1`), the no-separator case exists, and the field holds the ORIGINAL SENDER, not the acking station. Use the frame's `src`/`dst`.
+- **The webapp runs the same inline match client-side**; `storage/ack_match_vectors.json` is canonical here (replayed through production `store_message` by `ack_match_vectors_tests.py`) and hand-copied to the webapp. Change the rule, the corpus, its sha256 and the webapp copy in the same change.
+- **The extUDP `{"type":"ack"}` datagram has no `msg` key** and must be claimed in `_handle_non_chat_frame` before the DEBUG-only non-chat log.
 
 ## Store-and-Forward DM Status (`0x03 failed` / `0x04 held`)
 
-Delivery states a store-and-forward node reports for a DM, on top of the three ACK kinds above.
-Plan and the decisions: `doc/archive/2026-09-14_1153-store-forward-dm-status-plan.md`; firmware side:
-`MeshCom-Firmware-DEV-Main/docs/client-integration-store-forward.md` (fork-main `150b0a4a`).
+Delivery states a store-and-forward node reports for a DM, on top of the ACK kinds above. ADR-0009; plan `doc/archive/2026-09-14_1153-store-forward-dm-status-plan.md`; firmware: `MeshCom-Firmware-DEV-Main/docs/client-integration-store-forward.md`.
 
-- **`failed` must NOT set `send_success`, and that is the whole point of the branch.** `_handle_ack`
-  set it unconditionally for every ack type; `0x03` means every retry was exhausted and nobody
-  acked, so the pre-existing write would have marked the message transport-confirmed — the exact
-  inversion of the frame. The `0x03` path runs a read-only existence `SELECT` instead, so `rows`
-  still means "a matching original exists" for the record/publish gates. `0x04 held` KEEPS the
-  write: a store node demonstrably took the frame off the air.
-- **Precedence is one monotone rank, enforced in the UPDATE's own WHERE clause.**
-  `sent/node/gateway = 1 < held = 2 < failed = 3 < acked = 4`, NULL = 0 via the SQL `CASE`'s `ELSE`;
-  `_DELIVERY_STATUS_RANK` in `storage/ingest.py` is the single source and the SQL is built from it.
-  Encoding the test in SQL rather than read-then-write is what makes two out-of-order acks
-  race-proof — the loser matches zero rows instead of clobbering a higher rank from a stale read.
-  This reproduces every rule in the spec's §2 and every sequence in its §6 with no special case.
-- **Equal rank does not overwrite, so `held(A)` then `held(B)` keeps A.** The spec says "show the
-  most recent holder"; a strict `>` is what makes the scheme race-proof, so the deviation is
-  deliberate. Both holders survive in `message_acks`, whose `(msg_id, kind, from_call)` key also
-  collapses the firmware's hourly per-holder repeat for free. `holder` is written through
-  `COALESCE(?, holder)` so an unattributed frame never blanks a known holder.
-- **`acked: false` on the `failed` event is a compatibility floor, not decoration.** The webapp's
-  `msg:status` handler renders ANY event with no `sent` key and no `acked === false` as a peer
-  acknowledgement — ✓✓ Delivered. Without that key a `failed` event renders the one thing it
-  exists to deny. Do not remove it once the webapp learns `ack_kind: "failed"`. `held` needs no
-  such guard: its `sent: true` takes the transport branch, which is already the honest rendering.
-- **`holder` is a deliberate duplicate of `from` on the `held` event.** The spec names it; the
-  webapp reads it without knowing this repo's attribution convention.
-- **Both "the addressee answered" paths write the `message_acks` ledger, and the inline one does
-  NOT extend its published payload.** The inline `:ackNNN` branch recorded no ledger row until
-  2026-09-21, so a text peer ack rendered ✓✓ Delivered with an empty "Acknowledged by" — and text
-  is the only form of a peer ack on the extUDP path and in mc-chat, neither of which has a binary
-  `0x02` frame. It now records `kind="peer"` attributed to the ack frame's own sender (through
-  `normalise_ack_callsign`, the same grammar the BLE appendix uses) with `via` = the ack's
-  `src_type` through `_coerce_ack_via` (BLE yields None). The `msg_status` event stays
-  `{msg_id, acked, ack_kind}` with no `from`/`via`: it is byte-pinned by `ack_status_tests` and
-  shared with mc-chat, and the popover reads the ledger, not the event.
-- **There are TWO paths that mean "the addressee answered", and both must write the rank.** The
-  binary `0x02` branch in `_handle_ack` and the inline `:ackNNN` TEXT match further down
-  `store_message` are independent; wiring only the first left a `held` message acked by text
-  sitting at `delivery_status='held'` AND `acked=1`, with history contradicting the live event.
-  The inline path passes `row_id=` explicitly, because it locates the original by `echo_id` while
-  `_write_delivery_status`'s own lookup takes the newest row for the msg_id — and one msg_id
-  legitimately has two transport copies, so resolving separately can mark `acked` on one and
-  `delivery_status` on the other.
-- **Do not fold this into the existing `send_failed` event.** `_publish_send_failed` (`main.py`) is
-  a LOCAL send failure, emitted before a msg_id exists, which is why the webapp matches it by
-  `dst` + `msg`. `0x03` has a msg_id and is a different fact. Same display fields, distinct events.
-- **The `:sto` notice text is absorbed like `:ack`, not shown** (reversed 2026-10-02; plan §6.2).
-  A store node answers the original sender with `'%-9.9s:sto%03i[ <held destination>]'`
-  (firmware `docs/client-integration-store-forward.md` §3). `store_message` matches it in
-  `_inline_sto_original` (original sender == notice `dst`, `echo_id` == NNN, original target ==
-  the held destination when named, `DEDUP_WINDOW_MS` = 1 h) and `_apply_held_notice` writes it
-  exactly like the 0x04 branch: `send_success`, rank `held`, ledger `kind="held"`, and the shared
-  `_held_status_payload` event. The row is still stored but hidden from every read path through
-  `_STORE_NOTICE_GLOBS` in `_HIDDEN_GLOBS` — matched or not, an unmatched notice is dropped from
-  view. It must NOT join `_PEER_ACK_GLOBS`: the acks query serves that shape as a delivery receipt.
-  The old "double count with 0x04" objection does not hold: a fork node with EXTUDP on really does
-  deliver both (text over extUDP, 0x04 over BLE), and they collapse — equal rank never overwrites
-  and the ledger key `(msg_id, kind, from_call)` is the same holder string on both paths. Push is
-  unchanged: contract v10 keeps `:ack` / `:rej` / `:sto` push-silent.
-- **No push is emitted for `failed` or for `acked`-after-`held`** — deliberate, reasons in the
-  plan's §6.1.
-- **The frame decoder needed no change and still needs none.** `parse_ack_appendix` walks by the
-  length byte and `_ACK_APPENDIX_MAX_LEN = 10` already covers the spec's `n <= 9`. An unknown
-  status byte is reported as `unknown(...)`, never an error — the spec is explicit about that.
+- **`failed` must NOT set `send_success`** (every retry exhausted, nobody acked); the `0x03` path runs a read-only existence `SELECT` instead so `rows` still means "a matching original exists". `0x04 held` KEEPS the write (a store node took the frame off the air).
+- **Precedence is one monotone rank enforced in the UPDATE's own WHERE clause**: `sent/node/gateway = 1 < held = 2 < failed = 3 < acked = 4`, NULL = 0. `_DELIVERY_STATUS_RANK` in `storage/ingest.py` is the single source and the SQL is built from it; read-then-write would let a stale read clobber a higher rank.
+- **Equal rank does not overwrite**, so `held(A)` then `held(B)` keeps A (deliberate deviation from the spec's "most recent holder"; both survive in `message_acks`). `holder` is written via `COALESCE(?, holder)`.
+- **`acked: false` on the `failed` event is a compatibility floor**: the webapp renders ANY `msg:status` with no `sent` key and no `acked === false` as a peer ack (✓✓ Delivered). Do not remove it. `holder` duplicates `from` on the `held` event on purpose.
+- **Two paths mean "the addressee answered" and both must write the rank**: the binary `0x02` branch in `_handle_ack` and the inline `:ackNNN` text match in `store_message`. The inline path passes `row_id=` explicitly (one msg_id legitimately has two transport copies; resolving separately can mark `acked` on one and `delivery_status` on the other) and records `kind="peer"` in the ledger without extending its published payload (`{msg_id, acked, ack_kind}` is byte-pinned by `ack_status_tests` and shared with mc-chat).
+- **Do not fold this into `send_failed`**: `_publish_send_failed` (`main.py`) is a LOCAL failure before a msg_id exists, matched by the webapp via `dst` + `msg`.
+- **The `:sto` notice text is absorbed like `:ack`, not shown**: `_inline_sto_original` matches it and `_apply_held_notice` writes it like the `0x04` branch; the row is stored but hidden through `_STORE_NOTICE_GLOBS` in `_HIDDEN_GLOBS`. It must NOT join `_PEER_ACK_GLOBS` (the acks query would serve it as a delivery receipt). Both transports collapse (equal rank, same ledger key). Push stays silent for `:ack`/`:rej`/`:sto`, `failed`, and `acked`-after-`held`.
+- `parse_ack_appendix` walks by the length byte; an unknown status byte is reported as `unknown(...)`, never an error.
 
 ## Unread Cursors (`read_cursors`, sidebar badges)
 
-Server-authoritative "what has the operator seen" state behind the webapp's sidebar badges and
-the PWA app-icon badge. Plan and the field evidence: `doc/archive/2026-09-06_1200-unread-cursor-plan.md`.
+Server-authoritative "what has the operator seen" state behind the webapp's sidebar badges and the PWA app-icon badge. ADR-0008; plan `doc/archive/2026-09-06_1200-unread-cursor-plan.md`.
 
-- **A cursor is a timestamp, never a count.** `read_cursors(key, ts)` holds the ingest `timestamp`
-  of the newest message seen; `unread = COUNT(timestamp > cursor AND base(src) != base(me)
-AND NOT suppressed)`.
-  The previous scheme (`read_counts`, v7: "the total was N when I looked") broke every time the
-  count shrank under retention, the blocklist filter or the webapp's 2000-row cap, and was stale
-  on every device except the one that did the reading. `read_counts` is still emitted and served
-  for one release (v2.0.4) and is dead weight after that.
-- **`unread` excludes what the client would never render; `count` does not.** The read cursor only
-  advances over RENDERED bubbles, so a conversation whose NEWEST message the webapp hides had a
-  badge no client action could clear (group 20 on mcapp.local, stuck at +1 against a `node_advert`
-  link — `doc/archive/2026-09-19_2140-unread-suppression-plan.md`). `get_conversation_summary` therefore
-  runs `storage/suppression.py`, a server-side mirror of the webapp's `isSpamByClassifier` plus the
-  unconditional `isTextBlocked` half of `passesBaseGuards` (`enabled: false` disables the classifier
-  half, NEVER the blocklist). `count`/`last_ts` stay unfiltered on purpose — a hidden message still
-  belongs to its conversation. The predicate is pinned by `suppression_vectors.json`, canonical
-  here and hand-copied to the webapp with a sha256 on both sides; it is one more corpus on top of
-  the six in Key Gotchas, and nothing syncs it for you. The aggregate and candidate queries in
-  `query.py` MUST keep sharing `_conv_dedup_subquery` / `_CONV_NEWER_EXPR` / `_CONV_NEWER_SPAM_EXPR`
-  — if their predicates disagree the subtraction silently corrupts the count, and three mutations
-  that break it are pinned by `unread_suppression_tests.py`.
-- **The live broadcast carries the classifier fields, and it does so by MUTATING the shared dict.**
-  `MessageRouter.publish` hands ONE `data` object to every subscriber in subscription order;
-  `_storage_handler` is subscribed in `MessageRouter.__init__` and therefore runs before
-  `SSEManager._broadcast_handler`, so `store_message` annotating `message` in place is what puts
-  `category`/`tags`/`info_score`/`template_hash`/`classifier_ver` on the live SSE payload. Both that
-  annotation and `_build_message_dict`'s history reconstruction go through `_classifier_fields`, so
-  live and reloaded views cannot drift. **That ordering is load-bearing** — invert it and the live
-  payload silently loses the fields again; `live_classification_tests.py` asserts the two
-  subscribers' indices. `_broadcast_handler`'s own "shallow COPY, never the shared dict" comment is
-  about the `dst` rebucketing, a different and non-additive mutation, and still stands. Until
-  2026-09-20 the fields were INSERT parameters only, so a hidden message rendered live, the read
-  marker advanced over it, and the badge resolved itself — self-healing, but live and history
-  disagreed about the same message.
-- **`tags` is presence-gated, not truthiness-gated, and that is not a style choice.** An EMPTY tag
-  list is the common case — 19644 of 21048 classified rows on the live DB carry `tags = '[]'` — and
-  mc-chat's `meshcom_mock/wire.py` emits `tags: []` for exactly those rows. Dropping the key on `[]`
-  changes the history payload of 93% of classified messages and diverges the two backends on a wire
-  contract they share. A NULL or undecodable column still omits the key.
-- **A distinct message is FOUR legs, not just `msg_id`.** `_conv_dedup_subquery` groups by the
-  msg_id-or-rowid group AND the resolved sender base AND the conversation key AND a
-  `DEDUP_WINDOW_MS` time fence, mirroring the ingest rule (`_find_duplicate_row_id`); both call
-  `sender_base_sql` (`storage/constants.py`) so the ingest and read-time boundaries cannot drift. A
-  firmware `msg_id` is a node-local counter that gets REUSED: on the live DB 572 multi-row groups
-  split cleanly into 454 real transport pairs (≤ 172 ms apart, max size 2, never spanning a sender,
-  dst or key) and 118 reuse groups (≥ 3.33 h apart, 71 across more than one conversation key).
-  Grouping on `msg_id` alone made narrowed and full-scan `count` disagree for 10 keys AND hid real
-  unread messages — a reuse group took its OLDEST copy's timestamp, so a recent message under an
-  11-day-old msg_id sat before the read cursor and never lit the badge. The time fence is anchored
-  on the data (`_CONV_ANCHOR_SQL`), NEVER a `timestamp / W` bucket: a fixed boundary falling between
-  a 172 ms pair splits it and recreates the unclearable `+1`. **Cost, measured end-to-end through
-  `get_conversation_summary` on mcapp.local against the live DB: 460 ms → 990 ms** for the full
-  scan (once per client connect, off-loop; `/events` is exempt from `StallMiddleware`) and
-  178 ms → 266 ms narrowed. The dedup subquery alone is 313 ms and **both** the aggregate and the
-  candidate query execute it, so its cost is paid TWICE per call — measuring the subquery in
-  isolation understates the real figure by about half, which is how the first recorded number
-  (517 ms) came out low. Materialising it once is the obvious lever if this needs to come down.
-- **Keys are `conversation_key`, on both ends of the wire.** DMs are `A<>B` (sorted base
-  callsigns), groups/hashtags/`*` verbatim. The webapp translates to its sidebar key at exactly
-  one boundary (`translateServerSummaryKey` / `serverKeyForSidebarKey`). `read_counts.dst` stored
-  whatever the client sent, which is why the one-shot seed at startup
-  (`seed_read_cursors_from_counts`) has to translate `A~B` pairs and bare partner calls itself.
-- **Writes are `MAX(existing, incoming)`, and the write returns the stored value.** A second
-  device or a delayed retry must never move the mark backwards. `POST /api/read_cursor` answers
-  `{ts, unread}` and broadcasts `proxy:read_cursor {key, ts, unread}` to every client: the
-  `unread` rides along because the webapp's local window is capped and cannot recompute it once
-  the cursor moves.
-- **Own traffic is excluded by BASE callsign**, not exact SSID: `DK5EN-98` and `DK5EN-14` are
-  both the operator. A message you send from another node must not light a badge here.
-- **The own-message whitelist (spam filter, blocked texts, blocklist verdict) is a webapp
-  display-side rule, not an unread-count rule.** It exempts a self-sent message from
-  `isSpamByClassifier`/`isTextBlocked`/the blocklist verdict at the webapp's call sites only, so it
-  never silently vanishes from the chat view. `storage/suppression.py` mirrors those two predicate
-  functions verbatim and is deliberately unaware of the exemption — `unread` already excludes own
-  traffic by base callsign above. Do not add it to `suppression.py` or to
-  `suppression_vectors.json`.
-- **`proxy:read_cursors` is emitted unconditionally, `{}` included**, for the same reason as
-  `blocked_callsigns`: the client max-merges, so an empty burst is harmless and a gated one leaves
-  a reconnecting client stuck with stale local cursors.
-- **The webapp marks read on render while the tab is visible, in every mode.** The old scheme
-  marked on conversation switch only, so "All / No Filter" never marked anything and badges grew
-  while the messages were on screen.
-- **Unread is counted per DISTINCT message, judged by its EARLIEST stored copy.** The same
-  message lands as two `messages` rows with the same `msg_id` about 100 ms apart (UDP datagram
-  plus the BLE copy; the v3 migration dropped the `msg_id` UNIQUE constraint on purpose), while
-  the webapp dedups to the first copy and marks read with that copy's timestamp. A per-row count
-  leaves the later sibling "newer than the cursor" forever: on mcapp.local every conversation
-  whose newest message arrived over two transports sat at **+1** with nothing a client could do
-  (v2.0.4-dev.1). `get_conversation_summary` therefore groups by `msg_id` (rowid fallback for
-  id-less rows) and takes `MIN(timestamp)` before joining the cursors. Symptom → cause: a badge
-  stuck at exactly 1 per conversation means a query is counting transport copies, not messages.
-  The pairs themselves were an ingest RACE, fixed the same day: the dedup gate was a
-  check-then-insert against `messages` with classification and the SQLite write between the
-  two awaits, and the two copies arrive as separate router tasks 40-170 ms apart. 984 pairs in
-  one week, none slower than 172 ms. `_claim_recent_ingest` now claims `(sender, msg_id)` in
-  memory synchronously before the first await; the DB lookup stays as the restart backstop.
-  Rows written before v2.0.4-dev.3 still hold the pairs, so the per-message aggregation stays.
+- **A cursor is a timestamp, never a count**: `unread = COUNT(timestamp > cursor AND base(src) != base(me) AND NOT suppressed)`. (`read_counts` is still emitted for one release and is dead weight afterwards.)
+- **`unread` excludes what the client would never render; `count` does not.** A cursor only advances over RENDERED bubbles, so a hidden newest message made an unclearable badge. `get_conversation_summary` runs `storage/suppression.py`, a server-side mirror of the webapp's `isSpamByClassifier` plus the unconditional `isTextBlocked` half of `passesBaseGuards` (`enabled: false` disables the classifier half, NEVER the blocklist). The predicate is pinned by `contract/suppression_vectors.json`, which comes from mc-chat via the contract subtree: edit it in mc-chat, pull it here, then hand-copy it to the webapp with its sha256 (nothing syncs that copy). The aggregate and candidate queries in `query.py` MUST keep sharing `_conv_dedup_subquery` / `_CONV_NEWER_EXPR` / `_CONV_NEWER_SPAM_EXPR`, or the subtraction silently corrupts the count (`unread_suppression_tests.py` pins three mutations).
+- **The live broadcast carries the classifier fields by MUTATING the shared dict.** `MessageRouter.publish` hands ONE `data` object to every subscriber in order; `_storage_handler` (subscribed in `MessageRouter.__init__`) runs before `SSEManager._broadcast_handler`, so `store_message` annotating in place puts the fields on the live SSE payload. **That order is load-bearing** (`live_classification_tests.py` asserts the subscriber indices). `_broadcast_handler`'s own "shallow COPY" comment concerns the `dst` rebucketing and stands.
+- **`tags` is presence-gated, not truthiness-gated**: an empty `[]` is the common case (93% of classified rows) and mc-chat emits `tags: []` too. A NULL or undecodable column omits the key.
+- **A distinct message is FOUR legs, not `msg_id`**: `_conv_dedup_subquery` groups by msg_id-or-rowid AND resolved sender base AND conversation key AND a `DEDUP_WINDOW_MS` fence, mirroring ingest (`_find_duplicate_row_id`); both call `sender_base_sql` (`storage/constants.py`). Firmware `msg_id` is a node-local counter that gets REUSED (hours to days apart). The time fence is anchored on the data (`_CONV_ANCHOR_SQL`), NEVER a `timestamp / W` bucket (a boundary between a 172 ms transport pair recreates the unclearable `+1`). The dedup subquery runs twice per `get_conversation_summary` call (~1 s full scan on the live DB, off-loop); materialising it once is the lever if that must come down.
+- **Keys are `conversation_key` on both ends**: DMs `A<>B` (sorted base callsigns), groups/hashtags/`*` verbatim. The webapp translates at one boundary (`translateServerSummaryKey` / `serverKeyForSidebarKey`); `seed_read_cursors_from_counts` translates old `A~B` pairs and bare partner calls.
+- **Writes are `MAX(existing, incoming)` and return the stored value.** `POST /api/read_cursor` answers `{ts, unread}` and broadcasts `proxy:read_cursor {key, ts, unread}` (`unread` rides along because the webapp's window is capped). `proxy:read_cursors` is emitted unconditionally, `{}` included (the client max-merges; a gated emit leaves a reconnecting client stale).
+- **Own traffic is excluded by BASE callsign** (`DK5EN-98` and `DK5EN-14` are both the operator). The own-message whitelist (spam filter, blocked texts, blocklist verdict) is a webapp display rule only; do not add it to `suppression.py` or `suppression_vectors.json`.
+- **A DM TO the operator's base callsign is never classifier-hidden** (blocked texts still apply). Unlike the own-message whitelist this IS in the predicate and the corpus (v5, `ownCall` + `message.dst`), because the unread count must agree with what renders. v8 labels bot replies (`!time`, `!help`, `!mheard`, `!pos`) origin `machine` at score 0.25, so `hideAutoBeacons`/`minInfoScore` hid answers the operator asked for (OE5HWN-12 on 2.1.27, 2026-11-26). `is_suppressed(..., own_base=)` everywhere; mc-chat's SQL form uses the registered `mc_call_base`.
+- **Unread counts per DISTINCT message judged by its EARLIEST stored copy**: the same message lands as two `messages` rows with the same `msg_id` ~100 ms apart (UDP + BLE; v3 dropped the `msg_id` UNIQUE on purpose), and the webapp marks read with the first copy's timestamp. `get_conversation_summary` groups by `msg_id` (rowid fallback) and takes `MIN(timestamp)`. **Symptom → cause:** a badge stuck at exactly 1 per conversation means a query counts transport copies. The pairs were an ingest race, closed by `_claim_recent_ingest` (claims `(sender, msg_id)` in memory synchronously before the first await; the DB lookup is the restart backstop); rows written before v2.0.4-dev.3 still hold pairs.
 
 ## Blocklist (`sperrliste.json`)
 
-The curated global blocklist, maintained in this repo and fetched by every node from
-`raw.githubusercontent.com/DK5EN/McApp/main/sperrliste.json` (branch **main**) (`commands/handler.py`). It is
-merged with admin `!kb` kickbans into `CommandHandler.blocked_callsigns` and pushed to clients over
-SSE. Design notes for the retroactive fix: `doc/archive/2026-08-30_0930-blocklist-retroactive-plan.md`.
+Curated global blocklist maintained in this repo and fetched by every node from `raw.githubusercontent.com/DK5EN/McApp/main/sperrliste.json` (`commands/handler.py`), merged with admin `!kb` kickbans into `CommandHandler.blocked_callsigns`, pushed to clients over SSE. ADR-0012.
 
-- **The URL is pinned to `main`.** A commit that only reaches `development` blocks nobody. This has
-  already cost one debugging session.
-- **`blocklist_decision` is an INGEST gate, so blocking used to be forward-only.** It ran on ingest
-  (`main.py`) and on the live broadcast (`sse_handler._broadcast_handler`) and nowhere else, which
-  left every row a station had deposited _before_ it was blocked in `messages.db`, replayed to
-  every client on every reload. The sperrliste is curated centrally and lands on boxes we do not
-  administer, so a per-host `DELETE` is not a fix. `MessageRouter.filter_history_row` is now applied
-  on the way **out** of storage — `get_smart_initial_with_summary` and `get_messages_page` take a
-  `blocklist_filter` — and that is the only thing making an entry retroactive.
-- **The summary counts must be filtered with the same predicate as the messages.** They drive the
-  sidebar badges; an unfiltered summary keeps advertising a conversation whose messages the filter
-  just removed. `has_more` is the opposite case: it stays keyed on the **raw** row count, or a page
-  that filters to empty reads as "start of history" and the client stops paging backwards.
-- **`blocked_callsigns` must be emitted BEFORE `smart_initial` in the SSE burst.** The webapp applies
-  the set at one ingest chokepoint (`messageProcessor`), so anything delivered ahead of it is
-  admitted against an _empty_ blocklist and stays on screen. Emitting history first is exactly why a
-  blocked station survived every reload even with a correct list on both ends. Order is load-bearing.
-- **Offline-cache hydration is the one door into the webapp's store that bypasses
-  `processDataElement`.** `source === 'hydrate'` routes rows straight into `msgData`, so cached rows
-  were immune to the blocklist forever. Gated now, plus `purgeBlockedCallsigns` (memory + IndexedDB
-  - positions) on every `proxy:blocked_callsigns` snapshot. All three sites share
-    `blocklistVerdict()` so they cannot drift.
-- **The refresh is 15 min with a conditional GET, not 24 h.** An unchanged list costs a 304.
-  `_apply_sperrliste` REPLACES the curated portion instead of unioning it, so an upstream removal
-  un-blocks without a restart — but an entry an admin also kickbanned locally is protected from
-  that removal (provenance comes from the persisted kickban table; `blocked_callsigns` is a flat
-  union and knows none). The union runs after the subtraction and unconditionally, because
-  `!kb delall` clears the whole set and the next refresh has to restore the curated entries.
-- **The ETag is only stored for a payload that validated.** Caching the tag of a malformed list
-  turns every later refresh into a 304 and pins the node to its last good list forever.
+- **The URL is pinned to `main`**: a commit that only reaches `development` blocks nobody.
+- **`blocklist_decision` is an ingest gate, so blocking used to be forward-only.** `MessageRouter.filter_history_row` is applied on the way OUT of storage (`get_smart_initial_with_summary`, `get_messages_page` take a `blocklist_filter`); that is the only thing making an entry retroactive. **Summary counts must use the same predicate** as the messages, but `has_more` stays keyed on the RAW row count (else a page that filters to empty reads as "start of history").
+- **`blocked_callsigns` must be emitted BEFORE `smart_initial` in the SSE burst**: the webapp applies the set at one ingest chokepoint, so anything delivered earlier is admitted against an empty list.
+- **Offline-cache hydration bypasses `processDataElement`** (`source === 'hydrate'` goes straight into `msgData`); it is gated now, plus `purgeBlockedCallsigns` on every `proxy:blocked_callsigns` snapshot. All sites share `blocklistVerdict()`.
+- **Refresh is 15 min with a conditional GET.** `_apply_sperrliste` REPLACES the curated portion (an upstream removal un-blocks without restart), but an entry an admin also kickbanned locally is protected (provenance from the persisted kickban table); the union runs after the subtraction, unconditionally, because `!kb delall` clears the whole set. **The ETag is stored only for a payload that validated**, or a malformed list pins the node to its last good list forever.
 
 ## RF Monitor (`wire:frame`, `/api/monitor/frames`)
 
-`wire_monitor.py` keeps an in-memory ring (2000 envelopes, per process, not persisted) of every
-frame this backend saw or sent, and broadcasts each one as the bare SSE event `wire:frame`. The
-contract is canonical in the webapp repo (`docs/rf-monitor-plan.md`); mc-chat implements the same
-one, so change both together.
+`wire_monitor.py` keeps an in-memory ring (2000 envelopes, not persisted) of every frame seen or sent and broadcasts each as the bare SSE event `wire:frame`. The contract is canonical in the webapp repo (`docs/rf-monitor-plan.md`); mc-chat implements the same one, so change both together.
 
-- **One verdict source.** `sse_handler.broadcast_verdict()` decides what `_broadcast_handler`
-  delivers (link-check drop, command-echo drop, blocklist drop/redirect), and the monitor calls the
-  same function, so the live stream and the monitor can never disagree. Add a new SSE filter there,
-  never inline in `_broadcast_handler`.
-  A node command reply (`src == "response"`) is `("redirected", "node_reply")` and is decided BEFORE
-  the blocklist, so it no longer depends on `response` being in the sperrliste (same dst rewrite to
-  the spam group as before). Consequence: before the sperrliste has been fetched, such replies are
-  quarantined too instead of shown. The DBG session registers the text of every flag command it writes
-  in `command_echo.py` (15 s TTL, 64 entries), so the node's BLE echo of it is `dropped · command_echo`
-  instead of a duplicate of the DBG line.
-- **RX** subscribes to `mesh_message` (source `udp` only), `ble_notification` (mesh `type`s
-  msg/pos/tele/ack only; register frames and the synthetic `source == "self"` echo are skipped)
-  and `ble_status` (captured as SYS; `type: "sys"` is forced last). The envelope carries the
-  ORIGINAL frame, before any spam-group `dst` rewrite.
-- **TX has exactly one capture point**: `MessageRouter._handle_outbound`, one envelope per attempt
-  (`sent` / `failed` / `suppressed`), link `app`. `_send_via_udp` / `_send_via_ble` return `None` on
-  success or a short failure reason for that purpose. Command replies travel through the same point,
-  so a resolved `!wx` is `suppressed` (the raw command) plus `sent` (the reply).
-- `capture()` deep-copies and never raises into the publish path.
-- **DBG console lines are parsed here, not in the webapp** (2026-10-13, plan
-  `doc/archive/2026-10-13_1500-monitor-console-parsing-plan.md`, firmware reference
-  `how-to-read-meshcom-logs.md`). `node_console._emit_line` attaches `frame.parsed` from
-  `console_parse.parse_console_line` (and `parsed.frame` from `frame_decode.decode_frame` for
-  `[MC-TEST] RX/TX_FRAME`) to every non-notice line, after the 1000-char cut, on the event loop
-  (~3 µs/line). Both never raise; `msg` stays the raw line. Severity and noise rules live in the
-  webapp contract (`docs/rf-monitor-plan.md`, "Parsed console lines") — change them there first.
-- **setlog is the third DBG flag, and its `--info` label is `DisplyLog`** (firmware spelling),
-  so the flag-state regex is a per-flag label map, not `name.upper()`. A flag whose state the
-  `--info` reply does not show is neither turned on nor restored: `--setlog on` runs
-  `tg_post_setlog_off` and wipes a node's `--setlog <CALL>` filter, and the reply window can cut
-  the late `DisplyLog` line. While setlog is on the node stops printing `[HEAP]` and `[MC-HWM]`.
+- **One verdict source**: `sse_handler.broadcast_verdict()` decides what `_broadcast_handler` delivers (link-check drop, command-echo drop, blocklist drop/redirect) and the monitor calls the same function. Add a new SSE filter there, never inline. A node command reply (`src == "response"`) is `("redirected", "node_reply")`, decided BEFORE the blocklist (so before the sperrliste is fetched such replies are quarantined too). The DBG session registers each flag command's text in `command_echo.py` (15 s TTL, 64 entries) so the node's BLE echo is `dropped · command_echo`.
+- **RX** subscribes to `mesh_message` (source `udp` only), `ble_notification` (mesh `type`s msg/pos/tele/ack only; register frames and the synthetic `source == "self"` echo are skipped) and `ble_status` (SYS; `type: "sys"` forced last). The envelope carries the ORIGINAL frame, before any spam-group `dst` rewrite.
+- **TX has exactly one capture point**: `MessageRouter._handle_outbound`, one envelope per attempt (`sent` / `failed` / `suppressed`); `_send_via_udp` / `_send_via_ble` return `None` or a short failure reason for that purpose. `capture()` deep-copies and never raises into the publish path.
+- **DBG console lines are parsed here, not in the webapp**: `node_console._emit_line` attaches `frame.parsed` (`console_parse.parse_console_line`, and `frame_decode.decode_frame` for `[MC-TEST] RX/TX_FRAME`) after the 1000-char cut; both never raise; `msg` stays the raw line. Severity/noise rules live in the webapp contract ("Parsed console lines"), change them there first. Plan: `doc/archive/2026-10-13_1500-monitor-console-parsing-plan.md`.
+- **setlog is the third DBG flag and its `--info` label is `DisplyLog`** (firmware spelling), so the flag-state regex is a per-flag label map. A flag whose state `--info` does not show is neither turned on nor restored: `--setlog on` runs `tg_post_setlog_off` and wipes a node's `--setlog <CALL>` filter. While setlog is on the node stops printing `[HEAP]` and `[MC-HWM]`.
 
 ## Web Push
 
-Web Push to browser / iOS-PWA clients, sharing one wire contract with mc-chat so both backends behave identically.
+Shares one wire contract with mc-chat. ADR-0013.
 
-- **Contract:** `src/mcapp/contract/push_contract.json` (**v7**) — defines the three `/api/push/*` endpoints, the filter `{ dm, groups[], broadcast }`, and match/eligibility/dedup/coalesce/payload semantics. `push_tests.py` runs every vector and pins the corpus sha256; mc-chat runs the same corpus. Inline `contract vN` references in the source name the version that _introduced_ a clause — they are provenance, not staleness, and must not be bumped on a sync.
-- **A subscribe POST replaces the stored filter wholesale, and that is load-bearing in both directions.** Normative since **contract v6** — read `endpoints.subscribe.semantics`, which is the authority; this bullet only summarises it. The request body is the complete new filter state, never a patch, so the backend cannot distinguish "the user cleared their groups" from "the client POSTed before its own settings finished loading" — which is exactly how the webapp silently wiped a live subscription's groups on 2026-08-17 (fixed client-side in webapp v1.6.14-dev.42, see its `docs/backlog.md` B2). v6 therefore puts the ordering obligation on the **client** ("resolve stored prefs first, POST second") and forbids the server-side workaround: **do not add a heuristic** that ignores a default-looking filter or merges it into the stored one — that would break clearing groups on purpose and diverge the two backends.
-- **The delivered payload text is stripped of the firmware ack-request suffix; the gates are not.** Normative since **contract v7** — read `payload_ack_suffix_semantics`, which is the authority. `build_push_payload` strips the $-anchored `\{[0-9]+$`(**strict: no closing brace** — there is no`{NNN}`on the wire and there never will be, so a trailing`{NNN}`is ordinary chat text) and trims, **before** the 120-char truncation, so the cap carries 120 chars of real text and a truncation can never split the suffix into a bare`{`. `handle_mesh_message`gates eligibility/blocklist/dedup on`_build_gate_view`(**unstripped**) and builds the delivered payload only after every gate passes — **do not reorder**: stripping first widens dedup's msg_id-less`(src, dst, text)`fallback key so two messages differing only in their ack counter collapse into one, and it makes clause (d) depend on ping recognition being a prefix check. Both builders share`_payload_fields`so they cannot drift. Do **not** reuse mc-chat's`strip_ack_request`/ the webapp's`stripAckRequestSuffix`here — those are the looser`\{\d+\}?$`echo-matching variant and would strip`{pong}{451010884}`to`{pong}`, reopening the v5 bug. `_test_ack_suffix_stripped_after_gates` pins the ordering via dedup (verified by mutation; a link-check vector does **not** discriminate it).
-- **Routes:** `src/mcapp/sse_routes/push.py`. **Delivery:** `src/mcapp/push_delivery.py` — pure `matches()`/`is_eligible()` (resolve via-routed dst to the **last** comma-component; exclude non-chat frames and own-src), `PushCoalescer` (5 s window), `PushDedup`, and a background dispatcher calling `push_send.webpush` via `asyncio.to_thread` with timeouts. **`pywebpush` is not a dependency** (removed 2026-09-28, B4.3): its module top imports `aiohttp` and `requests`, +13.4 MB RSS. `push_send.py` reuses its crypto libraries unchanged — `http_ece` (RFC 8291 aes128gcm) and `py_vapid` (RFC 8292 JWT) — and POSTs with httpx; do not hand-roll either half. httpx does not follow redirects where `requests` did, so a 3xx is a non-pruning failure. **The mesh-ingest path never awaits delivery** — a no-internet Pi must not stall the event loop / SSE heartbeats.
-- **Storage:** `push_subscriptions`, upsert by endpoint. Prune on push-service **401/403/404/410**.
-- **VAPID (two gotchas, both hit on first real delivery):** the keypair is generated once and persisted as the **raw base64url 32-byte scalar**, NOT PEM (`py_vapid`'s `Vapid.from_string` base64-decodes it and dies on a PEM), at `/var/lib/mcapp/vapid.json` — never committed, and kept `0600` (a readable raw private scalar lets any local account forge VAPID JWTs as this node; `load_or_create_vapid` re-tightens a wider pre-existing file on load). JWT `sub` must be a valid FQDN (`mailto:admin@example.com`); Apple returns **403 `BadJwtToken`** for a no-TLD/`localhost` sub. Override via `MESHCOM_VAPID_SUB` — applied on **load**, so an existing install can fix its `sub` without regenerating a key and invalidating every subscription.
-- **VAPID path resolution** is per call, not import-time: `MESHCOM_VAPID_PATH` wins, else `MCAPP_ENV=dev` writes under `$XDG_STATE_HOME`/`~/.local/state/mcapp`, else `/var/lib/mcapp`. If the chosen directory is unwritable the key falls back to the user state dir rather than going **ephemeral** — an ephemeral key rotates on every restart and silently kills every stored subscription.
-- Delivery needs outbound internet from the Pi and degrades silently without it. `/api/push/*` is covered by the existing `^/api/` proxy rules — no Caddy change.
+- **Contract** `src/mcapp/contract/push_contract.json` (v7) defines the three `/api/push/*` endpoints, the filter `{ dm, groups[], broadcast }` and match/eligibility/dedup/coalesce/payload semantics. `push_tests.py` runs every vector and pins the corpus sha256. Inline `contract vN` references name the version that INTRODUCED a clause (provenance); do not bump them on a sync.
+- **A subscribe POST replaces the stored filter wholesale** (contract v6, `endpoints.subscribe.semantics` is the authority). The server cannot tell "user cleared groups" from "client POSTed before its settings loaded" (how a live subscription's groups were wiped 2026-08-17), so the obligation is on the client. **Do not add a server-side heuristic** that ignores a default-looking filter or merges it.
+- **The delivered payload text is stripped of the firmware ack-request suffix; the gates are not** (contract v7, `payload_ack_suffix_semantics`). `build_push_payload` strips the $-anchored `\{[0-9]+$` (strict: no closing brace) before the 120-char truncation. `handle_mesh_message` gates eligibility/blocklist/dedup on `_build_gate_view` (UNSTRIPPED) and builds the payload only after every gate passes; **do not reorder** (stripping first collapses messages differing only in their ack counter in dedup's `(src, dst, text)` fallback). Do NOT reuse mc-chat's `strip_ack_request` / the webapp's `stripAckRequestSuffix` (looser `\{\d+\}?$`; would turn `{pong}{451010884}` into `{pong}`). `_test_ack_suffix_stripped_after_gates` pins the ordering.
+- **Delivery** (`push_delivery.py`, routes `sse_routes/push.py`): pure `matches()`/`is_eligible()` (via-routed dst resolves to the LAST comma-component; non-chat frames and own-src excluded), `PushCoalescer` (5 s), `PushDedup`, and a background dispatcher calling `push_send.webpush` via `asyncio.to_thread` with timeouts. **The mesh-ingest path never awaits delivery.** **`pywebpush` is not a dependency** (imports aiohttp + requests, +13.4 MB RSS): `push_send.py` reuses `http_ece` and `py_vapid` and POSTs with httpx; do not hand-roll either half. httpx does not follow redirects, so a 3xx is a non-pruning failure.
+- **Storage** `push_subscriptions`, upsert by endpoint; prune on push-service 401/403/404/410.
+- **VAPID**: the keypair is persisted as the **raw base64url 32-byte scalar, NOT PEM** (`py_vapid`'s `Vapid.from_string` dies on PEM) at `/var/lib/mcapp/vapid.json`, 0600 (`load_or_create_vapid` re-tightens a wider file). JWT `sub` must be a valid FQDN (`mailto:admin@example.com`); Apple returns 403 `BadJwtToken` for a no-TLD/`localhost` sub. `MESHCOM_VAPID_SUB` is applied on LOAD, so an existing install can fix its `sub` without invalidating subscriptions.
+- **VAPID path is resolved per call**: `MESHCOM_VAPID_PATH`, else `MCAPP_ENV=dev` → `$XDG_STATE_HOME`/`~/.local/state/mcapp`, else `/var/lib/mcapp`. An unwritable directory falls back to the user state dir rather than going ephemeral (an ephemeral key rotates every restart and silently kills every subscription).
+- Delivery needs outbound internet and degrades silently without it. `/api/push/*` is covered by the `^/api/` proxy rules.
 
-## QRZ.com Callsign Lookup (`qrz_service.py`, issue #14)
+## QRZ.com Callsign Lookup (`qrz_service.py`)
 
-First name + QTH per base callsign from the QRZ.com XML API, with the operator's own account.
-Plan, threat model and API: `doc/archive/2026-10-04_0848-qrz-callsign-lookup-plan.md`.
+First name + QTH per base callsign from the QRZ.com XML API with the operator's account. Plan, threat model and API: `doc/archive/2026-10-04_0848-qrz-callsign-lookup-plan.md`.
 
-- **The budget has two hard guards, each tested on its own, plus an advisory server number.** The
-  ledger pre-check (`qrz_lookups`, written BEFORE the request) and the 24 h suspension set at the
-  50th lookup. Either masks the other in a combined test, which is how the first version of the
-  suite let all of them be deleted unnoticed. Keep Q3b/Q8/Q30/Q44 discriminating.
-- **QRZ's `Count` is advisory and NEVER suspends anything (changed 2026-10-05).** It used to suspend
-  for 24 h at `Count >= 50` on a free account, on the unverified assumption that it is a real 24 h
-  tally. The live box proved the opposite: 47 lookups on 04.10 09:18-09:42, our own 24 h cap expired
-  05.10 09:42:34, the login read `Count = 50` while our ledger said 0/50, and the service re-suspended
-  for another 24 h. `Count` is read only at login and nothing logs in or looks up while suspended,
-  so the ledger never moves and a `Count` that does not decay (or sits in the thousands, which free
-  accounts do report) wedged the service forever. Now: the budget is `min(50 - ledger, 100 -
-  (Count at the last login + lookups since that login))`, and a `Count >= 100` (QRZ's free limit) is
-  "not a plausible tally" and ignored (`SERVER_COUNT_PLAUSIBLE_MAX`). The baseline is in memory and
-  refreshed by every login, including a forced re-login once the session is older than 24 h; do not
-  trust the `Count` of later lookup responses for the budget (they cross 100). A used-up server budget
-  is a 1 h backoff plus a re-login, never a 24 h suspension. Any persisted `suspend_reason =
-  'server_count'` (or the legacy "QRZ reports" `last_error`) is lifted at the next step on every tier.
-  Q40-Q49 pin it, including the 99/100 boundary and the stale live-box row.
-- **The ledger cap applies to free accounts only.** QRZ does not limit a subscriber's XML
-  lookups per day, and on a subscriber `Count` is not a 24 h tally either (DM3KS: `Count 77678`
-  on login, QRZ's page: 1 XML lookup that day) — gating on it suspended every login forever,
-  and the 50/24 h ledger cap still capped a paid account until v2.1.4. `Count` never enters a subscriber's budget (it is still stored and shown). On a subscriber only the
-  30 s spacing bounds the rate; `daily_cap` is `null` in the status. `_is_free_tier` fails
-  closed on an absent or empty `SubExp`, and every login rewrites `subscription`, so a stale
-  "subscriber" can never lift the cap. A running cap suspension on a subscriber is lifted on the
-  next step; a legacy 24 h refusal suspension never is. Q20b-Q20k pin it.
-- **Why a suspension runs lives in `qrz_state.suspend_reason` (migration 34), never in
-  `last_error`.** Replacing the credentials clears `last_error` while the suspension keeps
-  running; the v2.1.2 lift keyed on that text and left DM3KS stuck after a password re-entry.
-  A row from before the column (`NULL`) with `last_error` cleared is lifted on a subscriber only
-  while our own ledger is under the cap.
-- **The 30 s gate must hold when `step()` is called early** (wake event, restart) — a test
-  driver that obeys the returned delay proves nothing about it.
-- **The password is encrypted, not hashed — the login needs the plain text.** `secret_box.py`:
-  install key in `/var/lib/mcapp/secret.key` (0600) + the Pi's board serial via HKDF, AES-GCM
-  with `qrz.password:<USER>` as associated data. An SD card moved to another Pi reads
-  `credentials_unreadable`; the operator re-enters the password. Code running as the service
-  user can always decrypt — no TPM, by design out of scope.
-- **QRZ requests are POSTed as a form body, never a query string**: httpx logs URLs, and the
-  URL would carry the password or the session key.
-- **The credentials PUT must never reach `stall_events`.** `stall_middleware` withholds the
-  body of `/api/qrz/credentials` entirely (key redaction only runs on a body that parses as
-  JSON; a truncated one is stored raw), `redact()` masks `*password*` keys, and the webapp's
-  `stallReporter.ts` does both on the client side.
-- **A rejected login stops the service until new credentials arrive** — retrying a wrong
-  password is what locks an account. A real QRZ refusal (`Connection refused`, or the
-  limit/exceeded/too many/quota wording) backs off a FIXED 1 h and retries (changed 2026-10-05
-  from the spec's 24 h; the retry is a login, which costs no lookup, and one lookup 30 s later), drops the session and logs
-  QRZ's RAW error text with `Count`, ledger and tier at WARNING. The journal is the instrument for
-  learning what QRZ really does on a free account: every login logs `QRZ login ok sub= count=
-  plausible= ledger= budget_today=` and every lookup `QRZ lookup CALL -> outcome count= ledger=`.
-- MFA on the QRZ account does not apply to the XML API (measured 2026-10-04); a free account
-  gets `fname name addr2 state country`, and the login itself costs no lookup.
+- **The budget has two hard guards, each tested on its own**: the ledger pre-check (`qrz_lookups`, written BEFORE the request) and the 24 h suspension at the 50th lookup. Either masks the other in a combined test; keep Q3b/Q8/Q30/Q44 discriminating.
+- **QRZ's `Count` is advisory and NEVER suspends anything.** It does not decay on a free account and reads in the thousands on subscribers; gating on it wedged the service. Budget is `min(50 - ledger, 100 - (Count at last login + lookups since))`; `Count >= 100` is "not a plausible tally" and ignored (`SERVER_COUNT_PLAUSIBLE_MAX`). Do not trust the `Count` of later lookup responses. A used-up server budget is a 1 h backoff plus re-login, never 24 h. Any persisted `suspend_reason = 'server_count'` (or legacy "QRZ reports" `last_error`) is lifted at the next step. Q40-Q49 pin it.
+- **The ledger cap applies to free accounts only.** `_is_free_tier` fails closed on an absent or empty `SubExp`, and every login rewrites `subscription`. On a subscriber only the 30 s spacing bounds the rate (`daily_cap` is `null` in status), and a running cap suspension is lifted on the next step; a legacy 24 h refusal suspension never is. Q20b-Q20k pin it.
+- **Why a suspension runs lives in `qrz_state.suspend_reason` (migration 34), never in `last_error`** (replacing credentials clears `last_error` while the suspension keeps running). A pre-column row (`NULL`) with `last_error` cleared is lifted on a subscriber only while our own ledger is under the cap.
+- **The 30 s gate must hold when `step()` is called early** (wake event, restart); a test driver that obeys the returned delay proves nothing about it.
+- **The password is encrypted, not hashed** (the login needs plain text): `secret_box.py`, install key `/var/lib/mcapp/secret.key` (0600) + the Pi's board serial via HKDF, AES-GCM with `qrz.password:<USER>` as associated data. An SD card moved to another Pi reads `credentials_unreadable`.
+- **QRZ requests are POSTed as a form body, never a query string** (httpx logs URLs). **The credentials PUT must never reach `stall_events`**: `stall_middleware` withholds the body of `/api/qrz/credentials`, `redact()` masks `*password*`, the webapp's `stallReporter.ts` does both client-side.
+- **A rejected login stops the service until new credentials arrive** (retrying a wrong password locks the account). A real QRZ refusal backs off a FIXED 1 h and retries, drops the session and logs QRZ's raw error text with `Count`, ledger and tier at WARNING; the journal is the instrument for what QRZ really does on a free account.
+- **The shown first name is not the first word of `fname`** (`Dr. Ralph`, `Ing. Wolfgang`): `qrz_client.first_name` skips leading titles and single-letter initials. Bare `DI` is deliberately NOT a title (`DI PAOLA` is an Italian surname). A title-list change needs a new migration (45 re-derived stored rows), or stored rows keep the old name.
 
 ## Group Labels (`group_labels.py`, `proxy:group_labels`)
 
-Präfix / Hinweis / remark for group numbers, plus operator name/QTH overrides for callsigns.
-Plan and decisions: `doc/plans/2026-10-25_0900-conversation-nav-group-labels-plan.md`.
+Präfix / Hinweis / remark for group numbers, plus operator name/QTH overrides for callsigns. Plan: `doc/plans/2026-10-25_0900-conversation-nav-group-labels-plan.md`. mc-chat parity is deferred (backlog B8).
 
-- **The ICSSW GRC list ships as `src/mcapp/group_labels_icssw.json`; the Pi never fetches it.**
-  `scripts/refresh_group_labels.py` scrapes <https://icssw.org/meshcom-grc-gruppen/> (no export
-  exists; the table is a serialized array in the page) and is a step of every production release
-  (prod-release skill, Step 2b). The file is shipped by NAME in the prod tarball next to
-  `classifier_contract.json` (`scripts/release.sh`, pinned by `webapp_deploy_tests.py`). ICSSW
-  `Reichweite` is our `remark`. Never load the Brandmeister list: we stay independent of it.
-- **Resolution order: own override → exact ICSSW entry → ICSSW range → country prefix → bare
-  number.** The backend expands ranges (`2321-2329` = OE1-OE9, `26200-26299` = DL00-DL99) into
-  exact keys and merges overrides, so the wire map is flat. The country fallback (`2621` →
-  `262`'s entry) is unbounded and therefore the ONE resolution step in the webapp
-  (`groupLabels.resolve`), fed by the payload's `countries`. An exact entry beats its range:
-  `26244` is ICSSW's own `DL 44 / Freising`, not the derived `DL44`.
-- **Overrides are per field, `NULL` = inherit** (`group_label_overrides`,
-  `callsign_info_overrides`, migration 39). An all-NULL row is deleted, which is the revert. A
-  newer snapshot still reaches every field the operator did not override, and a QRZ refresh never
-  touches a name override.
-- **Callsign overrides ride `proxy:callsign_info` with an additive `manual: true`.** Callsigns
-  without an override keep the byte-identical legacy payload. `qrz_service._publish` publishes the
-  MERGED entry, or a QRZ refresh would overwrite a manual name on every live client. Reverting an
-  override-only callsign broadcasts an all-null entry, because the webapp store never clears a key.
-- **`proxy:group_labels` is a BARE event** (like `proxy:callsign_info`, not the
-  `_RESPONSE_EVENT_MAP` envelope), sent in the connect burst after `proxy:callsign_info` and after
-  every label write. Writes have no Host/Origin guard (operator decision 2026-10-25).
+- **The ICSSW GRC list ships as `src/mcapp/group_labels_icssw.json`; the Pi never fetches it.** `scripts/refresh_group_labels.py` scrapes <https://icssw.org/meshcom-grc-gruppen/> and is a step of every production release (prod-release skill, Step 2b). The file is shipped by NAME in the prod tarball (`scripts/release.sh`, pinned by `webapp_deploy_tests.py`). Never load the Brandmeister list.
+- **Resolution order: own override → exact ICSSW entry → ICSSW range → country prefix → bare number.** The backend expands ranges into exact keys and merges overrides, so the wire map is flat. The country fallback (`2621` → `262`) is unbounded and is the ONE resolution step in the webapp (`groupLabels.resolve`). An exact entry beats its range (`26244` is ICSSW's own `DL 44 / Freising`).
+- **Overrides are per field, `NULL` = inherit** (`group_label_overrides`, `callsign_info_overrides`, migration 39); an all-NULL row is deleted (the revert). A QRZ refresh never touches a name override.
+- **Callsign overrides ride `proxy:callsign_info` with an additive `manual: true`**; callsigns without one keep the legacy payload. `qrz_service._publish` publishes the MERGED entry. Reverting an override-only callsign broadcasts an all-null entry (the webapp store never clears a key).
+- **`proxy:group_labels` is a BARE event** (like `proxy:callsign_info`, not the `_RESPONSE_EVENT_MAP` envelope), sent in the connect burst after `proxy:callsign_info` and after every label write. Writes have no Host/Origin guard (operator decision 2026-10-25).
 
 ## Web Layer (`weblite`, `/api/timezone`, Caddy static)
 
-RAM and front-door campaign, 2026-11-05: `doc/archive/2026-11-05_2230-ram-and-front-door-campaign.md`.
+ADR-0006; campaign: `doc/archive/2026-11-05_2230-ram-and-front-door-campaign.md`.
 
-- **FastAPI is gone; do not add it back.** `src/mcapp/weblite.py` is a small compatible layer on
-  Starlette implementing only what the routes use, and it raises `TypeError` at registration for
-  anything else. `ble_service/src/weblite.py` is a byte-identical copy, pinned by `weblite_tests`,
-  because that service cannot import mcapp. A 422 deliberately omits `input`, `ctx` and `url`,
-  which echo passwords. There is no `/docs` or `/openapi.json`.
-- **`route_table_tests` builds the real `_create_app()`.** Route suites build their own routers and
-  `server_imports_tests` stubs it, so a route weblite refuses would otherwise first fail on the box.
-  It also asserts that every Node Admin and internet-feed route refuses a foreign Host.
-- **`/api/timezone` runs a short-lived child** (`tz_lookup_worker.py`, 33 MB for 1.2-2 s) so numpy
-  and TimezoneFinder are never resident in `mcapp`; a clean-process test pins that. They stay
-  installed, so this saves RAM and not the 90 MB of disk. `uv sync` compiles no bytecode (6.6 s cold
-  against 1.6 s), so `deploy.sh` runs the worker once. Out-of-range coordinates are 400 with no spawn.
-- **Caddy serves `/webapp` from `.br`/`.gz` sidecars**, built by `scripts/precompress_webapp.mjs` in
-  `release.sh`, not on the fly. WASM gets none: 107 MB raw would add about 70 MB per tarball (B16).
-  Assets are immutable with no SPA fallback, because falling back would cache HTML at an asset URL;
-  `immutable` is gated on the file existing because a bare `header` also stamps the 404. Everything
-  else under `/webapp` is `no-cache`. Go's MIME table lacks `.webmanifest` on the box, hence the
-  explicit `Content-Type`. String tests cannot see these: render the template and run real Caddy on
-  a high port with `admin off`.
-- **`/events*` and `/api/*` use `encode { gzip 1 }`, and nothing else does** (2026-11-06,
-  `doc/archive/2026-11-06_1400-runtime-compression-measurements.md`). Static files stay on sidecars.
-  No zstd: it held 7 MB more than gzip with 3 SSE clients on the Pi. Compression does not buy
-  LAN speed, where the connect burst's 1.6 s is mostly server time; it helps slow links.
-  `--converge` rewrites only the LAN Caddyfile: a public-TLS box advances its epoch but keeps its
-  old Caddyfile until `ssl-tunnel-setup.sh` runs again. `/events` needs Caddy 2.11.5 or newer to
-  compress, and an older one just stays plain.
-- **lighttpd is still installed and running** for public-TLS Caddyfiles on existing boxes and an
-  older slot's `mcapp.sh`, which rewrites Caddy to v3 until the next `--skip` from a new slot.
+- **FastAPI is gone; do not add it back.** `src/mcapp/weblite.py` is a small Starlette layer implementing only what the routes use and raising `TypeError` at registration for anything else. `ble_service/src/weblite.py` is a byte-identical copy (pinned by `weblite_tests`; that service cannot import mcapp). A 422 omits `input`, `ctx` and `url` (they echo passwords). No `/docs` or `/openapi.json`.
+- **`route_table_tests` builds the real `_create_app()`** (route suites build their own routers and `server_imports_tests` stubs it); it also asserts every Node Admin and internet-feed route refuses a foreign Host.
+- **`/api/timezone` runs a short-lived child** (`tz_lookup_worker.py`) so numpy/TimezoneFinder are never resident in `mcapp` (a clean-process test pins it). `deploy.sh` runs the worker once because `uv sync` compiles no bytecode. Out-of-range coordinates are 400 with no spawn.
+- **Caddy serves `/webapp` from `.br`/`.gz` sidecars** built by `scripts/precompress_webapp.mjs` in `release.sh`. WASM gets none (107 MB raw; B16). Assets are immutable with no SPA fallback (falling back would cache HTML at an asset URL); `immutable` is gated on the file existing (a bare `header` also stamps the 404); everything else under `/webapp` is `no-cache`; the `.webmanifest` `Content-Type` is explicit because Go's MIME table lacks it. String tests cannot see these: render the template and run real Caddy on a high port with `admin off`.
+- **Only `/events*` and `/api/*` use `encode { gzip 1 }`** (no zstd: +7 MB with 3 SSE clients; measurements `doc/archive/2026-11-06_1400-runtime-compression-measurements.md`). `/events` needs Caddy 2.11.5+ to compress. `--converge` rewrites only the LAN Caddyfile: a public-TLS box advances its epoch but keeps its old Caddyfile until `ssl-tunnel-setup.sh` runs again.
+- lighttpd is still installed and running for public-TLS Caddyfiles on existing boxes and an older slot's `mcapp.sh`, which rewrites Caddy to v3 until the next `--skip` from a new slot (B15).
 
 ## Configuration
 
-`/etc/mcapp/config.json` (dev: `/etc/mcapp/config.dev.json`, auto-selected via `MCAPP_ENV=dev`).
-BLE mode: `remote` or `disabled` (`MCAPP_BLE_MODE` env override). See `ble_service/README.md` for the BLE service API.
+`/etc/mcapp/config.json` (dev: `/etc/mcapp/config.dev.json`, auto-selected via `MCAPP_ENV=dev`). BLE mode `remote` or `disabled` (`MCAPP_BLE_MODE` overrides). See `doc/reference/configuration.md` and `ble_service/README.md`.
 
 ## Inbound Charset (`text_decode.py`)
 
-One policy, one module, both ingest routes. Firmware background: CHR-03
-(`MeshCom-Firmware` fork-main `16670de9` + `094636b2`), `docs/BACKLOG.md` there.
+One policy, one module, both ingest routes (ADR-0019). Firmware background: CHR-03 (`MeshCom-Firmware` fork-main `16670de9` + `094636b2`).
 
-- **The payload is no longer guaranteed valid UTF-8, by firmware design.** Senders like
-  PinPoint put umlauts on the wire as single CP1252 bytes (`ü` = `0xFC`, not `C3 BC`); since
-  CHR-03 the firmware relays them unchanged instead of dropping them, so the deciding is ours.
-  `decode_text` re-reads every UTF-8-rejected byte as CP1252. `errors="ignore"` — what both
-  paths used before — deletes the character silently. Only the five bytes undefined in CP1252
-  (`0x81 0x8D 0x8F 0x90 0x9D`) become `U+FFFD`.
-- **The filter is a BLACKLIST and must stay one.** It rejects Unicode categories
-  `Cc Cf Cs Co Cn` and nothing else. Its predecessor, `is_allowed_char`, was a whitelist that
-  had to be extended by hand for every legitimate character nobody had enumerated, and it lost
-  that race repeatedly: joined emoji sequences (2026-08-30), `Ç` and `Ñ` while `ç` and `ñ` were
-  listed, the entire Nordic/Icelandic set, and every decomposed accent (`u` + `U+0308`, a mark,
-  therefore neither symbol nor punctuation). Adding characters back to an allow-list is the
-  wrong repair for the next report of this shape.
-- **`U+200D` and the tag range `U+E0020..U+E007F` are the only `Cf` exceptions.** They carry no
-  glyph and only bind neighbours into ONE grapheme, so dropping one SPLITS a sequence rather
-  than removing a character. The variation selectors (`Mn`) and the enclosing keycap (`Me`) need
-  no exception — marks are not a rejected category.
-- **`Cn` is judged against the RUNNING Python's Unicode tables.** A codepoint assigned after that
-  release reads as unassigned and is dropped. It is the one way this filter can still be wrong
-  about a legitimate character, and it self-heals on a Python upgrade.
-- **Both transports must use it, and that is the point.** The UDP path ran the whitelist over the
-  whole datagram; the BLE path ran no character filter at all. The same message arrives on both
-  (~100 ms apart) and `_claim_recent_ingest` keeps whichever copy lands FIRST, so the stored text
-  of any message with an unusual character was decided by a transport race. In `ble_protocol.py`
-  this applies to the message BODY only — `path` and `dest` are callsign fields and stay ASCII.
-- **`ble_service/src/main.py`'s `D{` decode stays strict on purpose.** There the
-  `UnicodeDecodeError` IS the evidence of the firmware's 244-byte register clamp cutting
-  mid-codepoint. A CP1252 fallback there would destroy the truncation detector.
-- mc-chat carries the same `decode_text` semantics in `meshcom_mock/decoder.py`. Ported, never
-  imported — separate repos.
+- **The payload is not guaranteed valid UTF-8, by firmware design**: senders like PinPoint put umlauts on the wire as single CP1252 bytes and the firmware relays them unchanged. `decode_text` re-reads every UTF-8-rejected byte as CP1252 (`errors="ignore"` deleted the character silently); only the five bytes undefined in CP1252 (`0x81 0x8D 0x8F 0x90 0x9D`) become `U+FFFD`.
+- **The filter is a BLACKLIST and must stay one**: it rejects Unicode categories `Cc Cf Cs Co Cn` only. The predecessor whitelist (`is_allowed_char`) lost every race against unenumerated legitimate characters (joined emoji, `Ç`/`Ñ`, Nordic set, decomposed accents). Do not repair the next report by extending an allow-list.
+- **`U+200D` and the tag range `U+E0020..U+E007F` are the only `Cf` exceptions** (dropping one SPLITS a grapheme sequence). `Cn` is judged against the running Python's Unicode tables (self-heals on upgrade).
+- **Both transports must use it**: the same message arrives on both ~100 ms apart and `_claim_recent_ingest` keeps whichever copy lands FIRST, so with different filters the stored text was decided by a transport race. In `ble_protocol.py` it applies to the message BODY only; `path` and `dest` stay ASCII.
+- **`ble_service/src/main.py`'s `D{` decode stays strict on purpose**: the `UnicodeDecodeError` IS the evidence of the 244-byte register clamp cutting mid-codepoint.
+- mc-chat carries the same semantics in `meshcom_mock/decoder.py` (ported, never imported).
 
 ## PN Retry XOR (`msg_core`)
 
-Firmware `fork-neo-test` (v4.35t.09.28-neo) resends every direct message up to 3x, 40 s apart;
-retry k XORs msg_id bits 10-11 with k, text and `{NNN` unchanged. Plan and campaign state:
-`doc/archive/2026-09-27_2200-pn-retry-xor-plan.md`; firmware side `docs/pn-retry-mcapp.md` there.
+Firmware `fork-neo-test` (v4.35t.09.28-neo) resends every DM up to 3x, 40 s apart; retry k XORs msg_id bits 10-11 with k, text and `{NNN` unchanged. Plan: `doc/archive/2026-09-27_2200-pn-retry-xor-plan.md`.
 
-- **A node on that firmware filters the copies; an old-firmware node forwards each one with its own
-  msg_id.** Every dedup that keys on msg_id therefore goes through `util.msg_core()` (mask
-  `0xFFFFF3FF`) or, in SQL, `msg_id IN (msg_id_retry_variants(...))` so the index stays usable.
-- **Never key on the core alone.** Bits 10-11 are the low bits of the sender's 22-bit node id, so
-  the core collides across stations. Every core-based key carries the sender: ingest
-  (`(sender, core)`, personal dst only), command dedup (`sender|core`), `PushDedup` and the webapp
-  (`dedup_contract.json` v2, `(resolved-src, core)`).
-- **Stored `messages.msg_id` stays the raw received value.** Ack ledger rows and the published
-  `msg_status` use the resolved row's msg_id, never the ack frame's.
-- **Every 0x41 ack/status frame for our own DM carries the ORIGINAL msg_id** (the firmware folds it
-  back). `_resolve_ack_target`'s variant fallback is defensive and limited to rows we sent.
-- `linkcheck.py` is untouched on purpose: ping/pong are never retried.
+- **A node on that firmware filters the copies; an old-firmware node forwards each with its own msg_id.** Every msg_id dedup therefore goes through `util.msg_core()` (mask `0xFFFFF3FF`) or, in SQL, `msg_id IN (msg_id_retry_variants(...))` so the index stays usable.
+- **Never key on the core alone**: bits 10-11 are the low bits of the sender's 22-bit node id, so the core collides across stations. Every core-based key carries the sender: ingest `(sender, core)` (personal dst only), command dedup `sender|core`, `PushDedup`, and the webapp (`dedup_contract.json` v2).
+- **Stored `messages.msg_id` stays the raw received value.** Ack ledger rows and published `msg_status` use the resolved row's msg_id. Every 0x41 ack/status frame for our own DM carries the ORIGINAL msg_id; `_resolve_ack_target`'s variant fallback is defensive, limited to rows we sent. `linkcheck.py` is untouched on purpose (ping/pong are never retried).
 
 ## Node Admin (RM1 remote admin)
 
-HMAC-tagged `RM1` DMs that administer other nodes. Always on, with no config switch (operator decision 2026-10-05: the
-web GUI is the frontend, nothing is configured by editing `config.json`): the Settings > Remote nodes tab stores nodes and
-their passwords, and the feature is inert until one exists. Plan, wave log and the
-review that shaped it: `doc/archive/2026-10-05_1000-node-admin-ui-concept-and-plan.md`; operator runbook: `doc/archive/operations-reference-pre-split-2026-11-10.md`;
-firmware side: `MeshCom-Firmware-DEV-Main` (`src/remote_cmd.cpp`, `docs/adr-remote-hmac.md`, branch `fork-dev`).
+HMAC-tagged `RM1` DMs that administer other nodes. Always on, no config switch (operator decision 2026-10-05: the GUI is the frontend; Settings > Remote nodes stores nodes and passwords, the feature is inert until one exists). ADR-0011; plan `doc/archive/2026-10-05_1000-node-admin-ui-concept-and-plan.md`; triage RB-006; firmware: `MeshCom-Firmware-DEV-Main` (`src/remote_cmd.cpp`, `docs/adr-remote-hmac.md`, branch `fork-dev`).
 
-- **The node is slower and stricter than it looks.** One accepted frame (command OR sync) per 10 s per node, from any
-  sender; ONE high-water mark per node shared by all senders; a 2-frame queue; and a lockout (3 counted rejects in 90 s
-  lock RM1 for 5 min, silencing even a valid sync, reachable by anyone on air). Every one of these is SILENT: wrong
-  password, rate limit, lockout, RM off and "never heard over LoRa" are indistinguishable on air. The service therefore
-  enforces ONE command in flight per target, 10 s spacing and a "possible lockout" refusal itself; do not loosen them.
-  **One deliberate exception (operator decision 2026-10-17): a VERIFIED reply releases the 10 s spacing at
-  once**, including the held-behind-sync path. The firmware anchors `RM_RATE_MS` at acceptance, just before
-  the reply; a rate reject is silent and NOT a strike; the limiter (and the sync's own 60 s one) is armed
-  only with `node_rmstrict` on, which is off by default. Residual risk, accepted: on a strict node a fast
-  reply plus an immediate next command can be dropped silently (120 s no-reply + cool-down). Unverified
-  replies and unanswered hand-offs still anchor 10 s (`_last_frame_ms`, webapp `lastFrameMs`). Asked of
-  the firmware: report `rs=` in status, or defer instead of drop.
-- **Counter = `MAX(ctr + 1, last_hwm + 1, unix_seconds)`**, the firmware sender's own rule (`rm_runtime.cpp`), allocated
-  in ONE `db_write` transaction in `to_thread` (`allocate_node_admin_command`). `_mutate` returns a rowcount and `_query`
-  never commits, so `UPDATE ... RETURNING` through them silently rolls back and every send reuses the counter. Refusals
-  happen BEFORE allocation so they burn no value. `last_hwm` only ever rises and only after tag verification.
-- **Both tags use the COMMAND's orientation**: `dst` = managed node, `src` = the attached node's call as the node stores it
-  (SSID included, upper case). `RM1R|<managed>|<commander>|ctr|result` for the reply, with the `ok `/`err ` prefix inside
-  `result`. A bare `CALL_SIGN` on a UDP-only box makes a valid-looking frame the node silently ignores.
-- **Replies arrive with `{NNN` on the Extern-UDP path and without it on BLE.** `remote_cmd.parse_reply` strips it with the
-  strict `util.strip_ack_suffix`; a parse that assumes stripped text passes every vector and fails every real UDP reply.
-- **The reply hook sits BEFORE `_should_filter_message`, observes only, and the SERVICE dedups.** Fifth instance of the
-  "hook after an early return never fires" trap (Link Check, Gateway Uptime, MHeard). Both transport copies reach it about
-  100 ms apart in independent tasks, so exactly-once is `apply_node_admin_reply`'s conditional `UPDATE ... WHERE verified IS
-  NOT 1` returning a change, and ONLY then are hwm, the sync gate and the SSE event touched. `verified` is terminal; an
-  unverified frame never moves hwm or releases the gate; a raising hook must not lose the stored row (the seam catches).
-- **State is derived, never stored** (`compute_state`): the 120 s no-reply window is anchored at `handed_off_at`, and the
-  webapp re-derives it because the server only emits a row on a transition.
-- **Re-ask is NOT free.** The node caches ONE reply (the latest accepted command, RAM only, 10 min, cleared by reboot). Re-ask
-  is offered only on the newest row of a target between 60 s (`RM_REASK_MIN_MS`; measured replies take 12-32 s, and relays plus repeat ACKs make one frame look re-sent on air) and 10 min after hand-off, never for `reboot`; anything else is a counted replay reject
-  (lockout) or, if the original never arrived, a first execution.
-- **Security posture.** The API has no authentication and is internet-reachable in the public-TLS modes (pre-existing, tracked
-  separately). Node Admin is therefore LAN-only and its router refuses any foreign `Host` and any foreign `Origin`, which
-  makes it LAN-only in every mode. A custom header would protect nothing (`allow_headers=["*"]`). The key route's body is withheld
-  from `stall_events` by PATH PREFIX (`/api/node-admin/keys`); the old exact-match set would never match a per-target path, and a
-  small JSON body is masked by `redact()` anyway, so the regression test must use a truncated or non-JSON body. A pydantic 422
-  echoes the offending `input` (the plaintext password) even with `SecretStr`: the PUT route validates by hand and never echoes.
-  A signed frame that may never have gone on air must not leak its tag (`_redact_rm1` on the INFO/DEBUG lines, `send_failed`
-  and failed monitor captures). The password is also the node's net-console/KISS password and `K = SHA-256(password)` is
-  unsalted, so ONE captured frame is an offline guessing oracle for a short password: McApp offers a random 14-character one.
-- **`remote_cmd_vectors.json` is canonical in the FIRMWARE repo** (`tools/tests/remote_cmd_vectors.json`), copied to
-  `src/mcapp/remote_cmd_vectors.json` with a sha256 pin in `remote_cmd_tests.py`. Copy and hash move in one commit. Runtime code never
-  reads it (the prod tarball ships no `*.json` test corpora). The dev tarball ships it; `main.py` must never import a `*_tests` module.
-- **Remote view (2026-10-06, `doc/archive/2026-10-06_1100-node-admin-remote-view-concept.md`): node state is FOLDED IN SEND
-  ORDER (log `id`), never by `reply_at`.** The node runs a command only above its shared high-water mark, so a late
-  verified reply to row N still describes the state right after N; ordering by arrival lets a late status overwrite a
-  newer ack (`node_admin_state.fold`, mutation-pinned). Only `verified = 1` rows are evidence; a status is an atomic
-  snapshot; `gps off` also clears Track on the node (the reply says only `gps=off`); LED is RAM-only (off after reboot).
-- **Send gates, all BEFORE counter allocation and on every path** (direct, held-behind-sync, sync): 10 s spacing, one in
-  flight, txpower within the board range from the newest verified status `p=<cur>/<min>/<max>` (unknown range:
-  `TX_MAX_LIMIT` 30; the per-key operator ceiling `tx_max` was dropped 2026-10-16 by operator decision, PUT still
-  accepts and ignores it, the storage column is dead), 5 min cool-down after a silent
-  row (the node's DM retry ladder resends RM1 frames; a late copy is a counted replay strike), 120 s pause after another
-  station's RM1 frame to/from the target (`_note_foreign`). The lockout guard is a backstop, not the floor. Re-ask: once
-  per row, never while the guard or the foreign pause holds. `_synced` is set only by a VERIFIED sync; a command held
-  behind an unanswered auto-sync is dropped (operator decision D2), never sent anyway.
-- **Sync (ctr 0) replies bind only inside their 120 s window and with `ctr=<hwm> >= last_hwm`**; the second transport
-  copy of an already verified reply is dropped. A genuine lower mark (re-flashed node) is ignored with a warning;
-  re-entering the password (`set_key`) resets `last_hwm`. `RESULT_MAX` is 108 (firmware draft 2, 140-char reply wire);
-  at 63 a longer reply vanished and two of them tripped McApp's own lockout guard.
-- **Remove deletes the node completely** (`DELETE /api/node-admin/targets/{target}`, 2026-10-06): key, state row and
-  log in one transaction. Keeping the counter (the v1 rule) is unnecessary: the counter floor is unix seconds and no
-  command leaves before a verified sync learns the node's mark. Remove is REFUSED while a command is in flight, a
-  cool-down or a possible lockout runs: those windows are derived from the log it deletes, so removing and re-adding
-  inside one would silently drop the protection.
-- **`net` and `upd` are sendable since the firmware reply of 2026-10-17**
-  (`MeshCom-Firmware-DEV-Main/docs/mcapp-rm1-net-update-reply-20261017.md`; corpus copied, sha256
-  re-pinned). Grammar differs from the draft: error tokens are `stale aubusy nowifi current noasset
-  notready safeboot unsupported`; `upd` carries `g=` (a remote go is armed, RAM only) and `ck=`; `-`
-  means none for `a`, `st`, `ck`, `e` and must never read as a value (`_tag`, `err`). "Update now" is
-  offered on `st=<tag>` or `n=1`+`a=<tag>`, only with `b=0` and `g=0`; `upd go` takes `st` when set
-  (staging marks the tag installed, so a check afterwards reads `n=0`). Tag charset
-  `[A-Za-z0-9._-]`, 1..23. The webapp's `FIRMWARE_PENDING_COMMANDS` is empty. `upd go <tag>` is an
-  install: never re-asked (service guard) and never offered by history Run again / Ask again
-  (`isUpdateInstall`). `status` now ends in `rs=<0|1>` (node strict mode); not parsed yet.
-- **Feature flag to the webapp is `/api/status` `features`** (`"node_admin"`), not the mc-chat flag: `requiresAdminBackend` means
-  "mc-chat only". The webapp uses `adminStatus.nodeAdminAvailable` and a three-state view (no router guard: the backend flag is `null`
-  at first paint). `useProxyAPI` tolerates a body-less 204 and carries the backend `detail` on `ProxyAPIError.detail`.
-- **`blockcall` (firmware BLK-01 call blocklist) is a FULL write, and three rules guard it server-side**
-  (`_gate_blockcall` in `node_admin_service.py`, both the direct and the held-behind-sync path, before counter
-  allocation; plan `doc/archive/2026-10-24_1500-rm1-blockcall-plan.md`). No args reads, `none` clears, a comma list REPLACES
-  the node's list. (1) An entry that would block an own call (attached node, any logged `src_call`) or the target is
-  refused, by the FIRMWARE match rule: a bare entry covers every SSID, so `DK5EN` is refused for `DK5EN-98` while
-  `DK5EN-14` is allowed. (2) RM1 args are capped at 39 chars (about 3-4 calls); the node holds 16 when set locally.
-  (3) A write other than `none` needs the newest verified `ok b=` reply to be complete (no `,+N`) and <= 39 chars,
-  otherwise the list is read-only remotely and only clearable: a write would silently drop the entries we cannot see.
-  The write ack `ok b=<csv>` is the node's stored list after the write and IS the read-back
-  (`fields.blockcall.requested`/`matches`); no extra read frame. `err blocked` = firmware without the command.
-  Rules live in `rm_blocklist.py`, mirrored by the webapp's `nodeAdminBlocklist.ts` through
-  `rm_blocklist_vectors.json`. Blocking a relay on the RM path also drops our replies: silent, not detectable.
+- **The node is slower and stricter than it looks.** One accepted frame per 10 s per node from any sender; ONE high-water mark per node shared by all senders; a 2-frame queue; a lockout (3 counted rejects in 90 s lock RM1 for 5 min, reachable by anyone on air). Every failure is SILENT (wrong password, rate limit, lockout, RM off and "never heard" are indistinguishable). The service therefore enforces ONE command in flight per target, 10 s spacing and a "possible lockout" refusal itself; do not loosen them. **Deliberate exception (operator decision 2026-10-17): a VERIFIED reply releases the 10 s spacing at once** (the firmware anchors `RM_RATE_MS` at acceptance; a rate reject is silent and not a strike; the limiter is armed only with `node_rmstrict`, off by default). Accepted risk: on a strict node a fast reply plus an immediate next command can be dropped silently. Unverified replies and unanswered hand-offs still anchor 10 s.
+- **Counter = `MAX(ctr + 1, last_hwm + 1, unix_seconds)`**, the firmware sender's rule, allocated in ONE `db_write` transaction in `to_thread` (`allocate_node_admin_command`). `_mutate` returns a rowcount and `_query` never commits, so `UPDATE ... RETURNING` through them silently rolls back and every send reuses the counter. Refusals happen BEFORE allocation. `last_hwm` only rises, and only after tag verification.
+- **Both tags use the COMMAND's orientation**: `dst` = managed node, `src` = the attached node's call as the node stores it (SSID included, upper case); reply is `RM1R|<managed>|<commander>|ctr|result` with `ok `/`err ` inside `result`. A bare `CALL_SIGN` on a UDP-only box makes a valid-looking frame the node silently ignores.
+- **Replies arrive with `{NNN` on Extern-UDP and without it on BLE**: `remote_cmd.parse_reply` strips it with the strict `util.strip_ack_suffix`; a parse that assumes stripped text passes every vector and fails every real UDP reply.
+- **The reply hook sits BEFORE `_should_filter_message`, observes only, and the SERVICE dedups** (fifth instance of the early-return trap). Both transport copies arrive ~100 ms apart in independent tasks, so exactly-once is `apply_node_admin_reply`'s conditional `UPDATE ... WHERE verified IS NOT 1`; only then are hwm, the sync gate and the SSE event touched. `verified` is terminal; an unverified frame never moves hwm; a raising hook must not lose the stored row.
+- **State is derived, never stored** (`compute_state`): the 120 s no-reply window is anchored at `handed_off_at`; the webapp re-derives it.
+- **Re-ask is NOT free**: the node caches ONE reply (RAM only, 10 min). Offered only on a target's newest row between 60 s (`RM_REASK_MIN_MS`) and 10 min after hand-off, never for `reboot`; otherwise a counted replay reject (lockout) or a first execution.
+- **Security**: the API has no authentication and is internet-reachable in public-TLS modes (tracked separately), so Node Admin is LAN-only: its router refuses any foreign `Host` and `Origin` (a custom header would protect nothing, `allow_headers=["*"]`). The key route's body is withheld from `stall_events` by PATH PREFIX (`/api/node-admin/keys`); a regression test must use a truncated or non-JSON body. A pydantic 422 echoes the plaintext password even with `SecretStr`: the PUT route validates by hand. A signed frame that may never have gone on air must not leak its tag (`_redact_rm1` on INFO/DEBUG lines, `send_failed`, failed monitor captures). `K = SHA-256(password)` is unsalted, so one captured frame is an offline guessing oracle for a short password; McApp offers a random 14-character one.
+- **`remote_cmd_vectors.json` is canonical in the FIRMWARE repo** (`tools/tests/remote_cmd_vectors.json`), copied to `src/mcapp/` with a sha256 pin in `remote_cmd_tests.py`; copy and hash move in one commit. Runtime code never reads it (the prod tarball ships no `*.json` test corpora; the dev tarball does); `main.py` must never import a `*_tests` module.
+- **Node state is FOLDED IN SEND ORDER (log `id`), never by `reply_at`** (`node_admin_state.fold`, mutation-pinned): a late verified reply to row N still describes the state right after N. Only `verified = 1` rows are evidence; a status is an atomic snapshot; `gps off` also clears Track; LED is RAM-only. Design: `doc/archive/2026-10-06_1100-node-admin-remote-view-concept.md`.
+- **Send gates, all BEFORE counter allocation on every path** (direct, held-behind-sync, sync): 10 s spacing, one in flight, txpower within the board range from the newest verified status `p=<cur>/<min>/<max>` (unknown: `TX_MAX_LIMIT` 30; the per-key `tx_max` was dropped 2026-10-16, the PUT accepts and ignores it, the column is dead), 5 min cool-down after a silent row (the node's DM retry ladder resends RM1 frames; a late copy is a counted replay strike), 120 s pause after another station's RM1 frame to/from the target (`_note_foreign`). `_synced` is set only by a VERIFIED sync; a command held behind an unanswered auto-sync is dropped (decision D2), never sent anyway. Re-ask: once per row, never while the guard or foreign pause holds.
+- **Sync (ctr 0) replies bind only inside their 120 s window and with `ctr=<hwm> >= last_hwm`**; a second transport copy of a verified reply is dropped; a genuine lower mark (re-flashed node) is ignored with a warning; re-entering the password (`set_key`) resets `last_hwm`. `RESULT_MAX` is 108 (140-char reply wire); at 63 a longer reply vanished and two tripped McApp's own lockout guard.
+- **Remove deletes the node completely** (`DELETE /api/node-admin/targets/{target}`: key, state row and log in one transaction) and is REFUSED while a command is in flight, a cool-down or a possible lockout runs (those windows derive from the log it deletes).
+- **`net` and `upd` are sendable** (firmware reply `MeshCom-Firmware-DEV-Main/docs/mcapp-rm1-net-update-reply-20261017.md`). In `upd` replies `-` means none for `a`, `st`, `ck`, `e` and must never read as a value. "Update now" is offered only with `b=0` and `g=0`. `upd go <tag>` is an install: never re-asked (service guard) and never offered by history Run again / Ask again (`isUpdateInstall`). `status` ends in `rs=<0|1>` (not parsed yet). `upd chan prod|dev` is backlog B14.
+- **The feature flag to the webapp is `/api/status` `features` (`"node_admin"`)**, not the mc-chat flag (`requiresAdminBackend` means "mc-chat only"). The webapp uses `adminStatus.nodeAdminAvailable` and a three-state view (no router guard: the backend flag is `null` at first paint).
+- **`blockcall` (firmware BLK-01) is a FULL write with three server-side rules** (`_gate_blockcall` in `node_admin_service.py`, before counter allocation, on direct and held-behind-sync paths): no args reads, `none` clears, a comma list REPLACES the node's list. (1) An entry that would block an own call (attached node, any logged `src_call`) or the target is refused by the FIRMWARE match rule (a bare entry covers every SSID: `DK5EN` is refused for `DK5EN-98`, `DK5EN-14` allowed). (2) Args are capped at 39 chars. (3) A write other than `none` needs the newest verified `ok b=` reply to be complete (no `,+N`) and <= 39 chars, else the list is read-only remotely and only clearable. The write ack `ok b=<csv>` IS the read-back; `err blocked` = firmware without the command. Rules in `rm_blocklist.py`, mirrored by the webapp's `nodeAdminBlocklist.ts` via `rm_blocklist_vectors.json`. Plan: `doc/archive/2026-10-24_1500-rm1-blockcall-plan.md`.
 
 ## Key Gotchas
 
-- **A `#TAG` destination is a hashtag channel, not a callsign — and `is_group()` stays numeric.** The MeshCom FW 4.36 RfC puts a `#OE-SOTA` token in the destination field. All three repos independently misclassified it as a personal DM, which sent it into `compute_conversation_key`'s DM branch where it was **split on its first hyphen** (`"#OE-SOTA"` → key `"#OE<>DK5EN"`), collapsing distinct tags and fragmenting one tag per sender. Fixed in `ea15511` by adding **sibling** predicates `is_hashtag()` / `dst_kind()` / `resolve_dst_target()` beside `is_group()` in `commands/parsing.py` — `is_group` was deliberately NOT widened, because it is pinned by a corpus mirrored in mc-chat and the webapp. Two invariants look like oversights and are load-bearing: classification is **case-insensitive** and **NOT length-bounded** — a tag failing either would fall straight back into the DM branch, which is the defect. The RfC's 9-char cap is send-side grammar, enforced at the API boundary, never in classification. `dst_kind` returns `"unknown"` (never `"direct"`) for a `#`-prefixed value that fails the tag charset: it addresses nobody, and is the shape most likely to arrive from a buggy or hostile sender. Contract: `commands/hashtag_dst_vectors.json` (32 vectors, sha256-pinned by `commands/hashtag_dst_tests.py`). **No prefix/subscription matching exists** (RfC US-3) — its stated rule contradicts its own worked examples, so implementing it would encode a guess. Background: `MeshCom-Hashtag-prep.md`.
-- **Six vector corpora are hand-copied to the sibling repos, and nothing syncs them for you.** `commands/group_dst_vectors.json` (v2), `storage/conversation_key_vectors.json` (v4), `blocklist_decision_vectors.json` (v2), `commands/hashtag_dst_vectors.json` (v1), `storage/ack_match_vectors.json` (v1) and `rm_blocklist_vectors.json` (v1) are canonical **here**. The first three go to **both** mc-chat (`tests/fixtures/`) and the webapp; `blocklist_decision_vectors.json` goes to the **webapp only** (`src/services/__tests__/`) — mc-chat has its own `sperrliste.py` and never reads this corpus, so do not go looking for a copy there. `ack_match_vectors.json` is also **webapp only** (`src/services/messageProcessor/__tests__/`), sha256-pinned on both sides; mc-chat's own-messages-only matcher is deliberately not held to it. `rm_blocklist_vectors.json` is **webapp only** too (`src/utils/__tests__/`), sha256-pinned on both sides. mc-chat asserts parse-equality against the paths it does carry; the webapp pins a sha256 of the conversation-key corpus and runs drift checks against both siblings. Change one and you must copy it to every repo that carries it **and** bump the webapp's `EXPECTED_SHA256`, or their suites fail the moment anyone runs them with siblings checked out. Unlike `contract/`, these are not a git subtree — there is no `subtree pull` that will do it for you. A seventh, `remote_cmd_vectors.json`, is canonical in the FIRMWARE repo (see Node Admin).
-- **Two different ACKs, never conflate them.** `send_success` is the firmware's 7-byte **binary** ack (`ack_type` 0x00 Node / 0x01 Gateway, `ble_protocol.py`) — "my node or a gateway took the frame" — also written by a `held` (binary 0x04 or the `:sto` notice text), which publishes `sent: true`, never `acked`. `acked` is a matched inline `:ackNNN` text frame — "the addressee answered". `_handle_ack` publishes `msg_status` `{sent, ack_kind: node|gateway}`, the inline path publishes `{acked, ack_kind: "peer"}` with the ORIGINAL message's msg_id; the webapp renders only the latter as ✓✓ Delivered. Wiring the webapp's `msg_ack` to `send_success` is exactly the 2026-08-19 bug where three unanswered `!ctcping` probes all showed as delivered. `ack_status_tests.py` pins both payloads.
-- **A BLE `D{` register frame carries at most 244 chars of JSON.** `addBLEComToOutBuffer` clamps at
-  245 bytes, minus the `0x44` type byte; the firmware names it `BLE_JSON_PAYLOAD_MAX`. Over that it
-  cuts **mid-value**, so the app gets an unparseable object, not a shortened one — every field is
-  lost, not just the last. The builders in `command_functions.cpp` check against
-  `MAX_MSG_LEN_PHONE - 2` (298), which looks like the limit but never binds; that mismatch is how a
-  one-day `FWDATE` regression took the whole `I` register down on mcapp.local for 9 hours
-  (2026-08-27). `ble_service` salvages such a frame by trimming to the last COMPLETE member — whole
-  members only, never a coerced partial value. A node with all six `GCB` slots filled still
-  overflows, so the salvage stays load-bearing.
-- **All DB timestamps are in milliseconds** (not seconds). Divide by 1000 for `datetime.fromtimestamp()`. Forgetting this causes `ValueError: year 58089 is out of range`.
-- **SSH + `python3 -c` quoting**: single-quote the Python code, `\"` for strings inside. Never use f-strings with dict key access — use `%` formatting, or write a temp script with `cat > /tmp/q.py << 'PYEOF'`.
-- **MHeard beacons** (RSSI/SNR, no coordinates) and **position beacons** (lat/lon, no signal) used to be disjoint packet types. Since firmware `c4ad78bb`, an Extern-UDP `pos` packet with `src_type=="lora"` carries **both** — `store_message()` then updates both `station_positions` field groups. See the 2026-07-05 amendment in `doc/archive/2026-02-11_1400-position-signal-architecture-ADR.md` and `doc/archive/UDP-2.0-impl.md`.
-- **Extern-UDP wire format** (node → proxy, JSON, port 1799, bidirectional): `rssi`/`snr` appear only on `pos`/`msg` packets and only since firmware `c4ad78bb` (2026-03-01) — detect by key presence, there is no protocol version field. Same rule for the hardware fields: `hw_id` rides on `pos` frames since forever and `hw_id`/`lora_mod`/`max_hop` on `msg` (text) frames since the 2026-09-16 firmware handover (`MeshCom-Firmware-DEV-Main/docs/2026-09-16_firmware-extudp-hw-id-on-text-frames.md`); an older node omits them and the proxy stores NULL. `udp_handler._coerce_hardware_fields` normalises them at the ingress choke point — ints, `lora_mod` masked to its low nibble exactly like the BLE path — and DROPS a present key that does not coerce rather than the frame. Never subscript them. Both are already final values: RSSI is dBm as-is, SNR is already ÷4 in firmware — **never re-scale either**. Only `src_type=="lora"` carries real signal; `"node"`/`"udp"` send a `0/0` sentinel and must be excluded by an explicit `src_type` check, not a range check.
+- **A `#TAG` destination is a hashtag channel, not a callsign, and `is_group()` stays numeric** (ADR-0021). `compute_conversation_key`'s DM branch splits on the first hyphen (`"#OE-SOTA"` → `"#OE<>DK5EN"`), so misclassifying a tag collapsed distinct tags. The sibling predicates `is_hashtag()` / `dst_kind()` / `resolve_dst_target()` in `commands/parsing.py` sit beside `is_group()` because widening `is_group` would break a corpus mirrored in mc-chat and the webapp. Classification is **case-insensitive and NOT length-bounded** (the RfC's 9-char cap is send-side grammar, enforced at the API boundary). `dst_kind` returns `"unknown"`, never `"direct"`, for a `#`-prefixed value failing the tag charset. No prefix/subscription matching exists (RfC US-3 contradicts its own examples). Contract: `commands/hashtag_dst_vectors.json` (sha256-pinned by `hashtag_dst_tests.py`). Background: `MeshCom-Hashtag-prep.md`.
+- **Six vector corpora are hand-copied to sibling repos, and nothing syncs them for you.** `commands/group_dst_vectors.json`, `storage/conversation_key_vectors.json`, `blocklist_decision_vectors.json`, `commands/hashtag_dst_vectors.json`, `storage/ack_match_vectors.json` and `rm_blocklist_vectors.json` are canonical HERE. `group_dst`, `conversation_key` and `hashtag_dst` go to mc-chat (`tests/fixtures/`) AND the webapp; **`blocklist_decision`, `ack_match` and `rm_blocklist` go to the webapp only** (mc-chat has its own `sperrliste.py` and a deliberately looser ack matcher; do not look for a copy there). Webapp locations: `src/services/__tests__/`, `src/services/messageProcessor/__tests__/`, `src/utils/__tests__/`. Change one and copy it to every repo that carries it AND bump the webapp's `EXPECTED_SHA256`, or their suites fail once siblings are checked out. A seventh, `remote_cmd_vectors.json`, is canonical in the FIRMWARE repo (Node Admin). `contract/suppression_vectors.json` is NOT canonical here: it arrives via the mc-chat contract subtree (Unread Cursors). Other `*_vectors.json` files exist (`ack_predicate`, `aprs_symbol`, `box_feed`, `directed_dst`); the owning suite names the canonical copy.
+- **Two different ACKs, never conflate them.** `send_success` is the firmware's 7-byte BINARY ack (`ack_type` 0x00 Node / 0x01 Gateway; also written by `held`) meaning "my node or a gateway took the frame". `acked` is a matched inline `:ackNNN` text frame meaning "the addressee answered". `_handle_ack` publishes `msg_status` `{sent, ack_kind: node|gateway}`; the inline path publishes `{acked, ack_kind: "peer"}` with the ORIGINAL message's msg_id; the webapp renders only the latter as ✓✓ Delivered. Wiring `msg_ack` to `send_success` is the 2026-08-19 bug where three unanswered `!ctcping` probes showed as delivered. `ack_status_tests.py` pins both payloads.
+- **A BLE `D{` register frame carries at most 244 chars of JSON** (`BLE_JSON_PAYLOAD_MAX`; `addBLEComToOutBuffer` clamps at 245 bytes minus the type byte). Over that it cuts MID-VALUE, so every field is lost. The builders in `command_functions.cpp` check against `MAX_MSG_LEN_PHONE - 2` (298), which never binds (a one-day `FWDATE` regression took the whole `I` register down for 9 hours, 2026-08-27). `ble_service` salvages such a frame by trimming to the last COMPLETE member; a node with all six `GCB` slots filled still overflows.
+- **All DB timestamps are milliseconds.** Forgetting it gives `ValueError: year 58089 is out of range`.
+- **MHeard beacons (RSSI/SNR, no coordinates) and position beacons (lat/lon, no signal) used to be disjoint.** Since firmware `c4ad78bb`, an Extern-UDP `pos` packet with `src_type=="lora"` carries both and `store_message()` updates both `station_positions` field groups (`doc/archive/2026-02-11_1400-position-signal-architecture-ADR.md`, ADR-0003).
+- **Extern-UDP wire format** (node → proxy, JSON, port 1799, bidirectional, unauthenticated): `rssi`/`snr` appear only on `pos`/`msg` packets since firmware `c4ad78bb`; `hw_id` rides on `pos` always and `hw_id`/`lora_mod`/`max_hop` on `msg` frames since the 2026-09-16 handover. Detect by key presence (there is no protocol version field); an older node omits them and the proxy stores NULL. `udp_handler._coerce_hardware_fields` normalises them at the ingress choke point (ints, `lora_mod` masked to its low nibble) and DROPS a present key that does not coerce rather than the frame. Never subscript them. **Both are final values: RSSI is dBm as-is and SNR is already ÷4 in firmware, never re-scale either.** Only `src_type=="lora"` carries real signal; `"node"`/`"udp"` send a `0/0` sentinel, excluded by an explicit `src_type` check, not a range check.
+- **SSH + `python3 -c` quoting**: single-quote the Python code and use `%` formatting, never f-strings with dict key access; or write a temp script with a heredoc.
 
 ## Deployment
 
-`mcapp.local` (Raspberry Pi Zero 2W) is **the** production target and currently the only host running
-MCProxy. `rpizero.local` used to be the integration target but no longer runs it at all — verified
-2026-07-25: `mcapp.service` is absent there, `mcproxy.service` is masked, and the box runs mc-chat.
+`mcapp.local` (Raspberry Pi Zero 2W) is **the** production target and the only host running MCProxy. `rpizero.local` no longer runs it (`mcproxy.service` masked, runs mc-chat); do not check or fix it for McApp. Release and deploy procedures: the `/dev-release`, `/prod-release` and `/ai-ops` skills.
 
-On-device layout:
+- Slots `~/mcapp-slots/slot-{0,1,2}` with `~/mcapp-slots/current` symlinked to the active one. Service `mcapp` (`ExecStart` is the slot's `.venv/bin/mcapp`, no `uv run`); logs `sudo journalctl -u mcapp.service -f`. DB `/var/lib/mcapp/messages.db` (SQLite, WAL).
+- Deploy installs with `uv sync --all-packages --no-dev` (`bootstrap/lib/deploy.sh`). Running `uv run` on the box re-syncs the default groups and brings mypy back into that slot; the next deploy drops it again.
+- **Slot activation never restores the database, and must never again.** The Update page's Activate button (`POST /api/update/activate {slot}`, runner mode `activate`) switches code + webapp bundle + services and keeps `messages.db`. Its predecessor, Rollback, overwrote the DB with `meta/slot-N.db`, a snapshot taken when slot N was last LEFT through the runner (which `mcapp.sh` deploys never refreshed), so it would have replaced the live DB with a 4-day to 3-week-old copy. Migrations are forward-only additive and the schema marker is never written downward, so older code on a newer DB is fine; "restore the DB on rollback" is a data-loss bug. The served webapp is a COPIED directory (`/var/www/html/webapp`), not a symlink: a slot switch that only moves `current` leaves the old bundle on screen.
 
-- Slots: `~/mcapp-slots/slot-{0,1,2}`, with `~/mcapp-slots/current` symlinked to the active one
-- Service: `systemctl status mcapp` — `ExecStart=/home/martin/.local/bin/uv run mcapp`; logs via `sudo journalctl -u mcapp.service -f`
-- DB: `/var/lib/mcapp/messages.db` (SQLite, WAL)
-- Deploy installs deps with `uv sync --all-packages --no-dev` (pulls the Web Push crypto libs + the BLE workspace member, never the `dev` group's mypy) — see `bootstrap/lib/deploy.sh`. Running `uv run` on the box re-syncs the default groups and brings mypy back into that slot; the next deploy drops it again
-- **Slot activation never restores the database, and must never again.** The Update page's
-  Activate button (`POST /api/update/activate {slot}`, runner mode `activate`) switches code +
-  webapp bundle + services to an already-deployed slot and keeps `/var/lib/mcapp/messages.db`
-  as it is. Its predecessor, the Rollback button, overwrote the DB with `meta/slot-N.db` — a
-  snapshot taken when slot N was last LEFT through the runner, which `mcapp.sh` deploys never
-  refreshed — so on mcapp.local it would have replaced the live DB with a copy 4 days to 3 weeks
-  old (found 2026-09-10, never pressed). Migrations are forward-only additive and the schema
-  marker is never written downward, so older code on a newer DB is fine; a "restore the DB on
-  rollback" feature is a data-loss bug, not a safety net. The served webapp is a COPIED directory
-  (`/var/www/html/webapp`), not a symlink: a slot switch that only moves `current` leaves the old
-  bundle on screen.
+See `bootstrap/README.md` for installation, `doc/reference/tls-architecture.md` for TLS, `doc/sop/SOP-003-tls-maintenance.md` for maintenance.
 
-See `bootstrap/README.md` for installation, `doc/reference/tls-architecture.md` for TLS setup, `doc/sop/SOP-003-tls-maintenance.md` for maintenance.
+## Git
+
+`development` also moves without you: Dependabot PRs merge automatically once CI passes (weekly on Mondays, security fixes on any day), and the daily `dev-release.yml` cuts `vX.Y.Z-dev.N` (tags McApp and webapp, may commit release notes). Fetch tags too (`git fetch --tags`). Run `git pull --rebase` before you start work and before every push.

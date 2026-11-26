@@ -21,7 +21,7 @@ from typing import Any
 
 import regex
 
-SUPPORTED_SCHEMA = 2
+SUPPORTED_SCHEMA = 3
 _MEMO_CAP = 100_000
 
 # Signal names structure emits; the contract's ``structure.signals`` must list exactly these.
@@ -162,7 +162,6 @@ class AxesEngine:
         self._tolerance = float(c["TOLERANCE"])
         self._min_share = float(c["MIN_SHARE"])
         self._max_multiple = int(c["MAX_MULTIPLE"])
-        self._min_median = float(c["MIN_MEDIAN_SEC"])
         self._live_gaps = int(c["LIVE_TIMING_GAPS"])
         self._raw_window = int(c["CADENCE_RAW_WINDOW"])
         self._part_sec = float(c["PART_SEC"])
@@ -391,7 +390,7 @@ class AxesEngine:
         for g in gaps:
             for k in range(1, self._max_fraction + 1):
                 p = g / k
-                if p < self._min_median or (k > 1 and p < self._min_fraction_sec):
+                if k > 1 and p < self._min_fraction_sec:
                     continue
                 share = sum(1 for x in gaps if self._is_on_clock(x, p)) / len(gaps)
                 if share > best_share or (share == best_share and p > best_p):
@@ -405,10 +404,10 @@ class AxesEngine:
             return CADENCE_SINGLE
         sends = self._sends_of(raw)[-self._cadence_window :]
         gaps = [sends[i] - sends[i - 1] for i in range(1, len(sends))]
-        period, share = (0.0, 0.0)
+        share = 0.0
         if len(gaps) >= self._min_intervals:
-            period, share = self._best_period(gaps)
-        periodic = period >= self._min_median and share >= self._min_share
+            share = self._best_period(gaps)[1]
+        periodic = share >= self._min_share
         return CADENCE_PERIODIC if periodic else CADENCE_JITTERED
 
     def hmm_classes_of_gaps(self, gaps: Sequence[float]) -> list[str]:
