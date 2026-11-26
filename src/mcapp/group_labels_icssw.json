@@ -139,6 +139,12 @@
       "remark": null
     },
     {
+      "group": "268",
+      "hint": "Portugal",
+      "prefix": "CS",
+      "remark": null
+    },
+    {
       "group": "292",
       "hint": "San Marino",
       "prefix": "T7",
@@ -181,6 +187,12 @@
     {
       "group": "19000",
       "hint": "France départements 19 et 87",
+      "prefix": "F",
+      "remark": null
+    },
+    {
+      "group": "20819",
+      "hint": "Frankreich Correze",
       "prefix": "F",
       "remark": null
     },
@@ -432,7 +444,7 @@
       "group": "26379",
       "hint": "Hochrhein",
       "prefix": "DL3 79",
-      "remark": null
+      "remark": "Portuguese"
     },
     {
       "group": "60000",
@@ -453,6 +465,6 @@
       "remark": null
     }
   ],
-  "fetched_at": "2026-10-30",
+  "fetched_at": "2026-11-26",
   "source_url": "https://icssw.org/meshcom-grc-gruppen/"
 }
