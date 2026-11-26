@@ -376,7 +376,7 @@ def _subtract_suppressed_row(
         return
 
     view = view_from_row(dict(row))
-    if not is_suppressed(view, policy):
+    if not is_suppressed(view, policy, own_base=my_base):
         return
 
     # unread must never go below 0. This clamp should be unreachable: every

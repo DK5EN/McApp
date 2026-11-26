@@ -29,6 +29,11 @@ Mirrors, verbatim in decision order, two independent webapp functions
 a message is hidden if EITHER the text is blocked OR the classifier calls it
 spam.
 
+Own-call DM exemption (mirrors mc-chat `meshcom_mock/suppression.py`, corpus v5):
+a message whose `dst` base callsign equals the operator's base callsign is never
+hidden by the CLASSIFIER half (bot replies are origin machine, low info score).
+Blocked texts stay unconditional. Callers pass `own_base`; empty disables it.
+
 Own-message whitelist (webapp, not mirrored here): the webapp exempts a
 message whose `src` base callsign equals the operator's own base callsign
 from BOTH halves of this predicate, at its call sites, one level ABOVE
@@ -82,6 +87,8 @@ class MessageView:
     template_hash: str
     # v8 origin axis (human|machine) or None; `tags` holds the stored topics only.
     origin: str | None = None
+    # Destination callsign / group / tag; only used by the own-call exemption.
+    dst: str = ""
 
 
 # A policy that suppresses nothing, for any input. Returned by
@@ -313,6 +320,7 @@ def view_from_row(row: Mapping[str, Any]) -> MessageView:
     template_hash = row.get("template_hash")
     origin = row.get("origin")
     origin = origin if origin in ("human", "machine") else None
+    dst = row.get("dst")
 
     return MessageView(
         msg=msg if isinstance(msg, str) else "",
@@ -320,6 +328,7 @@ def view_from_row(row: Mapping[str, Any]) -> MessageView:
         origin=origin,
         info_score=_as_optional_float(row.get("info_score")),
         template_hash=template_hash if isinstance(template_hash, str) else "",
+        dst=dst if isinstance(dst, str) else "",
     )
 
 
@@ -339,11 +348,26 @@ def _tag_hidden(tags: frozenset[str], hidden: frozenset[str]) -> bool:
     return not tags.isdisjoint(hidden)
 
 
-def is_spam_by_classifier(view: MessageView, policy: SuppressionPolicy) -> bool:
+def _call_base(value: str) -> str:
+    """Base callsign: text before the first '-', stripped and upper-cased."""
+    return value.split("-", 1)[0].strip().upper()
+
+
+def is_addressed_to_own(view: MessageView, own_base: str) -> bool:
+    """True iff the message's dst base callsign is the operator's. `own_base`
+    may carry an SSID. Groups, `*` and `#TAG` can never equal a callsign base."""
+    own = _call_base(own_base)
+    return bool(own) and _call_base(view.dst) == own
+
+
+def is_spam_by_classifier(
+    view: MessageView, policy: SuppressionPolicy, *, own_base: str = ""
+) -> bool:
     """Mirrors the webapp's `isSpamByClassifier` in its exact decision
     order — do not reorder these clauses, the order itself is the contract:
 
       1. disabled                        -> False (stop)
+      1b. dst base == own base (a DM to the operator) -> False (stop)
       2. template_hash in promoted       -> True  (stop)
       3. template_hash in demoted        -> False (stop)
       4. hidden tag (see `_tag_hidden`)  -> True  (stop)
@@ -351,7 +375,7 @@ def is_spam_by_classifier(view: MessageView, policy: SuppressionPolicy) -> bool:
       6. info_score below min_info_score -> True
       7. otherwise                       -> False
     """
-    if not policy.enabled:
+    if not policy.enabled or is_addressed_to_own(view, own_base):
         return False
 
     template_hash = view.template_hash
@@ -372,9 +396,12 @@ def is_spam_by_classifier(view: MessageView, policy: SuppressionPolicy) -> bool:
     )
 
 
-def is_suppressed(view: MessageView, policy: SuppressionPolicy) -> bool:
+def is_suppressed(view: MessageView, policy: SuppressionPolicy, *, own_base: str = "") -> bool:
     """A message is hidden from the client if EITHER half says so — the same
     combination the webapp applies at each of its filter call sites
     (`passesBaseGuards`'s blocklist check plus a separate `isSpamByClassifier`
-    check alongside it, never one without the other)."""
-    return is_text_blocked(view.msg, policy) or is_spam_by_classifier(view, policy)
+    check alongside it, never one without the other). A DM to `own_base` is
+    never classifier-hidden; blocked texts still apply."""
+    return is_text_blocked(view.msg, policy) or is_spam_by_classifier(
+        view, policy, own_base=own_base
+    )

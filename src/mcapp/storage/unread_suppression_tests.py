@@ -323,9 +323,10 @@ async def _test_own_message_exclusion_unaffected(results: list[tuple[str, bool]]
                 (
                     (
                         "own-message exclusion holds under an active suppression policy:"
-                        " the partner's reply is suppressed -> unread == 0, not 1"
+                        " the partner's machine reply is a DM to the operator, so the"
+                        " own-call exemption keeps it -> unread == 1 (own rows add none)"
                     ),
-                    entry.get("unread") == 0,
+                    entry.get("unread") == 1,
                 )
             )
         finally:
@@ -630,6 +631,45 @@ async def _test_spam_group_subtract_uses_rebucketed_cursor(
             await storage.close()
 
 
+async def _test_dm_to_own_call_exempt(results: list[tuple[str, bool]]) -> None:
+    """Case 12: a machine-origin DM addressed to the operator's base callsign
+    (any SSID) is never classifier-hidden, so it counts as unread; the same
+    classification on a group message stays suppressed."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = Path(tmp_dir) / "own_dm_exempt_test.db"
+        storage = await create_sqlite_storage(db_path)
+        try:
+            partner = "OE5HWN-12"
+            dm_dst = "DK5EN-14"  # other SSID than MY_CALLSIGN (DK5EN-98)
+            dm_key = compute_conversation_key(partner, dm_dst) or ""
+            t0 = now_ms() - 100_000
+            await _store_msg(storage, partner, dm_dst, "earlier", t0)
+            reply_ts = t0 + 10
+            await _store_msg(storage, partner, dm_dst, "!time reply", reply_ts)
+            await _classify(storage, partner, reply_ts, {"origin": "machine", "info_score": 0.25})
+            await _store_msg(storage, partner, "20", "bot in group", t0 + 20)
+            await _classify(storage, partner, t0 + 20, {"origin": "machine", "info_score": 0.25})
+            await storage.set_read_cursor(dm_key, t0 + 5)
+            await storage.set_read_cursor("20", t0)
+            await storage.set_filter_prefs({"enabled": True, "hideAutoBeacons": True})
+
+            summary = await storage.get_conversation_summary(MY_CALLSIGN)
+            results.append(
+                (
+                    "own-call exemption: machine DM to the operator counts unread == 1",
+                    summary.get(dm_key, {}).get("unread") == 1,
+                )
+            )
+            results.append(
+                (
+                    "own-call exemption: machine message in group 20 stays suppressed (unread 0)",
+                    summary.get("20", {}).get("unread") == 0,
+                )
+            )
+        finally:
+            await storage.close()
+
+
 async def run_unread_suppression_tests() -> bool:
     """Run the unread-suppression regression suite. Returns True iff every
     case passes."""
@@ -644,6 +684,7 @@ async def run_unread_suppression_tests() -> bool:
     await _test_key_narrowing_matches_full_scan(results)
     await _test_own_suppressed_message_does_not_cancel_foreign_unread(results)
     await _test_spam_group_subtract_uses_rebucketed_cursor(results)
+    await _test_dm_to_own_call_exempt(results)
 
     for label, ok in results:
         print(f"    {'✅ PASS' if ok else '❌ FAIL'} | {label}")

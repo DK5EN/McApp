@@ -43,6 +43,7 @@ from .suppression import (
     NOOP_POLICY,
     MessageView,
     SuppressionPolicy,
+    is_addressed_to_own,
     is_suppressed,
     load_policy,
     policy_from_parts,
@@ -57,7 +58,7 @@ _VECTORS_PATH = Path(__file__).parent.parent / "contract" / "suppression_vectors
 # constant deliberately (and re-check the hand-written cases below still
 # agree with the new corpus) or the change was unintentional and this
 # tripwire just did its job. Mirrors commands/hashtag_dst_tests.py.
-_EXPECTED_SHA256 = "a54db9f3a1c787763e90196aa75c286a51e24bcee0d7265694b49ebbd74c97f2"
+_EXPECTED_SHA256 = "1c46e12723f710c9497a88ee9b21616753b5ce0e95fc7633a500240710e6b305"
 
 # DDL copied verbatim from storage/migrations.py (migrations v11, v16, v17).
 # Kept as a local copy rather than importing anything from migrations.py: a
@@ -135,7 +136,7 @@ def _test_corpus_vectors(results: list[tuple[str, bool]]) -> None:
 
     version = contract.get("version")
     results.append(
-        (f"contract/suppression_vectors.json version == 4 (got {version!r})", version == 4)
+        (f"contract/suppression_vectors.json version == 5 (got {version!r})", version == 5)
     )
 
     policies = {name: _policy_from_spec(spec) for name, spec in contract["policies"].items()}
@@ -143,7 +144,7 @@ def _test_corpus_vectors(results: list[tuple[str, bool]]) -> None:
     for vector in contract["vectors"]:
         policy = policies[vector["policy"]]
         view = view_from_row(vector["message"])
-        actual = is_suppressed(view, policy)
+        actual = is_suppressed(view, policy, own_base=vector.get("ownCall", ""))
         expected = vector["suppressed"]
         results.append((f"vector: {vector['name']}", actual == expected))
 
@@ -421,6 +422,28 @@ def _test_hidden_tags_semantics(results: list[tuple[str, bool]]) -> None:
     )
 
 
+def _test_addressed_to_own(results: list[tuple[str, bool]]) -> None:
+    """Direct checks of the own-call exemption helper."""
+
+    def addr(dst: str, own: str) -> bool:
+        return is_addressed_to_own(MessageView("", frozenset(), None, "", dst=dst), own)
+
+    cases = [
+        ("same SSID", addr("DK5EN-98", "DK5EN-98"), True),
+        ("other SSID", addr("DK5EN-14", "DK5EN-98"), True),
+        ("bare dst, SSID own", addr("DK5EN", "DK5EN-98"), True),
+        ("lower-case dst", addr("dk5en-14", "DK5EN-98"), True),
+        ("other call", addr("OE5HWN-12", "DK5EN-98"), False),
+        ("group 20", addr("20", "DK5EN-98"), False),
+        ("broadcast *", addr("*", "DK5EN-98"), False),
+        ("hashtag #DK5EN", addr("#DK5EN", "DK5EN-98"), False),
+        ("empty own", addr("DK5EN-98", ""), False),
+        ("empty dst and own", addr("", ""), False),
+    ]
+    for label, actual, expected in cases:
+        results.append((f"is_addressed_to_own: {label}", actual == expected))
+
+
 def _test_origin_hiding(results: list[tuple[str, bool]]) -> None:
     """hideAutoBeacons keys on origin machine; stored retired ids are inert topics.
     MCProxy has no SQL twin of the predicate (unread counting runs `is_suppressed` per
@@ -464,6 +487,7 @@ async def run_suppression_predicate_tests() -> bool:
     _test_policy_is_noop(results)
     _test_hidden_tags_semantics(results)
     _test_origin_hiding(results)
+    _test_addressed_to_own(results)
 
     for label, ok in results:
         print(f"    {'✅ PASS' if ok else '❌ FAIL'} | {label}")
