@@ -25,7 +25,7 @@ from typing import Any
 
 from .commands.constants import has_console
 from .config_loader import Config, StallsConfig
-from .stalls import StallRecorder, redact
+from .stalls import _LAG_LOOP_INTERVAL_S, StallRecorder, redact
 
 RecordFn = Callable[[str, bool], None]
 
@@ -310,13 +310,20 @@ async def _test_install_executor(_record: RecordFn) -> None:
 async def _test_loop_lag(_record: RecordFn) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "stalls.db"
-        config = StallsConfig(loop_lag_ms=1)
+        config = StallsConfig(loop_lag_ms=20)
         recorder = StallRecorder(db_path, config, version="v7", slot="s7")
         await recorder.start()
         try:
-            # Block the event loop's OWN thread directly (on purpose) so the
-            # loop-lag watchdog's asyncio.sleep(0.1) measurably overruns.
-            time.sleep(0.05)  # noqa: ASYNC251 - deliberately blocks the loop to make the watchdog measure real lag
+            # start() only schedules the watchdog task. Yield first so its
+            # first cycle (t0, then asyncio.sleep(interval)) is in flight;
+            # a block before that lands ahead of t0 and is never measured.
+            await asyncio.sleep(0.02)
+            # Block the event loop's OWN thread (on purpose) past the whole
+            # watchdog interval: the overrun is then ~one interval, far above
+            # loop_lag_ms, so the row no longer depends on scheduler jitter
+            # (with loop_lag_ms=1 and a 50 ms block it only ever passed on
+            # jitter, and failed on a quiet CI runner).
+            time.sleep(_LAG_LOOP_INTERVAL_S * 2)  # noqa: ASYNC251 - deliberately blocks the loop to make the watchdog measure real lag
 
             found = False
             for _ in range(20):  # poll, don't count ticks — up to ~1s total
