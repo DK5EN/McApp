@@ -148,6 +148,14 @@ Follow-ups from the container test campaign:
 - The dev-group `bleak` has no platform marker, so Linux CI installs bleak + dbus-fast. Harmless; fix
   the comment wording.
 
+## B25 — McApp as a desktop app (Windows `.exe`, macOS `.dmg`)
+
+Idea, not scheduled (2026-11-27). Self-contained installer: the webapp as the display, the
+backend bundled, using the desktop's internet, UDP and Bluetooth to reach a MeshCom node; a server
+mode connects to `mcapp.local` instead. Verdict: Tauri shell + Python sidecar, no GPUI and no Rust
+rewrite. Builds on B13's bleak backend. First step is a one-week BLE spike on Windows and macOS.
+Concept: `plans/2026-11-27_1944-desktop-app-concept.md`.
+
 ## B14 — RM1 update channel switch DEV/MAIN in the Remote view
 
 The firmware gained `upd chan prod|dev` (fork-dev `636e681b`, benched over LoRa on 2026-10-31). McApp
